@@ -1,0 +1,17 @@
+# Lexical-hook baseline snapshot (skill_first_nudge.py era)
+# Captured: 2026-06-26T11:32:35Z — BEFORE semantic enforcer go-live.
+# This is the irrecoverable 'before' half of the fusion before/after. Source ledger:
+#   /Users/thinhkhuat/.claude/skill-telemetry/logs/skill-invocation-ledger.log
+# NOTE: no `offer` events here (lexical hook emits none) → hit@k/fallback pending by design.
+
+ledger        : /Users/thinhkhuat/.claude/skill-telemetry/logs/skill-invocation-ledger.log
+events        : 33   turn-windows: 22   manual: 4
+uptake        : 4/22  18%   (turn used a skill)
+search called : 0/22  0%
+dodge         : 18/22  82%   (no skill, no search)
+hit@k         : pending (no `offer` events yet — enforcer not live / no banked turns)
+top auto      : [('plugin-scaffold', 2), ('working-with-claude-code', 2), ('architecture-decision-records', 1), ('ck-plan', 1), ('readme', 1)]
+top manual (real skill)     : [('session-handoff', 2), ('what-next', 1)]
+manual (built-in/non-skill) : [('cook', 1)]   [split via http://localhost:6333/claude_skills]
+note: `turn` denominator = non-empty non-slash prompts (NOT offer/triviality-gated);
+      treat dodge/uptake as a proxy upper-bound until `offer` events land, then re-derive vs offered turns.

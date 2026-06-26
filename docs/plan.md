@@ -1,6 +1,6 @@
 # Skill Governance Layer — skill-search × skill-first Fusion
 
-**Status:** IN PROGRESS — embedder **A** approved (+ hard timeout→fallback). Ledger slice (P1 step 0) built · reviewed · tested · verified, currently **HELD local** (not installed; owner choice 2026-06-26). Warm-shim + hook-rewrite phases not started.
+**Status:** P1 COMPLETE — warm embed shim + enforcer hook built · verified (90ms timeout, cosine parity 1.000000, fallback tested). Ledger + enforcer both ready. **HELD, owner-gated go-live** (old skill-first-nudge hook still in ~/.claude/settings.json; cached plugin has ledger only). Go-live = deregister old hook (backup first) → marketplace bump → full plugin install.
 **Date:** 2026-06-26
 **Owner context:** workbench; live global hook + Qdrant MCP deployment (see session memory [[skill-first-vs-skill-search-purpose]])
 
@@ -145,6 +145,14 @@ Rule A: never write the install path without an explicit per-step OK.
 
 ## Build log
 
+**2026-06-26 — P1 fusion complete: warm embed shim + enforcer hook (HELD, owner-gated go-live).**
+- **Warm embed shim:** `scripts/embed_server.py` (stdlib http.server, mpnet-768 in memory; POST /embed, GET /health); `bin/embed-shim` (host launcher); Dockerfile + .dockerignore (Docker sidecar next to skill-search-qdrant container, 127.0.0.1:6363); `setup.sh` builds/runs the sidecar. Parity verified: cosine 1.000000 vs index-build path (EN + VN). **Timeout calibration:** design nominal ~120ms breached cold-start budget (~50ms python) with co-equal ≲150ms per-turn; measured p95 3.75x headroom → set ENFORCER_EMBED_TIMEOUT=90ms (env-overridable, client-side hard timeout via urllib socket). Verified: deliberately-slowed shim falls through to mandate-only, turn ≲150ms.
+- **Vendor lock:** `vendor/skill-search/pyproject.toml` fastembed pinned ==0.8.0 (was >=0.3). Version 0.5.1 switches mean→CLS pooling, silently corrupts retrieval. The live index built on 0.8.0 — pinning guarantees rebuild-free reproduction.
+- **Enforcer hook:** `hooks/scripts/enforcer.py` (UserPromptSubmit); embeds prompt via shim (90ms timeout), Qdrant top-k via raw urllib, injects mandate + semantic candidates (name, desc, score). Retire `score()`/`_tokens()`/`_fold()`/`_distinct_hits()` + `library.json` read. Keep: fail-silent/additive/never-blocks, empty/slash suppression. Fallback on embed-down/timeout/qdrant-down → mandate-only (tagged telemetry). Cheap pre-gate (empty/slash/≤2-word).
+- **Registry:** `hooks/hooks.json` registers enforcer.py alongside ledger.py (not yet installed; settings.json registration or full plugin install pending). Ledger and enforcer both registered, both fire.
+- **Telemetry:** `scripts/analyze.py` repointed off library.json → Qdrant index (stdlib scroll). Reports hit@k + fallback rate + bands from `offer` events. ledger.py logs stripped q so offer↔turn join works.
+- Status: DONE (design + code + verification); owner-gated go-live. Old lexical hook (skill-first-nudge.py) still registered in ~/.claude/settings.json; cached plugin (0.1.0/0.1.1/0.1.2) still has ledger.py only. No double-injection today. Go-live = deregister old hook (backup first) THEN marketplace bump + full plugin install.
+
 **2026-06-26 — Ledger slice (P1 step 0) — built, HELD local (not installed).**
 - Files: `hooks/scripts/ledger.py` (UPS `turn`/`manual` + PostToolUse `auto`/`search`; fail-silent, additive-only, stdlib), `hooks/hooks.json` (plugin wrapper; UPS + PostToolUse matcher `Skill|mcp__skill-search__search_skills`), `scripts/analyze.py` (uptake/search/dodge + per-skill rollups).
 - Event shape grounded in official `hooks.md`: PostToolUse carries `tool_name`/`tool_input`/`session_id`; Skill→`tool_name:"Skill"`; UPS→`prompt`. The Skill `tool_input` field is undocumented → capture `input_keys` (no assumption; learn the real field from live data).
@@ -166,6 +174,16 @@ Rule A: never write the install path without an explicit per-step OK.
 - `code-reviewer` (DONE_WITH_CONCERNS) + `tester` (7/8) → all applied: **B1** atomic write (blocker), backup collision (pid stamp), **S3** keep-on validation + router-dark warn, **S4** model-from-`.mcp.json`, **S5** Python-version pick, **S1** go-live de-dup note (`claude mcp remove skill-search -s user`), **S2** setup-before-enable note, docker-daemon precheck, `--reindex`. Re-verified green. Reports: `plans/reports/{code-review,test}-260626-reproduction-layer.md`.
 - HELD (Rule A): `setup.sh` NOT executed; live `settings.json` / MCP registration untouched. Go-live = run `setup.sh` → `claude mcp remove skill-search -s user` → restart Claude Code.
 
+**2026-06-26 — Published + MCP brought online + docs/ADR set.**
+- Published → github.com/thinhkhuat/skill-concierge. Versions 0.1.0 → 0.1.1 (MCP launcher + stable venv fix) → 0.1.2 (router keep-on). MCP verified connected (`search_skills` answers); engine healthy (509 indexed, dim 768). See `CHANGELOG.md`.
+- **Decision rationale extracted into `docs/adr/` (0001–0006)** + a loud `docs/caveats.md` (landmines) — so the design intent stops living only in code comments.
+- **Correction (session finding):** ran the vendored `eval/labeled_queries.jsonl` and got recall@k ≈ 0.08 — then proved it **invalid here**: its ground truth targets skills NOT in this index (upstream plugins + built-in commands), which ADR-0001 excludes by design. recall@k says nothing about retrieval quality on this deployment. This **un-decides** ADR-0002's "retire the lexical scorer" — it was never evidence-backed. A real eval needs ground truth from the indexed catalogue only. Captured in ADR-0001/0002, `caveats.md` §1, `eval/README-LOCAL.md`, and memory [[skill-search-indexes-model-invocable-only]].
+
+**2026-06-26 — 0.2.0: maintenance skills (`setup` + `doctor`).**
+- `skills/setup/SKILL.md` → `skill-concierge:setup`: wraps the idempotent `setup.sh` bootstrap + verifies. `skills/doctor/SKILL.md` → `skill-concierge:doctor` + `scripts/doctor.py`: pure-stdlib deployment healthcheck (venv / MCP wiring / Qdrant / overrides / ledger), **delegates** retrieval health to the engine's `skill-search --health`; `--fix` does only safe/fast repairs (docker start + readiness poll → reindex → re-apply overrides). Heavy bootstrap stays in `setup.sh`.
+- Both skills declare `name:`=dir (proven registration pattern, 158/159 cache skills) with single-line descriptions (engine parses frontmatter by regex, not YAML). Versions bumped 0.1.2 → **0.2.0** (plugin.json + marketplace.json). Rationale → **ADR-0007**.
+- Verified: `py_compile` + `doctor.py --selftest` green; live `doctor.py` ran end-to-end (correctly flagged stale-index + duplicate-MCP). HELD per Rule A — written in workbench source, NOT installed; live slash registration unverified until reinstall.
+
 ## Risks / open
 
 - Warm service = a new always-on dependency (like Qdrant). Mitigated by the
@@ -174,6 +192,6 @@ Rule A: never write the install path without an explicit per-step OK.
   single-daemon consolidation.
 - Soft-enforcement ceiling: relevant candidates raise compliance but can't guarantee
   it; P2 teeth deferred by design — measure first.
-- Override-generator landmine (separate finding): `generate_overrides.py` targets
-  `settings.local.json` (deleted) with a 2-item keep-on default → a rerun would nuke
-  the curated always-on set. Guard before any override regen. (Track separately.)
+- Override-generator landmine: `generate_overrides.py` targets `settings.local.json` with a
+  2-item keep-on default → a rerun would nuke the curated always-on set. Guard before any
+  override regen. **Now documented in ADR-0005 + `caveats.md` §2.**

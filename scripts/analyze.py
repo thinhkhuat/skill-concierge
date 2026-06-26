@@ -19,6 +19,7 @@ Pure stdlib, read-only. Usage:  python3 analyze.py [path-to-ledger.log]
 import sys
 import os
 import json
+import urllib.request
 from pathlib import Path
 from collections import Counter
 
@@ -44,18 +45,31 @@ def load(path):
 
 
 def known_skill_ids():
-    """Live skill-name set from the which-skills catalogue, to separate real skills
-    from built-in/plugin slash commands in the manual rollup. Interim source:
-    library.json (the plan unifies this onto the Qdrant index later). Empty if absent."""
-    p = Path.home() / ".claude" / "which-skills" / "library.json"
+    """Live skill-name set straight from the Qdrant index — the SAME catalogue the
+    enforcer offers from — so the manual real-skill-vs-builtin split can't drift
+    from what the retriever knows (kills the old 585/508/512 library.json drift).
+    Scrolls all point payload `name`s (stdlib only). Empty set if Qdrant is down."""
+    base = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+    coll = os.environ.get("SKILL_COLLECTION", "claude_skills")
+    url = f"{base}/collections/{coll}/points/scroll"
+    ids, offset = set(), None
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-        ids = set()
-        for s in d.get("skills", []):
-            for k in ("id", "name"):
-                if isinstance(s.get(k), str):
-                    ids.add(s[k])
-        return ids, str(p)
+        while True:
+            body = {"limit": 256, "with_payload": ["name"]}
+            if offset is not None:
+                body["offset"] = offset
+            req = urllib.request.Request(
+                url, data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"})
+            res = json.loads(urllib.request.urlopen(req, timeout=3).read())["result"]
+            for p in res.get("points", []):
+                nm = (p.get("payload") or {}).get("name")
+                if isinstance(nm, str):
+                    ids.add(nm)
+            offset = res.get("next_page_offset")
+            if offset is None:
+                break
+        return ids, f"{base}/{coll}"
     except Exception:
         return set(), None
 
@@ -67,30 +81,46 @@ def main():
 
     # Segment into per-session turn windows. A `turn`/`manual` opens a window;
     # subsequent `auto`/`search` for that session attach to its latest window.
-    turns, cur = [], {}
+    # `offer` (from the enforcer) fires in the SAME UserPromptSubmit as `turn`
+    # but BEFORE it (hook array order), so a latest-window match would miss — we
+    # collect offers and attach them by (sid, q) after windows are built.
+    turns, cur, by_sid_q, offers = [], {}, {}, []
     for e in events:
         sid, ev = e.get("sid", ""), e.get("ev")
         if ev in ("turn", "manual"):
-            w = {"sid": sid, "kind": ev, "q": e.get("q", ""),
-                 "name": e.get("name", ""), "autos": [], "searches": 0}
+            w = {"sid": sid, "kind": ev, "q": e.get("q", ""), "name": e.get("name", ""),
+                 "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
             turns.append(w)
             cur[sid] = w
+            if ev == "turn":
+                by_sid_q[(sid, w["q"])] = w
         elif ev == "auto":
             w = cur.get(sid)
             if w is None:
-                w = {"sid": sid, "kind": "orphan-auto", "q": "",
-                     "name": "", "autos": [], "searches": 0}
+                w = {"sid": sid, "kind": "orphan-auto", "q": "", "name": "",
+                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
                 turns.append(w)
                 cur[sid] = w
             w["autos"].append(e.get("name") or "?")
         elif ev == "search":
             w = cur.get(sid)
             if w is None:
-                w = {"sid": sid, "kind": "orphan-search", "q": "",
-                     "name": "", "autos": [], "searches": 0}
+                w = {"sid": sid, "kind": "orphan-search", "q": "", "name": "",
+                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
                 turns.append(w)
                 cur[sid] = w
             w["searches"] += 1
+        elif ev == "offer":
+            offers.append(e)
+
+    # Attach offers to their turn window by (sid, q-prefix). Offer.q and turn.q
+    # are both prompt[:120], so they match exactly.
+    for e in offers:
+        w = by_sid_q.get((e.get("sid", ""), e.get("q", "")))
+        if w is not None:
+            w["offered"] = [o[0] for o in e.get("offered", []) if isinstance(o, list) and o]
+            w["band"] = e.get("band")
+            w["fallback"] = e.get("fallback")
 
     windows = [w for w in turns if w["kind"] == "turn" and w["q"].strip()]
     manual = [w for w in turns if w["kind"] == "manual"]
@@ -98,6 +128,15 @@ def main():
     used = sum(1 for w in windows if w["autos"])
     searched = sum(1 for w in windows if w["searches"])
     dodge = sum(1 for w in windows if not w["autos"] and not w["searches"])
+
+    # hit@k — of turns that offered candidates AND used an auto skill, how often
+    # the used skill was in the offered set (the retriever's precision payoff).
+    eligible = [w for w in windows if w["offered"] and w["autos"]]
+    hits = sum(1 for w in eligible if any(a in w["offered"] for a in w["autos"]))
+    # fallback rate — offers that degraded to mandate-only (embed/qdrant down/slow).
+    all_offers = [w for w in turns if w["band"] is not None]
+    fb = sum(1 for w in all_offers if w["fallback"])
+    band_freq = Counter(w["band"] for w in all_offers)
 
     auto_freq = Counter(a for w in turns for a in w["autos"])
     names = [w["name"] for w in manual if w["name"]]
@@ -116,7 +155,13 @@ def main():
     print(f"uptake        : {used}/{n}  {pct(used)}   (turn used a skill)")
     print(f"search called : {searched}/{n}  {pct(searched)}")
     print(f"dodge         : {dodge}/{n}  {pct(dodge)}   (no skill, no search)")
-    print(f"hit@k         : pending (needs `offer` events from the enforcer hook)")
+    if all_offers:
+        hk = f"{hits}/{len(eligible)}  {(100*hits/len(eligible)):.0f}%" if eligible else "n/a (no offered+used turn yet)"
+        print(f"hit@k         : {hk}   (used skill was in the offered set)")
+        print(f"offers        : {len(all_offers)}   bands: {dict(band_freq)}")
+        print(f"fallback rate : {fb}/{len(all_offers)}  {(100*fb/len(all_offers)):.0f}%   (mandate-only: embed/qdrant down or slow)")
+    else:
+        print(f"hit@k         : pending (no `offer` events yet — enforcer not live / no banked turns)")
     print(f"top auto      : {auto_freq.most_common(10)}")
     if skills:
         print(f"top manual (real skill)     : {manual_skill.most_common(10)}")

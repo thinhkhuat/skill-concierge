@@ -14,3 +14,4 @@ vendor/**/*.egg-info/
 
 # IJFW tool state — internal session tracking (journals, transcripts, metrics, db); not part of the plugin
 .ijfw/
+ijfw/

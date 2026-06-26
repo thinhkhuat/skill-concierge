@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# skill-concierge — warm embed shim launcher (host / service-free tier).
+# Mirrors bin/skill-search-mcp: EXECS the STABLE venv built by setup.sh
+# ($HOME/.local/share/skill-concierge/venv) so it survives plugin reinstalls.
+#
+# The DEPLOYED server tier runs the shim as a Docker sidecar next to the Qdrant
+# container (see Dockerfile + setup.sh). This launcher covers local dev,
+# the cosine-parity check, and the no-Docker embedded tier. Both run the same
+# scripts/embed_server.py, so parity holds across launch modes.
+set -euo pipefail
+VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
+PY="$VENV/bin/python"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ ! -x "$PY" ]; then
+  echo "skill-concierge: engine venv not found at $VENV." >&2
+  echo "Run the plugin setup once:  bash \"$here/setup.sh\"" >&2
+  exit 127
+fi
+# The vendored engine is pip-installed into the venv (setup.sh), so skill_search
+# imports without PYTHONPATH. Pass the deployed embed env explicitly so the shim
+# serves the index's mpnet-768 model, never the engine's bge-small default.
+exec env \
+  SKILL_EMBED_BACKEND="${SKILL_EMBED_BACKEND:-fastembed}" \
+  SKILL_EMBED_MODEL="${SKILL_EMBED_MODEL:-sentence-transformers/paraphrase-multilingual-mpnet-base-v2}" \
+  "$PY" "$here/scripts/embed_server.py"

@@ -1,0 +1,13 @@
+# Keep the embed-shim build context small: only vendor/skill-search +
+# scripts/embed_server.py are COPYed by the Dockerfile.
+.git
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+vendor/skill-search/eval
+vendor/skill-search/tests
+plans
+docs
+hooks
+config

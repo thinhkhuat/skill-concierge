@@ -62,8 +62,12 @@ def main() -> int:
                 name = s[1:].split()[0] if len(s) > 1 else ""
                 _append({"t": t, "sid": sid, "ev": "manual", "name": name})
             else:
-                # turn boundary — lets the analyzer segment uptake per prompt
-                _append({"t": t, "sid": sid, "ev": "turn", "q": prompt[:120]})
+                # turn boundary — lets the analyzer segment uptake per prompt.
+                # Log the STRIPPED prompt so analyze.py can join this `turn` to
+                # the enforcer's `offer` event by (sid, q) — the enforcer logs q
+                # stripped, so an unstripped q here would break the join for any
+                # whitespace-bearing prompt and silently undercount hit@k.
+                _append({"t": t, "sid": sid, "ev": "turn", "q": s[:120]})
 
         elif evt == "PostToolUse":
             tool = d.get("tool_name", "")

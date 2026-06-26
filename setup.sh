@@ -14,6 +14,9 @@ VENDOR="$ROOT/vendor/skill-search"
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
 QNAME="${SKILL_QDRANT_CONTAINER:-skill-search-qdrant}"
 QIMAGE="${SKILL_QDRANT_IMAGE:-qdrant/qdrant:1.18.2}"
+ENAME="${SKILL_EMBED_CONTAINER:-skill-concierge-embed-shim}"
+EIMAGE="${SKILL_EMBED_IMAGE:-skill-concierge-embed-shim:latest}"
+EPORT="${EMBED_SHIM_PORT:-6363}"
 
 PYTHON="${SKILL_PYTHON:-}"
 if [ -z "$PYTHON" ]; then
@@ -48,6 +51,22 @@ else
     "$QIMAGE"
 fi
 
+echo "[2b/4] warm embed shim (Docker sidecar '$ENAME' next to Qdrant)"
+# The per-turn enforcer hook POSTs queries here to embed in ~tens of ms instead
+# of paying a cold model load. Sidecar mirrors Qdrant's restart policy. Bound to
+# 127.0.0.1 only — never exposed off-host. Skip cleanly if not already listening.
+if ! curl -s -m 2 "http://127.0.0.1:$EPORT/health" >/dev/null 2>&1; then
+  docker build -t "$EIMAGE" "$ROOT"
+  if docker ps -a --format '{{.Names}}' | grep -qx "$ENAME"; then
+    docker rm -f "$ENAME" >/dev/null 2>&1 || true
+  fi
+  docker run -d --name "$ENAME" --restart unless-stopped \
+    -p "127.0.0.1:$EPORT:6363" \
+    "$EIMAGE"
+else
+  echo "  embed shim already listening on 127.0.0.1:$EPORT — leaving it."
+fi
+
 echo "[3/4] build/refresh the multilingual index @ $QURL"
 env_run() { SKILL_QDRANT_URL="$QURL" SKILL_EMBED_BACKEND=fastembed SKILL_EMBED_MODEL="$MODEL" "$@"; }
 env_run "$VENV/bin/skill-search" --reindex
@@ -65,5 +84,6 @@ so it survives plugin reinstalls. To go live:
         claude mcp remove skill-search -s user
   • Restart Claude Code so the MCP + overrides take effect.
   • Re-run setup.sh after a plugin UPDATE to refresh the engine.
-  • Qdrant must be up each session: docker start $QNAME
+  • Qdrant + embed shim must be up each session:
+        docker start $QNAME $ENAME
 EOF
