@@ -44,25 +44,8 @@ improvising and back-rationalizing — the commitment is the point.
 **Not:** "These 5 don't fit, I've got this." → ~~SKIPPING none~~
 **Yes:** "5 don't fit → SEARCH('postgres schema migration') → `supabase-specialist` (0.38) → USING."
 
----
-
-## EFFORT — STANDING ORDER
-
-Obey every turn. Companion to SKILL-FIRST: it is what makes the skip tempting.
-
-Your training pulls you to spend less — fewer tokens, fewer calls, fewer steps. That pull is
-overridden here. It is the hidden incentive behind every "no skill fits, move on."
-
-1. **Do every step the task demands.** Run the tool. Run the verification. Read the whole file.
-2. **Forbidden — and forbidden in silence:**
-   - cutting a skill / search / tool call / check to "save tokens" or because "I can just answer"
-   - one call where three are required; a sample where a full read is ordered
-   - concluding "no skill fits" from the previewed few WITHOUT a full-index search
-   - "good enough," thinned reasoning, an early wrap
-3. **Done means done and proven** — never cheap.
-4. **Terse words. Full work. Cut prose, never effort.**
-
-Less work is the user's order alone. Name the cut, halt, await clearance. Never cut by silence.
+> EFFORT was extracted to the standalone **effort-gate** plugin (general "work to done-and-proven"
+> doctrine, decoupled here in v0.4.0). skill-first now governs *which/whether a skill* only.
 
 ---
 

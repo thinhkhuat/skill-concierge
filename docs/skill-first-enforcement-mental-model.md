@@ -84,6 +84,11 @@ Replaced with: *closest-fit-adapted is the standard; naming an unfit skill to pa
 
 ## 4. The EFFORT companion (drop trained token-thrift)
 
+> **Extracted (v0.4.0):** EFFORT is now the standalone **effort-gate** plugin
+> (`github.com/thinhkhuat/effort-gate`), decoupled from skill-concierge — it is universal, not
+> skill-bound. The design below is preserved as rationale/history; the live doctrine ships in
+> effort-gate (same caveman split: SessionStart full + per-turn re-assert, no detection).
+
 Models are trained (length/effort penalties) to minimize tokens — and will **silently cut WORK** to feel
 economical: skip a skill, a tool call, a search, a verification; do one call where three are needed;
 "good enough" to wrap early. This is the hidden incentive that makes the SKILL gate's *skip* tempting.
@@ -247,6 +252,7 @@ Yes: "5 don't fit → SEARCH('postgres schema migration') → supabase-specialis
 ```
 
 ### 10.2 EFFORT — STANDING ORDER
+*(Extracted to the standalone effort-gate plugin in v0.4.0 — see §4. Kept here as the origin artifact.)*
 ```
 EFFORT — STANDING ORDER. Obey every turn. This is not advice.
 

@@ -70,28 +70,21 @@ LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 
-# Per-turn GATE TRIGGER — the cheap re-assert of BOTH standing orders. The full
-# rich versions are injected once at SessionStart (doctrine.py); these keep them
-# live in attention every turn without re-paying the rich version. Pre-commitment,
-# not persuasion. Two co-equal gates, both in-generation (no post-turn detection):
-#   • SKILL-FIRST — forces a line-1 token; "the few don't fit" → SEARCH, never skip.
-#   • EFFORT      — forbids cutting work to save tokens; a cut must be named + halted,
-#                   never silent (silent thrift is the dodge that makes a SKIP tempting).
-# EFFORT_TRIGGER is shared by the fallback and offer paths (DRY).
-EFFORT_TRIGGER = (
-    "\nEFFORT — run every step the task needs (skill, search, tool, full read, verify). "
-    "Cutting work to \"save tokens\" / \"good enough\" is forbidden; name any cut and halt — "
-    "never cut by silence. Cut prose, never effort. [full standing order: session start]"
-)
-
+# Per-turn GATE TRIGGER — the cheap re-assert. The full SKILL-FIRST standing order
+# is injected once at SessionStart (doctrine.py); this keeps it live in attention
+# every turn without re-paying the rich version. Pre-commitment, not persuasion: it
+# forces a line-1 token and turns "the few don't fit" into an order to SEARCH, never
+# a skip. In-generation only — no post-turn detection.
+# (EFFORT was decoupled to the standalone effort-gate plugin in v0.4.0; this hook
+# now governs which/whether a skill only.)
 MANDATE = (
     "SKILL-FIRST — line 1 of your reply = one of: "
     "USING <skill> | SEARCH <query> | SKIPPING none.\n"
     "The skills shown each turn are a top-few PREVIEW, not the ~500-skill inventory. "
     "\"Few don't fit\" / \"I'm confident\" / \"I can handle it\" are NOT skips — they order "
     "you to SEARCH the full index (search_skills) before any SKIPPING; show the query. "
-    "SKIPPING is lawful only after a search returns nothing usable."
-    + EFFORT_TRIGGER
+    "SKIPPING is lawful only after a search returns nothing usable. "
+    "[full standing order: session start]"
 )
 
 
@@ -159,8 +152,8 @@ def _ranked_mandate(cands: list) -> str:
         "Top-few PREVIEW for this request (NOT the full ~500-skill shelf):\n"
         + "\n".join(lines) + "\n"
         "None fit? That is not a skip — SEARCH the full index (search_skills) before any "
-        "SKIPPING; show the query. Closest fit, adapted, is the standard; perfect is not the bar."
-        + EFFORT_TRIGGER
+        "SKIPPING; show the query. Closest fit, adapted, is the standard; perfect is not the bar. "
+        "[full standing order: session start]"
     )
 
 
