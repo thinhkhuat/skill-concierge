@@ -1,0 +1,28 @@
+{
+  "description": "skill-concierge invocation ledger — append-only telemetry: turns + manual /skill use (UserPromptSubmit), and Claude's auto skill / semantic-search invocations (PostToolUse). Fail-silent, additive-only.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/ledger.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Skill|mcp__skill-search__search_skills",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/ledger.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
