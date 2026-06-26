@@ -1,0 +1,19 @@
+{
+  "name": "skill-concierge",
+  "owner": {
+    "name": "thinhkhuat"
+  },
+  "metadata": {
+    "description": "Skill-governance layer for Claude Code — semantic retrieval + use-enforcement + invocation ledger.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "skill-concierge",
+      "source": "./",
+      "description": "Fuses semantic skill-search (which skill fits) with a use-enforcement hook (whether Claude actually uses one) over a single catalogue, plus a compounding skill-invocation ledger for data-backed always-on curation.",
+      "category": "developer-tools",
+      "tags": ["skills", "governance", "semantic-search", "hooks", "telemetry"]
+    }
+  ]
+}

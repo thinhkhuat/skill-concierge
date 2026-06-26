@@ -1,0 +1,16 @@
+# telemetry output — compounding runtime data, handled by logman, never committed
+logs/
+
+# python
+__pycache__/
+*.pyc
+
+# vendored engine: plugin-local venv + downloaded model cache (reproduced by setup, not committed)
+vendor/.venv/
+vendor/**/*.egg-info/
+
+# os
+.DS_Store
+
+# IJFW tool state — internal session tracking (journals, transcripts, metrics, db); not part of the plugin
+.ijfw/
