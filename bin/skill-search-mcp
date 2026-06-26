@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# skill-concierge — MCP launcher.
+# Runs the vendored skill-search server from a STABLE venv (built once by setup.sh),
+# so the MCP survives plugin reinstalls/updates — unlike a venv under the
+# wipe-on-reinstall plugin cache (${CLAUDE_PLUGIN_ROOT}/vendor/.venv), the original
+# ENOENT cause. Only EXECS (never builds) → no slow first spawn that times out the MCP
+# connect. The MCP env (SKILL_QDRANT_URL, SKILL_EMBED_*) comes from .mcp.json via exec.
+set -euo pipefail
+VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
+BIN="$VENV/bin/skill-search"
+if [ ! -x "$BIN" ]; then
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  echo "skill-concierge: MCP engine venv not found at $VENV." >&2
+  echo "Run the plugin setup once:  bash \"$here/setup.sh\"" >&2
+  exit 127
+fi
+exec "$BIN"
