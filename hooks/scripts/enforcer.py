@@ -70,17 +70,19 @@ LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 
-# Generic standing mandate — injected with the candidates, and alone on fallback.
+# Per-turn GATE TRIGGER — the cheap re-assert. The full standing order is injected
+# once at SessionStart (doctrine.py); this keeps it live in attention every turn
+# without re-paying the rich version. Pre-commitment, not persuasion: it forces a
+# line-1 token and turns "the few don't fit" into an order to SEARCH, never a skip.
+# Injected alone on fallback (shim/Qdrant down), or above the candidate preview.
 MANDATE = (
-    "SKILL-FIRST (standing mandate). Before acting on this request: scan your "
-    "available skill catalogue. If ANY available skill genuinely fits this task, "
-    "you MUST invoke it — skills encode a better, structured approach and "
-    "consistently raise output quality over improvising. This is not optional for "
-    "substantive work. The ONLY getaway is a genuinely trivial ask (a quick fact, "
-    "a yes/no, a one-line edit, a pure conversational reply, or work the user "
-    "scoped to \"no skill\"). When in doubt, invoke. Prefer the most specific "
-    "skill; chain when the task spans domains. Announce the skill you're using in "
-    "one line, then proceed."
+    "SKILL-FIRST — line 1 of your reply = one of: "
+    "USING <skill> | SEARCH <query> | SKIPPING none.\n"
+    "The skills shown each turn are a top-few PREVIEW, not the ~500-skill inventory. "
+    "\"Few don't fit\" / \"I'm confident\" / \"I can handle it\" are NOT skips — they order "
+    "you to SEARCH the full index (search_skills) before any SKIPPING; show the query. "
+    "SKIPPING is lawful only after a search returns nothing usable.\n"
+    "Terse words, full work — not the cheap stop. [full standing order: session start]"
 )
 
 
@@ -143,13 +145,13 @@ def _ranked_mandate(cands: list) -> str:
             blurb = blurb[:_DESC_CHARS].rsplit(" ", 1)[0] + "…"
         lines.append(f"  • {name} (match {score:.2f}) — {blurb}")
     return (
-        "SKILL-FIRST (standing mandate). For THIS request, your top-ranked "
-        "installed skills (semantic match against the skill index):\n"
+        "SKILL-FIRST — line 1 of your reply = one of: "
+        "USING <skill> | SEARCH <query> | SKIPPING none.\n"
+        "Top-few PREVIEW for this request (NOT the full ~500-skill shelf):\n"
         + "\n".join(lines) + "\n"
-        "You MUST invoke the best-fitting one before improvising — skills encode a "
-        "better, structured approach and consistently raise quality. Chain them if "
-        "the task spans domains. Skip ONLY if this is genuinely trivial. Announce "
-        "the skill in one line, then proceed."
+        "None fit? That is not a skip — SEARCH the full index (search_skills) before any "
+        "SKIPPING; show the query. Closest fit, adapted, is the standard; perfect is not the bar.\n"
+        "Terse words, full work — not the cheap stop. [full standing order: session start]"
     )
 
 

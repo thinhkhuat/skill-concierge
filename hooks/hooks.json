@@ -1,6 +1,18 @@
 {
-  "description": "skill-concierge — semantic skill-first enforcer + invocation ledger. UserPromptSubmit: inject semantic top-k skill candidates (enforcer) and log turns/manual use (ledger). PostToolUse: log Claude's auto skill / semantic-search invocations. Fail-silent, additive-only.",
+  "description": "skill-concierge — SKILL-FIRST doctrine + semantic enforcer + invocation ledger. SessionStart: inject the full standing-order doctrine (doctrine.py, read from hooks/doctrine/skill-first.md). UserPromptSubmit: inject the cheap per-turn gate trigger + semantic top-k candidates (enforcer) and log turns/manual use (ledger). PostToolUse: log Claude's auto skill / semantic-search invocations. Fail-silent, additive-only. No post-turn gate — governance is in-generation, caveman-style.",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/doctrine.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
