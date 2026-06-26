@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "skill-search": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/vendor/.venv/bin/skill-search",
+      "args": [],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}/vendor/skill-search",
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "fastembed",
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+      }
+    }
+  }
+}

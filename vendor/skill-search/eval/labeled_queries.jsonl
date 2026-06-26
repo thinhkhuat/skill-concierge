@@ -1,0 +1,28 @@
+# Labeled retrieval eval for skill-search. One JSON object per line:
+#   {"query": "...", "expect": ["skill-a", "skill-b"]}   # hit = any expected skill in top-k
+# These targets reflect a specific skill install (117 skills). Build your own set
+# for your skills — that's the point; this is a worked example, not a universal truth.
+{"query": "debug a failing test", "expect": ["gsd-debug", "superpowers:systematic-debugging"]}
+{"query": "write tests before implementing the feature", "expect": ["superpowers:test-driven-development", "gsd-add-tests"]}
+{"query": "review my UI for accessibility", "expect": ["chrome-devtools-mcp:a11y-debugging", "web-design-guidelines"]}
+{"query": "build a polished landing page component", "expect": ["frontend-design:frontend-design"]}
+{"query": "set up a supabase database with authentication", "expect": ["supabase:supabase"]}
+{"query": "optimize a slow postgres query", "expect": ["supabase:supabase-postgres-best-practices", "supabase:supabase"]}
+{"query": "create a new skill from scratch", "expect": ["skill-creator:skill-creator"]}
+{"query": "is there a skill that can do this for me", "expect": ["find-skills"]}
+{"query": "plan out a multi-step feature before coding", "expect": ["superpowers:writing-plans", "claude-mem:make-plan", "gsd-plan-phase"]}
+{"query": "start a brand new project from nothing", "expect": ["gsd-new-project"]}
+{"query": "brainstorm ideas before building anything", "expect": ["superpowers:brainstorming"]}
+{"query": "work on a feature in an isolated git branch", "expect": ["superpowers:using-git-worktrees"]}
+{"query": "watch a pull request until it is ready to merge", "expect": ["claude-mem:babysit"]}
+{"query": "review this code for security vulnerabilities", "expect": ["security-review", "gsd-code-review"]}
+{"query": "confirm my change actually works in the running app", "expect": ["verify", "run"]}
+{"query": "search my past sessions and memory", "expect": ["claude-mem:mem-search", "context-mode:ctx-search"]}
+{"query": "review the current diff for bugs", "expect": ["code-review", "gsd-code-review"]}
+{"query": "audit a design against good design principles", "expect": ["claude-mem:design-is", "web-design-guidelines"]}
+{"query": "diagnose a memory leak in a node app", "expect": ["chrome-devtools-mcp:memory-leak-debugging"]}
+{"query": "my page loads slowly, improve largest contentful paint", "expect": ["chrome-devtools-mcp:debug-optimize-lcp"]}
+{"query": "change claude code settings and permissions", "expect": ["update-config"]}
+{"query": "customize my keyboard shortcuts", "expect": ["keybindings-help"]}
+{"query": "turn a document into a slide deck", "expect": ["claude-mem:wowerpoint"]}
+{"query": "run a command on a recurring interval", "expect": ["loop", "schedule"]}
