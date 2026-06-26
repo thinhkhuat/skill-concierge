@@ -65,6 +65,12 @@ The score band insight was humbling. mpnet multilingual cosines are narrow and o
 
 ## Next Steps
 
+> **Update (same session, 2026-06-26): go-live EXECUTED on owner GO.** Shipped as v0.2.0
+> (commit `12b61de`), lexical hook deregistered from `~/.claude/settings.json` (backup kept),
+> plugin updated 0.1.2→0.2.0, applied via `/reload-plugins`. Verified live: one enforcement
+> hook fires, `band=offer` with candidates when settled. The "owner must approve" note below
+> was the state at journal-write time. See `docs/plan.md` status header.
+
 **Phase 5 (go-live) is HIGH-RISK and owner-gated:**
 - Deregister lexical `skill_first_nudge.py` from ~/.claude/settings.json
 - Bump marketplace version + install semantic enforcer

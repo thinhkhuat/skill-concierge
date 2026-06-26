@@ -8,6 +8,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 ## [0.2.0] — 2026-06-26
 
 ### Added
+- **P1 fusion — semantic skill-enforcement (the headline of 0.2.0).** Retires the lexical
+  per-turn enforcement hook and points it at the SAME semantic Qdrant index `skill-search` serves:
+  - **Warm embed shim** — `scripts/embed_server.py` (stdlib http.server holding fastembed
+    mpnet-768 in memory; `POST /embed`, `GET /health`), shipped as a Docker sidecar next to the
+    Qdrant container on `127.0.0.1:6363` (`Dockerfile`, `bin/embed-shim`, `setup.sh`). Reuses the
+    engine embed path; `vendor/skill-search/pyproject.toml` pins `fastembed==0.8.0` for index
+    parity (cosine 1.000000 verified, EN+VN).
+  - **Semantic enforcer** — `hooks/scripts/enforcer.py` (UserPromptSubmit): embed → Qdrant top-k →
+    inject mandate + semantic candidates; fail-silent, additive-only, never blocks. Hard ~90ms
+    client-side embed timeout → mandate-only fallback on embed/Qdrant down or slow (see ADR-0008
+    for the 90ms calibration). Replaces the lexical scorer + `library.json`.
+  - **Telemetry** — `scripts/analyze.py` catalogue repointed off `library.json` onto the Qdrant
+    index; now reports hit@k / fallback rate / bands from new `offer` events.
+  - Go-live: lexical `skill_first_nudge.py` deregistered from `~/.claude/settings.json`; this
+    plugin version is the live enforcement layer.
 - **Maintenance skills** — `skill-concierge:setup` and `skill-concierge:doctor`:
   - `setup` — wraps the idempotent `setup.sh` bootstrap (stable venv, Qdrant, index,
     overrides) for first-time install and post-update refresh, then verifies with doctor.
@@ -30,8 +45,9 @@ All notable changes to **skill-concierge**. Format loosely follows
   by the existing `skill-search` skill in this deployment (158/159 installed plugin skills use
   it). Descriptions are single-line because the vendored engine parses frontmatter with a regex,
   not a YAML parser, so a `>-` block scalar would leak into the indexed text.
-- The docs slice (ADRs, caveats) documents an existing reality; no behavioural code change.
-  The fusion (P1) remains unbuilt — see `docs/plan.md` and ADR-0002.
+- The ADR/caveats docs slice documents existing reality; the P1 fusion (above) is the
+  behavioural change in 0.2.0 — the enforcement organ moved from the lexical scorer to the
+  semantic index. See `docs/plan.md` build log, ADR-0002, and ADR-0008.
 
 ## [0.1.2] — 2026-06-26
 

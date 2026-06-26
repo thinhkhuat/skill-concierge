@@ -1,6 +1,6 @@
 # ADR-0002: Fusion architecture — skill-search (WHICH) × skill-first (WHETHER)
 
-**Status:** Accepted; P1 implementation **COMPLETE** — enforcer hook built, warm embed shim operational, fallback tested. Deploy pending (owner-gated). See `../plan.md` build log.
+**Status:** Accepted; P1 implementation **COMPLETE + LIVE** (2026-06-26) — enforcer hook built, warm embed shim operational, fallback tested, **shipped as v0.2.0** (commit `12b61de`) and installed; lexical hook deregistered. See `../plan.md` build log.
 **Date:** 2026-06-26
 **Deciders:** owner (thinhkhuat)
 
@@ -46,7 +46,8 @@ stdlib-only). Semantic retrieval = embed(query) + Qdrant search. Qdrant search i
 embedding the query needs the **mpnet-768** model (ADR-0003), and cold-loading it per
 prompt is **seconds-scale** — over budget. So **P1's real deliverable is a WARM embedding
 endpoint** serving that exact model, that the cold hook hits in tens of ms, with a hard
-client-side **~120ms timeout → mandate-only fallback** (never silence, never crash).
+client-side timeout → mandate-only fallback (never silence, never crash). *(Design nominal
+was ~120ms; as-built default is **90ms** after live calibration — see ADR-0008.)*
 
 ## Consequences
 

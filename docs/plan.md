@@ -1,6 +1,6 @@
 # Skill Governance Layer — skill-search × skill-first Fusion
 
-**Status:** P1 COMPLETE — warm embed shim + enforcer hook built · verified (90ms timeout, cosine parity 1.000000, fallback tested). Ledger + enforcer both ready. **HELD, owner-gated go-live** (old skill-first-nudge hook still in ~/.claude/settings.json; cached plugin has ledger only). Go-live = deregister old hook (backup first) → marketplace bump → full plugin install.
+**Status:** P1 COMPLETE + **LIVE** (2026-06-26) — warm embed shim + enforcer hook built, verified (90ms timeout, cosine parity 1.000000, fallback tested), and **shipped as v0.2.0** (commit `12b61de`). Go-live executed: lexical `skill_first_nudge.py` deregistered from `~/.claude/settings.json` (backup `settings.json.bak-260626-pre-fusion-golive`), plugin updated 0.1.2→0.2.0, applied via `/reload-plugins`. Post-go-live verified live: exactly one enforcement hook fires, `band=offer` with semantic candidates when settled. Remaining: logman `RETENTION_DAYS=0` drop-in; measure the before/after uptake lift vs `plans/reports/baseline-260626-lexical-hook-snapshot.txt` as turns bank.
 **Date:** 2026-06-26
 **Owner context:** workbench; live global hook + Qdrant MCP deployment (see session memory [[skill-first-vs-skill-search-purpose]])
 
@@ -145,13 +145,19 @@ Rule A: never write the install path without an explicit per-step OK.
 
 ## Build log
 
-**2026-06-26 — P1 fusion complete: warm embed shim + enforcer hook (HELD, owner-gated go-live).**
+> **Current state (2026-06-26, end of day): ALL slices LIVE.** The fusion shipped as v0.2.0
+> (commit `12b61de`) and is installed + firing. The per-slice "HELD" notes below are
+> point-in-time records from when each slice was built; they were all subsequently brought
+> live (ledger + enforcer install via the 0.2.0 plugin; reproduction layer / MCP online; old
+> lexical hook deregistered). Read the Status header at the top of this file for live state.
+
+**2026-06-26 — P1 fusion complete: warm embed shim + enforcer hook (SHIPPED LIVE v0.2.0).**
 - **Warm embed shim:** `scripts/embed_server.py` (stdlib http.server, mpnet-768 in memory; POST /embed, GET /health); `bin/embed-shim` (host launcher); Dockerfile + .dockerignore (Docker sidecar next to skill-search-qdrant container, 127.0.0.1:6363); `setup.sh` builds/runs the sidecar. Parity verified: cosine 1.000000 vs index-build path (EN + VN). **Timeout calibration:** design nominal ~120ms breached cold-start budget (~50ms python) with co-equal ≲150ms per-turn; measured p95 3.75x headroom → set ENFORCER_EMBED_TIMEOUT=90ms (env-overridable, client-side hard timeout via urllib socket). Verified: deliberately-slowed shim falls through to mandate-only, turn ≲150ms.
 - **Vendor lock:** `vendor/skill-search/pyproject.toml` fastembed pinned ==0.8.0 (was >=0.3). Version 0.5.1 switches mean→CLS pooling, silently corrupts retrieval. The live index built on 0.8.0 — pinning guarantees rebuild-free reproduction.
 - **Enforcer hook:** `hooks/scripts/enforcer.py` (UserPromptSubmit); embeds prompt via shim (90ms timeout), Qdrant top-k via raw urllib, injects mandate + semantic candidates (name, desc, score). Retire `score()`/`_tokens()`/`_fold()`/`_distinct_hits()` + `library.json` read. Keep: fail-silent/additive/never-blocks, empty/slash suppression. Fallback on embed-down/timeout/qdrant-down → mandate-only (tagged telemetry). Cheap pre-gate (empty/slash/≤2-word).
 - **Registry:** `hooks/hooks.json` registers enforcer.py alongside ledger.py (not yet installed; settings.json registration or full plugin install pending). Ledger and enforcer both registered, both fire.
 - **Telemetry:** `scripts/analyze.py` repointed off library.json → Qdrant index (stdlib scroll). Reports hit@k + fallback rate + bands from `offer` events. ledger.py logs stripped q so offer↔turn join works.
-- Status: DONE (design + code + verification); owner-gated go-live. Old lexical hook (skill-first-nudge.py) still registered in ~/.claude/settings.json; cached plugin (0.1.0/0.1.1/0.1.2) still has ledger.py only. No double-injection today. Go-live = deregister old hook (backup first) THEN marketplace bump + full plugin install.
+- Status: DONE + LIVE. Was owner-gated; on owner GO the cutover ran in order — committed+pushed `12b61de` (v0.2.0), deregistered the old `skill_first_nudge.py` from `~/.claude/settings.json` (backup kept), `claude plugin update` 0.1.2→0.2.0, applied via `/reload-plugins`. Verified: exactly one enforcement hook fires; `band=offer` with candidates when settled; the one `embed_timeout` observed was a reload-moment load spike (resilience working).
 
 **2026-06-26 — Ledger slice (P1 step 0) — built, HELD local (not installed).**
 - Files: `hooks/scripts/ledger.py` (UPS `turn`/`manual` + PostToolUse `auto`/`search`; fail-silent, additive-only, stdlib), `hooks/hooks.json` (plugin wrapper; UPS + PostToolUse matcher `Skill|mcp__skill-search__search_skills`), `scripts/analyze.py` (uptake/search/dodge + per-skill rollups).

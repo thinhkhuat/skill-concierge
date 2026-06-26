@@ -223,14 +223,18 @@ not embedded.
 
 ## Status & roadmap
 
-`0.2.0` — **published, MCP live, maintenance skills added** (`skill-concierge:setup` /
-`skill-concierge:doctor`). The system currently runs **Retrieve** (MCP) + **Ledger**
-(telemetry); the **Enforce** organ still uses its legacy lexical scorer. **The fusion itself
-is not yet built.**
+`0.2.0` — **published, MCP live, P1 fusion shipped + live, maintenance skills added**
+(`skill-concierge:setup` / `skill-concierge:doctor`). All three organs now run semantic:
+**Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
+from the SAME semantic index via a warm embed shim, with a hard-timeout → mandate-only
+fallback) + **Ledger** (telemetry, now with `offer`/hit@k/fallback). The legacy lexical
+`skill_first_nudge.py` is retired (deregistered from `~/.claude/settings.json`).
 
-Next major work is **P1 — fusion**: the enforcer sources candidates from the semantic index
-(warm embed shim + hard-timeout fallback) instead of the lexical scorer. See
-[`docs/plan.md`](docs/plan.md) and [ADR-0002](docs/adr/0002-fusion-which-plus-whether.md).
+The P1 fusion is **done**: warm fastembed mpnet-768 Docker sidecar (`127.0.0.1:6363`),
+semantic enforcer with a 90ms client-side embed timeout, and `analyze.py` repointed to the
+Qdrant index. See [`docs/plan.md`](docs/plan.md),
+[ADR-0002](docs/adr/0002-fusion-which-plus-whether.md), and
+[ADR-0008](docs/adr/0008-warm-embed-shim-timeout-calibration.md).
 
 ## Troubleshooting
 
