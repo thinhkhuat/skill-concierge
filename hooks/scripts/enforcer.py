@@ -16,8 +16,8 @@ Design contract (mirrors the sibling ledger hook):
   • STDLIB-ONLY + lazy — no heavy imports; the trivial-getaway path does no I/O.
 
 Resilience / budget (Phase 3). The embed POST has a HARD client-side socket
-timeout (default 90ms — see EMBED_TIMEOUT_S for why it's tuned below the plan's
-nominal ~120ms). On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
+timeout (default 200ms within a ≲300ms total per-turn budget — see EMBED_TIMEOUT_S
+for the calibration history). On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
 embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
 never crashing — and stays within the per-turn budget regardless of shim health.
 (c) is load-bearing: a reachability check misses an up-but-slow shim that would
@@ -51,12 +51,14 @@ QUERY_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query"
 # RANK signal, not absolute confidence — so we show top-k above the floor rather
 # than gating hard on a high threshold. Tune from the ledger's offered-but-never-
 # taken rollups once data accrues.
-# HARD embed cap. Plan nominal was ~120ms, but measured python3 cold-start +
-# imports is ~50ms, so a 120ms cap pushes the slow-shim fallback path to ~180ms
-# — breaching the co-equal ≲150ms total-budget criterion. 90ms keeps the slow
-# path at ~140ms (measured) while leaving 3.75x headroom over the warm p95 of
-# 24ms, so real candidates always clear it. Raise via env if cold-start drops.
-EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.09"))
+# HARD embed cap. History: design nominal ~120ms → tuned to 90ms to fit a ≲150ms
+# total budget. But LIVE dogfooding showed ~60% of turns hit embed_timeout: the
+# single-threaded shim's inference, under real in-turn CPU contention (concurrent
+# UserPromptSubmit hooks + overlapping sessions), exceeded 90ms even though it's
+# ~18ms idle. Fix (owner-approved): threaded shim (embed_server.py) + relax the
+# budget to ≲300ms total → 200ms embed cap. Worst slow-path ≈ 50ms cold-start +
+# 200ms cap ≈ 250ms ≲ 300ms; happy path stays ~100ms. Raise/lower via env.
+EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.20"))
 QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.1"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "5"))
 GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.20"))  # top<this → silent
@@ -167,7 +169,7 @@ def main() -> int:
         if len(prompt.split()) <= MAX_SHORT_WORDS:
             return 0
 
-        # Embed (HARD ~90ms timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
+        # Embed (HARD ~200ms timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
         try:
             vector = _embed(prompt)
         except (socket.timeout, TimeoutError):

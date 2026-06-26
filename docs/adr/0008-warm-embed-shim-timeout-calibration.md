@@ -22,23 +22,23 @@ The solution: keep the model **warm** in memory between prompts. Three approache
 - Exposes `GET /health` for liveness checks.
 - Auto-starts via `setup.sh` alongside the Qdrant container.
 
-The hook queries this shim with a **hard client-side timeout** (socket timeout via urllib): **90ms** (not the design-nominal ~120ms — see "Calibration" below).
+The hook queries this shim with a **hard client-side timeout** (socket timeout via urllib): **200ms**, within a **≲300ms** per-turn total budget. The shim is **threaded** (`ThreadingHTTPServer`) so concurrent requests don't serialize. See "Calibration" for how this evolved.
 
-## Calibration (90ms, not 120ms)
+## Calibration (200ms / ≲300ms / threaded — evolved from live dogfooding)
 
-The original design specified ~120ms timeout to leave headroom for Qdrant search + overhead on top of the ≲150ms per-turn budget. Live measurement changed this:
+The timeout went through three values; the final one is dogfooding-driven, not desk-tuned:
 
-- Python cold-start (hook process start → first call): ~50ms.
-- Embed call (hit shim, return vector): p50 ~15ms, p95 ~25ms, pathological (GC pause) ~80ms.
-- Qdrant search + overhead: ~30–40ms (top-k in-memory search).
-- Total per-turn: baseline ~70ms, p95 ~100ms, pathological ~150ms (at budget cap).
+1. **Design nominal ~120ms** — left headroom for Qdrant + overhead on a ≲150ms budget.
+2. **Tuned to 90ms** — measured python cold-start ~50ms meant 120ms breached the ≲150ms budget; 90ms kept the slow-path ~140ms. Looked safe in **isolated** latency tests (idle embed p50 ~15ms, p95 ~25ms).
+3. **Raised to 200ms + budget relaxed to ≲300ms + shim threaded** — **live dogfooding contradicted the isolated tests.** The plugin's own ledger showed **~60% of real turns hit `embed_timeout`** (mandate-only fallback). Root cause: idle the embed POST is ~18ms, but *during* a real `UserPromptSubmit` the single-threaded shim's CPU-bound mpnet inference competed with the busy host (≈4 concurrent UserPromptSubmit hooks + the working model + active MCP servers, sometimes overlapping sessions hitting the one shim) and slipped past 90ms. Isolated p95 (~25ms) never saw this contention.
 
-**120ms timeout leaves only ~30ms for embed latency before falling into Qdrant slot, risking timeout-driven fallback on normal load.** 90ms timeout:
-- Covers pathological embed calls (p99 ~85ms observed over 1000 samples).
-- Leaves ~60ms for Qdrant + overhead at the budget cap.
-- 3.75x headroom over warm p95 (25ms).
+**Fix (owner-approved, 2026-06-26):**
+- **Threaded shim** (`embed_server.py` → `ThreadingHTTPServer`): onnxruntime releases the GIL during inference, so per-request threads run concurrently. Measured: 8 parallel embeds dropped from **288ms serial → 65ms wall (4.4×)** — the serialization that drove the timeouts is gone.
+- **200ms embed cap within a ≲300ms total budget** (relaxes the original ≲150ms): the hook is *non-blocking additive context* injected before the user reads the reply, so ~250ms worst-case is imperceptible. Worst slow-path ≈ 50ms cold-start + 200ms cap ≈ 250ms ≲ 300ms; happy path stays ~100ms.
 
-90ms is **environment-overridable** via `ENFORCER_EMBED_TIMEOUT` (milliseconds, integer).
+Both knobs are **environment-overridable**: `ENFORCER_EMBED_TIMEOUT` (float **seconds**, default `0.20`) and `ENFORCER_QDRANT_TIMEOUT`. Watch the ledger's fallback rate (`analyze.py`) and re-tune if real load shifts.
+
+**Lesson:** isolated micro-benchmarks underestimate a per-turn hook's real cost — the binding latency is in-turn contention, not the idle path. The plugin's own telemetry (the `offer`/`fallback` ledger) is what surfaced it; trust the dogfooding signal over the bench.
 
 ## Consequences
 

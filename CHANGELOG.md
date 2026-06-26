@@ -5,6 +5,19 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-26
+
+### Changed
+- **Enforcer embed timeout 90ms → 200ms, total per-turn budget ≲150ms → ≲300ms**, and the
+  embed shim is now **threaded** (`ThreadingHTTPServer`). Live dogfooding (the plugin's own
+  ledger) showed ~60% of real turns were hitting `embed_timeout` → mandate-only: the
+  single-threaded shim's mpnet inference, under real in-turn CPU contention (concurrent
+  UserPromptSubmit hooks + overlapping sessions), slipped past 90ms even though it's ~18ms idle.
+  Threading flattens concurrent embeds (8 parallel: 288ms serial → 65ms wall) and the wider
+  budget recovers the semantic candidates on the common path; the hook is non-blocking additive
+  context so ~250ms worst-case is imperceptible. Both knobs env-overridable
+  (`ENFORCER_EMBED_TIMEOUT` float-seconds, `ENFORCER_QDRANT_TIMEOUT`). See ADR-0008.
+
 ## [0.2.0] — 2026-06-26
 
 ### Added
@@ -76,7 +89,8 @@ All notable changes to **skill-concierge**. Format loosely follows
   `config/keep-on.json`.
 - Build plan + ops docs under `docs/`.
 
-[Unreleased]: https://github.com/thinhkhuat/skill-concierge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/thinhkhuat/skill-concierge/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/thinhkhuat/skill-concierge/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/thinhkhuat/skill-concierge/releases/tag/v0.2.0
 [0.1.2]: https://github.com/thinhkhuat/skill-concierge/releases/tag/v0.1.2
 [0.1.1]: https://github.com/thinhkhuat/skill-concierge/releases/tag/v0.1.1

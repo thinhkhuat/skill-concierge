@@ -21,13 +21,17 @@ Routes:
   POST /embed  {"text": "..."}  -> {"vector": [...768]}
   GET  /health                  -> {"status":"ok","model":..., "dim":768}
 
-# ponytail: one-file stdlib http.server, single-threaded. Fine once warm — the
-# hook embeds one short query per turn. Put ThreadingHTTPServer/gunicorn in front
-# only if measured throughput ever demands it, not before.
+# ThreadingHTTPServer: live dogfooding showed a single-threaded shim serialized
+# concurrent hits (multiple UserPromptSubmit hooks per turn + overlapping sessions),
+# pushing the per-turn embed POST past the client timeout ~60% of turns. onnxruntime
+# releases the GIL during inference, so per-request threads run concurrently and cut
+# that queuing. The model object is shared+stateless across requests (ORT Run is
+# thread-safe). # ponytail: threaded stdlib server; reach for gunicorn only if this
+# is measured insufficient, not before.
 """
 import os
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Set the deployed embed env BEFORE importing the engine, so it reads mpnet-768
 # (NOT the engine's bge-small-en-v1.5 384-dim default). SKILL_QDRANT_URL forces
@@ -94,10 +98,10 @@ def main() -> None:
     # Warm-up so the first REAL request isn't the cold model load.
     embed("warm up")
     print(
-        f"embed-shim: model={EMBED_MODEL} dim={_dim()} listening on {HOST}:{PORT}",
+        f"embed-shim: model={EMBED_MODEL} dim={_dim()} listening on {HOST}:{PORT} (threaded)",
         flush=True,
     )
-    HTTPServer((HOST, PORT), Handler).serve_forever()
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":
