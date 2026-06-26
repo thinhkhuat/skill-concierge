@@ -1,7 +1,7 @@
 ---
 title: "skill-first x skill-search Fusion - P1 Implementation Task List"
 description: "Ordered build breakdown of the locked P1 fusion design (warm embed shim + skill-first hook rewrite). Decomposes docs/plan.md into 4 sequenced phases for the implementing agent."
-status: in-progress
+status: completed
 priority: P1
 branch: ""
 tags: [skill-concierge, fusion, hook, embeddings, qdrant]
@@ -48,12 +48,13 @@ semantically-relevant skill candidates instead of token-overlap guesses.
 | 1 | [Warm Embed Endpoint](./phase-01-warm-embed-endpoint.md) | Done | — |
 | 2 | [Hook Rewrite](./phase-02-hook-rewrite.md) | Done | 1 |
 | 3 | [Resilience and Budget](./phase-03-resilience-and-budget.md) | Done | 2 |
-| 4 | [Acceptance and Rollout](./phase-04-acceptance-and-rollout.md) | In progress (owner-gated go-live pending) | 1,2,3 |
+| 4 | [Acceptance and Rollout](./phase-04-acceptance-and-rollout.md) | Done — go-live executed (applies on restart) | 1,2,3 |
 
 > **Build status (2026-06-26, `ck:cook --auto`):** Phases 1-3 implemented + verified. Phase 4
-> acceptance/review/baseline done; the live go-live (deregister lexical hook in `~/.claude/settings.json`
-> + marketplace release/install) is HIGH-RISK + owner-gated → STOPPED for owner approval. No
-> double-injection today (cache plugin lacks `enforcer.py`). See `reports/`:
+> acceptance/review/baseline done. **GO-LIVE EXECUTED on owner GO:** committed+pushed `12b61de`,
+> plugin updated 0.1.2→0.2.0, lexical `skill_first_nudge.py` deregistered from `~/.claude/settings.json`
+> (backup kept). Applies on next Claude Code restart; post-restart verification (one hook fires +
+> before/after `analyze.py`) and the logman `RETENTION_DAYS=0` drop-in remain. See `reports/`:
 > `code-review-260626-semantic-fusion-impl.md`, `test-260626-semantic-fusion-impl.md`,
 > `baseline-260626-lexical-hook-snapshot.txt`.
 >

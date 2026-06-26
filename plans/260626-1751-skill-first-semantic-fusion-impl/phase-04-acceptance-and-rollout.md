@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Acceptance and Rollout"
-status: in-progress
+status: done
 priority: P1
 effort: "0.5-1d"
 dependencies: [1, 2, 3]
@@ -56,7 +56,7 @@ rollback path. The baseline snapshot is the irreversible-if-skipped step: do it 
 - [x] `analyze.py` prints offer / uptake / hit@k / dodge / fallback + per-skill rollups.
 - [ ] Ledger is ONE append-only compounding `.log`; logman-detectable; `RETENTION_DAYS=0` documented. *(PENDING: logman wiring deferred — step 8; ledger is already a single append-only `.log`.)*
 - [x] Baseline captured on the lexical hook BEFORE the fusion landed (before/after comparable).
-- [ ] Old lexical hook retired; exactly one enforcement hook live. *(PENDING: OWNER-GATED go-live — deregister `skill_first_nudge.py` + marketplace install. No double-injection today; cache plugin lacks `enforcer.py`.)*
+- [x] Old lexical hook retired; exactly one enforcement hook live. *(GO-LIVE EXECUTED 2026-06-26 on owner GO: committed+pushed `12b61de`, `skill_first_nudge.py` deregistered from `~/.claude/settings.json` (backup `settings.json.bak-260626-pre-fusion-golive`), plugin updated 0.1.2→0.2.0. Applies on next Claude Code restart; verify exactly one enforcement hook fires post-restart.)*
 
 ## Risk Assessment
 
