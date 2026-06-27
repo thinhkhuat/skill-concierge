@@ -5,6 +5,19 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-06-27
+
+### Added
+- `scripts/analyze.py` — `--since WHEN` / `--until WHEN` flags window the ledger by event
+  time (`WHEN` = epoch seconds or local ISO `YYYY-MM-DD[ HH:MM:SS]`), so before/after
+  compares (e.g. around a fix or go-live commit time) no longer need hand-splitting the
+  ledger. Prints a `window` header; positional-path and no-flag invocations are unchanged;
+  stays stdlib-only. Documented in `README.md`, `AGENTS.md`, and the mental-model doc.
+
+### Fixed
+- `README.md` ledger example claimed `hit@k` was "pending (needs offer events)" — stale:
+  `offer` events land and hit@k computes. Updated the example line and the note.
+
 ## [0.2.1] — 2026-06-26
 
 ### Changed

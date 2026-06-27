@@ -13,11 +13,21 @@ Reads the append-only JSONL ledger and reports the numbers that drive decisions:
 hit@k (was the auto-invoked skill in the offered set?) computes once `offer` events land
 from the enforcer hook; before any offers it falls back to "pending" (no offered-set yet).
 
-Pure stdlib, read-only. Usage:  python3 analyze.py [path-to-ledger.log]
+Pure stdlib, read-only.
+
+Usage:
+  python3 analyze.py [path-to-ledger.log] [--since WHEN] [--until WHEN]
+
+`--since`/`--until` window the ledger by event time so you don't have to split it by
+hand. WHEN is epoch seconds or a local ISO time (`YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS`).
+Before/after compare around a fix/ship point T (e.g. a commit time):
+  python3 analyze.py --until "T"     # the "before" window
+  python3 analyze.py --since "T"     # the "after"  window
 """
-import sys
 import os
 import json
+import argparse
+import datetime
 import urllib.request
 from pathlib import Path
 from collections import Counter
@@ -73,9 +83,52 @@ def known_skill_ids():
         return set(), None
 
 
+def parse_when(s):
+    """Parse a --since/--until value into epoch seconds (local time).
+    Accepts raw epoch seconds, or an ISO-ish date / datetime:
+    `YYYY-MM-DD`, `YYYY-MM-DD HH:MM[:SS]`, or `YYYY-MM-DDTHH:MM[:SS]`.
+    Tip — a git commit time is a valid boundary; grab it with
+    `git show -s --format=%cd --date=format:'%Y-%m-%d %H:%M:%S' <ref>`."""
+    s = s.strip()
+    try:
+        return float(s)  # bare epoch seconds
+    except ValueError:
+        pass
+    iso = s.replace("/", "-")
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(iso, fmt).timestamp()
+        except ValueError:
+            continue
+    raise SystemExit(
+        f"--since/--until: cannot parse '{s}' "
+        f"(use epoch seconds, 'YYYY-MM-DD', or 'YYYY-MM-DD HH:MM:SS' in local time)")
+
+
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else str(LEDGER)
+    ap = argparse.ArgumentParser(
+        description="Analyze the skill-concierge invocation ledger.")
+    ap.add_argument("path", nargs="?", default=str(LEDGER),
+                    help="ledger file to read (default: the live telemetry log)")
+    ap.add_argument("--since", metavar="WHEN",
+                    help="keep only events at/after WHEN (epoch or local ISO time)")
+    ap.add_argument("--until", metavar="WHEN",
+                    help="keep only events BEFORE WHEN (epoch or local ISO time)")
+    args = ap.parse_args()
+    path = args.path
+
     events = load(path)
+    n_total = len(events)
+    since = parse_when(args.since) if args.since else None
+    until = parse_when(args.until) if args.until else None
+    if since is not None or until is not None:
+        # Window the ledger by event time. Events without a `t` can't be placed
+        # in a window, so they're dropped here (kept only on a full-ledger run).
+        events = [e for e in events
+                  if e.get("t")
+                  and (since is None or e["t"] >= since)
+                  and (until is None or e["t"] < until)]
     events.sort(key=lambda e: e.get("t", 0))
 
     # Segment into per-session turn windows. A `turn`/`manual` opens a window;
@@ -150,6 +203,11 @@ def main():
         return f"{(100 * x / n):.0f}%" if n else "n/a"
 
     print(f"ledger        : {path}")
+    if since is not None or until is not None:
+        def _fmt(t):
+            return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "—"
+        print(f"window        : [{_fmt(since)} .. {_fmt(until)})   "
+              f"{len(events)}/{n_total} events in window")
     print(f"events        : {len(events)}   turn-windows: {n}   manual: {len(manual)}")
     print(f"uptake        : {used}/{n}  {pct(used)}   (turn used a skill)")
     print(f"search called : {searched}/{n}  {pct(searched)}")

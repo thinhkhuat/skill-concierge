@@ -23,7 +23,7 @@ the full product overview see [`README.md`](README.md); for the *why* behind eac
 The full tree is in the README's *Architecture* section. The parts you will touch most:
 
 - `skills/{skill-search,setup,doctor}/SKILL.md` — the three plugin skills (router + maintenance)
-- `scripts/` — `doctor.py` (health check), `analyze.py` (ledger), `apply-overrides.py` (keep-on writer), `embed_server.py` (warm embed sidecar)
+- `scripts/` — `doctor.py` (health check), `analyze.py` (ledger; `--since`/`--until` window it by event time for before/after compares — don't split the ledger by hand), `apply-overrides.py` (keep-on writer), `embed_server.py` (warm embed sidecar)
 - `hooks/` — ledger capture (`hooks.json` + scripts) and enforcement doctrine
 - `vendor/skill-search/` — vendored MCP engine (MIT · sowhan/skill-search) — **do not diverge silently**
 - `.claude-plugin/{plugin,marketplace}.json` — plugin manifests

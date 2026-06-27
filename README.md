@@ -137,17 +137,27 @@ uptake, search rate, and dodge rate with the read-only, stdlib-only analyzer:
 python3 scripts/analyze.py        # reads ~/.claude/skill-telemetry/logs/skill-invocation-ledger.log
 ```
 
+To compare a window — e.g. before vs after a fix or a go-live — use `--since` / `--until`
+instead of splitting the ledger by hand. `WHEN` is epoch seconds or a local ISO time
+(`YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS`); a commit time makes a clean boundary:
+
+```bash
+T="$(git show -s --format=%cd --date=format:'%Y-%m-%d %H:%M:%S' <fix-commit>)"
+python3 scripts/analyze.py --until "$T"   # the "before" window
+python3 scripts/analyze.py --since "$T"   # the "after"  window
+```
+
 Output shape (numbers below are illustrative):
 
 ```
 uptake        : <n>/<N>  <pct>   (turn used a skill)
 search called : <n>/<N>  <pct>
 dodge         : <n>/<N>  <pct>   (no skill, no search)   ← the behaviour Enforce exists to kill
-hit@k         : pending (needs `offer` events from the enforcer hook)
+hit@k         : <n>/<m>  <pct>   (used skill was in the offered set)
 ```
 
-> `hit@k` is reported as **pending** — it needs `offer` events from the rewritten enforcer
-> hook (the unbuilt P1 fusion work). See [`docs/plan.md`](docs/plan.md).
+> `hit@k` computes once `offer` events land from the enforcer hook (now live). Before any
+> offers it shows **pending** (no offered-set yet). See [`docs/plan.md`](docs/plan.md).
 
 ## Configuration
 

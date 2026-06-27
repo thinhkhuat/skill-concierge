@@ -208,7 +208,9 @@ the dev repo, propagated to the install only on explicit owner go-live. **Proof:
 4. `hooks/hooks.json` → `SessionStart` wired in (`matcher:"*"`, `${CLAUDE_PLUGIN_ROOT}`).
 
 **No P2 / Stop gate** — rejected by design (see §8). **Next:** `analyze.py` on a *clean* workload
-window; never claim lift on the contaminated ledger.
+window; never claim lift on the contaminated ledger. To compare windows, use
+`analyze.py --since WHEN` / `--until WHEN` (epoch or local ISO time) around the boundary —
+e.g. a fix/go-live commit time — instead of hand-splitting the ledger.
 
 ---
 
