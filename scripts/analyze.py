@@ -10,9 +10,8 @@ Reads the append-only JSONL ledger and reports the numbers that drive decisions:
   • per-skill rollups — auto-invoked frequency + manual /skill frequency
                    (the evidence base for always-on promote/demote)
 
-hit@k (was the auto-invoked skill in the offered set?) is intentionally NOT computed
-yet: `offer` events come from the rewritten enforcer hook (a later build phase). Until
-then there is no offered-set to compare against, so hit@k is reported as pending.
+hit@k (was the auto-invoked skill in the offered set?) computes once `offer` events land
+from the enforcer hook; before any offers it falls back to "pending" (no offered-set yet).
 
 Pure stdlib, read-only. Usage:  python3 analyze.py [path-to-ledger.log]
 """

@@ -29,7 +29,7 @@ from pathlib import Path
 LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
-SEARCH_TOOL = "mcp__skill-search__search_skills"
+SEARCH_TOOL = "skill-search__search_skills"  # suffix match; tolerates the mcp__[plugin_...]__ namespace prefix (drift-proof — the bare name broke when the tool got plugin-namespaced)
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
 
 
@@ -82,7 +82,7 @@ def main() -> int:
                             break
                 _append({"t": t, "sid": sid, "ev": "auto",
                          "name": name, "input_keys": keys})
-            elif tool == SEARCH_TOOL:
+            elif tool.endswith(SEARCH_TOOL):
                 _append({"t": t, "sid": sid, "ev": "search"})
     except Exception:
         return 0
