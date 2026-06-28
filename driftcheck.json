@@ -1,0 +1,47 @@
+{
+  "facts": [
+    {
+      "name": "version",
+      "source": {
+        "file": ".claude-plugin/plugin.json",
+        "regex": "\"version\":\\s*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+      },
+      "mirrors": [
+        {
+          "file": ".claude-plugin/marketplace.json",
+          "regex": "\"version\":\\s*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+        },
+        {
+          "file": "CHANGELOG.md",
+          "regex": "##\\s*\\[([0-9]+\\.[0-9]+\\.[0-9]+)\\]",
+          "occurrence": "first"
+        }
+      ]
+    }
+  ],
+  "paths_exist": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "CHANGELOG.md",
+    ".mcp.json",
+    ".claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "docs/adr/README.md",
+    "docs/caveats.md",
+    "docs/plan.md",
+    "vendor/skill-search/VENDORED.md",
+    "config/keep-on.json",
+    "scripts/doctor.py",
+    "setup.sh",
+    "skills/skill-search/SKILL.md",
+    "skills/setup/SKILL.md",
+    "skills/doctor/SKILL.md"
+  ],
+  "command_checks": [
+    {
+      "name": "claude-agents-scratch-parity",
+      "command": "python3 scripts/check_doc_parity.py"
+    }
+  ]
+}

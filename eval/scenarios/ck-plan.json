@@ -1,0 +1,24 @@
+{
+  "skill": "ck:plan",
+  "positive": [
+    "break the new notifications feature into implementation phases",
+    "create a technical roadmap for migrating to microservices",
+    "I need a phased plan to rebuild the checkout flow",
+    "design the architecture for our new analytics pipeline",
+    "lay out the steps to ship the mobile app over the next quarter",
+    "draft an implementation strategy for adding multi-language support",
+    "plan how we'll roll out the new permissions system in stages",
+    "outline the architecture and milestones for the chat feature",
+    "I want a structured plan with phases for the data migration",
+    "map out the development phases for the new dashboard",
+    "lập kế hoạch theo từng giai đoạn để xây tính năng thông báo",
+    "phác thảo lộ trình kỹ thuật cho việc chuyển sang microservices"
+  ],
+  "negative": [
+    "research the options thoroughly before we decide on the architecture",
+    "build the notifications API now",
+    "write the failing tests first for this feature",
+    "design the database schema for the new feature",
+    "tìm nguyên nhân lỗi trong luồng thanh toán"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "skill": "ck:payment-integration",
+  "positive": [
+    "integrate Stripe checkout into my store",
+    "set up recurring subscriptions with Paddle",
+    "handle the webhook events coming from the payment provider",
+    "add a VietQR payment flow using SePay",
+    "I need to process one-time payments with Polar",
+    "build the subscription billing logic for my SaaS",
+    "wire up Stripe webhooks to mark orders as paid",
+    "implement a checkout page that actually charges customers",
+    "issue license keys automatically after a purchase",
+    "add a paywall with monthly and yearly plan options",
+    "tích hợp thanh toán VietQR qua SePay cho cửa hàng",
+    "thiết lập gói đăng ký định kỳ với Stripe"
+  ],
+  "negative": [
+    "build a generic REST API for managing orders",
+    "store payment records with RLS in Supabase",
+    "design the polished pricing page UI from this mockup",
+    "design the orders and invoices database schema",
+    "đưa trang thanh toán lên production trên Vercel"
+  ]
+}

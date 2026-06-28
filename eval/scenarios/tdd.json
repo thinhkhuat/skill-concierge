@@ -1,0 +1,24 @@
+{
+  "skill": "tdd",
+  "positive": [
+    "write the failing tests first, then implement the parser",
+    "let's do test-driven development for this validation logic",
+    "start with a red test for the discount calculation before coding it",
+    "I want to write the tests before any implementation exists",
+    "drive this feature with tests: write them first then make them pass",
+    "set up failing unit tests for the cart total, then build it",
+    "write a test that captures the expected behavior before implementing",
+    "do TDD on the new string formatter",
+    "create the test cases first and let them guide the implementation",
+    "write specs for the rate limiter before I write the code",
+    "viết test trước cho phần tính giảm giá rồi mới code",
+    "làm theo kiểu viết test fail trước rồi mới hiện thực tính năng"
+  ],
+  "negative": [
+    "figure out why this existing test fails intermittently",
+    "build the API endpoint for the cart",
+    "scan the project for security vulnerabilities",
+    "deploy the service to production",
+    "lập kế hoạch các giai đoạn kiểm thử cho dự án"
+  ]
+}

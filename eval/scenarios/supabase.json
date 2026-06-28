@@ -1,0 +1,24 @@
+{
+  "skill": "supabase",
+  "positive": [
+    "set up row level security policies on my posts table in Supabase",
+    "write an edge function that runs when a user signs up",
+    "create a migration to add a column to the profiles table in Supabase",
+    "configure email and password auth with the supabase-js client",
+    "my RLS policy is blocking legitimate reads, help me fix it",
+    "I need realtime subscriptions on the messages table",
+    "set up storage buckets and access rules in Supabase",
+    "connect my Next.js app to Supabase auth using the JS client",
+    "write a Postgres function and trigger inside Supabase",
+    "enable Google OAuth sign-in through Supabase",
+    "thiết lập chính sách RLS cho bảng bài viết trên Supabase",
+    "viết giúp mình edge function chạy khi người dùng đăng ký"
+  ],
+  "negative": [
+    "design a MongoDB schema for the product catalog",
+    "build a FastAPI service with JWT auth",
+    "add monthly subscriptions with Stripe billing",
+    "scan for exposed secrets in my env files",
+    "đưa ứng dụng lên Vercel chạy production"
+  ]
+}

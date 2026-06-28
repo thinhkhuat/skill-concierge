@@ -1,0 +1,24 @@
+{
+  "skill": "ck:media-processing",
+  "positive": [
+    "convert this MOV file to MP4 with FFmpeg",
+    "generate thumbnails from a folder full of videos",
+    "resize and compress these images in one batch",
+    "extract the audio track from this video as an MP3",
+    "I need to transcode a video into HLS for streaming",
+    "crop and watermark a bunch of product photos",
+    "trim the first ten seconds off every clip in this directory",
+    "convert all my PNGs to WebP to save space",
+    "create an animated GIF from this short video clip",
+    "downscale this 4K video to 1080p",
+    "chuyển file MOV này sang MP4 bằng FFmpeg",
+    "tạo ảnh thu nhỏ hàng loạt từ thư mục video"
+  ],
+  "negative": [
+    "generate a product mockup image for the campaign",
+    "build a video player UI component for the site",
+    "publish the media gallery site to production",
+    "design the postgres table to store video metadata",
+    "tạo ảnh quảng cáo phong cách điện ảnh cho sản phẩm"
+  ]
+}

@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.2.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.4.2-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -227,23 +227,36 @@ not embedded.
    indexed catalogue from Qdrant.
 3. **Invoke** — Claude reads the ranked names + descriptions and fires the relevant skills.
 4. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation
-   (matcher `Skill|mcp__skill-search__search_skills`), fail-silent and additive-only.
+   (matcher `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant since v0.4.1), fail-silent and additive-only.
 5. **Curate** — `scripts/analyze.py` rolls the ledger up into uptake/dodge metrics that drive
    the always-on policy.
 
 ## Status & roadmap
 
-`0.2.0` — **published, MCP live, P1 fusion shipped + live, maintenance skills added**
-(`skill-concierge:setup` / `skill-concierge:doctor`). All three organs now run semantic:
+`0.4.2` — **published, MCP live, all three organs semantic, SKILL-FIRST gate live.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
-from the SAME semantic index via a warm embed shim, with a hard-timeout → mandate-only
-fallback) + **Ledger** (telemetry, now with `offer`/hit@k/fallback). The legacy lexical
+from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
+fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical
 `skill_first_nudge.py` is retired (deregistered from `~/.claude/settings.json`).
 
-The P1 fusion is **done**: warm fastembed mpnet-768 Docker sidecar (`127.0.0.1:6363`),
-semantic enforcer with a 90ms client-side embed timeout, and `analyze.py` repointed to the
-Qdrant index. See [`docs/plan.md`](docs/plan.md),
-[ADR-0002](docs/adr/0002-fusion-which-plus-whether.md), and
+Trajectory since the P1 fusion (`0.2.0`):
+- **`0.3.0` — SKILL-FIRST doctrine gate.** A SessionStart hook (`hooks/scripts/doctrine.py`)
+  injects the rich standing order from a single-source doctrine file; the per-turn enforcer
+  message was reworded from persuasion into a cheap gate trigger (forced line-1 token,
+  "previewed few don't fit → SEARCH the full index, never skip"). Governance is **in-generation
+  only** — no Stop/PostToolUse detection gate (rejected by design as the anti-caveman). The
+  driving finding: retrieval was never the bottleneck — compliance is.
+- **`0.4.0` — EFFORT decoupled** into its own universal [`effort-gate`](https://github.com/thinhkhuat/effort-gate)
+  plugin. skill-concierge governs *which/whether* a skill; effort-gate governs *how much work*.
+- **`0.4.1` — search-logging fix.** `search` events were never logged (tool-name drift: the live
+  MCP tool is plugin-namespaced); now matched by suffix so the gate's primary lever is visible to
+  its own telemetry.
+- **`0.4.2` — measurement window.** `analyze.py --since/--until` for clean before/after compares.
+
+**Open question:** whether the gate actually lifts compliance is still unproven — it needs a
+clean workload window on `0.4.1+` to accumulate real `search`+`auto` data; pre-`0.4.1` ledger
+numbers are blind on the search signal. See [`docs/skill-first-enforcement-mental-model.md`](docs/skill-first-enforcement-mental-model.md),
+[`docs/plan.md`](docs/plan.md), [ADR-0002](docs/adr/0002-fusion-which-plus-whether.md), and
 [ADR-0008](docs/adr/0008-warm-embed-shim-timeout-calibration.md).
 
 ## Troubleshooting

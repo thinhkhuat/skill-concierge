@@ -31,6 +31,7 @@ import sys
 import os
 import json
 import time
+import re
 import socket
 import urllib.request
 from pathlib import Path
@@ -61,7 +62,7 @@ QUERY_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query"
 EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.20"))
 QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.1"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "5"))
-GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.20"))  # top<this → silent
+GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.40"))  # top<this → silent; 0.40 tuned for the enriched index (was 0.20; centroid enrichment shifted scores up)
 ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-candidate cutoff
 MAX_SHORT_WORDS = 2   # ≤ this many words → trivial getaway, skip embed entirely
 _DESC_CHARS = 96
@@ -85,6 +86,25 @@ MANDATE = (
     "you to SEARCH the full index (search_skills) before any SKIPPING; show the query. "
     "SKIPPING is lawful only after a search returns nothing usable. "
     "[full standing order: session start]"
+)
+
+
+# Explicit skill-refusal pattern (Phase A / C3, verified 2026-06-28). mpnet cosine
+# does NOT encode negation: an affirmed vs negated prompt embeds ~0.65-0.87 cosine,
+# so a refusal like "do not use the <X> skill" still retrieves <X> at full score. A
+# BROAD any-negation rule (the bm25 hook's approach) over-suppresses — bug-report
+# prompts ("tests are not passing", "never finishes") carry a negation token yet
+# genuinely need skills (3/4 wrongly suppressed in testing). So anchor on negation +
+# an explicit INVOCATION-META verb (use/invoke/apply/call/rely-on/trigger/activate),
+# NOT action verbs that recur in bug reports. High precision, low recall by design;
+# a leaked offer is additive + low-blast (the agent reads the real prompt and won't
+# act on a refused skill). Contract pinned in `--selftest`.
+_REFUSAL_RE = re.compile(
+    r"\b(?:do\s+not|do\s*n['\u2019]?t|don['\u2019]?t|never|please\s+do\s*n['\u2019]?t)\s+"
+    r"(?:use|using|invoke|invoking|apply|applying|call|calling|trigger|activate|rely\s+on)\b"
+    r"|\bwithout\s+(?:use|using|invoking|applying|calling)\b"
+    r"|\bskip\s+\w+ing\b",
+    re.IGNORECASE,
 )
 
 
@@ -140,17 +160,29 @@ def _retrieve(vector: list) -> list:
 
 
 def _ranked_mandate(cands: list) -> str:
+    # Confidence as %-SHARE of the shown candidates' score mass (Phase A2), not the
+    # raw cosine. mpnet cosines sit in a compressed ~0.18-0.40 band that reads as
+    # noise to the agent; relative share ("58%" vs "31%") disambiguates WHICH
+    # candidate fits far more legibly. Absolute relevance is already guaranteed
+    # upstream (GETAWAY_FLOOR + ITEM_FLOOR gate before this runs), and raw scores
+    # are still logged to the ledger — so dropping them from the DISPLAY loses no
+    # signal. Share is shown only with 2+ candidates (a lone candidate is always
+    # 100% → meaningless), and the disambiguation note rides the same condition.
+    total = sum(s for (_n, _d, s) in cands) or 1.0
+    multi = len(cands) > 1
     lines = []
     for name, desc, score in cands:
         blurb = _clean(desc)
         if len(blurb) > _DESC_CHARS:
             blurb = blurb[:_DESC_CHARS].rsplit(" ", 1)[0] + "…"
-        lines.append(f"  • {name} (match {score:.2f}) — {blurb}")
+        pct = f" ({round(score / total * 100)}%)" if multi else ""
+        lines.append(f"  • {name}{pct} — {blurb}")
+    note = "\nMultiple candidates — pick the one matching the actual intent." if multi else ""
     return (
         "SKILL-FIRST — line 1 of your reply = one of: "
         "USING <skill> | SEARCH <query> | SKIPPING none.\n"
         "Top-few PREVIEW for this request (NOT the full ~500-skill shelf):\n"
-        + "\n".join(lines) + "\n"
+        + "\n".join(lines) + note + "\n"
         "None fit? That is not a skip — SEARCH the full index (search_skills) before any "
         "SKIPPING; show the query. Closest fit, adapted, is the standard; perfect is not the bar. "
         "[full standing order: session start]"
@@ -171,6 +203,13 @@ def main() -> int:
         if not prompt or prompt.startswith("/"):
             return 0
         if len(prompt.split()) <= MAX_SHORT_WORDS:
+            return 0
+
+        # Explicit skill-refusal -> MANDATE-ONLY (never surface the skill the user
+        # just refused; keep the SKILL-FIRST discipline live). See _REFUSAL_RE.
+        if _REFUSAL_RE.search(prompt):
+            _inject(MANDATE)
+            _append_offer(sid, "negation", [], "skill_refusal", prompt)
             return 0
 
         # Embed (HARD ~200ms timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
@@ -211,5 +250,56 @@ def main() -> int:
     return 0
 
 
+def _selftest() -> int:
+    """Pin two contracts: (1) the refusal guard fires on explicit skill-refusal and
+    stays silent on affirmations + bug-report negations; (2) _ranked_mandate renders
+    %-share + a disambiguation note for 2+ candidates, and neither for a lone one.
+    Run: python3 enforcer.py --selftest"""
+    must_fire = [
+        "do not use the <skill> here",
+        "please don't invoke that skill",
+        "without using the test skill, just patch it",
+        "skip reviewing this file",
+        "never apply the formatter",
+    ]
+    must_not_fire = [
+        "use the test skill to check this",                # affirmation
+        "fix the bug where login does not work",           # bug report
+        "the tests are not passing, help me debug",        # bug report
+        "this deploy never finishes, investigate why",     # bug report
+        "this function does not return the right value",   # bug report
+        "ship this application to production",             # affirmation
+    ]
+    bad = []
+    for t in must_fire:
+        if not _REFUSAL_RE.search(t):
+            bad.append("MISS (should fire): " + repr(t))
+    for t in must_not_fire:
+        if _REFUSAL_RE.search(t):
+            bad.append("FALSE-FIRE (should stay silent): " + repr(t))
+    # (2) ranked-mandate %-share + disambiguation note
+    multi = _ranked_mandate([("alpha", "desc alpha", 0.30), ("beta", "desc beta", 0.10)])
+    if "(75%)" not in multi or "(25%)" not in multi:
+        bad.append("ranked_mandate: expected 75%/25% shares")
+    if "Multiple candidates" not in multi:
+        bad.append("ranked_mandate: missing disambiguation note for 2+ candidates")
+    lone = _ranked_mandate([("alpha", "desc alpha", 0.25)])
+    if "%" in lone or "Multiple candidates" in lone:
+        bad.append("ranked_mandate: lone candidate must show no share and no note")
+    if "• alpha — desc alpha" not in lone:
+        bad.append("ranked_mandate: lone candidate line malformed")
+
+    if bad:
+        print("enforcer --selftest FAIL:")
+        for b in bad:
+            print("  " + b)
+        return 1
+    print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share"
+          % (len(must_fire), len(must_not_fire)))
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
     sys.exit(main())

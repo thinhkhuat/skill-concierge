@@ -10,6 +10,8 @@ skills, freshness) to the engine's own `skill-search --health`, so the two never
 Pure stdlib. Read-only by default. With --fix it attempts ONLY fast, safe repairs:
   • start a stopped Qdrant container         → docker start
   • reindex a degraded / stale index         → skill-search --reindex
+    (a stale-but-serving index is WARN, not FAIL — it still matches the indexed
+     skills; only newly added/removed ones are missing until the refresh)
   • re-apply the curated settings overrides  → scripts/apply-overrides.py
 
 The heavy bootstrap (building the venv, creating the container) is intentionally NOT
@@ -37,6 +39,7 @@ VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".local/share/s
 QNAME = os.environ.get("SKILL_QDRANT_CONTAINER", "skill-search-qdrant")
 SETTINGS = Path(os.environ.get("SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude/settings.json"))
 LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-telemetry/logs"))
+COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 GLYPH = {OK: "✓", WARN: "!", FAIL: "✗"}           # ✓ ! ✗
@@ -159,6 +162,37 @@ def check_qdrant():
                 detail=f"container up but {QURL} not answering yet", fix=None)
 
 
+def _stale_only(rep):
+    """True when the index is stale but otherwise fully SERVING — the lone issue is a
+    disk/index drift: embedder + qdrant reachable, points indexed, nothing dark or
+    stale at the point level. Such an index degrades recall (new skills missing) but
+    still works, so it is WARN, not FAIL."""
+    emb = (rep.get("embedder") or {}).get("reachable")
+    qd = rep.get("qdrant") or {}
+    return bool(
+        rep.get("stale")
+        and emb and qd.get("reachable")
+        and (qd.get("indexed") or 0) > 0
+        and not (rep.get("dark_skills") or [])
+        and not (rep.get("stale_points") or [])
+    )
+
+
+def _fresh(rep):
+    """' (indexed 3h ago)' suffix from indexed_at, or '' when unknown."""
+    t = rep.get("indexed_at")
+    if not t:
+        return ""
+    age = max(0, time.time() - float(t))
+    if age < 3600:
+        a = f"{int(age // 60)}m"
+    elif age < 86400:
+        a = f"{int(age // 3600)}h"
+    else:
+        a = f"{int(age // 86400)}d"
+    return f" (indexed {a} ago)"
+
+
 def check_engine_health():
     """Delegate the retrieval diagnostic to the engine itself (DRY)."""
     if not SS_BIN.exists():
@@ -171,12 +205,50 @@ def check_engine_health():
         return dict(id="health", label="Retrieval health", status=FAIL,
                     detail=(r.stderr.strip() or "could not parse --health output")[:200], fix="reindex")
     issues = rep.get("issues") or []
+    idx = rep.get("qdrant", {}).get("indexed", "?")
     if rep.get("status") == "ok" and not issues:
-        idx = rep.get("qdrant", {}).get("indexed", "?")
         return dict(id="health", label="Retrieval health", status=OK,
-                    detail=f"{idx} skills indexed; embedder + qdrant reachable", fix=None)
+                    detail=f"{idx} skills indexed; embedder + qdrant reachable{_fresh(rep)}", fix=None)
+    # Stale-but-serving is degraded, not broken: WARN (auto-fixable via reindex) so the
+    # exit code distinguishes "index needs a refresh" from "retrieval is down".
+    if _stale_only(rep):
+        return dict(id="health", label="Retrieval health", status=WARN,
+                    detail=f"index stale{_fresh(rep)} — {idx} indexed & serving; run reindex to refresh",
+                    fix="reindex")
     return dict(id="health", label="Retrieval health", status=FAIL,
                 detail="; ".join(str(i) for i in issues)[:300], fix="reindex")
+
+
+def _count_enriched(base):
+    body = json.dumps({"filter": {"must": [{"key": "enriched", "match": {"value": True}}]},
+                       "exact": True}).encode()
+    req = urllib.request.Request(base + "/points/count", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())["result"]["count"]
+
+
+def check_enrichment():
+    """Enrichment-overlay freshness. A reindex rewrites changed/new points BARE (no `enriched`
+    marker); until `enrich_index.py --reapply` runs, retrieval silently regresses for them.
+    Enriched-mode + some bare points -> WARN, auto-fixable. Not enriched -> N/A (OK)."""
+    if not _qdrant_reachable():
+        return None
+    base = QURL.rstrip("/") + f"/collections/{COLLECTION}"
+    try:
+        total = json.loads(urllib.request.urlopen(base, timeout=3).read())["result"]["points_count"]
+        enr = _count_enriched(base)
+    except Exception:
+        return None
+    if enr == 0:
+        return dict(id="enrich", label="Enrichment overlay", status=OK,
+                    detail="not enriched (no overlay in use)", fix=None)
+    if enr < total:
+        return dict(id="enrich", label="Enrichment overlay", status=WARN,
+                    detail=f"{total - enr}/{total} points un-enriched (reindex/new) — run --reapply",
+                    fix="reapply")
+    return dict(id="enrich", label="Enrichment overlay", status=OK,
+                detail=f"all {total} points enriched", fix=None)
 
 
 def check_overrides():
@@ -207,6 +279,26 @@ def check_ledger():
                 detail=str(LOGDIR), fix=None)
 
 
+def _skill_search_servers(mcp_list_text):
+    """Distinct skill-search MCP *installs* from `claude mcp list`. Counts real registrations,
+    NOT substring lines: one entry per line ("name: command - status"), keyed by the name before
+    the first colon. Excludes entries whose command still contains an UNEXPANDED
+    ${CLAUDE_PLUGIN_ROOT} — that is this plugin's own .mcp.json template being auto-loaded as a
+    project MCP when CWD is the source repo (a real install expands the var), not a second install."""
+    out = []
+    for ln in mcp_list_text.splitlines():
+        name, sep, rest = ln.partition(": ")       # name/command separator is colon-SPACE;
+        if not sep:                                 # a namespaced name keeps its internal colons
+            continue
+        name = name.strip()
+        if not (name == "skill-search" or name.endswith(":skill-search")):
+            continue
+        if "${CLAUDE_PLUGIN_ROOT}" in rest:        # repo's own template projection, not an install
+            continue
+        out.append(name)
+    return out
+
+
 def check_dup_mcp():
     claude = shutil.which("claude")
     if not claude:
@@ -214,16 +306,17 @@ def check_dup_mcp():
     r = _run([claude, "mcp", "list"])
     if r.returncode != 0:
         return None
-    hits = [ln for ln in r.stdout.splitlines() if "skill-search" in ln]
-    if len(hits) > 1:
+    servers = _skill_search_servers(r.stdout)
+    if len(servers) > 1:
         return dict(id="dupmcp", label="Duplicate MCP", status=WARN,
-                    detail="more than one skill-search MCP — de-dup: claude mcp remove skill-search -s user",
+                    detail=f"{len(servers)} skill-search installs ({', '.join(servers)}) — "
+                           f"remove the extra: claude mcp remove <name> (check its scope first)",
                     fix=None)
     return dict(id="dupmcp", label="Duplicate MCP", status=OK, detail="single skill-search MCP", fix=None)
 
 
 CHECKS = [check_python, check_venv, check_mcp_wiring, check_qdrant,
-          check_engine_health, check_overrides, check_ledger, check_dup_mcp]
+          check_engine_health, check_enrichment, check_overrides, check_ledger, check_dup_mcp]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -240,11 +333,29 @@ def fix_docker_start():
     return True, f"started container {QNAME} (still booting — re-run doctor shortly)"
 
 
+def _reapply_cmd():
+    py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
+    return _run([str(py), str(ROOT / "scripts" / "enrich_index.py"), "--reapply"], env=_engine_env())
+
+
 def fix_reindex():
     if not SS_BIN.exists():
         return False, "venv missing — run ./setup.sh first"
     r = _run([str(SS_BIN), "--reindex"], env=_engine_env())
-    return (r.returncode == 0), (_last_line(r.stdout) or r.stderr.strip() or "reindexed")
+    if r.returncode != 0:
+        return False, (r.stderr.strip() or "reindex failed")
+    msg = _last_line(r.stdout) or "reindexed"
+    # reindex rewrites changed/new points bare — re-apply the enrichment overlay so the
+    # refresh does not silently undo it (no-op when the index was never enriched).
+    rr = _reapply_cmd()
+    return (rr.returncode == 0), f"{msg}; reapply: {_last_line(rr.stdout) or rr.stderr.strip()}"
+
+
+def fix_reapply():
+    if not SS_BIN.exists():
+        return False, "venv missing — run ./setup.sh first"
+    rr = _reapply_cmd()
+    return (rr.returncode == 0), (_last_line(rr.stdout) or rr.stderr.strip() or "reapplied")
 
 
 def fix_overrides():
@@ -253,7 +364,8 @@ def fix_overrides():
     return (r.returncode == 0), (_last_line(r.stdout) or r.stderr.strip() or "applied")
 
 
-AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex, "overrides": fix_overrides}
+AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
+               "reapply": fix_reapply, "overrides": fix_overrides}
 
 
 # ---------- run + report ----------
@@ -283,7 +395,23 @@ def _selftest():
     assert overall([mk(WARN), mk(FAIL)]) == FAIL
     assert overall([]) == OK
     assert QURL.startswith("http")
-    assert set(AUTO_FIXERS) <= {"docker", "reindex", "overrides"}
+    assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides"}
+    # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
+    healthy_emb = {"reachable": True}
+    serving_qd = {"reachable": True, "indexed": 495}
+    assert _stale_only({"stale": True, "embedder": healthy_emb, "qdrant": serving_qd,
+                        "dark_skills": [], "stale_points": []}) is True
+    assert _stale_only({"stale": False, "embedder": healthy_emb, "qdrant": serving_qd}) is False
+    assert _stale_only({"stale": True, "embedder": healthy_emb, "qdrant": serving_qd,
+                        "dark_skills": ["x"], "stale_points": []}) is False
+    assert _stale_only({"stale": True, "embedder": {"reachable": False},
+                        "qdrant": serving_qd, "dark_skills": [], "stale_points": []}) is False
+    sample = ("plugin:skill-concierge:skill-search: /cache/.../0.4.2/bin/skill-search-mcp - ok\n"
+              "skill-search: ${CLAUDE_PLUGIN_ROOT}/bin/skill-search-mcp - pending\n"
+              "exa: https://x - ok")
+    assert _skill_search_servers(sample) == ["plugin:skill-concierge:skill-search"], _skill_search_servers(sample)
+    two = sample + "\nskill-search: /usr/local/bin/other-skill-search-mcp - ok"
+    assert len(_skill_search_servers(two)) == 2
     print("selftest ok")
     return 0
 

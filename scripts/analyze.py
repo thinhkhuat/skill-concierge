@@ -7,6 +7,9 @@ Reads the append-only JSONL ledger and reports the numbers that drive decisions:
   • search rate  — how often Claude called the semantic retriever
   • dodge rate   — substantive turn with NO skill and NO search (the behaviour the
                    enforcement layer exists to kill)
+  • offered-turn conversion / per-skill offer\u2192take (C1) — of turns where a skill was
+                   actually OFFERED, how often the agent took one (the compliance denominator,
+                   cleaner than global dodge which includes getaway/no-offer turns)
   • per-skill rollups — auto-invoked frequency + manual /skill frequency
                    (the evidence base for always-on promote/demote)
 
@@ -106,6 +109,52 @@ def parse_when(s):
         f"(use epoch seconds, 'YYYY-MM-DD', or 'YYYY-MM-DD HH:MM:SS' in local time)")
 
 
+def _offer_conversion(windows):
+    """C1 offers<->takes join. For turns where the enforcer offered >=1 candidate:
+      - turn-level conversion: did the agent invoke ANY offered skill that turn?
+      - per-skill: how often each skill was offered, and of those turns how often
+        that SAME skill was actually invoked (its own pull, not the turn's).
+    Returns (n_offered_turns, n_took_any, offered_by_skill, took_by_skill)."""
+    offered_turns = [w for w in windows if w.get("offered")]
+    took_any = sum(1 for w in offered_turns
+                   if any(a in w["offered"] for a in w["autos"]))
+    off_by, took_by = Counter(), Counter()
+    for w in offered_turns:
+        autos = set(w["autos"])
+        for skill in set(w["offered"]):
+            off_by[skill] += 1
+            if skill in autos:
+                took_by[skill] += 1
+    return len(offered_turns), took_any, off_by, took_by
+
+
+def _run_selftest():
+    """Pin the C1 join contract on synthetic turn-windows."""
+    windows = [
+        {"offered": ["a", "b"], "autos": ["a"]},   # converted on a
+        {"offered": ["a", "c"], "autos": []},       # dodged
+        {"offered": ["b"], "autos": ["b"]},          # converted on b
+        {"offered": [], "autos": ["z"]},             # NOT an offered turn
+    ]
+    n_off, took, off_by, took_by = _offer_conversion(windows)
+    bad = []
+    if n_off != 3:
+        bad.append(f"offered_turns expected 3, got {n_off}")
+    if took != 2:
+        bad.append(f"took_any expected 2, got {took}")
+    if dict(off_by) != {"a": 2, "b": 2, "c": 1}:
+        bad.append(f"offered_by_skill wrong: {dict(off_by)}")
+    if dict(took_by) != {"a": 1, "b": 1}:
+        bad.append(f"took_by_skill wrong: {dict(took_by)}")
+    if bad:
+        print("analyze --selftest FAIL:")
+        for b in bad:
+            print("  " + b)
+        return 1
+    print("analyze --selftest OK: offer->take join (turn conversion + per-skill)")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Analyze the skill-concierge invocation ledger.")
@@ -115,7 +164,11 @@ def main():
                     help="keep only events at/after WHEN (epoch or local ISO time)")
     ap.add_argument("--until", metavar="WHEN",
                     help="keep only events BEFORE WHEN (epoch or local ISO time)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the C1 offer->take join self-check and exit")
     args = ap.parse_args()
+    if args.selftest:
+        raise SystemExit(_run_selftest())
     path = args.path
 
     events = load(path)
@@ -189,6 +242,7 @@ def main():
     all_offers = [w for w in turns if w["band"] is not None]
     fb = sum(1 for w in all_offers if w["fallback"])
     band_freq = Counter(w["band"] for w in all_offers)
+    n_off_turns, took_off, offered_by_skill, took_by_skill = _offer_conversion(windows)
 
     auto_freq = Counter(a for w in turns for a in w["autos"])
     names = [w["name"] for w in manual if w["name"]]
@@ -217,6 +271,15 @@ def main():
         print(f"hit@k         : {hk}   (used skill was in the offered set)")
         print(f"offers        : {len(all_offers)}   bands: {dict(band_freq)}")
         print(f"fallback rate : {fb}/{len(all_offers)}  {(100*fb/len(all_offers)):.0f}%   (mandate-only: embed/qdrant down or slow)")
+        if n_off_turns:
+            conv = 100 * took_off / n_off_turns
+            print(f"offered-turn conv : {took_off}/{n_off_turns}  {conv:.0f}%   (offered \u22651 skill -> agent used one of them)")
+            print(f"offered-turn dodge: {n_off_turns - took_off}/{n_off_turns}  {100 - conv:.0f}%   (offered yet none used \u2014 the compliance gap)")
+            rows = sorted(offered_by_skill, key=lambda k: (-offered_by_skill[k], -took_by_skill[k]))
+            print("per-skill offer\u2192take (top 10 by times offered):")
+            for skill in rows[:10]:
+                off, tk = offered_by_skill[skill], took_by_skill[skill]
+                print(f"    {skill:<30} {tk}/{off}  {(100*tk/off):.0f}%")
     else:
         print(f"hit@k         : pending (no `offer` events yet — enforcer not live / no banked turns)")
     print(f"top auto      : {auto_freq.most_common(10)}")
@@ -226,7 +289,9 @@ def main():
     else:
         print(f"top manual (UNFILTERED)     : {manual_skill.most_common(10)}   [catalogue unavailable — includes built-in slashes]")
     print("note: `turn` denominator = non-empty non-slash prompts (NOT offer/triviality-gated);")
-    print("      treat dodge/uptake as a proxy upper-bound until `offer` events land, then re-derive vs offered turns.")
+    print("      global dodge/uptake are a proxy upper-bound (they include getaway/no-offer turns).")
+    print("      The real compliance signal is `offered-turn conv/dodge` above: dodge measured ONLY")
+    print("      on turns where the enforcer actually surfaced a skill.")
 
 
 if __name__ == "__main__":

@@ -70,6 +70,9 @@ fi
 echo "[3/4] build/refresh the multilingual index @ $QURL"
 env_run() { SKILL_QDRANT_URL="$QURL" SKILL_EMBED_BACKEND=fastembed SKILL_EMBED_MODEL="$MODEL" "$@"; }
 env_run "$VENV/bin/skill-search" --reindex
+# Re-apply the trigger-phrase enrichment overlay (vector-only) that a reindex rewrites bare.
+# Idempotent + a no-op when the index was never enriched, so this is safe on a fresh install.
+env_run "$VENV/bin/python" "$ROOT/scripts/enrich_index.py" --reapply
 env_run "$VENV/bin/skill-search" --health
 
 echo "[4/4] apply curated name-only overrides to ~/.claude/settings.json (backed up first)"

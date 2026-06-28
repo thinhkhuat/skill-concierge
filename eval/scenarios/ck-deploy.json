@@ -1,0 +1,24 @@
+{
+  "skill": "ck:deploy",
+  "positive": [
+    "deploy my Next.js app to Vercel",
+    "publish this site to Netlify",
+    "I want to ship the app to production on Railway",
+    "push my static site live on Cloudflare Pages",
+    "get this project hosted on Fly.io",
+    "let's go live with the current build",
+    "set up deployment to Render for my API",
+    "how do I publish this to GitHub Pages",
+    "take my app from local to production hosting",
+    "roll out the worker to Cloudflare",
+    "đưa ứng dụng Next.js của mình lên Vercel",
+    "mình muốn ship bản build này lên production trên Railway"
+  ],
+  "negative": [
+    "build the API that this site will be serving",
+    "write a Supabase edge function for the signup flow",
+    "scan for committed secrets before the release",
+    "plan the rollout phases for the launch",
+    "tìm lỗi khiến bản build production bị crash"
+  ]
+}

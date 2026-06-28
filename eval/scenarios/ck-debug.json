@@ -1,0 +1,24 @@
+{
+  "skill": "ck:debug",
+  "positive": [
+    "find out why this function returns null on the second call",
+    "my unit test passes locally but fails in CI and I can't tell why",
+    "the app crashes intermittently and I need to trace the root cause",
+    "can you figure out what's actually causing this NullPointerException",
+    "track down the source of this memory leak before we patch anything",
+    "users report the checkout button does nothing but there's no error in the console",
+    "I need to understand why the payload is empty by the time it reaches the handler",
+    "step through the call stack and tell me where the value gets corrupted",
+    "the response time spikes randomly under load and I want to know the cause",
+    "diagnose why this regression appeared right after the last merge",
+    "giúp mình tìm nguyên nhân gốc khiến hàm này trả về sai kết quả",
+    "test chạy trên máy mình thì ổn mà lên CI cứ fail, không hiểu tại sao"
+  ],
+  "negative": [
+    "break the new notifications feature into implementation phases",
+    "write the failing tests first before we build the parser",
+    "scan the repo for hardcoded API keys and passwords",
+    "ship this build to production on Vercel",
+    "thiết kế schema cho bảng người dùng và đơn hàng"
+  ]
+}

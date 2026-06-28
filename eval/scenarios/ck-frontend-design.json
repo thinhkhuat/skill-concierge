@@ -1,0 +1,24 @@
+{
+  "skill": "ck:frontend-design",
+  "positive": [
+    "build this landing page to match the Figma mockup pixel for pixel",
+    "turn this screenshot into a working React component",
+    "I need a polished pricing page with smooth animations",
+    "can you recreate this dashboard UI from the image I attached",
+    "make the hero section look exactly like this design reference",
+    "the layout feels generic, give it a more refined and designed look",
+    "implement a responsive nav bar that matches our brand mockup",
+    "code up an immersive landing experience from this video reference",
+    "I want a sleek product card grid that matches the attached comp",
+    "build a polished settings screen from this wireframe",
+    "dựng giúp mình giao diện trang chủ y hệt cái mockup này",
+    "chuyển ảnh chụp màn hình này thành component giao diện hoàn chỉnh"
+  ],
+  "negative": [
+    "build the REST API that this page will call",
+    "design the postgres schema behind this admin panel",
+    "generate a marketing image of the product sitting on a desk",
+    "deploy the finished site to Netlify",
+    "viết bài blog tiếng Việt giới thiệu trang chủ mới"
+  ]
+}

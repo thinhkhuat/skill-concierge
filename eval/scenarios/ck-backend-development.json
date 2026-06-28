@@ -1,0 +1,24 @@
+{
+  "skill": "ck:backend-development",
+  "positive": [
+    "build a REST API for managing user profiles in FastAPI",
+    "I need JWT authentication on my Node backend",
+    "set up a GraphQL server with resolvers for the orders service",
+    "implement a microservice in Go that handles image uploads",
+    "add OAuth login to my Express API",
+    "create CRUD endpoints for the products table",
+    "wire up rate limiting and request validation on the API",
+    "design a gRPC service for internal communication between services",
+    "build the server-side logic to process incoming form submissions",
+    "I need a Django REST endpoint that returns paginated results",
+    "viết giúp mình API REST quản lý đơn hàng bằng Node",
+    "thêm cơ chế xác thực JWT cho phần backend của mình"
+  ],
+  "negative": [
+    "set up row level security policies on my Supabase tables",
+    "build the React form that posts to this endpoint",
+    "design the postgres schema for the orders table",
+    "integrate Stripe checkout into the app",
+    "tìm nguyên nhân khiến API trả về lỗi 500"
+  ]
+}

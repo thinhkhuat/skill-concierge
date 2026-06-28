@@ -1,0 +1,24 @@
+{
+  "skill": "vn-author",
+  "positive": [
+    "write a Vietnamese blog post about the benefits of remote work",
+    "draft a Vietnamese article on AI trends for our newsletter",
+    "compose a Vietnamese Facebook post announcing our new product",
+    "write release notes in Vietnamese for the latest version",
+    "I need a Vietnamese LinkedIn post about our funding round",
+    "turn these notes into Vietnamese landing page copy",
+    "write a Vietnamese tweet promoting our upcoming event",
+    "create a quarterly report in Vietnamese from this outline",
+    "write a Vietnamese company introduction for our website",
+    "draft a Vietnamese piece sharing tips on learning to code",
+    "viết giúp mình một bài blog tiếng Việt về làm việc từ xa",
+    "soạn bài đăng Facebook tiếng Việt giới thiệu sản phẩm mới"
+  ],
+  "negative": [
+    "design the polished blog layout UI from this mockup",
+    "generate a cover image for the article",
+    "research the topic thoroughly before I write anything",
+    "design the database schema to store these articles",
+    "tạo ảnh minh họa cho bài blog này"
+  ]
+}

@@ -7,7 +7,7 @@ Claude-specific quick reference:
 
 - **Verify before "done":** run the `skill-concierge:doctor` skill (or `python3 scripts/doctor.py`); a green `status: OK` is the bar.
 - **Bootstrap / repair:** the `skill-concierge:setup` skill, or `./setup.sh` (idempotent).
-- **Versioning:** bump `.claude-plugin/plugin.json` **and** `marketplace.json` together, plus a `CHANGELOG.md` entry.
-- **Don't commit tool state:** `.ijfw/`, `.handoff/`, and `logs/` are gitignored scratch, not source.
+- **Versioning:** bump `.claude-plugin/plugin.json` **and** `.claude-plugin/marketplace.json` together, plus a `CHANGELOG.md` entry.
+- **Don't commit tool state:** `.ijfw/`, `ijfw/`, `.handoff/`, and `logs/` are gitignored scratch, not source.
 
 Repo layout, full conventions, and guardrails are all in [`AGENTS.md`](AGENTS.md).

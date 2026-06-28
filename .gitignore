@@ -15,3 +15,15 @@ vendor/**/*.egg-info/
 # IJFW tool state — internal session tracking (journals, transcripts, metrics, db); not part of the plugin
 .ijfw/
 ijfw/
+
+# session handoff notes — scratch, not source (see CLAUDE.md)
+.handoff/
+
+# generated enrichment artifacts (rebuilt by build_triggers.py / calibrate_thresholds.py)
+eval/triggers.json
+eval/thresholds.json
+
+# python test cache + local env / secrets
+.pytest_cache/
+.env
+

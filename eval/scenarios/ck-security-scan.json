@@ -1,0 +1,24 @@
+{
+  "skill": "ck:security-scan",
+  "positive": [
+    "scan my codebase for hardcoded API keys and passwords",
+    "check whether any of my dependencies have known vulnerabilities",
+    "audit the repo for OWASP top ten issues before release",
+    "I think a secret got committed somewhere, can you find it",
+    "run a full security check over the whole project",
+    "look for SQL injection risks in my query code",
+    "are there any leaked credentials sitting in the git history",
+    "review the app for common web vulnerabilities",
+    "flag any insecure or outdated packages in package.json",
+    "do a vulnerability sweep before we go live next week",
+    "quét toàn bộ mã nguồn xem có lộ khóa API hay mật khẩu không",
+    "kiểm tra xem các thư viện phụ thuộc có lỗ hổng bảo mật nào không"
+  ],
+  "negative": [
+    "find out why the login fails intermittently for some users",
+    "implement OAuth login on the API",
+    "publish the app to Cloudflare Pages",
+    "fix my Supabase RLS policy that blocks legitimate reads",
+    "tối ưu chỉ mục cho bảng đơn hàng cho truy vấn nhanh hơn"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "skill": "ck:ai-artist",
+  "positive": [
+    "generate a product mockup of our app on a phone screen",
+    "create marketing visuals for the new campaign",
+    "I need concept art for a cyberpunk city scene",
+    "make a brand image of our logo on a coffee mug",
+    "generate a hero banner image for the website",
+    "produce some social media graphics for the launch",
+    "create a vintage-style poster for the event",
+    "I want an AI-generated illustration for the blog header",
+    "generate product photography of the bottle on a marble surface",
+    "make a set of marketing images in a cinematic style",
+    "tạo ảnh mockup sản phẩm đặt trên bàn làm việc",
+    "tạo bộ ảnh quảng cáo phong cách điện ảnh cho chiến dịch ra mắt"
+  ],
+  "negative": [
+    "build the website hero section UI from this design",
+    "resize and compress these product photos in batch",
+    "publish the marketing site to production",
+    "plan the marketing campaign in phases",
+    "viết bài quảng bá sản phẩm bằng tiếng Việt"
+  ]
+}

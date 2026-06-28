@@ -1,0 +1,24 @@
+{
+  "skill": "ck:databases",
+  "positive": [
+    "design a Postgres schema for an e-commerce store",
+    "write a SQL query to get the top customers by revenue",
+    "I need an index strategy to speed up these slow queries",
+    "create a migration to add a foreign key between orders and users",
+    "model the data for a blog with posts, authors, and tags",
+    "write a MongoDB aggregation pipeline to group sales by month",
+    "normalize this table structure to remove the duplication",
+    "design the schema and relationships for a multi-tenant app",
+    "optimize this query that's doing a full table scan",
+    "set up the database tables and indexes for the inventory system",
+    "thiết kế schema Postgres cho một cửa hàng thương mại điện tử",
+    "viết câu truy vấn SQL lấy top khách hàng theo doanh thu"
+  ],
+  "negative": [
+    "set up RLS policies and migrations in Supabase",
+    "build the REST API that sits over this database",
+    "research which database technology best fits our needs",
+    "figure out why this query returns the wrong rows",
+    "lập kế hoạch các giai đoạn di chuyển dữ liệu"
+  ]
+}

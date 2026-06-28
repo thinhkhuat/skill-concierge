@@ -1,0 +1,24 @@
+{
+  "skill": "deep-research",
+  "positive": [
+    "research the best approach for real-time collaboration before we build it",
+    "do a thorough investigation of vector database options for our use case",
+    "I need a deep dive on how to implement end-to-end encryption properly",
+    "compare the tradeoffs of the major message queue technologies in depth",
+    "investigate current best practices for multi-tenant architecture",
+    "gather everything we need to know about WebRTC before committing",
+    "look into how other teams solve idempotent payment processing",
+    "thoroughly evaluate which auth strategy fits our scaling needs",
+    "survey the state of the art for full-text search before I start coding",
+    "dig deep into rate-limiting algorithms and their trade-offs for our API",
+    "nghiên cứu kỹ các phương án cơ sở dữ liệu vector trước khi mình bắt tay làm",
+    "tìm hiểu sâu cách triển khai mã hóa đầu cuối cho đúng chuẩn"
+  ],
+  "negative": [
+    "break the chosen approach into implementation phases",
+    "build the search API for the product now",
+    "design the schema for the search index table",
+    "write the failing tests first for the new feature",
+    "điều tra nguyên nhân lỗi production khiến request bị treo"
+  ]
+}

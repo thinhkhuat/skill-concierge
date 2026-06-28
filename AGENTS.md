@@ -40,6 +40,11 @@ Run `doctor.py` (or the `skill-concierge:doctor` skill) before **and** after any
 touches the engine, MCP wiring, or overrides. A green `status: OK` is the bar — claim "done"
 only with that proof in hand.
 
+**Doc/version drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced). It
+checks the version triple (`plugin.json` ↔ `marketplace.json` ↔ latest `CHANGELOG.md` heading), that
+every doc-referenced path exists, and that this file and `CLAUDE.md` name the same scratch dirs. Run it
+after a version bump or after editing a fact shared between these docs.
+
 ## Conventions
 
 - **Python:** 3.10–3.12, `snake_case`. `analyze.py` and `doctor.py` are **stdlib-only** — keep them dependency-free.
