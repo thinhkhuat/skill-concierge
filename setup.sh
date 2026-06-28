@@ -75,6 +75,11 @@ env_run "$VENV/bin/skill-search" --reindex
 env_run "$VENV/bin/python" "$ROOT/scripts/enrich_index.py" --reapply
 env_run "$VENV/bin/skill-search" --health
 
+echo "[3b/4] build the actionability-gate corpus (prompt_intent) from the transcript store"
+# Reproducible rebuild of the gate's grounding collection (scripts/build_prompt_intent.py +
+# the enforcer actionability gate). Fail-soft: too little history / shim down -> gate FAIL-OPEN.
+"$VENV/bin/python" "$ROOT/scripts/build_prompt_intent.py" || echo "  (prompt_intent build skipped — gate fails-open)"
+
 echo "[4/4] apply curated name-only overrides to ~/.claude/settings.json (backed up first)"
 "$VENV/bin/python" "$ROOT/scripts/apply-overrides.py"
 

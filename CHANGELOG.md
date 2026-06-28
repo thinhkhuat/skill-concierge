@@ -5,6 +5,25 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-28
+
+### Added
+- **Actionability gate (the headline).** A new per-turn gate in the enforcer suppresses an offer
+  when the prompt is non-imperative AND leans CONVERSATIONAL over ACTIONABLE in embedding space —
+  the conversational/status/meta turns that clear the relevance floor topically but reliably get
+  dodged. Prior-independent class-margin rule (mean top-K cosine to each class over a *balanced*
+  `prompt_intent` corpus), tuned to ~2% false-suppression of actionable turns on a held-out
+  transcript backtest and validated to fire on out-of-distribution prompts. Fail-OPEN everywhere
+  (missing collection / imperative / any error -> offer). Logs a new `intent_skip` ledger band.
+  Tunable via `ENFORCER_INTENT_MARGIN` / `ENFORCER_INTENT_K`.
+- **`scripts/build_prompt_intent.py`** — reproducible build of the gate's grounding corpus: mines
+  the transcript store for (prompt -> agent-action) pairs, labels by outcome (Edit/Write or >=3
+  tools = actionable; 0 tools = conversational), balances the classes, embeds via the warm shim,
+  and (re)builds the `prompt_intent` Qdrant collection. Stdlib, idempotent, fail-soft (too little
+  history -> gate fails-open). Wired into `setup.sh` and `doctor.py --fix`.
+- `doctor.py` — "Actionability gate" health check (warns when `prompt_intent` is missing/empty and
+  the gate is silently failing-open; auto-fixable by rebuilding).
+
 ## [0.5.0] — 2026-06-28
 
 ### Added

@@ -251,6 +251,29 @@ def check_enrichment():
                 detail=f"all {total} points enriched", fix=None)
 
 
+def check_prompt_intent():
+    """Actionability-gate corpus. The enforcer's gate suppresses conversational-turn offers
+    using the `prompt_intent` collection; missing/empty -> the gate silently FAILS-OPEN (offers
+    everything, no suppression). Reachable + populated -> OK; reachable + missing/empty -> WARN
+    (auto-fixable by rebuilding from the transcript store). Qdrant unreachable -> N/A."""
+    if not _qdrant_reachable():
+        return None
+    coll = os.environ.get("SKILL_PROMPT_INTENT_COLLECTION", "prompt_intent")
+    base = QURL.rstrip("/") + f"/collections/{coll}"
+    try:
+        total = json.loads(urllib.request.urlopen(base, timeout=3).read())["result"]["points_count"]
+    except Exception:
+        return dict(id="prompt_intent", label="Actionability gate", status=WARN,
+                    detail=f"'{coll}' collection missing — gate fails-open (no suppression); "
+                           "rebuild from transcripts", fix="prompt_intent")
+    if not total:
+        return dict(id="prompt_intent", label="Actionability gate", status=WARN,
+                    detail=f"'{coll}' empty — gate fails-open; rebuild from transcripts",
+                    fix="prompt_intent")
+    return dict(id="prompt_intent", label="Actionability gate", status=OK,
+                detail=f"{total} labelled prompts in '{coll}'", fix=None)
+
+
 def check_overrides():
     if not SETTINGS.exists():
         return dict(id="overrides", label="Settings overrides", status=WARN,
@@ -316,7 +339,8 @@ def check_dup_mcp():
 
 
 CHECKS = [check_python, check_venv, check_mcp_wiring, check_qdrant,
-          check_engine_health, check_enrichment, check_overrides, check_ledger, check_dup_mcp]
+          check_engine_health, check_enrichment, check_prompt_intent,
+          check_overrides, check_ledger, check_dup_mcp]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -364,8 +388,15 @@ def fix_overrides():
     return (r.returncode == 0), (_last_line(r.stdout) or r.stderr.strip() or "applied")
 
 
+def fix_prompt_intent():
+    py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
+    r = _run([str(py), str(ROOT / "scripts" / "build_prompt_intent.py")], env=_engine_env())
+    return (r.returncode == 0), (_last_line(r.stdout) or r.stderr.strip() or "rebuilt prompt_intent")
+
+
 AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
-               "reapply": fix_reapply, "overrides": fix_overrides}
+               "reapply": fix_reapply, "overrides": fix_overrides,
+               "prompt_intent": fix_prompt_intent}
 
 
 # ---------- run + report ----------
@@ -395,7 +426,7 @@ def _selftest():
     assert overall([mk(WARN), mk(FAIL)]) == FAIL
     assert overall([]) == OK
     assert QURL.startswith("http")
-    assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides"}
+    assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides", "prompt_intent"}
     # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
     healthy_emb = {"reachable": True}
     serving_qd = {"reachable": True, "indexed": 495}

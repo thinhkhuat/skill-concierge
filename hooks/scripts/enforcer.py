@@ -67,6 +67,31 @@ ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-ca
 MAX_SHORT_WORDS = 2   # ≤ this many words → trivial getaway, skip embed entirely
 _DESC_CHARS = 96
 
+# ── actionability gate (prior-independent class-margin over the prompt_intent corpus) ─
+# A relevant skill clearing the floor is NOT enough: most "dodged" offers land on
+# conversational/status/meta turns that match a skill topically but want none. The gate
+# suppresses an offer ONLY when the prompt is non-imperative AND sits closer to
+# CONVERSATIONAL space than ACTIONABLE space by a margin (mean top-K cosine to each class).
+# A class-MARGIN, not an absolute neighbour count, is used because conversational is the
+# minority (~30%) of the ~1.7k-prompt corpus — an absolute count is biased by that prior
+# and went inert on novel phrasing. Tuned M=0.03 -> ~2% false-suppression on a held-out
+# backtest; validated to fire on out-of-distribution prompts. Fail-OPEN everywhere
+# (missing collection / empty class / any error / imperative prompt -> offer).
+PROMPT_INTENT_COLLECTION = os.environ.get("SKILL_PROMPT_INTENT_COLLECTION", "prompt_intent")
+INTENT_QUERY_URL = f"{QDRANT_URL}/collections/{PROMPT_INTENT_COLLECTION}/points/query"
+INTENT_K = int(os.environ.get("ENFORCER_INTENT_K", "10"))                # neighbours per class for the mean-similarity
+INTENT_MARGIN = float(os.environ.get("ENFORCER_INTENT_MARGIN", "0.03"))  # suppress iff (conv_sim - act_sim) > this
+_IMPERATIVE_VERBS = frozenset(
+    "fix build create add write implement refactor update integrate decouple run test debug "
+    "remove delete rename convert migrate deploy generate make set install check verify review "
+    "analyze analyse scan audit do apply enrich wire patch revert merge commit push save extract "
+    "port draft design optimize optimise configure investigate trace diagnose produce render "
+    "compile lint format sort filter parse split trash drop kill start stop restart clean tidy "
+    "bump tag release clone pull fetch mine label embed".split())
+_FILLER = frozenset(
+    "now ok okay so well then please alright also and but lets let's pls just next first go right "
+    "cool good great yes yeah sure hey actually".split())
+
 LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
@@ -189,6 +214,50 @@ def _ranked_mandate(cands: list) -> str:
     )
 
 
+def _is_imperative(prompt: str) -> bool:
+    """Veto signal for the actionability gate: does the prompt OPEN with a task verb
+    (after skipping leading fillers and 'can you'-style openers)? Imperative turns are
+    NEVER suppressed — they are the actionable turns the gate must protect, since a
+    false-suppressed offer is the costly error. High precision on the open, low recall by
+    design (most real tasks don't open with a clean verb — the kNN catches those)."""
+    toks = re.findall(r"[a-z']+", prompt.lower())
+    i = 0
+    skips = {("can", "you"), ("could", "you"), ("would", "you"), ("i", "want"), ("i", "need")}
+    while i < len(toks):
+        if toks[i] in _FILLER:
+            i += 1
+            continue
+        if i + 1 < len(toks) and (toks[i], toks[i + 1]) in skips:
+            i += 2
+            continue
+        break
+    return i < len(toks) and toks[i] in _IMPERATIVE_VERBS
+
+
+def _intent_conversational(vector: list) -> bool:
+    """Prior-independent actionability gate: True only when the prompt sits closer to
+    CONVERSATIONAL space than ACTIONABLE space by a margin. Two label-filtered kNN queries
+    over prompt_intent; mean cosine of the top-INTENT_K per class; suppress iff
+    (conv_mean - act_mean) > INTENT_MARGIN. Reuses the embedding the enforcer already
+    computed. Fail-OPEN: missing collection / empty class / any error -> False (offer)."""
+    def _class_sim(label):
+        res = _post_json(INTENT_QUERY_URL,
+                         {"query": vector,
+                          "filter": {"must": [{"key": "label", "match": {"value": label}}]},
+                          "limit": INTENT_K},
+                         QDRANT_TIMEOUT_S)
+        pts = res.get("result", {}).get("points", []) or []
+        return (sum(float(p.get("score", 0.0)) for p in pts) / len(pts)) if pts else None
+    try:
+        conv_sim = _class_sim("conversational")
+        act_sim = _class_sim("actionable")
+        if conv_sim is None or act_sim is None:
+            return False
+        return (conv_sim - act_sim) > INTENT_MARGIN
+    except Exception:
+        return False
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -241,6 +310,14 @@ def main() -> int:
             _append_offer(sid, "getaway", offered, None, prompt)
             return 0
 
+        # Actionability gate (prior-independent class-margin). A relevant skill cleared the
+        # floor — but if this is a NON-imperative turn that leans conversational over
+        # actionable, the offer is noise the agent reliably dodges. Suppress it. Fail toward
+        # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
+        if not _is_imperative(prompt) and _intent_conversational(vector):
+            _append_offer(sid, "intent_skip", offered, "conversational", prompt)
+            return 0
+
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
         _inject(_ranked_mandate(shown))
         _append_offer(sid, "offer",
@@ -289,13 +366,28 @@ def _selftest() -> int:
     if "• alpha — desc alpha" not in lone:
         bad.append("ranked_mandate: lone candidate line malformed")
 
+    # (3) actionability gate — the imperative VETO fires on task-verb openers and stays
+    # off for conversational/question/approval turns (the gate suppresses ONLY non-imperatives).
+    imp_fire = ["fix the typo on line 12", "now, write the handoff", "please run the tests",
+                "can you refactor this", "delete the cloned copy", "integrate the EFFORT gate"]
+    imp_off = ["how's the documentation status?", "good direction we're heading",
+               "what does this function do", "i think we should reconsider",
+               "thanks that worked", "yes please"]
+    for t in imp_fire:
+        if not _is_imperative(t):
+            bad.append("imperative MISS (should fire): " + repr(t))
+    for t in imp_off:
+        if _is_imperative(t):
+            bad.append("imperative FALSE-FIRE (should stay off): " + repr(t))
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
-    print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share"
-          % (len(must_fire), len(must_not_fire)))
+    print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share "
+          "+ actionability imperative-veto (%d fire / %d off)"
+          % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off)))
     return 0
 
 
