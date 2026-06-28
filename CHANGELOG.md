@@ -5,6 +5,18 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-29
+
+### Changed
+- **Gate thresholds re-tuned by operator order (ADR-0009), against the data-backed
+  recommendation.** `MAX_SHORT_WORDS` 2→5 (pre-gate now skips ≤5-word prompts) and
+  `GETAWAY_FLOOR` 0.40→0.45 (an offer needs top cosine ≥0.45). Both floors raised to cut
+  perceived offer-noise. The ledger+corpus analysis argued against both: the score floor is
+  anti-correlated with adoption (taken offers score lower than dodged), and the word floor
+  misses the long-form noise (~93% of it is >5 words) while nicking short commands. See
+  ADR-0009 for the evidence and the one-line revert (set 2 / 0.40, or
+  `ENFORCER_GETAWAY_FLOOR=0.40`). Behaviour change only; both stay env-overridable.
+
 ## [0.6.0] — 2026-06-28
 
 ### Added
