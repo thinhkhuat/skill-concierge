@@ -5,6 +5,19 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-29
+
+### Added
+- **Vietnamese support in the actionability gate's imperative-veto.** `_is_imperative` now recognizes
+  Vietnamese task prompts — a Unicode+NFC tokenizer that keeps diacritics, a VN single-verb +
+  two-syllable-bigram lexicon, and VN polite openers (hãy / xin / làm ơn / vui lòng). It was
+  English-only, so Vietnamese commands could be wrongly suppressed by the intent gate. (commit 0b065e0)
+
+### Changed
+- **Word floor `MAX_SHORT_WORDS` 5 → 3 — ADR-0010 (supersedes ADR-0009's word floor).** Prompts of
+  4–5 words now reach the language-aware veto instead of a silent getaway, so short commands (incl.
+  Vietnamese) get skill offers; ≤3-word ultra-short trivia is still skipped. Score floor 0.45 unchanged.
+
 ## [0.7.1] — 2026-06-29
 
 ### Fixed

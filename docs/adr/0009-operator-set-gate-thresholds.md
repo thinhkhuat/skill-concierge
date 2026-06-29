@@ -1,6 +1,6 @@
 # ADR-0009: Operator-set gate thresholds over data-backed defaults (word floor 2→5, score floor 0.40→0.45)
 
-**Status:** Accepted — operator override of the data-backed recommendation; explicitly reversible (see "Revert")
+**Status:** Accepted — operator override of the data-backed recommendation; explicitly reversible (see "Revert"). **Word floor superseded by [ADR-0010](0010-word-floor-5-to-3.md) (5→3, 2026-06-29); the score floor 0.45 remains in force.**
 **Date:** 2026-06-29
 **Deciders:** owner (thinhkhuat)
 
