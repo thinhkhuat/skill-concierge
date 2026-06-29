@@ -8,6 +8,8 @@ __pycache__/
 # vendored engine: plugin-local venv + downloaded model cache (reproduced by setup, not committed)
 vendor/.venv/
 vendor/**/*.egg-info/
+# pip build artifact left by `pip install vendor/skill-search` in setup.sh
+vendor/**/build/
 
 # os
 .DS_Store
