@@ -1,0 +1,4 @@
+{
+  "_note": "Deterministic route overrides for the enforcer (ADR-pending). DEFAULT-INERT: read ONLY when ENFORCER_DETERMINISTIC=1 is set in the hook env; with the flag unset OR routes empty this file is a no-op. Each route GUARANTEES its skill in the offer menu when the lowercased prompt contains `contains` (leads at score 1.0, bypasses getaway + actionability gate). CURATE SPARINGLY: this system's dodge is dominated by FALSE offers, so every route must be near-zero false-positive — prefer leaving this empty until a concrete, unambiguous intent the semantic layer reliably misses appears. Format per route: {\"contains\": \"<lowercased substring>\", \"skill\": \"<exact skill name>\"}.",
+  "routes": []
+}

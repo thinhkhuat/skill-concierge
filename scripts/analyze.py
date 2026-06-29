@@ -115,7 +115,11 @@ def _offer_conversion(windows):
       - per-skill: how often each skill was offered, and of those turns how often
         that SAME skill was actually invoked (its own pull, not the turn's).
     Returns (n_offered_turns, n_took_any, offered_by_skill, took_by_skill)."""
-    offered_turns = [w for w in windows if w.get("offered")]
+    # band=="offer" ONLY — turns where the menu was actually SHOWN to the agent.
+    # getaway/intent_skip turns also carry a retrieved `offered` list (logged for
+    # coverage stats) yet were NEVER surfaced, so counting them as dodged offers
+    # overstates the compliance gap. Matches build_keep_off.py's denominator (ADR-0011).
+    offered_turns = [w for w in windows if w.get("band") == "offer"]
     took_any = sum(1 for w in offered_turns
                    if any(a in w["offered"] for a in w["autos"]))
     off_by, took_by = Counter(), Counter()
@@ -131,10 +135,11 @@ def _offer_conversion(windows):
 def _run_selftest():
     """Pin the C1 join contract on synthetic turn-windows."""
     windows = [
-        {"offered": ["a", "b"], "autos": ["a"]},   # converted on a
-        {"offered": ["a", "c"], "autos": []},       # dodged
-        {"offered": ["b"], "autos": ["b"]},          # converted on b
-        {"offered": [], "autos": ["z"]},             # NOT an offered turn
+        {"band": "offer", "offered": ["a", "b"], "autos": ["a"]},   # shown, converted on a
+        {"band": "offer", "offered": ["a", "c"], "autos": []},       # shown, dodged
+        {"band": "offer", "offered": ["b"], "autos": ["b"]},          # shown, converted on b
+        {"band": "getaway", "offered": ["a", "d"], "autos": []},      # retrieved but NOT shown -> excluded
+        {"band": None, "offered": [], "autos": ["z"]},               # not an offered turn
     ]
     n_off, took, off_by, took_by = _offer_conversion(windows)
     bad = []

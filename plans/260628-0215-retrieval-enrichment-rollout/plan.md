@@ -51,8 +51,8 @@ ITEM_FLOOR retune (left at 0.18, unmeasured); OOD recall on an independently-aut
 | 2 | [Doctrine decay reinjection](./phase-02-doctrine-decay-reinjection.md) | Pending |
 | 3 | [Per-skill threshold wiring](./phase-03-per-skill-threshold-wiring.md) | Pending |
 | 4 | [Compliance measurement](./phase-04-compliance-measurement.md) | Pending |
-| 5 | [Offer-suppression keep-off map](./phase-05-offer-suppression-keep-off.md) | Pending (blockedBy P4) |
-| 6 | [Runner-up-gap menu collapse](./phase-06-runner-up-gap-collapse.md) | Pending |
+| 5 | [Offer-suppression keep-off map](./phase-05-offer-suppression-keep-off.md) | Shipped INERT v0.9.0 — machinery deployed; suppresses nothing (keep_off:[]); activation still gated on P4 clean-window data |
+| 6 | [Runner-up-gap menu collapse](./phase-06-runner-up-gap-collapse.md) | Shipped INERT v0.9.0 — default-off (ENFORCER_DOMINANCE_RATIO unset) |
 
 ## Dependencies
 
@@ -106,3 +106,10 @@ phase-status flip — pending operator go.
 - Auto-regen wiring into doctor --fix / setup.sh (don't arm an unproven generator on a timer).
 - Reindex for the stale-index WARN.
 - "Enrichment overlay: not enriched" per doctor — investigate vs the plan's "enrichment shipped live".
+
+### FINALIZE (2026-06-29 23:41) — cook close-out, completed late (see /come-clean)
+v0.9.0 committed (8abcffd) + pushed + deployed (marketplace update + reload). Validated by TWO
+independent verifiers -> GO (active=0.9.0, cache==source, --selftest OK, fail-open/fail-silent
+confirmed, generator reproduces 6 never-takers, doctor WARN=stale-index only). P5/P6 phase status
+synced above. Journal: docs/journals/2026-06-29-skill-concierge-090-offer-suppression.md. Handoff:
+.handoff/handoff-2026-06-29-2341-skill-concierge-090-offer-suppression-shipped.md.

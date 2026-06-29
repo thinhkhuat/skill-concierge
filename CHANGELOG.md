@@ -5,6 +5,43 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-30
+
+### Added
+- **Multi-vector MAX-pool retrieval — ADR-0012 (the headline).** Each skill is now indexed as a base
+  point (`name+desc+body`) PLUS one trigger point per intent phrase from its description, and scored at
+  query time by its single BEST point (Qdrant `query/groups`, `group_by=name`, `group_size=1`). This
+  imports the BM25-routing design's MAX-pool mechanism the project had missed (it shipped the opposite —
+  a dormant MEAN-centroid overlay). Validated on a shadow A/B: **rank-1 2.2×, top-5 1.8×, separation
+  2.2×, false-fire flat**. Live index 500→2312 points; groups query ~2 ms. `build_index` builds the
+  trigger layer natively (reindex-safe, per-chunk upsert), with a keyword payload index on `name`.
+  Gated by `SKILL_MULTIVECTOR` (default ON; `=0` + reindex reverts to one bare vector per skill).
+- **`doctor` checks: Multi-vector layer + Corpus health.** The former counts trigger points (and WARNs
+  if `SKILL_MULTIVECTOR` is on but the index has none — silent single-vector degradation); the latter
+  surfaces the per-skill calibration `ok`/`weak`/`no-signal` fix-list from `eval/thresholds.json`.
+- **Per-skill calibrated τ + deterministic route tier — wired, default-INERT.** `enforcer.py` can gate
+  an `ok`-calibrated skill on its own τ (`ENFORCER_PER_SKILL_TAU`) or guarantee an exact-substring →
+  skill route (`ENFORCER_DETERMINISTIC`, `config/deterministic-routes.json`). Both OFF by default and
+  selftested: on the current compressed-cosine band all 5 `ok`-τ sit below the 0.45 floor, so arming τ
+  today would add false offers — recalibrate against multi-vector scores first.
+
+### Changed
+- **`analyze.py` offered-turn denominator unified to `band=="offer"` — ADR-0011 Open→Resolved.**
+  `_offer_conversion` now counts only actually-SHOWN menus (getaway/intent_skip excluded), matching
+  `build_keep_off.py`; the shared band-filter is stamped in build_keep_off's window builder so the two
+  can never diverge. The global all-turn `dodge` line is unchanged (still a labelled proxy).
+- **Getaway floor kept at 0.45.** A floor sweep showed the multi-vector "flooding" was a 0.20-floor
+  artifact; at 0.45 crowd-median is 11 (< bare's 34 @0.20) with 64.9% positive-clear, so no re-tune.
+- The legacy MEAN enrichment overlay is superseded by the trigger layer; `doctor --fix` no longer runs
+  the reapply step when `SKILL_MULTIVECTOR` is on (it would mean-corrupt base vectors).
+
+### Notes
+- **Activation:** the persistent skill-search MCP must restart/reconnect to load the new groups code —
+  until then its `search_skills` returns duplicate points on the multi-vector index (the enforcer, a
+  per-prompt subprocess, already uses the new code).
+- Recall lever is proven; the adoption payoff (offered-turn conversion) needs a post-deployment traffic
+  window to judge. Independent code-review: no blockers; tester: all selftests green.
+
 ## [0.9.0] — 2026-06-29
 
 ### Added

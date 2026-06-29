@@ -33,6 +33,7 @@ Deps:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -75,6 +76,10 @@ OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
+# Multi-vector trigger layer: index each skill's intent phrases as separate points and
+# MAX-pool them at query time (group_by name). Default ON; set SKILL_MULTIVECTOR=0 + reindex
+# to revert to one bare vector per skill. (Validated: 2.2x rank-1/separation, flat false-fire.)
+MULTIVECTOR     = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"
 # Index manifest: lets us detect drift between disk and the index cheaply.
 META_PATH       = Path(os.environ.get(
     "SKILL_META_PATH", str(Path.home() / ".cache" / "skill-search" / "index_meta.json")))
@@ -234,6 +239,34 @@ def _content_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
 
+# Trigger-phrase derivation for the multi-vector layer. MIRRORS scripts/build_triggers.py
+# split_phrases (kept in sync by hand so the vendored package stays self-contained — no
+# cross-dependency on scripts/). Splits a skill description into intent-bearing phrases.
+_SPLIT_RE = re.compile(r"(?:[.;!?]\s+|\s+[—–]\s+|\n+|^\s*[-*•]\s+)", re.MULTILINE)
+_LABEL_RE = re.compile(r"^\s*(triggers?|examples?|use when|also use|use this skill)\b[:\-]?\s*", re.I)
+_WS_RE = re.compile(r"\s+")
+_TRIG_MAX = int(os.environ.get("TRIGGERS_MAX", "12"))
+_TRIG_MIN_WORDS, _TRIG_MIN_CHARS = 3, 12
+
+
+def _split_phrases(description: str) -> list:
+    """Description -> deduped intent-bearing phrases (order-preserving), capped at _TRIG_MAX."""
+    if not description:
+        return []
+    out, seen = [], set()
+    for p in _SPLIT_RE.split(description):
+        p = _LABEL_RE.sub("", p or "")
+        p = _WS_RE.sub(" ", p).strip().strip("\"'`()[]")
+        if len(p) < _TRIG_MIN_CHARS or len(p.split()) < _TRIG_MIN_WORDS:
+            continue
+        k = p.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(p)
+    return out[:_TRIG_MAX]
+
+
 def _skill_text(s: dict) -> str:
     """The text we embed: name + description + body (meaning, not just name)."""
     return f"{s['name']}\n{s['description']}\n{s['body']}"
@@ -259,6 +292,14 @@ def _ensure_collection() -> None:
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=vector_size(), distance=Distance.COSINE),
         )
+    # Keyword index on `name` so the MAX-pool group_by retrieval is fast + exact. Idempotent:
+    # a re-create raises, so swallow it. group_by still works unindexed (just slower).
+    try:
+        _qdrant.create_payload_index(
+            collection_name=COLLECTION, field_name="name",
+            field_schema=models.PayloadSchemaType.KEYWORD)
+    except Exception:
+        pass
 
 
 def _existing_points() -> dict[str, str]:
@@ -301,33 +342,45 @@ def build_index(force: bool = False) -> dict:
 
     existing = {} if force else _existing_points()
 
-    # Desired end state: id -> (skill, text, content_hash).
+    # Desired end state: point-id -> (text-to-embed, content_hash, payload).
+    # Each skill gets ONE base point (name+desc+body); with MULTIVECTOR on it also gets one
+    # TRIGGER point per intent phrase from its description, MAX-pooled at query time via
+    # group_by name. Stable per-(skill, slot) ids keep reindex incremental and reindex-safe
+    # (a plain reindex maintains the trigger layer — no separate overlay/reapply needed).
     desired: dict[str, tuple] = {}
     for s in skills:
         text = _skill_text(s)
-        desired[_point_id(s["name"])] = (s, text, _content_hash(text))
+        h = _content_hash(text)
+        desired[_point_id(s["name"])] = (text, h, {
+            "name": s["name"], "description": s["description"],
+            "path": s["path"], "content_hash": h, "kind": "base"})
+        if MULTIVECTOR:
+            for i, ph in enumerate(_split_phrases(s["description"])):
+                ph_h = _content_hash(ph)
+                desired[_point_id(f"{s['name']}::trig::{i}")] = (ph, ph_h, {
+                    "name": s["name"], "description": s["description"],
+                    "content_hash": ph_h, "kind": "trigger"})
 
-    # Embed only what's new or whose text changed; delete what's gone.
-    changed = [(pid, d) for pid, d in desired.items() if existing.get(pid) != d[2]]
+    # Embed only what's new or whose text changed; delete what's gone (incl. orphaned
+    # trigger slots when a description shortens, and ALL triggers if MULTIVECTOR is turned off).
+    changed = [(pid, d) for pid, d in desired.items() if existing.get(pid) != d[1]]
     removed = [pid for pid in existing if pid not in desired]
 
-    points = []
+    # Embed AND upsert per chunk — upserting all points in one call overflows Qdrant's
+    # 33MB request limit once the multi-vector layer pushes the point count into the thousands.
     for i in range(0, len(changed), EMBED_BATCH):
         chunk = changed[i:i + EMBED_BATCH]
-        vecs = embed_batch([d[1] for _, d in chunk])
-        for (pid, (s, _text, h)), vec in zip(chunk, vecs):
-            points.append(PointStruct(
-                id=pid, vector=vec,
-                payload={"name": s["name"], "description": s["description"],
-                         "path": s["path"], "content_hash": h}))
-    if points:
-        _qdrant.upsert(collection_name=COLLECTION, points=points)
+        vecs = embed_batch([d[0] for _, d in chunk])
+        pts = [PointStruct(id=pid, vector=vec, payload=payload)
+               for (pid, (_text, _h, payload)), vec in zip(chunk, vecs)]
+        _qdrant.upsert(collection_name=COLLECTION, points=pts)
     if removed:
         _qdrant.delete(collection_name=COLLECTION,
                        points_selector=models.PointIdsList(points=removed))
 
-    _write_manifest(len(desired))
-    return {"indexed": len(desired), "embedded": len(changed),
+    n_skills = len({d[2]["name"] for d in desired.values()})
+    _write_manifest(n_skills)
+    return {"indexed": n_skills, "points": len(desired), "embedded": len(changed),
             "deleted": len(removed), "skipped": len(desired) - len(changed)}
 
 
@@ -354,13 +407,26 @@ def search_skills(query: str) -> str:
     Returns ranked {name, description, score}. Claude should then invoke the
     relevant ones by name (e.g. /frontend-design)."""
     qvec = embed(query)
-    hits = _qdrant.query_points(collection_name=COLLECTION, query=qvec, limit=TOP_K).points
-    results = [{
-        "name": h.payload["name"],
-        "command": f"/{h.payload['name']}",
-        "description": h.payload["description"],
-        "score": round(h.score, 4),
-    } for h in hits]
+    # MAX-pool over a skill's points: group_by name, keep each skill's single BEST point
+    # (group_size=1). On a single-vector index (one point per skill) this is identical to a
+    # plain top-k; on the multi-vector index it scores each skill by its best-matching phrase
+    # point — the documented recall lever. group_size=1 -> one hit per group.
+    groups = _qdrant.query_points_groups(
+        collection_name=COLLECTION, query=qvec, group_by="name",
+        limit=TOP_K, group_size=1, with_payload=True).groups
+    results = []
+    for g in groups:
+        if not g.hits:
+            continue
+        h = g.hits[0]
+        pl = h.payload or {}
+        name = pl.get("name", g.id)
+        results.append({
+            "name": name,
+            "command": f"/{name}",
+            "description": pl.get("description", ""),
+            "score": round(h.score, 4),
+        })
     out = {"query": query, "results": results}
     # Surface index drift in-band so dark/stale skills don't fail silently.
     warning = _staleness_warning()

@@ -40,6 +40,7 @@ QNAME = os.environ.get("SKILL_QDRANT_CONTAINER", "skill-search-qdrant")
 SETTINGS = Path(os.environ.get("SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude/settings.json"))
 LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-telemetry/logs"))
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
+MULTIVECTOR = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"   # multi-vector trigger layer (default on)
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 GLYPH = {OK: "✓", WARN: "!", FAIL: "✗"}           # ✓ ! ✗
@@ -338,9 +339,73 @@ def check_dup_mcp():
     return dict(id="dupmcp", label="Duplicate MCP", status=OK, detail="single skill-search MCP", fix=None)
 
 
+def check_multivector():
+    """Multi-vector trigger layer (server.py build_index). Counts kind="trigger" points: present
+    => each skill is scored by its single best phrase point (MAX-pool retrieval); absent => the
+    index is one bare vector per skill. Read-only, fail-open (N/A if Qdrant unreachable)."""
+    if not _qdrant_reachable():
+        return None
+    url = QURL.rstrip("/") + f"/collections/{COLLECTION}/points/count"
+
+    def _count(flt):
+        body = {"exact": True}
+        if flt:
+            body["filter"] = flt
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        return json.loads(urllib.request.urlopen(req, timeout=3).read())["result"]["count"]
+    try:
+        trig = _count({"must": [{"key": "kind", "match": {"value": "trigger"}}]})
+        total = _count(None)
+    except Exception:
+        return None
+    if trig == 0:
+        if MULTIVECTOR:
+            # env expects multi-vector but the index has none -> retrieval silently degraded to
+            # single-vector (lower recall, more getaways). This is the "skills go dark silently"
+            # mode the doctor exists to catch — WARN, auto-fixable by reindex.
+            return dict(id="multivector", label="Multi-vector layer", status=WARN,
+                        detail="SKILL_MULTIVECTOR on but 0 trigger points — retrieval degraded to "
+                               "single-vector; reindex to build the trigger layer", fix="reindex")
+        return dict(id="multivector", label="Multi-vector layer", status=OK,
+                    detail="off — one bare vector per skill", fix=None)
+    return dict(id="multivector", label="Multi-vector layer", status=OK,
+                detail=f"{trig} trigger points (+ base) of {total} total — MAX-pooled retrieval",
+                fix=None)
+
+
+def check_corpus_health():
+    """Per-skill calibration corpus health. Reads eval/thresholds.json (from
+    calibrate_thresholds.py): how many skills have cosine separation strong enough for a
+    trustworthy per-skill tau. `weak`/`no-signal` skills can't be fixed by ANY threshold —
+    the lever is index content (e.g. multi-vector) or contrastive negatives. Surfaced here
+    so the fix-list is visible in the normal health workflow. Read-only, fail-open: missing
+    file -> N/A (calibration is optional); WARN only if calibration is wholly signal-less."""
+    path = ROOT / "eval" / "thresholds.json"
+    if not path.exists():
+        return None  # calibration is optional; its absence is not a deployment fault
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return dict(id="corpus", label="Corpus health", status=WARN,
+                    detail=f"{path.name} invalid JSON — re-run calibrate_thresholds.py", fix=None)
+    if not d:
+        return None
+    counts = {"ok": 0, "weak": 0, "no-signal": 0}
+    for v in d.values():
+        counts[v.get("status")] = counts.get(v.get("status"), 0) + 1
+    n = len(d)
+    needs = counts.get("weak", 0) + counts.get("no-signal", 0)
+    detail = f"{counts.get('ok', 0)}/{n} ok · {counts.get('weak', 0)} weak · {counts.get('no-signal', 0)} no-signal"
+    if needs:
+        detail += " — weak/no-signal need contrastive negatives or richer index (multi-vector), not a threshold"
+    status = WARN if counts.get("ok", 0) == 0 else OK
+    return dict(id="corpus", label="Corpus health", status=status, detail=detail, fix=None)
+
+
 CHECKS = [check_python, check_venv, check_mcp_wiring, check_qdrant,
-          check_engine_health, check_enrichment, check_prompt_intent,
-          check_overrides, check_ledger, check_dup_mcp]
+          check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
+          check_corpus_health, check_overrides, check_ledger, check_dup_mcp]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -369,6 +434,11 @@ def fix_reindex():
     if r.returncode != 0:
         return False, (r.stderr.strip() or "reindex failed")
     msg = _last_line(r.stdout) or "reindexed"
+    if MULTIVECTOR:
+        # The multi-vector trigger layer is rebuilt by reindex itself (build_index), so the
+        # legacy MEAN enrichment overlay must NOT run on top — it would mean-corrupt the base
+        # vectors. Skip reapply; multi-vector supersedes the overlay.
+        return True, msg
     # reindex rewrites changed/new points bare — re-apply the enrichment overlay so the
     # refresh does not silently undo it (no-op when the index was never enriched).
     rr = _reapply_cmd()

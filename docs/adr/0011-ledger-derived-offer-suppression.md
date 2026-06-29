@@ -50,9 +50,13 @@ Merge-safe (inert: `keep_off: []`, P6 default-off). Fixes applied this session:
 - Malformed `ENFORCER_DOMINANCE_RATIO` fails silent to `None` (#4).
 - `intent_skip` path threads `dropped=` for telemetry symmetry (#6).
 
-## Open (operator decision, deferred — not changed here)
-`analyze.py`'s "offered-turn dodge" headline (~93%) is computed ALL-BANDS (includes never-shown
-getaway / intent_skip turns), so it likely OVERSTATES the shown-menu dodge. build_keep_off now uses
-the corrected `band=="offer"` denominator, so the two intentionally differ. Whether `analyze.py`
-adopts the same filter — changing the published compliance number and the evidence framing behind
-ADR-0009 — is an operator call, deliberately NOT made here (don't silently move an operator metric).
+## Resolved (2026-06-30, operator-approved)
+The operator approved adopting the corrected denominator in `analyze.py`. `_offer_conversion` now
+keys its offered-turn denominator on `band=="offer"` (SHOWN menus only), so the "offered-turn
+conv/dodge" metric excludes never-shown getaway / intent_skip turns — matching `build_keep_off.py`.
+The two no longer diverge: the band-filter is the single shared semantics (build_keep_off's
+`_windows` now stamps `band="offer"` on its shown-offer windows so the reused join counts the same
+set). The global all-turn `dodge` line is unchanged and still labelled a proxy upper-bound. Net:
+the published offered-turn dodge will read LOWER (it no longer counts impressions the agent never
+saw) — the more honest compliance number behind ADR-0009. Verified: `analyze.py --selftest` (band
+filter + getaway exclusion) and a synthetic `build_keep_off.compute` run (shown-only denominator).

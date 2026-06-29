@@ -43,7 +43,7 @@ EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
 EMBED_URL = f"http://{EMBED_HOST}:{EMBED_PORT}/embed"
 QDRANT_URL = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
-QUERY_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query"
+QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 
 # ── tuning (calibrated on the live mpnet index, 2026-06-26) ───────────────────
 # mpnet multilingual cosines are compressed into a narrow band: pure trivia
@@ -143,6 +143,84 @@ def _drop_keepoff(cands: list, keepoff: frozenset):
     return survivors, dropped
 
 
+# ── per-skill calibrated tau (Phase D wiring, default-INERT) ───────────────
+# Wire eval/thresholds.json so an `ok`-calibrated skill gates on ITS OWN tau instead of the
+# single global GETAWAY_FLOOR. DEFAULT OFF (ENFORCER_PER_SKILL_TAU unset) -> _PER_SKILL_TAU is
+# empty -> _floor_for() returns the global floor -> behaviour byte-identical to today.
+# WHY OFF BY DEFAULT (data, 2026-06-30): all 5 current `ok` skills calibrate to tau < 0.45 (one
+# negative), so arming this LOWERS their bar and ADDS the false-offers ADR-0009 tuned against.
+# On the compressed-cosine band the lever is index CONTENT (multi-vector), not thresholds —
+# calibrate_thresholds.py says the same. Mechanism shipped + tested; arm only after a substrate
+# change lifts separation. Opt in: export ENFORCER_PER_SKILL_TAU=1.  FAIL-OPEN on a bad file.
+_THRESHOLDS_PATH = Path(os.environ.get(
+    "SKILL_THRESHOLDS",
+    Path(__file__).resolve().parents[2] / "eval" / "thresholds.json"))
+
+
+def _load_per_skill_tau() -> dict:
+    if not os.environ.get("ENFORCER_PER_SKILL_TAU", "").strip():
+        return {}  # default-inert
+    try:
+        data = json.loads(_THRESHOLDS_PATH.read_text(encoding="utf-8"))
+        return {k: float(v["tau"]) for k, v in data.items()
+                if v.get("status") == "ok" and isinstance(v.get("tau"), (int, float))}
+    except Exception:
+        return {}  # fail-open: a bad thresholds file must never break a turn
+
+
+_PER_SKILL_TAU = _load_per_skill_tau()
+
+
+def _floor_for(name: str) -> float:
+    """Getaway floor for a candidate: its calibrated per-skill tau when armed AND `ok`,
+    else the global floor. Inert by default (_PER_SKILL_TAU empty)."""
+    return _PER_SKILL_TAU.get(name, GETAWAY_FLOOR)
+
+
+# ── deterministic route overrides (default-INERT) ──────────────────────────
+# A tiny, high-precision exact-substring -> skill map for intents where semantic ranking is
+# unreliable but the intent is unambiguous. GUARANTEES the mapped skill in the menu (prepended,
+# deduped) — additive, never blocks, and a hit bypasses getaway + the actionability gate.
+# DEFAULT OFF: loaded only when ENFORCER_DETERMINISTIC is set; missing/empty config -> no-op.
+# CURATE SPARINGLY — this system's dodge is dominated by FALSE offers, so every route must be
+# near-zero false-positive. config/deterministic-routes.json: {"routes":[{"contains":"<lower
+# substring>","skill":"<exact name>"}]}.  Opt in: export ENFORCER_DETERMINISTIC=1.
+_ROUTES_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_ROUTES",
+    Path(__file__).resolve().parents[2] / "config" / "deterministic-routes.json"))
+
+
+def _load_routes() -> list:
+    if not os.environ.get("ENFORCER_DETERMINISTIC", "").strip():
+        return []  # default-inert
+    try:
+        data = json.loads(_ROUTES_PATH.read_text(encoding="utf-8"))
+        return [(r["contains"].lower(), r["skill"]) for r in data.get("routes", [])
+                if isinstance(r.get("contains"), str) and isinstance(r.get("skill"), str)
+                and r["contains"].strip()]
+    except Exception:
+        return []  # fail-open
+
+
+_ROUTES = _load_routes()
+
+
+def _deterministic_hits(prompt: str, cands: list) -> list:
+    """Skills whose exact-substring route matches the prompt but retrieval missed. Returns
+    [(name, desc, score)] to PREPEND (score=1.0 so it leads + clears every floor). Order-
+    preserving, de-duped against cands. Inert by default (_ROUTES empty)."""
+    if not _ROUTES:
+        return []
+    low = prompt.lower()
+    have = {n for (n, _d, _s) in cands}
+    out = []
+    for sub, skill in _ROUTES:
+        if sub in low and skill not in have:
+            out.append((skill, "deterministic route", 1.0))
+            have.add(skill)
+    return out
+
+
 # ── P6: runner-up-gap menu collapse (default-INERT) ──────────────────
 # Collapse the menu to the top skill when it is clearly ahead of the runner-up by RAW-score
 # gap (NOT %-share, which never concentrates: top-share maxes ~0.285 on the live ledger).
@@ -233,14 +311,22 @@ def _embed(text: str) -> list:
 
 
 def _retrieve(vector: list) -> list:
-    """Top-k from Qdrant via raw REST (stdlib only). Returns [(name, desc, score)]."""
-    res = _post_json(QUERY_URL,
-                     {"query": vector, "limit": TOP_K, "with_payload": True},
+    """Top-k SKILLS from Qdrant via raw REST (stdlib only), MAX-pooled: group_by name with one
+    best point per skill (group_size=1). Identical to a plain top-k on a single-vector index; on
+    the multi-vector index each skill is scored by its single best phrase point. Returns
+    [(name, desc, score)]."""
+    res = _post_json(QUERY_GROUPS_URL,
+                     {"query": vector, "group_by": "name", "limit": TOP_K,
+                      "group_size": 1, "with_payload": ["name", "description"]},
                      QDRANT_TIMEOUT_S)
     out = []
-    for p in res.get("result", {}).get("points", []):
-        pl = p.get("payload", {}) or {}
-        out.append((pl.get("name", "?"), pl.get("description", ""), float(p.get("score", 0.0))))
+    for g in res.get("result", {}).get("groups", []):
+        hits = g.get("hits", [])
+        if not hits:
+            continue
+        pl = hits[0].get("payload", {}) or {}
+        out.append((pl.get("name", g.get("id", "?")), pl.get("description", ""),
+                    float(hits[0].get("score", 0.0))))
     return out
 
 
@@ -380,10 +466,19 @@ def main() -> int:
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
 
+        # Deterministic routes (default-inert): guarantee an unambiguously-intended skill in
+        # the menu even when semantic ranking missed it. A hit leads (score 1.0) and bypasses
+        # both the getaway and the actionability gate (the intent is explicit).
+        det = _deterministic_hits(prompt, cands)
+        if det:
+            cands = det + cands
+
         top = cands[0][2] if cands else 0.0
         offered = [[n, round(s, 4)] for (n, _d, s) in cands]
 
-        if top < GETAWAY_FLOOR:
+        # Getaway: top candidate below its floor (per-skill tau when armed+`ok`, else the
+        # global floor). A deterministic hit always clears — it IS the intent.
+        if not det and top < (_floor_for(cands[0][0]) if cands else GETAWAY_FLOOR):
             # No semantic fit → trivial/out-of-catalogue. Stay silent (getaway),
             # but log the consideration so coverage/fallback stats stay honest.
             _append_offer(sid, "getaway", offered, None, prompt, dropped=_dropped or None)
@@ -393,7 +488,7 @@ def main() -> int:
         # floor — but if this is a NON-imperative turn that leans conversational over
         # actionable, the offer is noise the agent reliably dodges. Suppress it. Fail toward
         # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
-        if not _is_imperative(prompt) and _intent_conversational(vector):
+        if not det and not _is_imperative(prompt) and _intent_conversational(vector):
             _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None)
             return 0
 
@@ -501,13 +596,40 @@ def _selftest() -> int:
     if "%" in lone_collapsed or "Multiple candidates" in lone_collapsed:
         bad.append("collapsed render must be lone (no %-share / note)")
 
+    # (6) per-skill tau + deterministic routes — BOTH default-INERT (no env set in this test).
+    global _PER_SKILL_TAU, _ROUTES
+    if _PER_SKILL_TAU != {}:
+        bad.append("per-skill tau must be empty/inert by default (ENFORCER_PER_SKILL_TAU unset)")
+    if _ROUTES != []:
+        bad.append("deterministic routes must be empty/inert by default (ENFORCER_DETERMINISTIC unset)")
+    if _floor_for("whatever") != GETAWAY_FLOOR:
+        bad.append("floor_for must return the global floor when inert")
+    _saved_tau, _saved_routes = _PER_SKILL_TAU, _ROUTES
+    try:
+        _PER_SKILL_TAU = {"vn-author": 0.30}
+        if _floor_for("vn-author") != 0.30:
+            bad.append("floor_for must use per-skill tau for an armed `ok` skill")
+        if _floor_for("uncalibrated") != GETAWAY_FLOOR:
+            bad.append("floor_for must fall back to the global floor for an uncalibrated skill")
+        _ROUTES = [("open a pull request", "ck:git")]
+        hit = [n for n, _d, _s in _deterministic_hits("please open a pull request now", [("o", "", 0.3)])]
+        if hit != ["ck:git"]:
+            bad.append("deterministic route must fire on a substring match: %s" % hit)
+        if _deterministic_hits("an unrelated prompt", [("o", "", 0.3)]) != []:
+            bad.append("deterministic route must not fire without a match")
+        if _deterministic_hits("open a pull request", [("ck:git", "", 0.3)]) != []:
+            bad.append("deterministic route must not duplicate an already-present skill")
+    finally:
+        _PER_SKILL_TAU, _ROUTES = _saved_tau, _saved_routes
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share "
-          "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse"
+          "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse "
+          "+ per-skill-tau/deterministic-routes (default-inert)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off)))
     return 0
 

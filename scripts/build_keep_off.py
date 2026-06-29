@@ -35,8 +35,9 @@ def _windows(events):
     """Re-build of analyze.main()'s window loop (offer attached by sid,q), but attaching offered
     ONLY for band=='offer' events — the actually-SHOWN menu. getaway/intent_skip log candidates the
     agent never saw; counting them inflates 'offered' and risks over-suppression (review finding #1).
-    Intentionally differs from analyze._offer_conversion's all-bands denominator (compliance
-    reporting) — suppression must measure SHOWN-menu conversion. Replicated, not imported."""
+    As of 2026-06-30 analyze._offer_conversion keys on band=='offer' too (the metric was unified —
+    ADR-0011 Open resolved), so this builder and the analyzer now report the SAME denominator; the
+    window loop stays replicated (not imported) to keep the generator import-light."""
     events = [e for e in events if isinstance(e, dict)]
     events.sort(key=lambda e: e.get("t", 0))
     turns, cur, by_sid_q, offers = [], {}, {}, []
@@ -62,6 +63,10 @@ def _windows(events):
             continue  # count only SHOWN menus; getaway/intent_skip never reached the agent
         w = by_sid_q.get((e.get("sid", ""), e.get("q", "")))
         if w is not None:
+            # set band too: analyze._offer_conversion now keys its denominator on
+            # band=="offer" (the shared SHOWN-menu semantics, ADR-0011), so these
+            # windows must carry the marker or the join would count zero.
+            w["band"] = "offer"
             w["offered"] = [o[0] for o in e.get("offered", []) if isinstance(o, list) and o]
     return turns
 

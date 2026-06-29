@@ -65,15 +65,21 @@ def embed(text):
 
 
 def skill_vector(name):
-    """Fetch skill S's indexed vector from Qdrant by exact payload.name."""
+    """Fetch skill S's BASE indexed vector from Qdrant by exact payload.name. With the
+    multi-vector layer a name maps to many points (base + triggers), so prefer the `base`
+    point; fall back to the first match for an older single-vector index with no `kind`.
+    NOTE: calibration scores a corpus prompt against this ONE vector, which no longer
+    mirrors live MAX-pool retrieval (max over a skill's points) — so per-skill tau / the
+    corpus-health status is now an approximation. It is advisory only (tau ships inert)."""
     res = _post(f"{QDRANT}/collections/{COLLECTION}/points/scroll", {
         "filter": {"must": [{"key": "name", "match": {"value": name}}]},
-        "limit": 1, "with_vector": True,
+        "limit": 50, "with_vector": True, "with_payload": ["kind"],
     })
     pts = res.get("result", {}).get("points", [])
     if not pts:
         return None
-    v = pts[0].get("vector")
+    base = next((p for p in pts if (p.get("payload") or {}).get("kind") == "base"), pts[0])
+    v = base.get("vector")
     return v if isinstance(v, list) else (v or {}).get("default")
 
 
