@@ -5,6 +5,18 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-29
+
+### Added
+- **`skill-usage-audit` bundled skill — a *valid* usage-measurement arm.** The invocation
+  ledger measures gate compliance (offer→take), which the operator flagged INVALID for
+  skill-USAGE analysis. This skill ships the correction beside the ledger that tempts the
+  misuse: it routes usage questions to the transcript SKILL-FIRST declaration trail
+  (`USING`/`SEARCH`/`SKIPPING`) — the signal that captures inline skill use the ledger and
+  the usage-tracker both miss — and bundles `scripts/audit_skill_usage.py` (windowed by
+  ship-time, self/meta dogfood sessions flagged, builtin slashes excluded). Auto-discovered
+  on install; no manifest wiring needed.
+
 ## [0.6.1] — 2026-06-29
 
 ### Changed

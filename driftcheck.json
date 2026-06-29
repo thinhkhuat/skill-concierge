@@ -36,7 +36,8 @@
     "setup.sh",
     "skills/skill-search/SKILL.md",
     "skills/setup/SKILL.md",
-    "skills/doctor/SKILL.md"
+    "skills/doctor/SKILL.md",
+    "skills/skill-usage-audit/SKILL.md"
   ],
   "command_checks": [
     {

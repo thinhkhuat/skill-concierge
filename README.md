@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.6.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.7.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -208,6 +208,7 @@ skill-concierge/
 ├── skills/skill-search/SKILL.md                # router skill (always-on entry point)
 ├── skills/setup/SKILL.md                       # skill-concierge:setup — bootstrap/refresh
 ├── skills/doctor/SKILL.md                      # skill-concierge:doctor — healthcheck + auto-fix
+├── skills/skill-usage-audit/SKILL.md           # skill-concierge:skill-usage-audit — valid usage measurement (SKILL-FIRST trail)
 ├── vendor/skill-search/                        # vendored MCP engine (MIT · sowhan/skill-search) + LICENSE + VENDORED.md
 ├── docs/adr/                                    # Architecture Decision Records (the WHY)
 ├── docs/caveats.md                             # operational landmines (the loud gotchas)
