@@ -5,6 +5,22 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-29
+
+### Fixed
+- **Docs reconciled with the 0.7.0 runtime.** README "How a request flows" now includes the
+  enforcer / doctrine / actionability-gate layer (it described only the pre-0.6 ledger→retrieve→curate
+  path); Status 0.4.2→0.7.0; AGENTS.md now lists four bundled skills + the in-generation hook layer
+  (was "three skills" / "ledger capture").
+- **Gate-knob comments de-footgunned** — `enforcer.py` GETAWAY_FLOOR / MAX_SHORT_WORDS no longer say
+  "revert to 0.40 / 2" (which invited silently undoing ADR-0009); they point to the ADR.
+- **ADR-0008 timeout reconciled** — note added for the 90ms→200ms relaxation (no decision reopened).
+- **`build_prompt_intent.py`** documents the in-sample caveat for threshold tuning.
+
+### Added
+- **driftcheck guards the prose that drifted** — README Status is now a version mirror, and a
+  `skill-list-parity` command-check asserts AGENTS.md names exactly the on-disk bundled skills.
+
 ## [0.7.0] — 2026-06-29
 
 ### Added

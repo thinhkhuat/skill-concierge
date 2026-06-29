@@ -4,6 +4,12 @@
 **Date:** 2026-06-26
 **Deciders:** owner (thinhkhuat)
 
+> **Update (2026-06-29):** the **90ms** client-side cap below was later relaxed to **200ms** after
+> the shim went threaded and live dogfooding showed ~60% of turns hitting `embed_timeout` under
+> in-turn CPU contention. The shim-sidecar *decision* (approach A) stands; only the calibrated cap
+> moved. Current value + history: `hooks/scripts/enforcer.py` `EMBED_TIMEOUT_S` (lines 55-62). This
+> note amends the title's "90ms"; it does not reopen the decision.
+
 ## Context
 
 ADR-0003 chose the multilingual mpnet-768 embedder. ADR-0002 requires the fusion hook to embed queries semantically at **every prompt**. Cold-loading the mpnet model per prompt is seconds-scale — unacceptable for a per-turn hook (~71ms budget today, ≲150ms target with 3.75x headroom).

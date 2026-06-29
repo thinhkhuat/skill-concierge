@@ -62,9 +62,9 @@ QUERY_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query"
 EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.20"))
 QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.1"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "5"))
-GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.45"))  # top<this → silent. OPERATOR-SET 0.45 (2026-06-29, ADR-0009) raised from 0.40 on perceived behaviour; the ledger/corpus analysis argued AGAINST it (taken offers score LOWER than dodged, so a higher floor cuts the better-converting offers first). Revert to the data-backed default: 0.40.
+GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.45"))  # top<this → silent. OPERATOR-SET 0.45 (2026-06-29, ADR-0009) raised from 0.40 on perceived behaviour; the ledger/corpus analysis argued AGAINST it (taken offers score LOWER than dodged, so a higher floor cuts the better-converting offers first). Do NOT change without re-opening ADR-0009 (data-backed alternative: 0.40 / env ENFORCER_GETAWAY_FLOOR).
 ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-candidate cutoff
-MAX_SHORT_WORDS = 5   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 5 (2026-06-29, ADR-0009) raised from 2 on perceived behaviour; analysis argued AGAINST it (~93% of conversational noise is >5 words so this misses it; the 3-5w band is ~2:1 actionable:conversational and this runs BEFORE the imperative-veto that protects short commands). Revert: 2.
+MAX_SHORT_WORDS = 5   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 5 (2026-06-29, ADR-0009) raised from 2 on perceived behaviour; analysis argued AGAINST it (~93% of conversational noise is >5 words so this misses it; the 3-5w band is ~2:1 actionable:conversational and this runs BEFORE the imperative-veto that protects short commands). Do NOT change without re-opening ADR-0009 (data-backed alternative: 2).
 _DESC_CHARS = 96
 
 # ── actionability gate (prior-independent class-margin over the prompt_intent corpus) ─

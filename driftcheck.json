@@ -15,6 +15,11 @@
           "file": "CHANGELOG.md",
           "regex": "##\\s*\\[([0-9]+\\.[0-9]+\\.[0-9]+)\\]",
           "occurrence": "first"
+        },
+        {
+          "file": "README.md",
+          "regex": "`([0-9]+\\.[0-9]+\\.[0-9]+)`[^\\n]*\\*\\*published",
+          "occurrence": "first"
         }
       ]
     }
@@ -43,6 +48,10 @@
     {
       "name": "claude-agents-scratch-parity",
       "command": "python3 scripts/check_doc_parity.py"
+    },
+    {
+      "name": "skill-list-parity",
+      "command": "python3 scripts/check_skill_list_parity.py"
     }
   ]
 }

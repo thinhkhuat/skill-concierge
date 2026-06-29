@@ -19,7 +19,7 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0005](0005-overrides-target-and-applier.md) | Keep-on overrides → `~/.claude/settings.json`, atomic applier (not upstream generator) | Accepted | 2026-06-26 |
 | [0006](0006-compounding-invocation-ledger.md) | Compounding, never-rotated invocation ledger (logman `RETENTION_DAYS=0`) | Accepted | 2026-06-26 |
 | [0007](0007-maintenance-skills-setup-doctor.md) | Maintenance skills (`setup` + `doctor`) — delegate health to the engine, fix only what is safe | Accepted | 2026-06-26 |
-| [0008](0008-warm-embed-shim-timeout-calibration.md) | Warm embed shim Docker sidecar + 90ms timeout calibration (client-side hard gate) | Accepted | 2026-06-26 |
+| [0008](0008-warm-embed-shim-timeout-calibration.md) | Warm embed shim Docker sidecar + timeout calibration (90ms → later relaxed to 200ms; see ADR note) | Accepted | 2026-06-26 |
 | [0009](0009-operator-set-gate-thresholds.md) | Operator-set gate thresholds over data-backed defaults (word floor 2→5, score floor 0.40→0.45) | Accepted | 2026-06-29 |
 
 ## Status values

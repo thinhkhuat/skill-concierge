@@ -20,6 +20,12 @@ script makes that corpus REPRODUCIBLE (it was prototyped ad-hoc). It:
      comment / the M=0.03 calibration);
   4. embeds via the warm shim and (re)builds the Qdrant `prompt_intent` collection.
 
+CAVEAT — threshold tuning is IN-SAMPLE against this corpus: the gate's `_intent_conversational`
+kNN self-matches these same points, so replaying them to measure gate accuracy overstates it
+(~73% noise-catch in-sample vs ~53% held-out). Sweep thresholds on a held-out train/test split
+(temp collection via SKILL_PROMPT_INTENT_COLLECTION on a train slice; evaluate on the held-out
+slice). See skills/skill-usage-audit.
+
 Fail-soft: too few labelled prompts (or the shim down) -> warns and leaves the gate to
 FAIL-OPEN (no collection => the enforcer offers normally). Pure stdlib. Idempotent
 (delete + rebuild).

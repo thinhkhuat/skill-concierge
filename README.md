@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.7.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.7.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -223,18 +223,23 @@ not embedded.
 
 ### How a request flows
 
-1. **UserPromptSubmit** — `hooks/scripts/ledger.py` records the turn (and any manual `/skill` use).
-2. **Retrieve** — Claude calls `search_skills`; the engine embeds the query and ranks the
+1. **SessionStart** — `hooks/scripts/doctrine.py` injects the full SKILL-FIRST standing order once.
+2. **UserPromptSubmit** — `hooks/scripts/enforcer.py` runs the per-turn gate: embed the prompt via the
+   warm shim → retrieve top-k from the SAME Qdrant index → apply the score/item floors + the
+   actionability gate → inject a ranked SKILL-FIRST mandate, or stay silent (fail-open on any error).
+   Then `hooks/scripts/ledger.py` records the turn (or a manual `/skill`).
+3. **Retrieve** (on demand) — Claude calls `search_skills`; the engine embeds the query and ranks the
    indexed catalogue from Qdrant.
-3. **Invoke** — Claude reads the ranked names + descriptions and fires the relevant skills.
-4. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation
+4. **Invoke** — Claude reads the ranked names + descriptions and fires the relevant skills.
+5. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation
    (matcher `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant since v0.4.1), fail-silent and additive-only.
-5. **Curate** — `scripts/analyze.py` rolls the ledger up into uptake/dodge metrics that drive
-   the always-on policy.
+6. **Curate** — `scripts/analyze.py` rolls the ledger up into offer→take / dodge / hit@k metrics.
+   (Usage questions use the `skill-usage-audit` skill + the transcript SKILL-FIRST trail, **not** the
+   ledger, which measures gate compliance only.)
 
 ## Status & roadmap
 
-`0.4.2` — **published, MCP live, all three organs semantic, SKILL-FIRST gate live.**
+`0.7.1` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, four bundled skills.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
 from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
 fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical
