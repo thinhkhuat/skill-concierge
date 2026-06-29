@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.8.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.9.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -239,7 +239,7 @@ not embedded.
 
 ## Status & roadmap
 
-`0.8.0` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, four bundled skills.**
+`0.9.0` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, four bundled skills.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
 from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
 fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical

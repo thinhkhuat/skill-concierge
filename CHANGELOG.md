@@ -5,6 +5,25 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-29
+
+### Added
+- **Ledger-derived offer suppression ("keep-off" map) — ADR-0011.** `scripts/build_keep_off.py`
+  derives chronic never-take skills (offered ≥15, take-rate ≤5%) from a POST-ENRICHMENT clean
+  window into `config/keep-off.json`; `enforcer.py` hard-drops those names from the offer menu
+  (still search-reachable), fail-open. Reuses `analyze._offer_conversion` and counts only
+  `band=="offer"` (actually-shown) menus. Ships INERT — on the current clean window zero skills
+  qualify (the never-takers were a pre-enrichment artifact), so `keep_off: []`.
+- **Runner-up-gap menu collapse (default-OFF).** `enforcer.py` can collapse the offer to the top
+  skill when its raw-score gap over the runner-up ≥ `ENFORCER_DOMINANCE_RATIO` (off unless the env
+  is set; %-share never concentrates). Collapse decided in `_apply_dominance` so the ledger logs the
+  post-collapse menu.
+
+### Notes
+- Both features are behavior-inert on merge. Independent review: SHIP-WITH-FIXES (all applied).
+  Auto-regen wiring and the `analyze.py` headline-denominator question are deferred operator
+  decisions (see ADR-0011 → Open).
+
 ## [0.8.0] — 2026-06-29
 
 ### Added
