@@ -5,6 +5,27 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-06-30
+
+### Fixed
+- **`setup.sh` no longer corrupts the multi-vector index.** It ran `enrich_index.py --reapply`
+  unconditionally; on a multi-vector index that MEAN-enriches (corrupts) the base vectors on top of
+  the trigger layer. Now guarded behind `SKILL_MULTIVECTOR=0`, mirroring `doctor`'s `fix_reindex`.
+  This mattered because re-running `setup.sh` is REQUIRED to refresh the stable venv after the 0.10.0
+  update (the venv holds a non-editable COPY of the engine — ADR-0004), so without the guard the very
+  step that activates 0.10.0 would have corrupted the index.
+
+### Changed (docs)
+- `doctor` SKILL.md check-matrix: added the Enrichment overlay, Multi-vector layer, and Corpus-health
+  rows (the table had drifted behind the actual checks).
+- `skill-usage-audit` SKILL.md: caveat that the "cosine anti-correlated with adoption" findings were
+  measured on the single-vector index; multi-vector ~doubled separation, so re-measure before reuse.
+
+### Notes
+- **Activation reality:** the stable venv at `~/.local/share/skill-concierge/venv` is a COPY, refreshed
+  only by `setup.sh` — `/plugin marketplace update` + `/reload-plugins` do NOT refresh it. So 0.10.0's
+  new retrieval code reaches the live MCP only after re-running `setup.sh` (now safe) + reloading.
+
 ## [0.10.0] — 2026-06-30
 
 ### Added

@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Skill-governance layer for Claude Code — semantic retrieval + use-enforcement + invocation ledger.",
-    "version": "0.10.0"
+    "version": "0.10.1"
   },
   "plugins": [
     {

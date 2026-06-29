@@ -71,6 +71,13 @@ trail), self/meta sessions flagged. Run `--help` for flags.
   better-converting low-cosine offers (adoption). Re-confirm on the live ledger before recommending.
 - Worked example: `skill-concierge/plans/reports/impact-analysis-260629-1020-*.md`.
 
+> **v0.10.0 caveat (multi-vector, ADR-0012).** The "cosine anti-correlated with adoption /
+> taken offers score LOWER than dodged" findings above were measured on the SINGLE-vector index.
+> Multi-vector MAX-pool roughly doubled positive↔negative separation, so the cosine↔adoption
+> relationship must be **re-measured on post-v0.10.0 traffic** before reuse — do not carry the old
+> anti-correlation forward as fact. The methodology (held-out sweeps, absolute coverage, drop
+> self/meta, gate on volume) is unchanged.
+
 ## Common mistakes (from baseline failures)
 
 | Rationalization | Reality |

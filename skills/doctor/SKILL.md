@@ -31,6 +31,9 @@ the engine's own `skill-search --health`, so the two never drift.
    | MCP wiring | `.mcp.json` is valid + `bin/skill-search-mcp` is executable |
    | Qdrant | the vector store answers at its URL (or the container is stopped) |
    | Retrieval health | engine `--health`: embedder reachable, no dark/stale skills, index fresh |
+   | Enrichment overlay | legacy MEAN overlay state (now superseded by the multi-vector layer) |
+   | Multi-vector layer | trigger points present (MAX-pool retrieval, ADR-0012); WARNs if `SKILL_MULTIVECTOR` is on but none exist |
+   | Corpus health | per-skill calibration `ok`/`weak`/`no-signal` counts from `eval/thresholds.json` |
    | Settings overrides | `skillOverrides` applied to `~/.claude/settings.json` |
    | Ledger dir | the telemetry log directory is writable |
    | Duplicate MCP | warns if a leftover user-scope `skill-search` MCP also exists |
