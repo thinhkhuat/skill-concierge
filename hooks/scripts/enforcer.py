@@ -33,6 +33,7 @@ import json
 import time
 import re
 import socket
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -90,7 +91,25 @@ _IMPERATIVE_VERBS = frozenset(
     "bump tag release clone pull fetch mine label embed".split())
 _FILLER = frozenset(
     "now ok okay so well then please alright also and but lets let's pls just next first go right "
-    "cool good great yes yeah sure hey actually".split())
+    "cool good great yes yeah sure hey actually hãy xin".split())
+
+# ── Vietnamese imperative lexicon (mirrors _IMPERATIVE_VERBS for VN task prompts) ──
+# The English veto was blind to Vietnamese; the tokenizer now keeps diacritics, and these sets give
+# the leading-token check Vietnamese verbs. Vietnamese is analytic — many task verbs are two
+# syllables ("kiểm tra", "cài đặt") — so we test the leading token against _VN_VERBS AND the
+# leading bigram against _VN_VERB_BIGRAMS. High-precision core; the kNN gate catches the long tail.
+# ponytail: core lexicon — widen from real VN prompts if recall proves short.
+_VN_VERBS = frozenset(
+    "sửa viết tạo chạy xóa xoá thêm dịch gỡ vá soạn lưu quét gộp tách mở đóng kéo đẩy tải "
+    "đọc tìm lọc gọi dựng đổi thử dán nén bỏ cài vẽ".split())
+_VN_VERB_BIGRAMS = frozenset([
+    ("kiểm", "tra"), ("rà", "soát"), ("cài", "đặt"), ("phân", "tích"), ("tối", "ưu"),
+    ("triển", "khai"), ("xử", "lý"), ("cập", "nhật"), ("sửa", "lỗi"), ("chỉnh", "sửa"),
+    ("thiết", "kế"), ("tích", "hợp"), ("gỡ", "lỗi"), ("kiểm", "thử"), ("biên", "dịch"),
+    ("định", "dạng"), ("khởi", "động"), ("xác", "minh"), ("tái", "cấu"), ("dọn", "dẹp"),
+    ("sao", "chép"), ("rà", "lại"),
+])
+
 
 LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
@@ -220,9 +239,10 @@ def _is_imperative(prompt: str) -> bool:
     NEVER suppressed — they are the actionable turns the gate must protect, since a
     false-suppressed offer is the costly error. High precision on the open, low recall by
     design (most real tasks don't open with a clean verb — the kNN catches those)."""
-    toks = re.findall(r"[a-z']+", prompt.lower())
+    toks = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)*", unicodedata.normalize("NFC", prompt).lower())
     i = 0
-    skips = {("can", "you"), ("could", "you"), ("would", "you"), ("i", "want"), ("i", "need")}
+    skips = {("can", "you"), ("could", "you"), ("would", "you"), ("i", "want"), ("i", "need"),
+             ("làm", "ơn"), ("vui", "lòng")}
     while i < len(toks):
         if toks[i] in _FILLER:
             i += 1
@@ -231,7 +251,11 @@ def _is_imperative(prompt: str) -> bool:
             i += 2
             continue
         break
-    return i < len(toks) and toks[i] in _IMPERATIVE_VERBS
+    if i >= len(toks):
+        return False
+    if toks[i] in _IMPERATIVE_VERBS or toks[i] in _VN_VERBS:
+        return True
+    return i + 1 < len(toks) and (toks[i], toks[i + 1]) in _VN_VERB_BIGRAMS
 
 
 def _intent_conversational(vector: list) -> bool:
@@ -368,11 +392,24 @@ def _selftest() -> int:
 
     # (3) actionability gate — the imperative VETO fires on task-verb openers and stays
     # off for conversational/question/approval turns (the gate suppresses ONLY non-imperatives).
+    # NOTE: production main() drops prompts with <= MAX_SHORT_WORDS (5) words BEFORE _is_imperative
+    # runs, so the veto only matters for >5-word prompts. The >5-word VN cases below represent that
+    # production-reachable population; the <=5-word cases pin the function's correctness directly.
     imp_fire = ["fix the typo on line 12", "now, write the handoff", "please run the tests",
-                "can you refactor this", "delete the cloned copy", "integrate the EFFORT gate"]
+                "can you refactor this", "delete the cloned copy", "integrate the EFFORT gate",
+                "let's run the tests",
+                "sửa lỗi ở dòng 12", "hãy viết báo cáo", "chạy test giúp mình",
+                "kiểm tra file này", "cài đặt thư viện", "phân tích log lỗi",
+                "làm ơn dịch đoạn này", "tối ưu hàm này",
+                "hãy sửa giúp mình cái lỗi đăng nhập ở trang chủ",
+                "phân tích các log lỗi trong thư mục build hôm nay"]
     imp_off = ["how's the documentation status?", "good direction we're heading",
                "what does this function do", "i think we should reconsider",
-               "thanks that worked", "yes please"]
+               "thanks that worked", "yes please",
+               "tài liệu thế nào rồi", "hàm này làm gì vậy",
+               "mình nghĩ nên xem lại", "cảm ơn nhé",
+               "cái hàm xử lý đăng nhập này hoạt động như thế nào vậy",
+               "theo bạn thì mình có nên viết lại phần này không"]
     for t in imp_fire:
         if not _is_imperative(t):
             bad.append("imperative MISS (should fire): " + repr(t))
