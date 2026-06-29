@@ -44,3 +44,39 @@ owner tuned against. Multi-vector lifted separation 2.2x — recalibrate τ vs M
 Real adoption impact (offered-turn conversion, now band=="offer") over a post-deployment traffic window —
 the central bet ("does surfacing the right skill more often raise take-rate?") is still unproven; the
 recall lever is proven, the behavioral payoff is not.
+
+---
+
+## Update — v0.10.1: the setup.sh bug + the activation gotcha (2026-06-30)
+
+A bundled-skill review (user asked "do the bundled skills need updating?") surfaced two things bigger
+than any SKILL.md edit:
+
+- **setup.sh would have corrupted the multi-vector index.** It ran `enrich_index.py --reapply`
+  unconditionally — the legacy MEAN overlay, which mean-enriches the base vectors on top of the trigger
+  layer. I'd guarded `doctor`'s `fix_reindex` for this but MISSED `setup.sh`. Now guarded behind
+  `SKILL_MULTIVECTOR=0`. Shipped **v0.10.1** (commit 18278b0).
+- **The stable venv is a non-editable COPY** (`pip install vendor/skill-search`, ADR-0004). So 0.10.0's
+  new retrieval code was NOT live in the MCP after `/plugin marketplace update` + `/reload-plugins` —
+  those refresh the plugin cache + reload MCP processes, but NOT the venv. Only `setup.sh` refreshes the
+  venv copy. My earlier "just restart the MCP" advice was wrong; the real activation is
+  **setup.sh → reload**.
+
+Ran setup.sh: venv now carries the new code (`query_points_groups`/`MULTIVECTOR` present), and the index
+stayed intact — base-vector parity `cos=1.00000` (bare, NOT mean-corrupted) proves the guard worked.
+Post-reload `search_skills` returns DISTINCT skills (no dupes) at the lifted 0.717 top score, no stale
+warning, doctor `status: OK`. Multi-vector is now fully live in BOTH the enforcer and the MCP.
+
+### Bundled-skill verdicts
+- skill-search SKILL.md — no drift (generic prose). · setup SKILL.md — prose fine; the SCRIPT was the bug.
+- doctor SKILL.md — check-matrix table had drifted; added Enrichment/Multi-vector/Corpus-health rows.
+- skill-usage-audit SKILL.md — added a caveat that its cosine↔adoption findings are single-vector-era.
+
+### Scars
+1. **Two layers ran the same legacy reapply** — `doctor.fix_reindex` AND `setup.sh`. Retiring a mechanism
+   means grepping EVERY caller of its reapply, not just the one you remember.
+2. **"The venv is a copy" silently defeats a code change.** Verify the RUNNING artifact (what the MCP
+   process loaded), not just the repo. The de-dup `search_skills` test was the only honest proof of live.
+3. The 33MB Qdrant upsert overflow (0.10.0) + this venv-copy gotcha are both "the obvious step had a
+   non-obvious failure at scale/deploy" — incremental verification (count after migrate, parity after
+   setup, de-dup after reload) caught each one immediately.
