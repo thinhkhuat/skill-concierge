@@ -5,6 +5,43 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-01
+
+Gate-prompt upgrade driven by a 5-day transcript analysis: the SKILL-FIRST gate was
+~93% compliant on *form* (the line-1 token) but only ~47% on *behavior*. This release
+closes the dominant failure modes and adds the telemetry to keep measuring them.
+
+### Changed
+- **SKILL-FIRST doctrine rewritten** (`hooks/doctrine/skill-first.md`):
+  - **Task-gated the obligation.** `SKIPPING: none` is now lawful on a genuinely no-task turn
+    (harness/system notification, await-only ping, an inbound message that hands you no work)
+    *without* a search. The old absolute "every reply, no exception" rule was being routed
+    around — most skips classified a real task as "exempt" and skipped the required search.
+  - **Named the dodges that are NOT exemptions** — self-confident domain judgment, a prior
+    turn's search, "you told me to use <tool>" — and stated that a shown candidate means a
+    task is present (the no-task class then does not apply). Hardened the agent-dispatch case:
+    dispatching work *to* another agent is itself a task.
+  - **`SEARCH:` now requires the `search_skills` call in the SAME reply.** Narrating an
+    imagined or earlier search ("Search returned nothing…") is a disguised skip.
+  - **Prohibited `USING: none`** — an invalid hybrid token agents were emitting; a no-skill
+    outcome is `SKIPPING: none`.
+  - Welded the skip-bar to the take-bar (a loosely-adaptable fit is a `USING:`, not a skip);
+    replaced the unbacked "no token = no reply" line with a self-imposed-protocol framing.
+- **Per-turn enforcer strings trimmed** (`hooks/scripts/enforcer.py` `MANDATE` /
+  `_ranked_mandate`) toward the per-turn budget — the reasoning lives in the SessionStart
+  doctrine. The candidate %-share is relabeled as RELATIVE rank, not confidence.
+
+### Added
+- **False-SKIPPING telemetry** (`skills/skill-usage-audit/scripts/audit_skill_usage.py`):
+  per-turn detection of a `SKIPPING` declared with no same-turn `search_skills` call — the
+  doctrine's hardest rule — plus a `--selftest`. Reproduces the independent diagnostic (~68%).
+- **Substantive-compliance line** in `scripts/analyze.py` (used-or-searched vs pure dodge).
+
+### Notes
+- **`config/keep-off.json` unchanged by design.** Re-running the auto-generator over its
+  post-enrichment window yields no suppressions: the v0.5.0 enrichment already resolved the
+  chronic 0-take offers. Hand-editing the auto-generated map is contraindicated (ADR-0011).
+
 ## [0.10.2] — 2026-06-30
 
 ### Fixed

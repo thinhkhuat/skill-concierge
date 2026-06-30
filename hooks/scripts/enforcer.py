@@ -240,13 +240,11 @@ except ValueError:
 # (EFFORT was decoupled to the standalone effort-gate plugin in v0.4.0; this hook
 # now governs which/whether a skill only.)
 MANDATE = (
-    "SKILL-FIRST — line 1 of your reply = one of: "
-    "USING <skill> | SEARCH <query> | SKIPPING none.\n"
-    "The skills shown each turn are a top-few PREVIEW, not the ~500-skill inventory. "
-    "\"Few don't fit\" / \"I'm confident\" / \"I can handle it\" are NOT skips — they order "
-    "you to SEARCH the full index (search_skills) before any SKIPPING; show the query. "
-    "SKIPPING is lawful only after a search returns nothing usable. "
-    "[full standing order: session start]"
+    "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
+    "Shown skills are a PREVIEW of ~500, not all. \"Few don't fit\" / \"I'm confident\" / "
+    "\"you named a tool\" are NOT skips — run search_skills THIS reply before any SKIPPING (show the "
+    "query). SKIPPING is lawful only on a no-task turn, or after a search finds nothing adaptable. "
+    "USING never takes \"none\". [full order: session start]"
 )
 
 
@@ -341,14 +339,9 @@ def _apply_dominance(cands: list) -> list:
 
 
 def _ranked_mandate(cands: list) -> str:
-    # Confidence as %-SHARE of the shown candidates' score mass (Phase A2), not the
-    # raw cosine. mpnet cosines sit in a compressed ~0.18-0.40 band that reads as
-    # noise to the agent; relative share ("58%" vs "31%") disambiguates WHICH
-    # candidate fits far more legibly. Absolute relevance is already guaranteed
-    # upstream (GETAWAY_FLOOR + ITEM_FLOOR gate before this runs), and raw scores
-    # are still logged to the ledger — so dropping them from the DISPLAY loses no
-    # signal. Share is shown only with 2+ candidates (a lone candidate is always
-    # 100% → meaningless), and the disambiguation note rides the same condition.
+    # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
+    # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
+    # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
     total = sum(s for (_n, _d, s) in cands) or 1.0
     multi = len(cands) > 1
     lines = []
@@ -358,15 +351,14 @@ def _ranked_mandate(cands: list) -> str:
             blurb = blurb[:_DESC_CHARS].rsplit(" ", 1)[0] + "…"
         pct = f" ({round(score / total * 100)}%)" if multi else ""
         lines.append(f"  • {name}{pct} — {blurb}")
-    note = "\nMultiple candidates — pick the one matching the actual intent." if multi else ""
+    note = ("\nShares are RELATIVE rank among these few (all above the noise floor), not confidence — "
+            "pick the one matching the intent.") if multi else ""
     return (
-        "SKILL-FIRST — line 1 of your reply = one of: "
-        "USING <skill> | SEARCH <query> | SKIPPING none.\n"
-        "Top-few PREVIEW for this request (NOT the full ~500-skill shelf):\n"
+        "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
+        "Preview for this task (NOT the full ~500 shelf):\n"
         + "\n".join(lines) + note + "\n"
-        "None fit? That is not a skip — SEARCH the full index (search_skills) before any "
-        "SKIPPING; show the query. Closest fit, adapted, is the standard; perfect is not the bar. "
-        "[full standing order: session start]"
+        "None fit → run search_skills THIS reply before any SKIPPING; show the query. "
+        "A loosely-adaptable fit is a USING. [full order: session start]"
     )
 
 
@@ -534,10 +526,10 @@ def _selftest() -> int:
     multi = _ranked_mandate([("alpha", "desc alpha", 0.30), ("beta", "desc beta", 0.10)])
     if "(75%)" not in multi or "(25%)" not in multi:
         bad.append("ranked_mandate: expected 75%/25% shares")
-    if "Multiple candidates" not in multi:
-        bad.append("ranked_mandate: missing disambiguation note for 2+ candidates")
+    if "RELATIVE rank" not in multi:
+        bad.append("ranked_mandate: missing relative-rank note for 2+ candidates")
     lone = _ranked_mandate([("alpha", "desc alpha", 0.25)])
-    if "%" in lone or "Multiple candidates" in lone:
+    if "%" in lone or "RELATIVE rank" in lone:
         bad.append("ranked_mandate: lone candidate must show no share and no note")
     if "• alpha — desc alpha" not in lone:
         bad.append("ranked_mandate: lone candidate line malformed")
@@ -593,7 +585,7 @@ def _selftest() -> int:
     finally:
         DOMINANCE_RATIO = _saved
     lone_collapsed = _ranked_mandate([("a", "da", 0.30)])
-    if "%" in lone_collapsed or "Multiple candidates" in lone_collapsed:
+    if "%" in lone_collapsed or "RELATIVE rank" in lone_collapsed:
         bad.append("collapsed render must be lone (no %-share / note)")
 
     # (6) per-skill tau + deterministic routes — BOTH default-INERT (no env set in this test).

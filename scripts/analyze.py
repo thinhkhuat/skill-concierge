@@ -271,6 +271,8 @@ def main():
     print(f"uptake        : {used}/{n}  {pct(used)}   (turn used a skill)")
     print(f"search called : {searched}/{n}  {pct(searched)}")
     print(f"dodge         : {dodge}/{n}  {pct(dodge)}   (no skill, no search)")
+    print(f"substantive   : {n - dodge}/{n}  {pct(n - dodge)}   (used a skill OR searched — "
+          f"ledger-side substantive compliance; transcript line-1 token = STRUCTURAL, see audit script)")
     if all_offers:
         hk = f"{hits}/{len(eligible)}  {(100*hits/len(eligible)):.0f}%" if eligible else "n/a (no offered+used turn yet)"
         print(f"hit@k         : {hk}   (used skill was in the offered set)")

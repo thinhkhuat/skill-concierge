@@ -3,7 +3,7 @@ name: skill-usage-audit
 description: Use when measuring whether a skill-concierge gate-threshold change helped real skill usage or adoption — "did the new gate values help", "skill usage impact after the change", "assess skill helpfulness", "audit skill usage post-deploy", "which telemetry is valid for skill-usage analysis". Stops the reflex of using the skill-invocation-ledger or treating offer→take as usage; routes to the transcript SKILL-FIRST trail instead.
 license: MIT
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # Skill Usage Audit
@@ -37,7 +37,9 @@ python3 scripts/audit_skill_usage.py --since "<ship/commit time, e.g. 2026-06-29
 ```
 
 Outputs the scoped post-change counts (Skill-tool, `/slash`, and the `USING`/`SEARCH`/`SKIPPING`
-trail), self/meta sessions flagged. Run `--help` for flags.
+trail), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a `SKIPPING`
+declared with NO same-turn `search_skills` call (the doctrine's hardest rule). Run `--help` for
+flags; `--selftest` pins the false-SKIPPING verdict logic.
 
 ## Scope to reduce noise (post-change)
 

@@ -12,6 +12,10 @@ is separable:
                                 — the ONLY signal that captures INLINE skill use (declare +
                                 read SKILL.md + execute, no Skill tool fired). The ledger and
                                 the usage-tracker both miss this.
+  4. FALSE-SKIPPING verdict    : per turn, did a 'SKIPPING' declaration fire WITHOUT a real
+                                search_skills call in the same turn? (the doctrine's hardest
+                                rule — 'no search, no skip'). The ledger can't see this; it
+                                needs the transcript declaration trail joined per turn.
 
 Names are canonicalized (strip '/', drop args, ':'->'-', lowercase) so 'ck:journal'
 merges with 'journal' before any counting/join.
@@ -40,6 +44,10 @@ _USING = re.compile(r'(?im)^\s*USING:?\s+([a-z0-9][a-z0-9:_\-]*)')
 _SEARCH = re.compile(r'(?im)^\s*SEARCH:?\s+')
 _SKIPPING = re.compile(r'(?im)^\s*SKIPPING:?\s+')
 _CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
+# The semantic-search tool, normalized — a SKIPPING is only lawful if one of these fired
+# in the same turn (an actual search_skills call, not a bare `SEARCH:` line which is itself
+# the 'ritual SEARCH' failure mode).
+_SEARCH_SLUGS = {"skill-search", "skill-concierge-skill-search"}
 
 
 def norm(name):
@@ -90,6 +98,24 @@ def parse_since(s):
     raise SystemExit(f"--since: cannot parse '{s}' (epoch or 'YYYY-MM-DD HH:MM:SS')")
 
 
+def _skip_verdicts(turns):
+    """Pure verdict over per-turn flags [{'saw_search':bool,'saw_skip':bool}, ...].
+
+    Returns (false_skip, lawful_skip). The doctrine's hardest rule is 'no search, no
+    skip': a turn that DECLARED `SKIPPING` with NO `search_skills` call in the SAME turn
+    is a false skip; one with a search is lawful. Turns without a SKIPPING are ignored.
+    Kept pure so --selftest pins the branching without touching the filesystem."""
+    false_skip = lawful_skip = 0
+    for t in turns:
+        if not t.get("saw_skip"):
+            continue
+        if t.get("saw_search"):
+            lawful_skip += 1
+        else:
+            false_skip += 1
+    return false_skip, lawful_skip
+
+
 def audit(since=None, meta_keywords=None):
     meta_keywords = [k.lower() for k in (meta_keywords or DEFAULT_META)]
     skill_tool = Counter()
@@ -100,16 +126,28 @@ def audit(since=None, meta_keywords=None):
     sess_text = defaultdict(str)
     sess_skill = defaultdict(Counter)
     sess_using = defaultdict(Counter)
+    turns = []  # per-turn {saw_search, saw_skip} for the false-SKIPPING verdict
 
     for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
         try:
             fh = open(fp, encoding="utf-8", errors="replace")
         except Exception:
             continue
+        # Turn segmentation: a genuine user prompt (string `content`) opens a turn; a
+        # tool_result user record (`content` is a LIST) does not. We accumulate, per turn,
+        # whether a SKIPPING was declared and whether a real search_skills call fired in the
+        # SAME turn, judging at the boundary so SEARCH-then-SKIPPING order is handled.
+        cur = {"saw_search": False, "saw_skip": False, "active": False}
         for line in fh:
             if '"timestamp"' not in line:
                 continue
-            if not ('"Skill"' in line or "<command-name>" in line
+            is_user = ('"type":"user"' in line or '"type": "user"' in line)
+            is_list_content = ('"content":[' in line or '"content": [' in line)
+            if is_user and not is_list_content:  # genuine user prompt -> new turn
+                if cur["active"] and cur["saw_skip"]:
+                    turns.append({"saw_search": cur["saw_search"], "saw_skip": True})
+                cur = {"saw_search": False, "saw_skip": False, "active": True}
+            if not ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
                     or "USING" in line or "SEARCH" in line or "SKIPPING" in line):
                 continue
             try:
@@ -122,22 +160,30 @@ def audit(since=None, meta_keywords=None):
                     continue
             sid = rec.get("sessionId") or fp
             role = rec.get("type")
-            # user /slash
+            # user /slash (a skill-search slash also credits a same-turn search)
             for m in _CMD.findall(line):
                 n = norm(m)
                 if n:
                     slash[n] += 1
+                    if n in _SEARCH_SLUGS:
+                        cur["saw_search"] = True
             msg = rec.get("message")
             if not (isinstance(msg, dict) and isinstance(msg.get("content"), list)):
                 continue
             for blk in msg["content"]:
                 if not isinstance(blk, dict):
                     continue
-                if blk.get("type") == "tool_use" and blk.get("name") == "Skill":
-                    n = norm((blk.get("input") or {}).get("skill"))
-                    if n:
-                        skill_tool[n] += 1
-                        sess_skill[sid][n] += 1
+                if blk.get("type") == "tool_use":
+                    nm = blk.get("name") or ""
+                    if nm == "Skill":
+                        n = norm((blk.get("input") or {}).get("skill"))
+                        if n:
+                            skill_tool[n] += 1
+                            sess_skill[sid][n] += 1
+                            if n in _SEARCH_SLUGS:
+                                cur["saw_search"] = True
+                    elif "search_skills" in nm:  # the MCP retriever call
+                        cur["saw_search"] = True
                 if blk.get("type") == "text":
                     txt = blk.get("text", "")
                     if role == "user":
@@ -153,7 +199,12 @@ def audit(since=None, meta_keywords=None):
                             n_search += 1
                         if _SKIPPING.search(txt):
                             n_skip += 1
+                            cur["saw_skip"] = True
+        if cur["active"] and cur["saw_skip"]:  # flush the file's last turn
+            turns.append({"saw_search": cur["saw_search"], "saw_skip": True})
         fh.close()
+
+    false_skip, lawful_skip = _skip_verdicts(turns)
 
     # Exclude builtin slashes (/clear, /compact, /plugin, ...) by catalogue membership so
     # they don't inflate "skill usage" — mirrors the skill-usage-tracker's known-skill filter.
@@ -165,6 +216,7 @@ def audit(since=None, meta_keywords=None):
     return {
         "skill_tool": skill_tool, "slash": slash_skill, "using": using,
         "n_search": n_search, "n_skip": n_skip,
+        "false_skip": false_skip, "lawful_skip": lawful_skip,
         "sess_skill": sess_skill, "sess_using": sess_using,
         "meta_sessions": meta_sessions,
     }
@@ -178,7 +230,17 @@ def main():
     ap.add_argument("--meta-keyword", action="append", default=None, metavar="KW",
                     help="mark a session self/meta if a user prompt contains KW (repeatable; "
                          "replaces the default set)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the false-SKIPPING verdict self-check and exit")
     args = ap.parse_args()
+    if args.selftest:
+        t = [{"saw_skip": True, "saw_search": False},   # SKIPPING, no search -> false
+             {"saw_skip": True, "saw_search": True},     # SKIPPING after a search -> lawful
+             {"saw_skip": False, "saw_search": True}]    # no SKIPPING -> ignored
+        fs, ls = _skip_verdicts(t)
+        ok = (fs == 1 and ls == 1)
+        print("audit --selftest", "OK: false-SKIPPING verdict" if ok else f"FAIL fs={fs} ls={ls}")
+        raise SystemExit(0 if ok else 1)
     since = parse_since(args.since)
     r = audit(since, args.meta_keyword)
 
@@ -192,6 +254,16 @@ def main():
     print(f"  USING <skill> declarations: {sum(us.values())}  (distinct {len(us)})")
     print(f"  SEARCH declarations: {r['n_search']}   SKIPPING declarations: {r['n_skip']}")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
+
+    fs, ls = r["false_skip"], r["lawful_skip"]
+    skip_turns = fs + ls
+    print(f"\nFALSE-SKIPPING (doctrine's hardest rule — 'no search, no skip'):")
+    if skip_turns:
+        print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  declared SKIPPING with NO search_skills "
+              f"call in the same turn   (lawful, search-backed skips: {ls})")
+    else:
+        print(f"  no SKIPPING turns in window")
+    print(f"  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")
 
     meta = r["meta_sessions"]
     organic_using = sum(c for sid, cc in r["sess_using"].items() if sid not in meta for c in cc.values())
