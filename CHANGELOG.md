@@ -5,6 +5,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-06-30
+
+### Fixed
+- **Plugin skills no longer double-prefixed (`ck:ck:…`).** `skills_discovery._namespaced_name`
+  unconditionally prepended the plugin id, so a plugin whose frontmatter `name:` already self-namespaces
+  (ClaudeKit ships `name: ck:plan`) was indexed as `ck:ck:plan` — 81 live skills, invisible to anything
+  keying the correct `ck:<skill>` name (eval corpus, per-skill τ, search/enforcer display). Now skips the
+  prefix when the name already starts with `<plugin_id>:`. A reindex applies it (drops the doubles).
+- **Per-skill τ calibration now mirrors live MAX-pool.** `calibrate_thresholds.py` scored each prompt
+  against a skill's single `base` vector — no longer matching live retrieval (max over base+trigger
+  points). Now takes the max cosine over all of a skill's indexed points, and drops the prior `limit:50`
+  fetch truncation. With the double-prefix fixed, the eval corpus resolves 14/14 skills (was 4):
+  12 ok · 1 weak · 1 no-signal. Per-skill τ stays default-INERT (`ENFORCER_PER_SKILL_TAU` off) — only
+  1 of the 12 ok skills clears the 0.45 floor.
+
 ## [0.10.1] — 2026-06-30
 
 ### Fixed

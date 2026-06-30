@@ -30,7 +30,15 @@ at `~/.local/share/skill-concierge/venv` (outside the plugin cache, so it surviv
 - These are applied via the plugin's own `.mcp.json` env + `setup.sh` + `scripts/apply-overrides.py`,
   keeping this vendored source unmodified for clean upstream diffs.
 
-The only file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md` (a
-local caveat note); the engine code is untouched.
+## Engine-code patches (DIRECT edits to the vendored source — re-apply after re-vendoring)
+Unlike the plugin-level layer above, these modify the vendored engine and must be re-applied if
+upstream is re-vendored:
+- **Multi-vector MAX-pool retrieval (v0.10.0, ADR-0012):** `server.py` (`search_skills` groups query;
+  `build_index` base + per-trigger layer) and `skills_discovery.py`. Gated by `SKILL_MULTIVECTOR`.
+- **Plugin self-prefix guard (v0.10.2):** `skills_discovery._namespaced_name` skips the plugin-id prefix
+  when a skill's frontmatter `name:` already starts with `<plugin_id>:` (prevents `ck:ck:…` for plugins
+  like ClaudeKit that self-namespace).
 
-If upstream changes, re-vendor from the same source and re-apply the customization layer.
+The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
+(a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
+plugin-level customization layer and these engine patches.
