@@ -7,12 +7,14 @@ The live enforcer offers any skill whose cosine clears a SINGLE global floor
 (tau) from a labeled scenarios corpus, so each skill could fire at the cosine that
 best separates its own positive prompts from near-miss negatives.
 
-Method (mirrors bm25-routing/routing/build-index.js, adapted to cosine):
-  - For skill S, fetch its INDEXED vector v_S from Qdrant (the exact vector the
-    enforcer scores against — so calibration == live retrieval, no proxy).
-  - Score each corpus prompt p as cosine(embed(p), v_S) via the warm embed shim.
-    (This IS the score S gets in the live enforcer; no LOO needed — bm25 used
-    prompt-vs-prompt LOO only because it had no per-skill vector.)
+Method (mirrors bm25-routing/routing/build-index.js, adapted to cosine + MAX-pool):
+  - For skill S, fetch ALL its INDEXED point vectors from Qdrant (the `base` point
+    PLUS one point per trigger phrase) — the exact points live retrieval scores against.
+  - Score each corpus prompt p as MAX over those points of cosine(embed(p), point) via
+    the warm embed shim. This reproduces the live MAX-pool score (Qdrant group_by name,
+    group_size=1) that S gets in the enforcer/server — so calibration == live retrieval,
+    no proxy. (No LOO needed — bm25 used prompt-vs-prompt LOO only because it had no
+    per-skill vector.)
   - Pick tau maximizing F-beta (beta^2=4, recall-favoring) for the skills that DO
     separate; but classify each skill HONESTLY by its real positive-vs-negative
     cosine separation, NOT by F1 alone (see calibrate()).
@@ -64,23 +66,28 @@ def embed(text):
     return _post(EMBED_URL, {"text": text})["vector"]
 
 
-def skill_vector(name):
-    """Fetch skill S's BASE indexed vector from Qdrant by exact payload.name. With the
-    multi-vector layer a name maps to many points (base + triggers), so prefer the `base`
-    point; fall back to the first match for an older single-vector index with no `kind`.
-    NOTE: calibration scores a corpus prompt against this ONE vector, which no longer
-    mirrors live MAX-pool retrieval (max over a skill's points) — so per-skill tau / the
-    corpus-health status is now an approximation. It is advisory only (tau ships inert)."""
-    res = _post(f"{QDRANT}/collections/{COLLECTION}/points/scroll", {
-        "filter": {"must": [{"key": "name", "match": {"value": name}}]},
-        "limit": 50, "with_vector": True, "with_payload": ["kind"],
-    })
-    pts = res.get("result", {}).get("points", [])
-    if not pts:
-        return None
-    base = next((p for p in pts if (p.get("payload") or {}).get("kind") == "base"), pts[0])
-    v = base.get("vector")
-    return v if isinstance(v, list) else (v or {}).get("default")
+def skill_vectors(name):
+    """Fetch ALL of skill S's indexed point vectors from Qdrant by exact payload.name —
+    the `base` point PLUS every trigger-phrase point. These are exactly the points live
+    retrieval MAX-pools over (group_by name, group_size=1), so scoring a prompt as the max
+    cosine across them reproduces the live score. Paginated so no skill's points are
+    truncated. Returns a list of vectors (empty if the name is not indexed)."""
+    vecs, offset = [], None
+    while True:
+        res = _post(f"{QDRANT}/collections/{COLLECTION}/points/scroll", {
+            "filter": {"must": [{"key": "name", "match": {"value": name}}]},
+            "limit": 256, "with_vector": True, "offset": offset,
+        })
+        result = res.get("result", {})
+        for p in result.get("points", []):
+            v = p.get("vector")
+            v = v if isinstance(v, list) else (v or {}).get("default")
+            if v:
+                vecs.append(v)
+        offset = result.get("next_page_offset")
+        if offset is None:
+            break
+    return vecs
 
 
 def cosine(a, b):
@@ -88,6 +95,11 @@ def cosine(a, b):
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
+
+
+def max_cosine(qvec, vecs):
+    """Live MAX-pool: a skill's score for a prompt is the cosine of its single best point."""
+    return max((cosine(qvec, v) for v in vecs), default=0.0)
 
 
 def metrics_at(pos, neg, tau):
@@ -144,12 +156,12 @@ def run(dry_run):
     for f in files:
         d = json.loads(f.read_text(encoding="utf-8"))
         skill = d["skill"]
-        v = skill_vector(skill)
-        if v is None:
-            print(f"[calibrate] WARN {skill}: no indexed vector (skipped)")
+        vecs = skill_vectors(skill)
+        if not vecs:
+            print(f"[calibrate] WARN {skill}: no indexed points (skipped)")
             continue
-        pos = [cosine(embed(p), v) for p in d.get("positive", [])]
-        neg = [cosine(embed(n), v) for n in d.get("negative", [])]
+        pos = [max_cosine(embed(p), vecs) for p in d.get("positive", [])]
+        neg = [max_cosine(embed(n), vecs) for n in d.get("negative", [])]
         cal = calibrate(pos, neg)
         if cal is None:
             continue
@@ -200,12 +212,17 @@ def _selftest():
     _p, r, _f1, _fb = metrics_at([0.4, 0.5], [0.35], 0.30)
     if r != 1.0:
         bad.append(f"recall calc wrong: r={r}")
+    # MAX-pool: a prompt scores against a skill's single best point.
+    if abs(max_cosine([1.0, 0.0], [[0.0, 1.0], [1.0, 0.0]]) - 1.0) > 1e-9:
+        bad.append("max_cosine should pick the best-aligned point")
+    if max_cosine([1.0, 0.0], []) != 0.0:
+        bad.append("max_cosine of no points should be 0.0")
     if bad:
         print("calibrate --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
-    print("calibrate --selftest OK: separation status (ok/weak/no-signal) + F-beta math")
+    print("calibrate --selftest OK: separation status (ok/weak/no-signal) + F-beta + MAX-pool")
     return 0
 
 
