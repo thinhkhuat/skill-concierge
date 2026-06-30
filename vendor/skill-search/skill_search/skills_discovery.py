@@ -48,7 +48,12 @@ def _namespaced_name(path: Path, base_name: str) -> str:
     if len(sub) >= 6 and sub[0] == "cache" and "skills" in sub:
         si = sub.index("skills")
         if si >= 3:                       # cache / <marketplace> / <plugin> / .../ skills
-            return f"{sub[si - 2]}:{base_name}"
+            plugin_id = sub[si - 2]
+            # Some plugins self-namespace their frontmatter `name:` already
+            # (e.g. ClaudeKit ships `name: ck:plan`) — don't double-prefix to `ck:ck:plan`.
+            if base_name.startswith(f"{plugin_id}:"):
+                return base_name
+            return f"{plugin_id}:{base_name}"
     return base_name
 
 
