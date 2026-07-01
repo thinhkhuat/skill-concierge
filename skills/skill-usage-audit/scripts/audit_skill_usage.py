@@ -172,8 +172,10 @@ def audit(since=None, meta_keywords=None):
                     if n in _SEARCH_SLUGS:
                         cur["saw_search"] = True
             msg = rec.get("message")
-            # Genuine user prompts carry string content (not the list-wrapped content used
-            # by tool results / hook-injected reminders) — capture them for meta-classification.
+            # User-role string content (typed prompts, but also relayed teammate/command/task
+            # messages) carries meta-keyword signal that list-wrapped content does not always
+            # surface early enough — capture it for meta-classification. Harmless if broader
+            # than typed prompts: every session flagged by this path so far also has a typed hit.
             if role == "user" and isinstance(msg, dict) and isinstance(msg.get("content"), str):
                 sess_text[sid] += " " + msg["content"][:400].lower()
             if not (isinstance(msg, dict) and isinstance(msg.get("content"), list)):
