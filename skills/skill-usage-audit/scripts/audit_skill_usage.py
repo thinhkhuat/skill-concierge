@@ -147,8 +147,12 @@ def audit(since=None, meta_keywords=None):
                 if cur["active"] and cur["saw_skip"]:
                     turns.append({"saw_search": cur["saw_search"], "saw_skip": True})
                 cur = {"saw_search": False, "saw_skip": False, "active": True}
-            if not ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
-                    or "USING" in line or "SEARCH" in line or "SKIPPING" in line):
+            # Genuine user-prompt lines must always reach sess_text below for meta
+            # classification, even when they carry none of these tool/doctrine markers
+            # (e.g. "review the skill-concierge gate" has no USING/SEARCH/SKIPPING token).
+            has_marker = ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
+                          or "USING" in line or "SEARCH" in line or "SKIPPING" in line)
+            if not (has_marker or (is_user and not is_list_content)):
                 continue
             try:
                 rec = json.loads(line.strip())
@@ -168,6 +172,10 @@ def audit(since=None, meta_keywords=None):
                     if n in _SEARCH_SLUGS:
                         cur["saw_search"] = True
             msg = rec.get("message")
+            # Genuine user prompts carry string content (not the list-wrapped content used
+            # by tool results / hook-injected reminders) — capture them for meta-classification.
+            if role == "user" and isinstance(msg, dict) and isinstance(msg.get("content"), str):
+                sess_text[sid] += " " + msg["content"][:400].lower()
             if not (isinstance(msg, dict) and isinstance(msg.get("content"), list)):
                 continue
             for blk in msg["content"]:
