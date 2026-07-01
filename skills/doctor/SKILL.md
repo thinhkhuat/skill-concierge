@@ -1,9 +1,9 @@
 ---
 name: doctor
-description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, Qdrant, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start Qdrant, reindex, re-apply overrides).
+description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, the MCP seems to run old code after a plugin update, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, engine freshness, Qdrant, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start Qdrant, reindex, re-apply overrides).
 license: MIT
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # skill-concierge doctor
@@ -28,6 +28,7 @@ the engine's own `skill-search --health`, so the two never drift.
    |-------|------------------|
    | Python 3.10-3.12 | a usable interpreter (only when the venv is missing) |
    | Engine venv | the stable venv + `skill-search` bin exist |
+   | Engine freshness | the venv's COPIED engine matches the deployed vendored source — catches a **stale MCP serving old code after `/plugin update`** (the venv is built once by setup.sh and never refreshed by an update); WARN → rerun setup.sh |
    | MCP wiring | `.mcp.json` is valid + `bin/skill-search-mcp` is executable |
    | Qdrant | the vector store answers at its URL (or the container is stopped) |
    | Retrieval health | engine `--health`: embedder reachable, no dark/stale skills, index fresh |
@@ -52,14 +53,18 @@ the engine's own `skill-search --health`, so the two never drift.
    > before running `--fix` so the change isn't a surprise.
 
 4. **Handle what `--fix` can't.** doctor never auto-builds the venv or the container
-   (slow, heavyweight). If `Engine venv` is FAIL, run the **`skill-concierge:setup`** skill
-   (or `./setup.sh`). For a duplicate MCP, run the printed `claude mcp remove` command.
-   After any fix, **restart Claude Code** if the MCP wiring or overrides changed.
+   (slow, heavyweight). If `Engine venv` is FAIL **or `Engine freshness` is WARN**, run the
+   **`skill-concierge:setup`** skill (or `./setup.sh`) — that rebuilds/refreshes the stable
+   venv from the deployed source. For a duplicate MCP, run the printed `claude mcp remove`
+   command. After any fix, **restart Claude Code** if the MCP wiring or engine changed.
 
 ## Symptom → check shortcuts
 
 - **`/mcp` shows skill-search not connected** → `Engine venv` / `MCP wiring`. Fix: run setup.
-- **search returns nothing or stale** → `Qdrant` / `Retrieval health`. Fix: `--fix` (reindex).
+- **search behaves like an OLD version after a plugin update** → `Engine freshness`. The MCP venv
+  is stale (copied engine, not refreshed by `/plugin update`). Fix: rerun setup.sh, then restart.
+- **search returns nothing or stale** → `Qdrant` / `Retrieval health`. Fix: `--fix` (reindex)
+  — note the SessionStart `auto_reindex` hook now self-heals index staleness in the background.
 - **skills you expect aren't offered** → `Settings overrides`. Fix: `--fix` (re-apply).
 
 Full landmine reference: `docs/caveats.md`.

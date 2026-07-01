@@ -25,6 +25,7 @@ Env seams (mirror setup.sh): SKILL_CONCIERGE_VENV, SKILL_QDRANT_URL, SKILL_QDRAN
 SKILL_EMBED_BACKEND, SKILL_EMBED_MODEL, SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERGE_LOG.
 """
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -127,6 +128,67 @@ def check_venv():
         return dict(id="venv", label="Engine venv", status=OK, detail=str(VENV), fix=None)
     return dict(id="venv", label="Engine venv", status=FAIL,
                 detail=f"no skill-search bin at {SS_BIN} — run ./setup.sh", fix="setup")
+
+
+def _tree_digest(root: Path):
+    """Stable content digest of a package tree: sorted (relpath, bytes) over every file
+    except __pycache__/*.pyc. None when the tree is absent or empty."""
+    if not root.is_dir():
+        return None
+    h = hashlib.sha256()
+    seen = False
+    for p in sorted(root.rglob("*")):
+        if p.is_dir() or "__pycache__" in p.parts or p.suffix == ".pyc":
+            continue
+        try:
+            data = p.read_bytes()
+        except Exception:
+            continue
+        seen = True
+        h.update(p.relative_to(root).as_posix().encode())
+        h.update(b"\0")
+        h.update(data)
+        h.update(b"\0")
+    return h.hexdigest() if seen else None
+
+
+def _venv_engine_dir():
+    """The skill_search package COPIED into the stable venv by setup.sh (NOT editable, so
+    /plugin update never refreshes it — the stale-engine vector). None if not installed."""
+    for lib in sorted((VENV / "lib").glob("python*")):
+        cand = lib / "site-packages" / "skill_search"
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def check_engine_freshness():
+    """Does the engine CODE the MCP actually runs match the DEPLOYED plugin source?
+
+    Landmine (ADR-0004, ADR-0013): the MCP launcher EXECs `skill-search` from the STABLE
+    venv, where the engine is COPIED into site-packages by setup.sh — not an editable
+    install. So `/plugin update` ships new code into the version-pinned cache but NEVER
+    updates the venv copy: the MCP can keep serving an OLDER engine while every other check
+    is green ("Engine venv ✓" only proves the bin EXISTS, not that it's current). This
+    content-hashes the venv's installed engine against the plugin's vendored source; a
+    mismatch means the venv is stale → rerun ./setup.sh (skill-concierge:setup), then
+    restart. Fail-open (N/A) when either tree is absent — venv-missing is check_venv's job;
+    a missing vendored source means doctor is running outside a packaged checkout.
+    """
+    if not SS_BIN.exists():
+        return None                                        # venv missing -> check_venv owns it
+    src_dig = _tree_digest(ROOT / "vendor" / "skill-search" / "skill_search")
+    installed = _venv_engine_dir()
+    inst_dig = _tree_digest(installed) if installed else None
+    if src_dig is None or inst_dig is None:
+        return None                                        # can't compare -> don't false-alarm
+    if src_dig != inst_dig:
+        return dict(id="engine_fresh", label="Engine freshness", status=WARN,
+                    detail="venv engine code DIFFERS from the deployed plugin source — the MCP is "
+                           "serving STALE engine code after a plugin update; rerun ./setup.sh "
+                           "(skill-concierge:setup), then restart Claude Code", fix="setup")
+    return dict(id="engine_fresh", label="Engine freshness", status=OK,
+                detail="venv engine matches deployed source", fix=None)
 
 
 def check_mcp_wiring():
@@ -403,7 +465,7 @@ def check_corpus_health():
     return dict(id="corpus", label="Corpus health", status=status, detail=detail, fix=None)
 
 
-CHECKS = [check_python, check_venv, check_mcp_wiring, check_qdrant,
+CHECKS = [check_python, check_venv, check_engine_freshness, check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_overrides, check_ledger, check_dup_mcp]
 
@@ -513,6 +575,18 @@ def _selftest():
     assert _skill_search_servers(sample) == ["plugin:skill-concierge:skill-search"], _skill_search_servers(sample)
     two = sample + "\nskill-search: /usr/local/bin/other-skill-search-mcp - ok"
     assert len(_skill_search_servers(two)) == 2
+    # engine-freshness digest: identical trees hash equal, a 1-byte change diverges, absent -> None
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        a, b = Path(d) / "a" / "skill_search", Path(d) / "b" / "skill_search"
+        for base in (a, b):
+            base.mkdir(parents=True)
+            (base / "x.py").write_text("print(1)\n")
+        assert _tree_digest(a) == _tree_digest(b)
+        (b / "x.py").write_text("print(2)\n")
+        assert _tree_digest(a) != _tree_digest(b)
+        assert _tree_digest(Path(d) / "absent") is None
+    assert any(getattr(fn, "__name__", "") == "check_engine_freshness" for fn in CHECKS)
     print("selftest ok")
     return 0
 

@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.10.2-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.11.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -239,11 +239,16 @@ not embedded.
 
 ## Status & roadmap
 
-`0.10.2` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, four bundled skills. Multi-vector MAX-pool retrieval live (ADR-0012): each skill scored by its best phrase point — 2.2× rank-1/separation over the bare single-vector index.**
+`0.11.1` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Multi-vector MAX-pool retrieval live (ADR-0012): each skill scored by its best phrase point — 2.2× rank-1/separation over the bare single-vector index.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
 from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
 fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical
 `skill_first_nudge.py` is retired (deregistered from `~/.claude/settings.json`).
+
+The deployment now **self-guards against staleness**: doctor's `Engine freshness` check
+(ADR-0013) catches a stale MCP venv engine after a `/plugin update`, and the SessionStart
+`auto_reindex` hook (ADR-0014) self-heals a stale index in the background — no manual reindex
+or reminders. Full per-version history in [`CHANGELOG.md`](CHANGELOG.md).
 
 Trajectory since the P1 fusion (`0.2.0`):
 - **`0.3.0` — SKILL-FIRST doctrine gate.** A SessionStart hook (`hooks/scripts/doctrine.py`)
@@ -258,10 +263,23 @@ Trajectory since the P1 fusion (`0.2.0`):
   MCP tool is plugin-namespaced); now matched by suffix so the gate's primary lever is visible to
   its own telemetry.
 - **`0.4.2` — measurement window.** `analyze.py --since/--until` for clean before/after compares.
+- **`0.5.0`–`0.10.x` — retrieval depth + curation.** Index enrichment, the ledger-derived
+  offer-suppression map (ADR-0011, auto-drop chronic never-take skills from the menu), and
+  multi-vector MAX-pool retrieval (ADR-0012). Per-version detail in the CHANGELOG.
+- **`0.11.0` — SKILL-FIRST doctrine rewrite + compliance telemetry.** A 5-day transcript analysis
+  showed ~93% token-*form* compliance but only ~47% *behavioral*; the doctrine was rewritten to
+  task-gate `SKIPPING` (lawful only on a genuine no-task turn), require the `search_skills` call
+  in the same reply, ban `USING: none`, and weld the skip-bar to the take-bar. Added a
+  false-SKIPPING detector (`audit_skill_usage.py`) + a substantive-compliance line (`analyze.py`).
+- **`0.11.1` — staleness self-guards.** doctor `Engine freshness` check (ADR-0013) catches a stale
+  MCP venv engine after `/plugin update`; SessionStart `auto_reindex` (ADR-0014) self-heals a stale
+  index in the background.
 
-**Open question:** whether the gate actually lifts compliance is still unproven — it needs a
-clean workload window on `0.4.1+` to accumulate real `search`+`auto` data; pre-`0.4.1` ledger
-numbers are blind on the search signal. See [`docs/skill-first-enforcement-mental-model.md`](docs/skill-first-enforcement-mental-model.md),
+**Open question:** `0.11.0`'s transcript analysis + a controlled A/B gave the first real evidence
+the gate shapes orientation — the doctrine fixes the no-task / `USING: none` cases cleanly — but
+the longitudinal lift on the hardest behavior (false-SKIPPING, now measurable via the
+`skill-usage-audit` detector) still needs a post-`0.11.0` workload window to accrue. See
+[`docs/skill-first-enforcement-mental-model.md`](docs/skill-first-enforcement-mental-model.md),
 [`docs/plan.md`](docs/plan.md), [ADR-0002](docs/adr/0002-fusion-which-plus-whether.md), and
 [ADR-0008](docs/adr/0008-warm-embed-shim-timeout-calibration.md).
 

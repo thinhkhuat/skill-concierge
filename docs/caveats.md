@@ -92,9 +92,12 @@ matching how Claude Code references them (`skills_discovery.py:35-52`).
 **Cause:** skill files changed/were re-touched on disk since the last index build
 (e.g. after `/reload-plugins` re-attaches skills).
 
-**Do:** reindex — `skill-search --reindex` (with the `.mcp.json` env), or call the MCP
-`reindex` tool. Incremental: unchanged skills are skipped (`embedded: 0, skipped: N`).
-Harmless but results are stale until you do.
+**Do:** **nothing — this now self-heals.** The SessionStart `auto_reindex.py` hook
+(ADR-0014) fires a detached, throttled, incremental reindex every session, so a stale index
+re-freshens on its own without anyone remembering. Manual paths still exist if you want it
+*now*: `skill-search --reindex` (with the `.mcp.json` env), the MCP `reindex` tool, or
+`doctor --fix`. Incremental either way: unchanged skills are skipped (`embedded: 0, skipped: N`).
+Throttle: `AUTO_REINDEX_THROTTLE_S` (default 1800s).
 
 ---
 
@@ -155,3 +158,37 @@ blocks writes; the `.ckignore` also blocks Bash commands containing the literal 
 **Do:** the owner's bypass is to rename `.git` → `git` (no-dot) while editing, then back to
 `.git` before committing. (Context for agents operating from the workbench root; irrelevant
 once the repo is cloned standalone elsewhere.)
+
+---
+
+## §11 — The MCP can serve STALE engine code after a `/plugin update` (venv ≠ cache)
+
+**Symptom:** a plugin update + restart is done, the new version is installed, `doctor` shows
+`Engine venv ✓` — yet the MCP *behaves like the old version* (a retrieval/engine fix you
+shipped isn't live). `/mcp` shows skill-search connected; nothing looks broken.
+
+**Cause:** the MCP launcher EXECs `skill-search` from the **stable venv**
+(`~/.local/share/skill-concierge/venv`, ADR-0004), where the engine is **COPIED into
+site-packages by `setup.sh` — not an editable install.** `/plugin update` ships new code into
+the version-pinned **cache** but **never touches the venv copy**. So the cache is new and the
+venv engine is old; the MCP runs the old one. `Engine venv ✓` only proves the bin *exists*,
+not that it's *current* — the original blind spot.
+
+**Detect:** `doctor` now has an **`Engine freshness`** check (ADR-0013) that content-hashes the
+venv's installed engine against the deployed vendored source and WARNs on a mismatch. Manual
+equivalent — the decisive test:
+
+```bash
+diff -rq \
+  "$CLAUDE_PLUGIN_ROOT/vendor/skill-search/skill_search" \
+  "$HOME/.local/share/skill-concierge/venv/lib/python3.*/site-packages/skill_search"
+```
+
+Empty output = fresh; any difference = stale.
+
+**Do:** rerun **`setup.sh`** (the `skill-concierge:setup` skill) — it rebuilds/refreshes the
+stable venv from the deployed source — then **restart Claude Code**. Rule of thumb: a
+`/plugin update` that changed engine code under `vendor/skill-search/` requires a `setup.sh`
+rerun; a change that only touched hooks/doctrine/scripts (cache-run) does not. (Hooks read
+their code straight from the cache, so they update with the plugin; only the venv-resident
+engine needs the rerun.)

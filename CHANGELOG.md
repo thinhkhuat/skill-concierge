@@ -5,6 +5,35 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-07-01
+
+Staleness self-guards — make two latent staleness vectors impossible to miss, so freshness
+never depends on someone remembering to run a command.
+
+### Added
+- **doctor `Engine freshness` check** (`scripts/doctor.py`, ADR-0013). Content-hashes the engine
+  COPIED into the stable venv against the deployed `vendor/skill-search/skill_search` source. The
+  MCP launcher EXECs the engine from that venv (built once by `setup.sh`, not editable), so a
+  `/plugin update` ships new code to the cache but never refreshes the venv copy — the MCP could
+  serve STALE engine code while `Engine venv ✓`. A mismatch now WARNs → rerun `setup.sh`. Pinned
+  by `--selftest`.
+- **SessionStart index self-heal** (`hooks/scripts/auto_reindex.py`, ADR-0014). A detached,
+  throttled (`AUTO_REINDEX_THROTTLE_S`, default 1800s), incremental reindex fires on session start,
+  so a stale index re-freshens itself — no manual reindex, no reliance on discipline. Fail-silent,
+  non-blocking; guarded on engine-present + Qdrant-up.
+
+### Changed
+- **doctor** SKILL.md (→ 0.2.0): documents the `Engine freshness` row + the "search behaves like an
+  old version after an update" symptom shortcut.
+- **caveats §6** downgraded to "self-heals" (auto_reindex); new **§11** documents the stale-engine
+  landmine + the `diff -rq` decisive test + the `setup.sh` remedy.
+- **README** refreshed to `0.11.1` (badge + status), recent trajectory (`0.5.0`→`0.11.1`) and the
+  compliance open-question filled in.
+
+### Fixed
+- **Docs staleness:** the ADR index was missing `0011` and `0012` (existed on disk, unlisted) —
+  added, along with `0013`/`0014`.
+
 ## [0.11.0] — 2026-07-01
 
 Gate-prompt upgrade driven by a 5-day transcript analysis: the SKILL-FIRST gate was
