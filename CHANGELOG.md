@@ -5,6 +5,8 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-04
+
 Usefulness-rate upgrades — surface the verdict the enforcer already computes, and get
 each skill's BODY-level "when to use" signal into retrieval. Implements the Opus-validated
 proposal `plans/reports/proposal-260704-0244-…`. **Operator directive: everything ships
