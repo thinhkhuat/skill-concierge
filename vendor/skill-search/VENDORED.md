@@ -38,6 +38,15 @@ upstream is re-vendored:
 - **Plugin self-prefix guard (v0.10.2):** `skills_discovery._namespaced_name` skips the plugin-id prefix
   when a skill's frontmatter `name:` already starts with `<plugin_id>:` (prevents `ck:ck:…` for plugins
   like ClaudeKit that self-namespace).
+- **Body-derived trigger points (v0.12.0, ADR-0016):** `skills_discovery.py` adds `_extract_body_triggers`
+  + a `body_triggers` field on the parsed dict — short phrases mined from the body's LABELED decision
+  sections (`## When to Use`, `Triggers:`, `Use when:`, `Examples:`, …; a `Do NOT use` block ends the
+  section so exclusions don't leak). `server.py` adds `_trigger_phrases`, which folds those into the SAME
+  MAX-pool trigger layer as the description phrases — deduped against the description and capped COMBINED at
+  `_TRIG_MAX`, so enabling this does NOT grow the point count. Gated by `SKILL_BODY_TRIGGERS` (default on;
+  `=0` + reindex reverts to description-only, byte-identical to before). Extends ADR-0012's trigger layer;
+  base vectors are untouched (no MEAN/centroid). **Requires re-copy into the stable venv
+  (`pip install vendor/skill-search`) + a reindex to deploy.**
 
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the

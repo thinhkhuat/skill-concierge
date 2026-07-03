@@ -80,6 +80,12 @@ TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
 # MAX-pool them at query time (group_by name). Default ON; set SKILL_MULTIVECTOR=0 + reindex
 # to revert to one bare vector per skill. (Validated: 2.2x rank-1/separation, flat false-fire.)
 MULTIVECTOR     = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"
+# Body-derived trigger points (Option 4): also mine each skill's BODY labeled
+# decision-sections ("## When to Use", "Triggers:", ...) for extra trigger phrases,
+# not just the description (skills_discovery.parse_skill's `body_triggers`).
+# Default ON; set SKILL_BODY_TRIGGERS=0 + reindex to revert to description-only
+# triggers (today's behavior, byte-identical). No effect when MULTIVECTOR is off.
+SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
 # Index manifest: lets us detect drift between disk and the index cheaply.
 META_PATH       = Path(os.environ.get(
     "SKILL_META_PATH", str(Path.home() / ".cache" / "skill-search" / "index_meta.json")))
@@ -267,6 +273,25 @@ def _split_phrases(description: str) -> list:
     return out[:_TRIG_MAX]
 
 
+def _trigger_phrases(s: dict) -> list:
+    """Trigger-point phrases for one skill: description-derived first, then (if
+    SKILL_BODY_TRIGGERS) body-derived, deduped against the description and capped
+    COMBINED at _TRIG_MAX — the same per-skill point budget description-only
+    triggers already had, so turning this on doesn't grow the multi-vector layer's
+    point count. (Real-skill check: median description alone uses ~3 of the 12
+    slots, so most skills still get body phrases; only already-verbose
+    descriptions at the cap get none.)"""
+    phrases = _split_phrases(s["description"])
+    if SKILL_BODY_TRIGGERS:
+        seen = {p.lower() for p in phrases}
+        body_text = "\n".join(s.get("body_triggers") or [])
+        for p in _split_phrases(body_text):
+            if p.lower() not in seen:
+                seen.add(p.lower())
+                phrases.append(p)
+    return phrases[:_TRIG_MAX]
+
+
 def _skill_text(s: dict) -> str:
     """The text we embed: name + description + body (meaning, not just name)."""
     return f"{s['name']}\n{s['description']}\n{s['body']}"
@@ -344,9 +369,10 @@ def build_index(force: bool = False) -> dict:
 
     # Desired end state: point-id -> (text-to-embed, content_hash, payload).
     # Each skill gets ONE base point (name+desc+body); with MULTIVECTOR on it also gets one
-    # TRIGGER point per intent phrase from its description, MAX-pooled at query time via
-    # group_by name. Stable per-(skill, slot) ids keep reindex incremental and reindex-safe
-    # (a plain reindex maintains the trigger layer — no separate overlay/reapply needed).
+    # TRIGGER point per intent phrase from its description and (SKILL_BODY_TRIGGERS) its
+    # body's labeled decision-sections, MAX-pooled at query time via group_by name. Stable
+    # per-(skill, slot) ids keep reindex incremental and reindex-safe (a plain reindex
+    # maintains the trigger layer — no separate overlay/reapply needed).
     desired: dict[str, tuple] = {}
     for s in skills:
         text = _skill_text(s)
@@ -355,7 +381,7 @@ def build_index(force: bool = False) -> dict:
             "name": s["name"], "description": s["description"],
             "path": s["path"], "content_hash": h, "kind": "base"})
         if MULTIVECTOR:
-            for i, ph in enumerate(_split_phrases(s["description"])):
+            for i, ph in enumerate(_trigger_phrases(s)):
                 ph_h = _content_hash(ph)
                 desired[_point_id(f"{s['name']}::trig::{i}")] = (ph, ph_h, {
                     "name": s["name"], "description": s["description"],
