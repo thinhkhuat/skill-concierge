@@ -276,11 +276,12 @@ def _split_phrases(description: str) -> list:
 def _trigger_phrases(s: dict) -> list:
     """Trigger-point phrases for one skill: description-derived first, then (if
     SKILL_BODY_TRIGGERS) body-derived, deduped against the description and capped
-    COMBINED at _TRIG_MAX — the same per-skill point budget description-only
-    triggers already had, so turning this on doesn't grow the multi-vector layer's
-    point count. (Real-skill check: median description alone uses ~3 of the 12
-    slots, so most skills still get body phrases; only already-verbose
-    descriptions at the cap get none.)"""
+    COMBINED at _TRIG_MAX — so per-skill triggers never exceed the SAME ceiling (12)
+    description-only already had. Growth is BOUNDED, not additive-on-top; but the
+    TOTAL point count DOES rise, because most skills left slots empty (median
+    description uses ~3 of 12) that body phrases now fill. Measured live: 2231 ->
+    3570 (+60%) — well under full-body chunking's 2-4x. Already-verbose descriptions
+    at the cap get no body phrases."""
     phrases = _split_phrases(s["description"])
     if SKILL_BODY_TRIGGERS:
         seen = {p.lower() for p in phrases}

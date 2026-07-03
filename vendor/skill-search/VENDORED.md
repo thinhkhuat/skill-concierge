@@ -43,7 +43,9 @@ upstream is re-vendored:
   sections (`## When to Use`, `Triggers:`, `Use when:`, `Examples:`, …; a `Do NOT use` block ends the
   section so exclusions don't leak). `server.py` adds `_trigger_phrases`, which folds those into the SAME
   MAX-pool trigger layer as the description phrases — deduped against the description and capped COMBINED at
-  `_TRIG_MAX`, so enabling this does NOT grow the point count. Gated by `SKILL_BODY_TRIGGERS` (default on;
+  `_TRIG_MAX` (per-skill triggers never exceed the same 12-slot ceiling as before; growth is bounded, though
+  the total point count does rise as body phrases fill previously-empty slots — measured 2231→3570, +60%, far
+  under full-body chunking's 2-4×). Gated by `SKILL_BODY_TRIGGERS` (default on;
   `=0` + reindex reverts to description-only, byte-identical to before). Extends ADR-0012's trigger layer;
   base vectors are untouched (no MEAN/centroid). **Requires re-copy into the stable venv
   (`pip install vendor/skill-search`) + a reindex to deploy.**
