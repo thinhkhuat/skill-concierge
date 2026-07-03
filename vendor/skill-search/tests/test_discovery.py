@@ -49,6 +49,48 @@ def test_body_is_capped(tmp_path):
     assert len(s["body"]) == 4000
 
 
+# --- body_triggers (Option 4) ---------------------------------------------
+
+def test_body_triggers_from_header_section(tmp_path):
+    body = (
+        "\n## When to Use\n\n"
+        "- Setting up VLANs on a home network for the first time\n"
+        "- Isolating IoT devices from trusted devices\n\n"
+        "## How It Works\n\nSome unrelated implementation details.\n"
+    )
+    s = sd.parse_skill(make_skill(tmp_path, "vlan", body=body))
+    assert "Setting up VLANs on a home network for the first time" in s["body_triggers"]
+    assert "Isolating IoT devices from trusted devices" in s["body_triggers"]
+    assert not any("unrelated implementation" in p for p in s["body_triggers"])
+
+
+def test_body_triggers_inline_label_line(tmp_path):
+    body = "\nTriggers: soccer scores, football scores, live match tracker.\n\nMore body text.\n"
+    s = sd.parse_skill(make_skill(tmp_path, "soccer", body=body))
+    assert any(p.lower().startswith("triggers:") for p in s["body_triggers"])
+    assert not any("more body text" in p.lower() for p in s["body_triggers"])
+
+
+def test_body_triggers_excludes_negative_section(tmp_path):
+    # A "Do NOT use when" exclusion block inside a "When to Use" section often
+    # names OTHER skills — must not leak into this skill's trigger phrases.
+    body = (
+        "\n## When to Use\n\nUse this skill when:\n\n"
+        "- An educator wants a grading rubric\n\n"
+        "Do NOT use when:\n\n"
+        "- The user wants the actual assignment -- use assessment-design instead\n\n"
+        "## Process\n\nStep one.\n"
+    )
+    s = sd.parse_skill(make_skill(tmp_path, "rubric", body=body))
+    assert any("educator wants a grading rubric" in p.lower() for p in s["body_triggers"])
+    assert not any("assessment-design" in p for p in s["body_triggers"])
+
+
+def test_body_triggers_empty_when_no_labeled_section(tmp_path):
+    s = sd.parse_skill(make_skill(tmp_path, "plain", body="\nJust prose, no sections.\n"))
+    assert s["body_triggers"] == []
+
+
 # --- _namespaced_name (plugin id reconstruction) -------------------------
 
 def test_namespaced_name_cache_layout():

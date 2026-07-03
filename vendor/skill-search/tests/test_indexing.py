@@ -43,6 +43,39 @@ def test_disk_signature_counts_and_staleness_round_trip(tmp_path, monkeypatch):
     assert server._staleness_warning() is not None
 
 
+def test_trigger_phrases_body_on_adds_and_dedupes(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_BODY_TRIGGERS", True)
+    s = {
+        "name": "x",
+        "description": "does alpha things when the user needs alpha",
+        "body_triggers": [
+            "does alpha things when the user needs alpha",   # dup of description
+            "a totally new body-derived trigger phrase",
+        ],
+    }
+    phrases = server._trigger_phrases(s)
+    assert "a totally new body-derived trigger phrase" in phrases
+    assert phrases.count("does alpha things when the user needs alpha") == 1
+
+
+def test_trigger_phrases_body_off_is_description_only(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_BODY_TRIGGERS", False)
+    s = {
+        "name": "x",
+        "description": "does alpha things when the user needs alpha",
+        "body_triggers": ["a totally new body-derived trigger phrase"],
+    }
+    assert server._trigger_phrases(s) == server._split_phrases(s["description"])
+
+
+def test_trigger_phrases_combined_cap_respects_trig_max(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_BODY_TRIGGERS", True)
+    desc = ". ".join(f"description phrase number {i}" for i in range(20))
+    s = {"name": "x", "description": desc,
+         "body_triggers": ["a totally new body-derived trigger phrase"]}
+    assert len(server._trigger_phrases(s)) <= server._TRIG_MAX
+
+
 def test_manifest_records_backend_and_dim(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "META_PATH", tmp_path / "meta.json")
     monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])

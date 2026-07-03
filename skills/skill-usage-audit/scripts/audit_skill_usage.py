@@ -48,6 +48,11 @@ _CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
 # in the same turn (an actual search_skills call, not a bare `SEARCH:` line which is itself
 # the 'ritual SEARCH' failure mode).
 _SEARCH_SLUGS = {"skill-search", "skill-concierge-skill-search"}
+# Cross-file contract with hooks/scripts/enforcer.py (Phase 1) — keep in sync. The enforcer
+# injects this literal marker on its two silent verdict legs (getaway skip, intent skip) to
+# pre-authorize a `SKIPPING: none`; a turn carrying it is a lawful hook-authorized skip, not
+# a false skip.
+AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
 
 
 def norm(name):
@@ -99,21 +104,26 @@ def parse_since(s):
 
 
 def _skip_verdicts(turns):
-    """Pure verdict over per-turn flags [{'saw_search':bool,'saw_skip':bool}, ...].
+    """Pure verdict over per-turn flags [{'saw_search':bool,'saw_skip':bool,'saw_marker':bool}, ...].
 
-    Returns (false_skip, lawful_skip). The doctrine's hardest rule is 'no search, no
-    skip': a turn that DECLARED `SKIPPING` with NO `search_skills` call in the SAME turn
-    is a false skip; one with a search is lawful. Turns without a SKIPPING are ignored.
-    Kept pure so --selftest pins the branching without touching the filesystem."""
-    false_skip = lawful_skip = 0
+    Returns (false_skip, lawful_skip, authorized_skip). The doctrine's hardest rule is 'no
+    search, no skip': a turn that DECLARED `SKIPPING` with NO `search_skills` call in the
+    SAME turn is a false skip; one with a search is lawful. A turn carrying the enforcer's
+    AUTHORIZED_SKIP_MARKER is a lawful, hook-pre-authorized skip — tallied separately as
+    `authorized_skip` so it never inflates the false-skip count, even without a search.
+    Turns without a SKIPPING are ignored. Kept pure so --selftest pins the branching without
+    touching the filesystem."""
+    false_skip = lawful_skip = authorized_skip = 0
     for t in turns:
         if not t.get("saw_skip"):
             continue
-        if t.get("saw_search"):
+        if t.get("saw_marker"):
+            authorized_skip += 1
+        elif t.get("saw_search"):
             lawful_skip += 1
         else:
             false_skip += 1
-    return false_skip, lawful_skip
+    return false_skip, lawful_skip, authorized_skip
 
 
 def audit(since=None, meta_keywords=None):
@@ -137,7 +147,7 @@ def audit(since=None, meta_keywords=None):
         # tool_result user record (`content` is a LIST) does not. We accumulate, per turn,
         # whether a SKIPPING was declared and whether a real search_skills call fired in the
         # SAME turn, judging at the boundary so SEARCH-then-SKIPPING order is handled.
-        cur = {"saw_search": False, "saw_skip": False, "active": False}
+        cur = {"saw_search": False, "saw_skip": False, "saw_marker": False, "active": False}
         for line in fh:
             if '"timestamp"' not in line:
                 continue
@@ -145,15 +155,27 @@ def audit(since=None, meta_keywords=None):
             is_list_content = ('"content":[' in line or '"content": [' in line)
             if is_user and not is_list_content:  # genuine user prompt -> new turn
                 if cur["active"] and cur["saw_skip"]:
-                    turns.append({"saw_search": cur["saw_search"], "saw_skip": True})
-                cur = {"saw_search": False, "saw_skip": False, "active": True}
+                    turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
+                                  "saw_marker": cur["saw_marker"]})
+                cur = {"saw_search": False, "saw_skip": False, "saw_marker": False, "active": True}
             # Genuine user-prompt lines must always reach sess_text below for meta
             # classification, even when they carry none of these tool/doctrine markers
             # (e.g. "review the skill-concierge gate" has no USING/SEARCH/SKIPPING token).
             has_marker = ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
-                          or "USING" in line or "SEARCH" in line or "SKIPPING" in line)
+                          or "USING" in line or "SEARCH" in line or "SKIPPING" in line
+                          or AUTHORIZED_SKIP_MARKER in line)
             if not (has_marker or (is_user and not is_list_content)):
                 continue
+            # Count ONLY the enforcer's own authorization line — anchor on its two message
+            # signatures, not the bare marker. The marker literal also appears in the
+            # SessionStart doctrine (skill-first.md) and in any prose/tool-result that discusses
+            # the feature; matching those would over-count authorized_skip and mask false-skips.
+            # Fails SAFE: if the enforcer wording drifts from these signatures we under-count
+            # authorized (over-flag false), never the reverse. Keep in sync with GETAWAY_SKIP_MSG /
+            # INTENT_SKIP_MSG in hooks/scripts/enforcer.py.
+            if AUTHORIZED_SKIP_MARKER in line and (
+                    "full-catalogue retrieval ran" in line or "intent-margin classifier" in line):
+                cur["saw_marker"] = True
             try:
                 rec = json.loads(line.strip())
             except Exception:
@@ -211,10 +233,11 @@ def audit(since=None, meta_keywords=None):
                             n_skip += 1
                             cur["saw_skip"] = True
         if cur["active"] and cur["saw_skip"]:  # flush the file's last turn
-            turns.append({"saw_search": cur["saw_search"], "saw_skip": True})
+            turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
+                          "saw_marker": cur["saw_marker"]})
         fh.close()
 
-    false_skip, lawful_skip = _skip_verdicts(turns)
+    false_skip, lawful_skip, authorized_skip = _skip_verdicts(turns)
 
     # Exclude builtin slashes (/clear, /compact, /plugin, ...) by catalogue membership so
     # they don't inflate "skill usage" — mirrors the skill-usage-tracker's known-skill filter.
@@ -226,7 +249,7 @@ def audit(since=None, meta_keywords=None):
     return {
         "skill_tool": skill_tool, "slash": slash_skill, "using": using,
         "n_search": n_search, "n_skip": n_skip,
-        "false_skip": false_skip, "lawful_skip": lawful_skip,
+        "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
         "sess_skill": sess_skill, "sess_using": sess_using,
         "meta_sessions": meta_sessions,
     }
@@ -244,12 +267,14 @@ def main():
                     help="run the false-SKIPPING verdict self-check and exit")
     args = ap.parse_args()
     if args.selftest:
-        t = [{"saw_skip": True, "saw_search": False},   # SKIPPING, no search -> false
-             {"saw_skip": True, "saw_search": True},     # SKIPPING after a search -> lawful
-             {"saw_skip": False, "saw_search": True}]    # no SKIPPING -> ignored
-        fs, ls = _skip_verdicts(t)
-        ok = (fs == 1 and ls == 1)
-        print("audit --selftest", "OK: false-SKIPPING verdict" if ok else f"FAIL fs={fs} ls={ls}")
+        t = [{"saw_skip": True, "saw_search": False, "saw_marker": False},  # SKIPPING, no search -> false
+             {"saw_skip": True, "saw_search": True, "saw_marker": False},   # SKIPPING after a search -> lawful
+             {"saw_skip": False, "saw_search": True, "saw_marker": False},  # no SKIPPING -> ignored
+             {"saw_skip": True, "saw_search": False, "saw_marker": True}]   # SKILL-CHECK: then SKIPPING -> authorized
+        fs, ls, az = _skip_verdicts(t)
+        ok = (fs == 1 and ls == 1 and az == 1)
+        print("audit --selftest",
+              "OK: false-SKIPPING verdict" if ok else f"FAIL fs={fs} ls={ls} az={az}")
         raise SystemExit(0 if ok else 1)
     since = parse_since(args.since)
     r = audit(since, args.meta_keyword)
@@ -265,12 +290,13 @@ def main():
     print(f"  SEARCH declarations: {r['n_search']}   SKIPPING declarations: {r['n_skip']}")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
 
-    fs, ls = r["false_skip"], r["lawful_skip"]
-    skip_turns = fs + ls
+    fs, ls, az = r["false_skip"], r["lawful_skip"], r["authorized_skip"]
+    skip_turns = fs + ls + az
     print(f"\nFALSE-SKIPPING (doctrine's hardest rule — 'no search, no skip'):")
     if skip_turns:
         print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  declared SKIPPING with NO search_skills "
-              f"call in the same turn   (lawful, search-backed skips: {ls})")
+              f"call in the same turn   (lawful, search-backed skips: {ls}; "
+              f"hook-authorized skips: {az})")
     else:
         print(f"  no SKIPPING turns in window")
     print(f"  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")

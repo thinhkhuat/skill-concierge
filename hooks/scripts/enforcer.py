@@ -68,6 +68,18 @@ ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-ca
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _DESC_CHARS = 96
 
+# ── AUTHORIZED-SKIP tier (Phase 1) ────────────────────────────────────────
+# The two silent verdict paths below (getaway: top<floor; intent_skip: classified
+# conversational) used to return 0 with zero additionalContext, so the agent had no
+# signal the hook already ran retrieval + both gates — it would re-invoke search_skills
+# to re-derive a verdict already computed here. AUTHORIZED_SKIP swaps that silence for a
+# one-line authorization instead (mirrors the GETAWAY_FLOOR / MAX_SHORT_WORDS env-override
+# pattern above). ON by default; export ENFORCER_AUTHORIZED_SKIP=0 to restore old silence.
+AUTHORIZED_SKIP = os.environ.get("ENFORCER_AUTHORIZED_SKIP", "1") != "0"
+# CROSS-FILE CONTRACT: skills/skill-usage-audit/scripts/audit_skill_usage.py (Phase 3) joins
+# its false-skip exclusion on this exact literal. Keep the two in sync.
+AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
+
 # ── actionability gate (prior-independent class-margin over the prompt_intent corpus) ─
 # A relevant skill clearing the floor is NOT enough: most "dodged" offers land on
 # conversational/status/meta turns that match a skill topically but want none. The gate
@@ -294,6 +306,35 @@ def _inject(text: str) -> None:
     }))
 
 
+# Authorization lines for the two silent verdict legs (see AUTHORIZED_SKIP above). Burden of
+# proof stays on SKIP: the getaway leg can't tell trivial from real-but-low-scoring, so it
+# pushes ambiguous/real work back to find-skills rather than blessing the skip outright.
+GETAWAY_SKIP_MSG = (
+    AUTHORIZED_SKIP_MARKER + " full-catalogue retrieval ran (top {top:.2f} < floor {floor:.2f}); "
+    "nothing cleared the floor. SKIPPING: none is pre-authorized ONLY if this turn is genuinely "
+    "trivial/non-task — if it's real or ambiguous work, do NOT skip: escalate to find-skills "
+    "instead (burden of proof is on SKIP). If a surfaced candidate's fit is unclear from its "
+    "short description, call get_skill(<name>) first."
+)
+INTENT_SKIP_MSG = (
+    AUTHORIZED_SKIP_MARKER + " the intent-margin classifier judged this turn conversational/"
+    "non-task. SKIPPING: none is pre-authorized — no further search_skills needed."
+)
+
+
+def _authorized_skip_inject(kind: str, **fmt) -> None:
+    """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip")
+    when the kill-switch is on; no-op when off. Wrapped so a bad format kwarg or a stdout
+    error can never escape — this hook is additive-only and must never block a turn."""
+    if not AUTHORIZED_SKIP:
+        return
+    try:
+        msg = GETAWAY_SKIP_MSG if kind == "getaway" else INTENT_SKIP_MSG
+        _inject(msg.format(**fmt))
+    except Exception:
+        pass
+
+
 def _post_json(url: str, payload: dict, timeout: float) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
@@ -470,10 +511,14 @@ def main() -> int:
 
         # Getaway: top candidate below its floor (per-skill tau when armed+`ok`, else the
         # global floor). A deterministic hit always clears — it IS the intent.
-        if not det and top < (_floor_for(cands[0][0]) if cands else GETAWAY_FLOOR):
-            # No semantic fit → trivial/out-of-catalogue. Stay silent (getaway),
-            # but log the consideration so coverage/fallback stats stay honest.
+        floor = _floor_for(cands[0][0]) if cands else GETAWAY_FLOOR
+        if not det and top < floor:
+            # No semantic fit → trivial/out-of-catalogue. Log the consideration so
+            # coverage/fallback stats stay honest, then authorize the skip (or stay fully
+            # silent if the kill-switch is off) instead of leaving the agent to re-derive
+            # this verdict via a fresh search_skills call.
             _append_offer(sid, "getaway", offered, None, prompt, dropped=_dropped or None)
+            _authorized_skip_inject("getaway", top=top, floor=floor)
             return 0
 
         # Actionability gate (prior-independent class-margin). A relevant skill cleared the
@@ -482,6 +527,7 @@ def main() -> int:
         # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
         if not det and not _is_imperative(prompt) and _intent_conversational(vector):
             _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None)
+            _authorized_skip_inject("intent_skip")
             return 0
 
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
@@ -614,6 +660,42 @@ def _selftest() -> int:
     finally:
         _PER_SKILL_TAU, _ROUTES = _saved_tau, _saved_routes
 
+    # (7) AUTHORIZED-SKIP tier: both legs inject the marker + required content when the
+    # kill-switch is on, and stay fully silent (no inject call at all) when it's off.
+    # Monkeypatch _inject to capture without touching real stdout.
+    global _inject, AUTHORIZED_SKIP
+    _saved_inject, _saved_authorized_skip = _inject, AUTHORIZED_SKIP
+    _captured = []
+
+    def _fake_inject(text):
+        _captured.append(text)
+
+    _inject = _fake_inject
+    try:
+        AUTHORIZED_SKIP = True
+        _authorized_skip_inject("getaway", top=0.30, floor=0.45)
+        _authorized_skip_inject("intent_skip")
+        if len(_captured) != 2:
+            bad.append("authorized-skip: expected 2 injects when flag ON, got %d" % len(_captured))
+        else:
+            if not all(c.startswith(AUTHORIZED_SKIP_MARKER) for c in _captured):
+                bad.append("authorized-skip: injected text must start with the marker")
+            if "find-skills" not in _captured[0] or "get_skill(" not in _captured[0]:
+                bad.append("authorized-skip: getaway message missing find-skills escalation or get_skill nudge")
+            if "0.30" not in _captured[0] or "0.45" not in _captured[0]:
+                bad.append("authorized-skip: getaway message did not interpolate top/floor")
+            if "conversational" not in _captured[1]:
+                bad.append("authorized-skip: intent_skip message missing conversational rationale")
+
+        _captured.clear()
+        AUTHORIZED_SKIP = False
+        _authorized_skip_inject("getaway", top=0.30, floor=0.45)
+        _authorized_skip_inject("intent_skip")
+        if _captured:
+            bad.append("authorized-skip: must stay silent when the kill-switch is off")
+    finally:
+        _inject, AUTHORIZED_SKIP = _saved_inject, _saved_authorized_skip
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
@@ -621,7 +703,8 @@ def _selftest() -> int:
         return 1
     print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share "
           "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse "
-          "+ per-skill-tau/deterministic-routes (default-inert)"
+          "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
+          "(inject-on/silent-off)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off)))
     return 0
 

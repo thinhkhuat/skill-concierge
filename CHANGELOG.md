@@ -5,6 +5,35 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-04
+
+Usefulness-rate upgrades — surface the verdict the enforcer already computes, and get
+each skill's BODY-level "when to use" signal into retrieval. Implements the Opus-validated
+proposal `plans/reports/proposal-260704-0244-…`. **Operator directive: everything ships
+DEFAULT-ON**, each behind an ON-default env kill-switch (rationale + the ADR-0009 risk this
+overrides are recorded in `plans/260704-0415-usefulness-rate-upgrades/decisions-audit-log.md`).
+
+### Added
+- **AUTHORIZED-SKIP enforcer tier** (`hooks/scripts/enforcer.py`, ADR-0015). The two silent
+  verdict legs (getaway `top<floor`, intent_skip conversational) now inject a one-line
+  `SKILL-CHECK:` authorization instead of nothing, so the agent stops re-running
+  `search_skills` to re-derive a verdict the hook already made. The getaway line keeps the
+  burden of proof on SKIP (escalate real/ambiguous work to `find-skills`; `get_skill` nudge).
+  Env `ENFORCER_AUTHORIZED_SKIP` (default ON). Fail-silent, additive.
+- **Library doctrine** (`hooks/doctrine/skill-first.md`, ADR-0015). Skip = reasoning-based
+  intent classification with asymmetric cost; burden of proof on SKIP; ambiguous/no-fit
+  escalates to `find-skills`, never a self-declared skip.
+- **Body-derived trigger points** (`vendor/skill-search/…`, ADR-0016). Each skill body's
+  labeled decision sections (`## When to Use`, `Triggers:`, `Use when:`) are mined for short
+  phrases and folded into the existing MAX-pool trigger layer (previously description-only) —
+  separate points, deduped, capped COMBINED at `_TRIG_MAX`. Env `SKILL_BODY_TRIGGERS`
+  (default ON). Live reindex added +1339 points (2231→3570). Recorded in `VENDORED.md`.
+
+### Changed
+- **skill-usage audit** (`skills/skill-usage-audit/…`) now recognises the `SKILL-CHECK:`
+  marker: a hook-authorized skip is tallied as `authorized_skip`, excluded from
+  false-SKIPPING, keeping the doctrine's hardest-rule metric honest.
+
 ## [0.11.1] — 2026-07-01
 
 Staleness self-guards — make two latent staleness vectors impossible to miss, so freshness

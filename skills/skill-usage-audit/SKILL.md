@@ -38,8 +38,12 @@ python3 scripts/audit_skill_usage.py --since "<ship/commit time, e.g. 2026-06-29
 
 Outputs the scoped post-change counts (Skill-tool, `/slash`, and the `USING`/`SEARCH`/`SKIPPING`
 trail), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a `SKIPPING`
-declared with NO same-turn `search_skills` call (the doctrine's hardest rule). Run `--help` for
-flags; `--selftest` pins the false-SKIPPING verdict logic.
+declared with NO same-turn `search_skills` call (the doctrine's hardest rule). A turn carrying the
+enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enforcer's two silent
+verdict legs — see `hooks/scripts/enforcer.py`) is a **lawful, hook-pre-authorized skip**: it is
+excluded from the false-skip count and tallied separately as `authorized_skip`, reported alongside
+the false-skip figure so "false-SKIPPING" stays honestly defined. Run `--help` for flags;
+`--selftest` pins the false-SKIPPING verdict logic, including the authorized-skip case.
 
 ## Scope to reduce noise (post-change)
 

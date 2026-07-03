@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.11.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.12.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -46,8 +46,8 @@ skill-concierge addresses three distinct failure modes the default conflates:
 
 | Organ | Question it answers | Mechanism |
 |-------|---------------------|-----------|
-| **Retrieve** | *Which* skill fits this task? | semantic search over the skill catalogue (Qdrant + multilingual embeddings) |
-| **Enforce** | *Whether* the model uses a skill at all (vs winging it) | a per-turn hook that hands over the right candidates under a use-mandate |
+| **Retrieve** | *Which* skill fits this task? | semantic search over the skill catalogue (Qdrant + multilingual embeddings), including a MAX-pool trigger layer mined from both each skill's description **and** its body's labeled decision sections (`## When to Use`, `Triggers:`, `Use when:`) — [ADR-0012](docs/adr/0012-multi-vector-max-pool-retrieval.md), [ADR-0016](docs/adr/0016-body-derived-trigger-points.md) |
+| **Enforce** | *Whether* the model uses a skill at all (vs winging it) | a per-turn hook that hands over the right candidates under a use-mandate; on its two previously-silent verdicts (score-floor miss, conversational turn) it now injects a `SKILL-CHECK:` authorization instead of nothing — [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
 | **Ledger** | *What actually got used* | a compounding, append-only skill-invocation log → data-backed always-on curation |
 
 ## ⚠ Critical design facts (read before judging the engine)
@@ -184,6 +184,16 @@ the built index can't diverge from the model the server uses):
 | `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:1.18.2` |
 | `SKILL_CONCIERGE_LOG` | `~/.claude/skill-telemetry/logs` (ledger directory) |
 
+### Runtime governance flags
+
+Behavior-changing kill-switches, both **default ON** — set to `0` (and reindex, where noted)
+to revert to the prior behavior:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ENFORCER_AUTHORIZED_SKIP` | `1` (ON) | Enforcer (`hooks/scripts/enforcer.py`) injects a `SKILL-CHECK:` authorization line on its two previously-silent verdicts (getaway score-floor miss, conversational-intent skip) instead of nothing. `=0` restores the old silence. [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md). |
+| `SKILL_BODY_TRIGGERS` | `1` (ON) | Vendored engine mines each skill body's labeled decision sections into extra MAX-pool trigger points, on top of the existing description-derived ones. `=0` + a reindex reverts to description-only (byte-identical to before). [ADR-0016](docs/adr/0016-body-derived-trigger-points.md). |
+
 ### Always-on policy (`config/keep-on.json`)
 
 A curated 32-skill always-on allowlist, applied to `~/.claude/settings.json` by
@@ -239,7 +249,7 @@ not embedded.
 
 ## Status & roadmap
 
-`0.11.1` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Multi-vector MAX-pool retrieval live (ADR-0012): each skill scored by its best phrase point — 2.2× rank-1/separation over the bare single-vector index.**
+`0.12.0` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Multi-vector MAX-pool retrieval (ADR-0012) now also mines each skill body's labeled decision-sections (ADR-0016), and the enforcer's two silent verdict legs emit a `SKILL-CHECK:` authorization instead of nothing (ADR-0015). Everything default-ON behind env kill-switches.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
 from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
 fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical
@@ -274,6 +284,12 @@ Trajectory since the P1 fusion (`0.2.0`):
 - **`0.11.1` — staleness self-guards.** doctor `Engine freshness` check (ADR-0013) catches a stale
   MCP venv engine after `/plugin update`; SessionStart `auto_reindex` (ADR-0014) self-heals a stale
   index in the background.
+- **`0.12.0` — usefulness-rate upgrades.** The enforcer's two silent verdict legs (score-floor miss,
+  conversational turn) now emit a `SKILL-CHECK:` authorization (ADR-0015) so the agent stops
+  re-searching to re-derive a verdict the hook already made; the library doctrine puts the burden of
+  proof on SKIP (escalate to `find-skills`). The MAX-pool trigger layer now also mines each skill
+  body's labeled decision-sections (ADR-0016; index 2231→3570 points). Everything default-ON behind
+  env kill-switches — an operator override of the proposal's gate-first advice (see ADR-0015/0016).
 
 **Open question:** `0.11.0`'s transcript analysis + a controlled A/B gave the first real evidence
 the gate shapes orientation — the doctrine fixes the no-task / `USING: none` cases cleanly — but

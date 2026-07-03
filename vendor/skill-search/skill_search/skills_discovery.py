@@ -57,6 +57,53 @@ def _namespaced_name(path: Path, base_name: str) -> str:
     return base_name
 
 
+# Body-trigger extraction: pulls short phrases out of the body's LABELED decision
+# sections ("## When to Use", "Triggers:", "Use when:", …) for server.py's
+# multi-vector trigger layer (SKILL_BODY_TRIGGERS). Hand-mirrors server._LABEL_RE's
+# label vocabulary — kept in sync by hand, the same way server.py already
+# hand-mirrors scripts/build_triggers.py (see VENDORED.md) — plus "when to use",
+# which only ever shows up here as a markdown header, never in a one-line description.
+_BODY_SECTION_RE = re.compile(
+    r"^[ \t]{0,3}(#{1,6})?[ \t]*\**[ \t]*"
+    r"(triggers?|examples?|use when|also use|use this skill|when to use)\b",
+    re.IGNORECASE | re.MULTILINE)
+_BODY_HEADER_RE = re.compile(r"^[ \t]{0,3}#{1,6}\s")
+_BODY_NEGATIVE_RE = re.compile(r"^[ \t]{0,3}(do\s*not|don'?t|never|avoid)\s+use\b", re.IGNORECASE)
+_BODY_BULLET_RE = re.compile(r"^[ \t]*[-*•]\s+")
+
+
+def _extract_body_triggers(body: str) -> list[str]:
+    """Short phrases from the body's labeled decision-sections only — never the
+    whole body. A markdown header ("## When to Use") pulls in every line below it
+    up to the next header OR a "Do NOT use when" style exclusion line, whichever
+    comes first, so negative/exclusion bullets (which often name OTHER skills)
+    don't leak in as if they were triggers for this one. A plain inline label line
+    ("Triggers: ...", "Use when: ...") is self-contained and taken as-is."""
+    lines = body.splitlines()
+    phrases: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        m = _BODY_SECTION_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        if m.group(1):                        # markdown header -> section body follows
+            j = i + 1
+            while j < n and not _BODY_HEADER_RE.match(lines[j]) \
+                    and not _BODY_NEGATIVE_RE.match(lines[j]):
+                j += 1
+            block = lines[i + 1:j]
+            i = j
+        else:                                  # inline label line, self-contained
+            block = [lines[i]]
+            i += 1
+        for line in block:
+            line = _BODY_BULLET_RE.sub("", line).strip()
+            if line:
+                phrases.append(line)
+    return phrases
+
+
 def parse_skill(path: Path) -> dict | None:
     """Return {name, description, body, path} or None if no valid frontmatter."""
     try:
@@ -85,10 +132,17 @@ def parse_skill(path: Path) -> dict | None:
     if when_m:
         description += "  " + when_m.group(1).strip()
 
+    stripped_body = body.strip()
     return {
         "name": name,
         "description": description,
-        "body": body.strip()[:4000],   # cap body so embeddings stay cheap
+        "body": stripped_body[:4000],   # cap body so embeddings stay cheap
+        # Extracted from the FULL body (not the 4000-char-capped copy above) so a
+        # decision section late in a long SKILL.md still refreshes its trigger
+        # points even when the capped base text is unaffected. Feeds the
+        # multi-vector trigger layer only (server.SKILL_BODY_TRIGGERS); leaves
+        # `description`/`body` untouched.
+        "body_triggers": _extract_body_triggers(stripped_body),
         "path": str(path),
     }
 

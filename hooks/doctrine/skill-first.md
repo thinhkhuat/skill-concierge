@@ -70,6 +70,28 @@ back-rationalizing the skip — the commitment is the whole point.
 
 ---
 
+## Library doctrine
+
+A skip is a **reasoning-based intent classification** — trivial errand vs. real work, unambiguous vs.
+ambiguous — never a score threshold. You are ruling on what kind of turn this is, not tallying a fit %.
+
+Costs are asymmetric. A needless search on a trivial turn wastes seconds — cheap. Declaring "nothing
+fits" on real or ambiguous work while a ~500-skill catalogue and the `find-skills` meta-skill sit
+unused is the top-severity failure here: the lazy student who glances at the card catalogue and writes
+the thesis unaided. Weigh a skip against that asymmetry, not against how confident you feel.
+
+**Burden of proof is on SKIP.** Only a positively-reasoned "this turn is trivial/unambiguous" earns a
+no-search skip. Anything real or ambiguous stays mandatory-protocol (rule 2) — a bare "nothing cleared
+the floor" is not a ruling, it's the dodge; it escalates to `find-skills`, never a self-declared
+`SKIPPING: none`.
+
+If the enforcer hands you a `SKILL-CHECK:` line (its AUTHORIZED-SKIP tier), you may go straight to
+`SKIPPING: none` ONLY when the line marks the turn genuinely trivial/conversational. When the line
+itself flags real-or-ambiguous, low-scoring work, its own text is telling you to escalate to
+`find-skills` — honor that escalation; the marker authorizes a ruling, not a blanket license to skip.
+
+---
+
 ## Persistence
 
 ACTIVE EVERY TASK TURN. Bound every turn. No revert after many turns. Still bound if unsure.
