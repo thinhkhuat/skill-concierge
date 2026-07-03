@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: Documentation
-status: in-progress
+status: completed
 effort: M
 ---
 

@@ -1,8 +1,8 @@
 ---
 phase: 7
-title: "Validation"
-status: pending
-effort: "M"
+title: Validation
+status: completed
+effort: M
 ---
 
 # Phase 7: Validation — opus-validate adversarial review + my final gate

@@ -1,8 +1,8 @@
 ---
 phase: 8
-title: "Go-live"
-status: pending
-effort: "S"
+title: Go-live
+status: in-progress
+effort: S
 ---
 
 # Phase 8: Go-live — LOCAL only, HOLD the push

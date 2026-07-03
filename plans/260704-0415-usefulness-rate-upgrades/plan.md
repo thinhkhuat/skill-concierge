@@ -48,9 +48,9 @@ Implement the Opus-validated proposal `plans/reports/proposal-260704-0244-retrie
 | 3 | [Audit patch](./phase-03-audit-patch.md) | Pending | Completed |
 | 4 | [Body triggers](./phase-04-body-triggers.md) | Pending | Completed |
 | 5 | [Deploy wiring](./phase-05-deploy-wiring.md) | Pending | Completed |
-| 6 | [Documentation](./phase-06-documentation.md) | Pending | In Progress |
-| 7 | [Validation](./phase-07-validation.md) | Pending | opus-validate + final gate (no source edits except blocker fixes) |
-| 8 | [Go-live](./phase-08-go-live.md) | Pending | `.claude-plugin/{plugin,marketplace}.json`, CHANGELOG; merge→main; HOLD push |
+| 6 | [Documentation](./phase-06-documentation.md) | Pending | Completed |
+| 7 | [Validation](./phase-07-validation.md) | Pending | Completed |
+| 8 | [Go-live](./phase-08-go-live.md) | Pending | In Progress |
 
 ## Acceptance criteria (whole plan)
 
