@@ -166,9 +166,15 @@ def audit(since=None, meta_keywords=None):
                           or AUTHORIZED_SKIP_MARKER in line)
             if not (has_marker or (is_user and not is_list_content)):
                 continue
-            # Raw-line check, independent of role/JSON-shape, so the join stays robust to
-            # exactly where the enforcer's UserPromptSubmit additionalContext lands.
-            if AUTHORIZED_SKIP_MARKER in line:
+            # Count ONLY the enforcer's own authorization line — anchor on its two message
+            # signatures, not the bare marker. The marker literal also appears in the
+            # SessionStart doctrine (skill-first.md) and in any prose/tool-result that discusses
+            # the feature; matching those would over-count authorized_skip and mask false-skips.
+            # Fails SAFE: if the enforcer wording drifts from these signatures we under-count
+            # authorized (over-flag false), never the reverse. Keep in sync with GETAWAY_SKIP_MSG /
+            # INTENT_SKIP_MSG in hooks/scripts/enforcer.py.
+            if AUTHORIZED_SKIP_MARKER in line and (
+                    "full-catalogue retrieval ran" in line or "intent-margin classifier" in line):
                 cur["saw_marker"] = True
             try:
                 rec = json.loads(line.strip())

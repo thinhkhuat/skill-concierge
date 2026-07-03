@@ -78,7 +78,7 @@ Format per entry: **Decision · Fork · Grounds · Risk · Reversal.**
 
 ---
 
-## D6 — Body triggers capped COMBINED with description at `_TRIG_MAX` (flat point-count)
+## D6 — Body triggers capped COMBINED with description at `_TRIG_MAX` (bounded point-count growth)
 
 - **Fork (implementation):** give body-derived trigger phrases their own extra point slots (grows the
   multi-vector layer 1.5–2×) vs. cap description+body COMBINED at the existing `_TRIG_MAX=12`.
