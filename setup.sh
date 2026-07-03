@@ -7,6 +7,10 @@
 # ponytail: Docker assumed for the Qdrant server tier. For the service-free embedded tier,
 # skip step 2 and unset SKILL_QDRANT_URL. Override SKILL_PYTHON / SKILL_CONCIERGE_VENV /
 # SKILL_QDRANT_URL / SKILL_EMBED_MODEL via env.
+#
+# Behavior flags (both DEFAULT ON; export =0 before this run / a session to revert):
+#   SKILL_BODY_TRIGGERS=0      description-only trigger layer, no body-derived points (ADR-0016)
+#   ENFORCER_AUTHORIZED_SKIP=0 restore the enforcer's old silent getaway/intent_skip (ADR-0015)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
