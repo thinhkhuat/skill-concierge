@@ -9,5 +9,6 @@ Claude-specific quick reference:
 - **Bootstrap / repair:** the `skill-concierge:setup` skill, or `./setup.sh` (idempotent).
 - **Versioning:** bump `.claude-plugin/plugin.json` **and** `.claude-plugin/marketplace.json` together, plus a `CHANGELOG.md` entry.
 - **Don't commit tool state:** `.ijfw/`, `ijfw/`, `.handoff/`, and `logs/` are gitignored scratch, not source.
+- **Governance flags (both default ON, one-var revert):** `ENFORCER_AUTHORIZED_SKIP` (enforcer's `SKILL-CHECK:` authorization on its two silent verdict legs — [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md)) and `SKILL_BODY_TRIGGERS` (body-derived MAX-pool trigger points, engine-side — [ADR-0016](docs/adr/0016-body-derived-trigger-points.md)).
 
 Repo layout, full conventions, and guardrails are all in [`AGENTS.md`](AGENTS.md).

@@ -46,8 +46,8 @@ skill-concierge addresses three distinct failure modes the default conflates:
 
 | Organ | Question it answers | Mechanism |
 |-------|---------------------|-----------|
-| **Retrieve** | *Which* skill fits this task? | semantic search over the skill catalogue (Qdrant + multilingual embeddings) |
-| **Enforce** | *Whether* the model uses a skill at all (vs winging it) | a per-turn hook that hands over the right candidates under a use-mandate |
+| **Retrieve** | *Which* skill fits this task? | semantic search over the skill catalogue (Qdrant + multilingual embeddings), including a MAX-pool trigger layer mined from both each skill's description **and** its body's labeled decision sections (`## When to Use`, `Triggers:`, `Use when:`) — [ADR-0012](docs/adr/0012-multi-vector-max-pool-retrieval.md), [ADR-0016](docs/adr/0016-body-derived-trigger-points.md) |
+| **Enforce** | *Whether* the model uses a skill at all (vs winging it) | a per-turn hook that hands over the right candidates under a use-mandate; on its two previously-silent verdicts (score-floor miss, conversational turn) it now injects a `SKILL-CHECK:` authorization instead of nothing — [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
 | **Ledger** | *What actually got used* | a compounding, append-only skill-invocation log → data-backed always-on curation |
 
 ## ⚠ Critical design facts (read before judging the engine)
@@ -183,6 +183,16 @@ the built index can't diverge from the model the server uses):
 | `SKILL_QDRANT_CONTAINER` | `skill-search-qdrant` |
 | `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:1.18.2` |
 | `SKILL_CONCIERGE_LOG` | `~/.claude/skill-telemetry/logs` (ledger directory) |
+
+### Runtime governance flags
+
+Behavior-changing kill-switches, both **default ON** — set to `0` (and reindex, where noted)
+to revert to the prior behavior:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ENFORCER_AUTHORIZED_SKIP` | `1` (ON) | Enforcer (`hooks/scripts/enforcer.py`) injects a `SKILL-CHECK:` authorization line on its two previously-silent verdicts (getaway score-floor miss, conversational-intent skip) instead of nothing. `=0` restores the old silence. [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md). |
+| `SKILL_BODY_TRIGGERS` | `1` (ON) | Vendored engine mines each skill body's labeled decision sections into extra MAX-pool trigger points, on top of the existing description-derived ones. `=0` + a reindex reverts to description-only (byte-identical to before). [ADR-0016](docs/adr/0016-body-derived-trigger-points.md). |
 
 ### Always-on policy (`config/keep-on.json`)
 
