@@ -50,7 +50,7 @@ Implement the Opus-validated proposal `plans/reports/proposal-260704-0244-retrie
 | 5 | [Deploy wiring](./phase-05-deploy-wiring.md) | Pending | Completed |
 | 6 | [Documentation](./phase-06-documentation.md) | Pending | Completed |
 | 7 | [Validation](./phase-07-validation.md) | Pending | Completed |
-| 8 | [Go-live](./phase-08-go-live.md) | Pending | In Progress |
+| 8 | [Go-live](./phase-08-go-live.md) | Pending | Completed |
 
 ## Acceptance criteria (whole plan)
 
