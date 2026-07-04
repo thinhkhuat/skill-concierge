@@ -5,6 +5,26 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-07-05
+
+Two correctness fixes from a grounded review of the enforcer + ledger, each landed
+test-first (failing selftest → fix → green) and independently reviewed.
+
+### Fixed
+- **Keep-off suppression can no longer be bypassed by a deterministic route**
+  (`hooks/scripts/enforcer.py`, ADR-0011). `_deterministic_hits` now takes the keep-off set
+  and skips any route whose skill is keep-off'd, so a chronic never-take skill can't resurface
+  at score 1.0 (gate-bypassing) when an operator co-configures a matching route. Both features
+  are opt-in/off by default, so this closes a latent interaction, not a live regression. New
+  combined selftest case (6b) guards it.
+- **Ledger offer→turn join no longer misattributes offers on duplicate prompt-prefixes**
+  (`scripts/analyze.py`). The join keyed on `(sid, prompt[:120])` with a plain dict, so two
+  turns in one session sharing a 120-char prefix (e.g. a retried "continue") collapsed both
+  offers onto the last turn — silently corrupting `hit@k`, offered-turn conversion, and
+  per-skill offer→take. The segmentation loop is now a `_segment_windows()` function pairing
+  each offer to its own turn in arrival order (`defaultdict(deque)` + `popleft`). New
+  dup-prefix selftest case guards it.
+
 ## [0.12.0] — 2026-07-04
 
 Usefulness-rate upgrades — surface the verdict the enforcer already computes, and get

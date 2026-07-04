@@ -33,7 +33,7 @@ import argparse
 import datetime
 import urllib.request
 from pathlib import Path
-from collections import Counter
+from collections import Counter, defaultdict, deque
 
 LEDGER = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs")
@@ -132,6 +132,55 @@ def _offer_conversion(windows):
     return len(offered_turns), took_any, off_by, took_by
 
 
+def _segment_windows(events):
+    """Segment time-sorted events into per-session turn windows, pairing each enforcer
+    `offer` back to its turn. A `turn`/`manual` opens a window; subsequent `auto`/`search`
+    for that session attach to its latest window. `offer` fires in the SAME
+    UserPromptSubmit as its `turn` but just BEFORE it (hook array order), so offers are
+    collected and matched afterward by (sid, q-prefix). A session that repeats an
+    identical prompt-prefix gets each offer paired to its OWN turn in arrival order,
+    instead of every offer collapsing onto whichever turn was recorded last. If a
+    (sid, q) group carries more offers than turns, the surplus offers are dropped
+    (FIFO — the earliest turns keep their offer; no crash)."""
+    turns, cur, by_sid_q, offers = [], {}, defaultdict(deque), []
+    for e in events:
+        sid, ev = e.get("sid", ""), e.get("ev")
+        if ev in ("turn", "manual"):
+            w = {"sid": sid, "kind": ev, "q": e.get("q", ""), "name": e.get("name", ""),
+                 "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
+            turns.append(w)
+            cur[sid] = w
+            if ev == "turn":
+                by_sid_q[(sid, w["q"])].append(w)
+        elif ev == "auto":
+            w = cur.get(sid)
+            if w is None:
+                w = {"sid": sid, "kind": "orphan-auto", "q": "", "name": "",
+                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
+                turns.append(w)
+                cur[sid] = w
+            w["autos"].append(e.get("name") or "?")
+        elif ev == "search":
+            w = cur.get(sid)
+            if w is None:
+                w = {"sid": sid, "kind": "orphan-search", "q": "", "name": "",
+                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
+                turns.append(w)
+                cur[sid] = w
+            w["searches"] += 1
+        elif ev == "offer":
+            offers.append(e)
+
+    for e in offers:
+        q = by_sid_q.get((e.get("sid", ""), e.get("q", "")))
+        if q:
+            w = q.popleft()
+            w["offered"] = [o[0] for o in e.get("offered", []) if isinstance(o, list) and o]
+            w["band"] = e.get("band")
+            w["fallback"] = e.get("fallback")
+    return turns
+
+
 def _run_selftest():
     """Pin the C1 join contract on synthetic turn-windows."""
     windows = [
@@ -151,6 +200,22 @@ def _run_selftest():
         bad.append(f"offered_by_skill wrong: {dict(off_by)}")
     if dict(took_by) != {"a": 1, "b": 1}:
         bad.append(f"took_by_skill wrong: {dict(took_by)}")
+
+    # Join: a session that repeats an identical prompt-prefix must pair each offer to its
+    # OWN turn in arrival order — NOT collapse every offer onto the last turn (dup-prefix bug).
+    dup_events = [
+        {"sid": "s", "ev": "offer", "q": "continue", "offered": [["a", 0.6]], "band": "offer"},
+        {"sid": "s", "ev": "turn", "q": "continue", "name": ""},
+        {"sid": "s", "ev": "auto", "name": "a"},
+        {"sid": "s", "ev": "offer", "q": "continue", "offered": [["b", 0.6]], "band": "offer"},
+        {"sid": "s", "ev": "turn", "q": "continue", "name": ""},
+        {"sid": "s", "ev": "auto", "name": "b"},
+    ]
+    jt = [w for w in _segment_windows(dup_events) if w["kind"] == "turn"]
+    if len(jt) != 2 or jt[0]["offered"] != ["a"] or jt[1]["offered"] != ["b"]:
+        bad.append("dup-prefix join: each offer must pair to its own turn in order, got %s"
+                   % [w["offered"] for w in jt])
+
     if bad:
         print("analyze --selftest FAIL:")
         for b in bad:
@@ -189,48 +254,8 @@ def main():
                   and (until is None or e["t"] < until)]
     events.sort(key=lambda e: e.get("t", 0))
 
-    # Segment into per-session turn windows. A `turn`/`manual` opens a window;
-    # subsequent `auto`/`search` for that session attach to its latest window.
-    # `offer` (from the enforcer) fires in the SAME UserPromptSubmit as `turn`
-    # but BEFORE it (hook array order), so a latest-window match would miss — we
-    # collect offers and attach them by (sid, q) after windows are built.
-    turns, cur, by_sid_q, offers = [], {}, {}, []
-    for e in events:
-        sid, ev = e.get("sid", ""), e.get("ev")
-        if ev in ("turn", "manual"):
-            w = {"sid": sid, "kind": ev, "q": e.get("q", ""), "name": e.get("name", ""),
-                 "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
-            turns.append(w)
-            cur[sid] = w
-            if ev == "turn":
-                by_sid_q[(sid, w["q"])] = w
-        elif ev == "auto":
-            w = cur.get(sid)
-            if w is None:
-                w = {"sid": sid, "kind": "orphan-auto", "q": "", "name": "",
-                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
-                turns.append(w)
-                cur[sid] = w
-            w["autos"].append(e.get("name") or "?")
-        elif ev == "search":
-            w = cur.get(sid)
-            if w is None:
-                w = {"sid": sid, "kind": "orphan-search", "q": "", "name": "",
-                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
-                turns.append(w)
-                cur[sid] = w
-            w["searches"] += 1
-        elif ev == "offer":
-            offers.append(e)
-
-    # Attach offers to their turn window by (sid, q-prefix). Offer.q and turn.q
-    # are both prompt[:120], so they match exactly.
-    for e in offers:
-        w = by_sid_q.get((e.get("sid", ""), e.get("q", "")))
-        if w is not None:
-            w["offered"] = [o[0] for o in e.get("offered", []) if isinstance(o, list) and o]
-            w["band"] = e.get("band")
-            w["fallback"] = e.get("fallback")
+    # Segment events into per-session turn windows (offers paired back to their turn).
+    turns = _segment_windows(events)
 
     windows = [w for w in turns if w["kind"] == "turn" and w["q"].strip()]
     manual = [w for w in turns if w["kind"] == "manual"]

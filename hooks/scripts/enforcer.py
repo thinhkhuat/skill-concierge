@@ -217,17 +217,19 @@ def _load_routes() -> list:
 _ROUTES = _load_routes()
 
 
-def _deterministic_hits(prompt: str, cands: list) -> list:
+def _deterministic_hits(prompt: str, cands: list, keepoff: frozenset = frozenset()) -> list:
     """Skills whose exact-substring route matches the prompt but retrieval missed. Returns
     [(name, desc, score)] to PREPEND (score=1.0 so it leads + clears every floor). Order-
-    preserving, de-duped against cands. Inert by default (_ROUTES empty)."""
+    preserving, de-duped against cands, and NEVER resurfaces a keep-off'd skill — ADR-0011
+    suppression outranks a route, else a co-configured route silently bypasses it. Inert by
+    default (_ROUTES empty)."""
     if not _ROUTES:
         return []
     low = prompt.lower()
     have = {n for (n, _d, _s) in cands}
     out = []
     for sub, skill in _ROUTES:
-        if sub in low and skill not in have:
+        if sub in low and skill not in have and skill not in keepoff:
             out.append((skill, "deterministic route", 1.0))
             have.add(skill)
     return out
@@ -502,7 +504,7 @@ def main() -> int:
         # Deterministic routes (default-inert): guarantee an unambiguously-intended skill in
         # the menu even when semantic ranking missed it. A hit leads (score 1.0) and bypasses
         # both the getaway and the actionability gate (the intent is explicit).
-        det = _deterministic_hits(prompt, cands)
+        det = _deterministic_hits(prompt, cands, KEEPOFF)
         if det:
             cands = det + cands
 
@@ -659,6 +661,20 @@ def _selftest() -> int:
             bad.append("deterministic route must not duplicate an already-present skill")
     finally:
         _PER_SKILL_TAU, _ROUTES = _saved_tau, _saved_routes
+
+    # (6b) keep-off must survive a co-configured deterministic route (ADR-0011): a route
+    # pointing at a keep-off'd skill must NOT resurface it at score 1.0 (which would bypass
+    # both the getaway and actionability gates). Reproduces the drop-then-route interaction.
+    _saved_routes2 = _ROUTES
+    try:
+        _ROUTES = [("deploy the app", "chronic")]
+        keepoff = frozenset({"chronic"})
+        surv, _drp = _drop_keepoff([("chronic", "", 0.2), ("other", "", 0.15)], keepoff)
+        det = _deterministic_hits("please deploy the app now", surv, keepoff)
+        if any(n == "chronic" for n, _d, _s in det):
+            bad.append("keep-off skill resurfaced via a deterministic route (ADR-0011 bypass)")
+    finally:
+        _ROUTES = _saved_routes2
 
     # (7) AUTHORIZED-SKIP tier: both legs inject the marker + required content when the
     # kill-switch is on, and stay fully silent (no inject call at all) when it's off.
