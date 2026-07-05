@@ -32,6 +32,3 @@ eval/thresholds.json
 # local Claude Code project state — shared plugin config lives in .claude-plugin/, not here
 .claude/
 
-# generated documentation wiki — rebuilt by the openwiki skill (init|update), not source
-openwiki/
-
