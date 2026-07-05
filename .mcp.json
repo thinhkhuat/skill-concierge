@@ -5,7 +5,8 @@
       "env": {
         "SKILL_QDRANT_URL": "http://localhost:6333",
         "SKILL_EMBED_BACKEND": "fastembed",
-        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "SKILL_TOP_K": "10"
       }
     }
   }

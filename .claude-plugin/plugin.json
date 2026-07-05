@@ -1,6 +1,6 @@
 {
   "name": "skill-concierge",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "A skill-governance layer over Claude Code's default mechanism: semantic retrieval (which skill) + use-enforcement (whether Claude uses one) + a compounding invocation ledger.",
   "author": {
     "name": "thinhkhuat"

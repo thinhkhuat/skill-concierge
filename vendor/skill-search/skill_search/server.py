@@ -428,33 +428,49 @@ def _indexed_names() -> set[str]:
 # ---------------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------------
+def _fuse_ranked(group_lists: list, top_k: int) -> list:
+    """MAX-pool skills across one or more query result sets: each skill keeps its
+    single BEST score across all queries, then return the fused top-k by score.
+    One query angle can bury the precise skill below the cut; fusing several
+    angles lifts it. With a single query this is identical to the old top-k."""
+    best: dict = {}  # name -> (score, description)
+    for groups in group_lists:
+        for g in groups:
+            if not g.hits:
+                continue
+            h = g.hits[0]
+            pl = h.payload or {}
+            name = pl.get("name", g.id)
+            if name not in best or h.score > best[name][0]:
+                best[name] = (h.score, pl.get("description", ""))
+    ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
+    return [{"name": n, "command": f"/{n}", "description": d, "score": round(s, 4)}
+            for n, (s, d) in ranked]
+
+
 @mcp.tool()
-def search_skills(query: str) -> str:
+def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     """Find skills relevant to a task by SEMANTIC match over full descriptions.
     Returns ranked {name, description, score}. Claude should then invoke the
-    relevant ones by name (e.g. /frontend-design)."""
-    qvec = embed(query)
-    # MAX-pool over a skill's points: group_by name, keep each skill's single BEST point
-    # (group_size=1). On a single-vector index (one point per skill) this is identical to a
-    # plain top-k; on the multi-vector index it scores each skill by its best-matching phrase
-    # point — the documented recall lever. group_size=1 -> one hit per group.
-    groups = _qdrant.query_points_groups(
-        collection_name=COLLECTION, query=qvec, group_by="name",
-        limit=TOP_K, group_size=1, with_payload=True).groups
-    results = []
-    for g in groups:
-        if not g.hits:
-            continue
-        h = g.hits[0]
-        pl = h.payload or {}
-        name = pl.get("name", g.id)
-        results.append({
-            "name": name,
-            "command": f"/{name}",
-            "description": pl.get("description", ""),
-            "score": round(h.score, 4),
-        })
-    out = {"query": query, "results": results}
+    relevant ones by name (e.g. /frontend-design).
+
+    Query by INTENT + DOMAIN TERMS, not the raw user sentence. For best recall,
+    pass 2-3 varied phrasings of the same need in `extra_queries` — the server
+    embeds every phrasing and scores each skill by its single best-matching
+    phrasing across all of them (MAX-pool over the query union), so a skill a
+    single phrasing would bury still surfaces."""
+    # group_by name + group_size=1 keeps each skill's single BEST point (on the
+    # multi-vector index, its best-matching phrase point — the recall lever).
+    queries = [query] + [q for q in (extra_queries or []) if q and q.strip()]
+    group_lists = [
+        _qdrant.query_points_groups(
+            collection_name=COLLECTION, query=qv, group_by="name",
+            limit=TOP_K, group_size=1, with_payload=True).groups
+        for qv in embed_batch(queries)
+    ]
+    out = {"query": query, "results": _fuse_ranked(group_lists, TOP_K)}
+    if len(queries) > 1:
+        out["queries"] = queries
     # Surface index drift in-band so dark/stale skills don't fail silently.
     warning = _staleness_warning()
     if warning:

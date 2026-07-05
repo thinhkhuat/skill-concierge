@@ -5,6 +5,28 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-07-05
+
+Recall upgrades — help the right skill surface when a single conversational query would bury it,
+and let the automatic offer show more of what retrieval found.
+
+### Added
+- **Query fanout / MAX-pool fusion in `search_skills`** (`vendor/skill-search/skill_search/server.py`).
+  The tool now takes an optional `extra_queries: list[str]` — the caller passes 2–3 varied phrasings of
+  the same need, the server embeds each and scores every skill by its single best-matching phrasing
+  across the union (MAX-pool), so a skill a single phrasing buries still surfaces. Backward-compatible:
+  omitting `extra_queries` is byte-identical to the old single-query top-k. Verified live (fusion lifts
+  `codebase-onboarding` from below the cut to rank 3) and by new unit tests (`tests/test_fusion.py`).
+
+### Changed
+- **Enforcer offer-menu breadth `ENFORCER_TOP_K` default 5 → 8** ([ADR-0017](docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md),
+  supersedes ADR-0009). A fired offer may now list up to 8 candidates (those clearing `ITEM_FLOOR`).
+  Trades more visibility for more push-noise — env-overridable, revert default 5.
+- **`search_skills` deployed `SKILL_TOP_K=10`** (`.mcp.json`, was default 6) — a 488-skill catalogue with
+  near-synonym clusters needs a wider pull window; the precise skill often ranks 7+.
+- **SKILL-FIRST doctrine** (`hooks/doctrine/skill-first.md`) — instruct querying by intent + domain terms
+  with 2–3 phrasings via `extra_queries`, not the raw user sentence.
+
 ## [0.12.1] — 2026-07-05
 
 Two correctness fixes from a grounded review of the enforcer + ledger, each landed

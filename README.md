@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.12.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.13.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -249,7 +249,7 @@ not embedded.
 
 ## Status & roadmap
 
-`0.12.1` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Multi-vector MAX-pool retrieval (ADR-0012) now also mines each skill body's labeled decision-sections (ADR-0016), and the enforcer's two silent verdict legs emit a `SKILL-CHECK:` authorization instead of nothing (ADR-0015). Everything default-ON behind env kill-switches. Patch 0.12.1: keep-off can't be bypassed by a co-configured deterministic route, and the ledger offer→turn join no longer misattributes offers on duplicate prompt-prefixes.**
+`0.13.0` — **published, MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Recall upgrades: `search_skills` query fanout — the caller passes 2–3 phrasings, the server MAX-pools the union so a skill a single phrasing buries still surfaces; the enforcer offer menu widened 5→8 (ADR-0017, supersedes ADR-0009); `SKILL_TOP_K=10` for the pull tool. Multi-vector MAX-pool retrieval (ADR-0012) also mines each skill body's labeled decision-sections (ADR-0016); the enforcer's two silent verdict legs emit a `SKILL-CHECK:` authorization (ADR-0015). Everything default-ON behind env kill-switches.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
 from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
 fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical

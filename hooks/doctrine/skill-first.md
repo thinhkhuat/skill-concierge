@@ -27,8 +27,14 @@ back-rationalizing the skip — the commitment is the whole point.
 
 2. **"The previewed few don't fit" is the trigger to SEARCH — never grounds to skip.**
    When a real task has no fitting preview, query the full index — in THIS reply, before you rule:
-   - tool: `mcp__plugin_skill-concierge_skill-search__search_skills` (arg: the task in your own words)
+   - tool: `mcp__plugin_skill-concierge_skill-search__search_skills` — pass 2–3 phrasings via `extra_queries=[…]` for one-call max-pool fusion
    - or:   `/skill-concierge:skill-search`
+   **Query it well — the arg is NOT the raw user sentence.** Retrieval is semantic over each skill's
+   name + description + body, so search by INTENT + DOMAIN TERMS, and issue 2–3 varied phrasings, not one.
+   A conversational sentence retrieves generic skills and buries the precise one below the shown few; a
+   term-rich reformulation surfaces it.
+   - *Raw* "explain to me how a project codebase works" → generic analyzers; `codebase-onboarding` misses the top hits.
+   - *Better* "codebase onboarding walkthrough" / "understand unfamiliar codebase architecture" → the onboarding skills rank top.
    `SEARCH:` is a promise to call that tool now, this reply. Narrating a search you did not run
    ("Search returned nothing", "my earlier search showed…") is a disguised skip — FALSE REPORT, forbidden.
 
