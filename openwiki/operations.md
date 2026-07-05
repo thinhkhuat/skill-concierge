@@ -1,0 +1,186 @@
+# Operations — setup, health, telemetry, config & deploy
+
+Everything needed to install, keep healthy, measure, configure, and ship skill-concierge. The
+loud landmine list is [`docs/caveats.md`](../docs/caveats.md) (canonical — read it before
+operating); this page maps the tooling and flags and points into it.
+
+## Bootstrap — `setup.sh`
+
+[`setup.sh`](../setup.sh) is idempotent and safe to re-run; the **`skill-concierge:setup`** skill
+runs the same thing and verifies it. Four steps:
+
+1. **[1/4] Stable venv.** Build a venv at `~/.local/share/skill-concierge/venv` (outside the
+   wipe-on-reinstall plugin cache — [ADR-0004](../docs/adr/0004-bundled-mcp-launcher-stable-venv.md)),
+   pip-install the vendored engine + deps, then `--force-reinstall --no-deps` the engine (the
+   vendored version is a static `0.1.0`, so plain pip would see "already satisfied" and skip
+   copying changed code — this is the stale-engine trap; see below). Stamps
+   `$VENV/.engine-plugin-version` so the launcher can auto-resync after a `/plugin update`.
+2. **[2/4] Qdrant.** Start the `skill-search-qdrant` Docker container (image `qdrant/qdrant:1.18.2`,
+   `localhost:6333`). **[2b/4]** Build + run the warm embed shim as a Docker sidecar
+   (`skill-concierge-embed-shim`, bound `127.0.0.1:6363`; skipped if already listening).
+3. **[3/4] Index.** `skill-search --reindex` (multi-vector built by the reindex itself).
+   **[3b/4]** Build the actionability-gate `prompt_intent` corpus (fail-soft).
+4. **[4/4] Overrides.** `apply-overrides.py` writes the curated always-on policy to
+   `~/.claude/settings.json`.
+
+The model and store are read from [`.mcp.json`](../.mcp.json) as the single source of truth, so
+the built index can never diverge from the model the live MCP server uses.
+
+> **`setup.sh` picks the first `python3.12` on PATH** — which on some machines has a broken
+> `ensurepip`. If venv creation fails, point the build at a known-good interpreter (`SKILL_PYTHON`)
+> or pre-create the stable venv, then re-run. [caveats §4](../docs/caveats.md).
+
+## Health — `doctor.py`
+
+[`scripts/doctor.py`](../scripts/doctor.py) (or the **`skill-concierge:doctor`** skill) is the
+read-only deployment health check; a green `status: OK` is the bar to claim "done". It runs **13
+checks** and delegates the retrieval diagnostic to `skill-search --health` (DRY): Python, venv,
+**engine freshness**, MCP wiring, Qdrant, engine health (stale-but-serving = WARN, not FAIL),
+enrichment, multi-vector layer, prompt-intent corpus, corpus health (reads `eval/thresholds.json`),
+overrides, ledger dir, and duplicate-MCP. Exit 0 unless a check FAILs.
+
+`--fix` performs only **fast, safe** repairs (`AUTO_FIXERS`): start a stopped Qdrant, reindex,
+re-apply the enrichment overlay, re-apply overrides, rebuild the prompt-intent corpus. It **never**
+rebuilds the venv or the container — heavy bootstrap is handed off to `setup.sh`.
+[ADR-0007](../docs/adr/0007-maintenance-skills-setup-doctor.md), [ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md).
+
+## Telemetry — `analyze.py`
+
+[`scripts/analyze.py`](../scripts/analyze.py) is a read-only, **stdlib-only** analyzer over the
+append-only ledger at `~/.claude/skill-telemetry/logs/skill-invocation-ledger.log`. It reports:
+**uptake** (turn used a skill), **search rate**, **dodge** (no skill + no search — the behavior
+Enforce exists to kill), **substantive**, **hit@k** (used skill was in the offered set),
+**fallback rate** (offers degraded to mandate-only), **offered-turn conversion/dodge** (the clean
+compliance denominator — `band=="offer"` turns only), and per-skill offer→take rollups. It pairs
+each enforcer `offer` back to its `turn` by `(sid, q-prefix)`, and pulls the real-skill catalogue
+live from Qdrant so the real-vs-builtin split can't drift.
+
+```bash
+python3 scripts/analyze.py                 # whole ledger (see epoch warning below)
+python3 scripts/analyze.py --since "2026-07-05 21:00:00"   # window from a boundary
+python3 scripts/analyze.py --until "$T"    # the "before" side of a fix/go-live compare
+```
+
+`--since`/`--until` accept epoch seconds or local ISO (`YYYY-MM-DD [HH:MM:SS]`) and filter by
+event time; a commit time makes a clean boundary. **Events without a timestamp are dropped in a
+windowed run** — only a full-ledger run counts them.
+
+### Reading the ledger: the epoch-scoped trap
+
+**Never cite a ledger rate pooled across config changes.** This repo changes the very things the
+ledger measures — gate floors, the retrieval engine, the doctrine, the embed shim — *almost
+daily*, so the ledger is a **sequence of short config epochs, not one dataset**. An all-time rate
+describes *no real configuration*. Before quoting any rate:
+
+1. Find the current epoch start — the last commit touching `hooks/scripts/enforcer.py`,
+   `hooks/doctrine/skill-first.md`, `vendor/skill-search/skill_search/server.py`, or
+   `scripts/embed_server.py`.
+2. Window `analyze.py --since "<that datetime>"`. Never quote the all-time number.
+3. Exclude contamination — subagent / harness / `<task-notification>` traffic and your own
+   meta/self-session turns are not representative.
+4. Respect sample size — a fresh epoch may be too small; say **"insufficient data"** rather than
+   pool backward.
+5. Design vs environment — a shift not aligned to a config commit is environmental (shim/Docker/
+   load), not a property of the code.
+
+An epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured". This exact mistake once
+invalidated a whole multi-agent analysis. Full rule: [`AGENTS.md` → Guardrails](../AGENTS.md). And
+remember the ledger measures **gate compliance only** — for real *usage* use the
+**`skill-usage-audit`** skill against the transcript SKILL-FIRST trail, not this ledger
+([enforcement-gate.md](architecture/enforcement-gate.md#ledger--usage-a-hard-line)).
+
+## The warm embed shim
+
+The per-turn enforcer must embed the prompt in ≲ its budget, so the model is held warm in memory
+by a Docker sidecar rather than cold-loaded per turn:
+
+- **Server** [`scripts/embed_server.py`](../scripts/embed_server.py): a `ThreadingHTTPServer`
+  holding the fastembed mpnet-768 model; `POST /embed {text}` → `{vector[768]}`, `GET /health`. It
+  reuses the engine's **exact** embed function under the deployed env (a parity contract) so its
+  vectors match the live index — otherwise retrieval degrades with no error. Threaded because a
+  single-threaded shim timed out ~60% of turns under contention. **fastembed pinned at 0.8.0.**
+- **Launcher** [`bin/embed-shim`](../bin/embed-shim): execs the stable venv's python with the
+  deployed embed env.
+- **Container:** `skill-concierge-embed-shim` on `127.0.0.1:6363`, `--restart unless-stopped`.
+
+> ⚠ **Doc drift:** [caveats §9](../docs/caveats.md) names this container `skill-search-embed-shim`
+> — that is **stale**. The code truth ([`setup.sh:21`](../setup.sh)) is
+> **`skill-concierge-embed-shim`** (env-overridable via `SKILL_EMBED_CONTAINER`). Verify health
+> with `docker ps --filter name=skill-concierge-embed-shim`. A stopped/slow shim shows up as a
+> sustained `fallback: true` rate in the ledger's `offer` events; `doctor --fix` restarts it.
+
+## The stale-engine trap (post-update)
+
+The most dangerous silent failure. The MCP launcher execs `skill-search` from the **stable venv**,
+where the engine was **copied** into site-packages by `setup.sh` (not an editable install). A
+`/plugin update` ships new code into the version-pinned **cache** but **never touches the venv
+copy** — so the cache is new, the venv engine is old, and the MCP runs the old one while every
+surface looks green. `Engine venv ✓` only proves the bin *exists*, not that it's *current*.
+
+- **Detect:** `doctor`'s **Engine freshness** check content-hashes the venv engine against the
+  deployed source and WARNs on mismatch ([ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md)).
+- **Fix:** re-run **`setup.sh`** (rebuilds the venv from deployed source), then restart Claude Code.
+- **Rule of thumb:** a `/plugin update` that changed engine code under `vendor/skill-search/`
+  needs a `setup.sh` rerun; a change that only touched hooks/doctrine/scripts (cache-run) does not.
+- Full symptom→fix: [caveats §11](../docs/caveats.md).
+
+> **Note — dangling ADR reference:** `setup.sh` (L47/L51/L111) cites **ADR-0018** for this trap and
+> the launcher auto-resync, but no `docs/adr/0018-*.md` file exists (the index stops at 0017). The
+> *mechanism* is real and correct; only the ADR record is missing. See [Open items](#open-items).
+
+## Runtime governance flags
+
+Both **default ON**; each is a one-var revert.
+
+| Variable | Default | Effect | ADR |
+|----------|---------|--------|-----|
+| `ENFORCER_AUTHORIZED_SKIP` | `1` | enforcer injects a `SKILL-CHECK:` authorization on its two silent verdict legs instead of nothing; `=0` restores the old silence | [0015](../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
+| `SKILL_BODY_TRIGGERS` | `1` | engine mines each skill body's labeled decision-sections into extra MAX-pool trigger points; `=0` **+ a reindex** reverts to description-only | [0016](../docs/adr/0016-body-derived-trigger-points.md) |
+
+Several enforcer levers are additionally **default-inert** and env-gated (`ENFORCER_DETERMINISTIC`,
+`ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) — see
+[enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-the-two-silent-legs).
+
+## Configuration files
+
+| File | Purpose |
+|------|---------|
+| [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, Qdrant URL, `SKILL_TOP_K=10` |
+| [`config/keep-on.json`](../config/keep-on.json) | curated always-on allowlist (**32 entries** in `keep_on`); applied by [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) to `~/.claude/settings.json` (atomic, backs up, refuses empty). **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
+| [`config/keep-off.json`](../config/keep-off.json) | ledger-derived offer-suppression — chronic never-take skills dropped from the enforcer menu ([ADR-0011](../docs/adr/0011-ledger-derived-offer-suppression.md)) |
+| [`config/deterministic-routes.json`](../config/deterministic-routes.json) | optional exact-route overrides — **inert unless `ENFORCER_DETERMINISTIC` is set** |
+
+`apply-overrides.py` uses the **same** discovery module as the index, so overrides and the
+retriever never drift, and it reports any `keep_on` entry missing on the target machine (the list
+is catalogue-specific).
+
+## Versioning & deploy discipline
+
+- **Bump BOTH `.claude-plugin/plugin.json` AND `.claude-plugin/marketplace.json` versions
+  together, plus a `CHANGELOG.md` entry.** Never bump one alone — the downstream update keys on the
+  version, so a mismatch is a silent no-op ([caveats §7](../docs/caveats.md)).
+- **A repo edit does not go live by itself:** bump the manifests, push to GitHub, then
+  `/plugin update` + restart — the runtime reads a version-pinned cache, and (for engine changes)
+  the stable venv needs a `setup.sh` rerun (the stale-engine trap above).
+- **Drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced) checks the
+  version triple (`plugin.json` ↔ `marketplace.json` ↔ latest `CHANGELOG.md` heading), that every
+  doc-referenced path exists, and that `AGENTS.md` / `CLAUDE.md` name the same scratch dirs. Run it
+  after a version bump or after editing a fact shared across docs.
+- **ADRs are immutable** — supersede with a new one, never edit an accepted record.
+- **Tool state is not source:** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/` are gitignored scratch.
+- **The vendored engine** must not diverge from upstream silently — log any customization in
+  [`vendor/skill-search/VENDORED.md`](../vendor/skill-search/VENDORED.md).
+
+## Open items
+
+- **ADR-0018 is a dangling reference** — `setup.sh` cites it for the stale-engine trap / launcher
+  auto-resync, but the ADR file doesn't exist (records stop at 0017). Either write the ADR or fix
+  the citation.
+- **caveats §9 names a stale container** (`skill-search-embed-shim`); the code truth is
+  `skill-concierge-embed-shim`.
+
+## See also
+
+- [`docs/caveats.md`](../docs/caveats.md) — the full 11-item landmine list (canonical).
+- [`docs/adr/README.md`](../docs/adr/README.md) — the decisions behind these choices.
+- [`README.md` → Troubleshooting](../README.md) — the symptom→fix table.

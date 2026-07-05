@@ -13,3 +13,14 @@ Claude-specific quick reference:
 - **Telemetry is EPOCH-SCOPED (HARD — a prior multi-agent analysis got this fatally wrong):** NEVER cite a ledger rate (fallback / conversion / dodge / hit@k) pooled across config changes. This repo changes what the ledger measures ~daily, so the all-time number describes no real config. Window `analyze.py --since "<last commit to enforcer.py / skill-first.md / server.py / embed_server.py>"`, **exclude subagent + self-session traffic**, and if the current epoch is too small say **"insufficient data"** — do not pool backward. A metric shift not aligned to a config commit is **environmental**, not a design flaw. An epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured". Full rule + checklist: [`AGENTS.md`](AGENTS.md) → *Guardrails*.
 
 Repo layout, full conventions, and guardrails are all in [`AGENTS.md`](AGENTS.md).
+
+## OpenWiki
+
+This repository has documentation located in the /openwiki directory.
+
+Start here:
+- [OpenWiki quickstart](openwiki/quickstart.md)
+
+OpenWiki includes repository overview, architecture notes, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
+
+When working in this repository, read the OpenWiki quickstart first, then follow its links to the relevant architecture, workflow, domain, operation, and testing notes.

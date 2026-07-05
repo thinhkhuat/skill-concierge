@@ -90,3 +90,14 @@ count, so the doctrine's hardest-rule metric doesn't get inflated by lawful, hoo
   already invalidated a full multi-agent analysis once (see the *Data-validity note* in
   `plans/reports/from-audit-and-openspace-syntheses-…-integrated-final-…-report.md`). Calibrate confidence to
   data-validity: an epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured".
+
+## OpenWiki
+
+This repository has documentation located in the /openwiki directory.
+
+Start here:
+- [OpenWiki quickstart](openwiki/quickstart.md)
+
+OpenWiki includes repository overview, architecture notes, workflows, domain concepts, operations, integrations, testing guidance, and source maps.
+
+When working in this repository, read the OpenWiki quickstart first, then follow its links to the relevant architecture, workflow, domain, operation, and testing notes.
