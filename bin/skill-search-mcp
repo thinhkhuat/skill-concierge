@@ -1,17 +1,47 @@
 #!/usr/bin/env bash
-# skill-concierge — MCP launcher.
-# Runs the vendored skill-search server from a STABLE venv (built once by setup.sh),
-# so the MCP survives plugin reinstalls/updates — unlike a venv under the
-# wipe-on-reinstall plugin cache (${CLAUDE_PLUGIN_ROOT}/vendor/.venv), the original
-# ENOENT cause. Only EXECS (never builds) → no slow first spawn that times out the MCP
-# connect. The MCP env (SKILL_QDRANT_URL, SKILL_EMBED_*) comes from .mcp.json via exec.
+# skill-concierge — MCP launcher (self-healing).
+# Runs the vendored skill-search engine from a STABLE venv (built by setup.sh) that lives
+# OUTSIDE the wipe-on-reinstall plugin cache (${CLAUDE_PLUGIN_ROOT}/vendor/.venv was the
+# original ENOENT cause), so the MCP survives reinstalls — ADR-0004. The MCP env
+# (SKILL_QDRANT_URL, SKILL_EMBED_*, SKILL_TOP_K) comes from .mcp.json via exec.
+#
+# Engine self-heal (ADR-0018): a /plugin update ships new engine code into the version-pinned
+# cache but never touches the venv's COPIED engine, so the MCP silently served STALE code until
+# a manual setup.sh (ADR-0013 only DETECTED it). The launcher now compares the deployed plugin
+# version to a stamp written at install time; on a mismatch it resyncs the engine into the venv
+# before exec. Cost profile: the guard is O(1) (two tiny reads) so the common in-version spawn
+# stays fast; the resync runs ONCE per update, is best-effort + FAIL-OPEN (a failed/slow resync
+# still execs the existing engine — never block the MCP connect, ADR-0004), and writes NOTHING
+# to stdout (this is a stdio MCP; stray stdout corrupts the protocol handshake).
 set -euo pipefail
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
 BIN="$VENV/bin/skill-search"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 if [ ! -x "$BIN" ]; then
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   echo "skill-concierge: MCP engine venv not found at $VENV." >&2
-  echo "Run the plugin setup once:  bash \"$here/setup.sh\"" >&2
+  echo "Run the plugin setup once:  bash \"$ROOT/setup.sh\"" >&2
   exit 127
 fi
+
+# ── engine self-heal: resync the venv's copied engine when the deployed plugin version moved ──
+STAMP="$VENV/.engine-plugin-version"
+VENDOR="$ROOT/vendor/skill-search"
+PLUGIN_JSON="$ROOT/.claude-plugin/plugin.json"
+if [ -f "$PLUGIN_JSON" ] && [ -d "$VENDOR" ]; then
+  deployed_ver="$("$VENV/bin/python" -c "import json;print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || true)"
+  installed_ver="$(cat "$STAMP" 2>/dev/null || true)"
+  if [ -n "$deployed_ver" ] && [ "$deployed_ver" != "$installed_ver" ]; then
+    echo "skill-concierge: plugin at v$deployed_ver, venv engine stamped '${installed_ver:-none}' — resyncing engine…" >&2
+    # --force-reinstall: the vendored package version is a static 0.1.0, so pip would otherwise
+    # skip re-copying changed code. --no-deps: deps already present → fast + offline-safe.
+    if "$VENV/bin/pip" install -q --no-input --no-deps --force-reinstall "$VENDOR" >/dev/null 2>&1; then
+      printf '%s' "$deployed_ver" > "$STAMP"
+      echo "skill-concierge: engine resynced to v$deployed_ver." >&2
+    else
+      echo "skill-concierge: engine resync FAILED — serving the existing engine; run ./setup.sh to repair." >&2
+    fi
+  fi
+fi
+
 exec "$BIN"

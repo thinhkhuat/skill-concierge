@@ -5,6 +5,23 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-07-05
+
+Deploy-flow fix — the MCP engine can no longer go stale after a plugin update.
+
+### Fixed
+- **Self-healing launcher: `/plugin update` now refreshes the MCP engine automatically**
+  (`bin/skill-search-mcp`, `setup.sh`, [ADR-0018](docs/adr/0018-self-healing-launcher-engine-resync.md)).
+  The stable venv holds a COPIED engine (ADR-0004); an update ships new engine code to the cache but
+  never touched the copy, so the MCP silently served STALE code until a manual `setup.sh` — exactly
+  what left v0.13.0's query fanout dark after `/plugin update` + restart (doctor caught it, ADR-0013).
+  Two causes fixed: (1) the launcher now stamps the deployed plugin version and, on a mismatch at
+  spawn, resyncs the engine into the venv before exec — O(1) guard on the fast path, once-per-update
+  resync, best-effort + fail-open (never blocks the MCP connect), stdout-clean; (2) `setup.sh`
+  force-reinstalls the engine (`--force-reinstall --no-deps`), since the vendored package version is a
+  static `0.1.0` that made plain `pip install` "already satisfied"-skip the changed copy. Residual: a
+  dependency change (not just engine code) still needs a `setup.sh` rerun.
+
 ## [0.13.0] — 2026-07-05
 
 Recall upgrades — help the right skill surface when a single conversational query would bury it,

@@ -41,7 +41,17 @@ echo "[1/4] venv + deps at a STABLE path (survives plugin reinstalls)"
 mkdir -p "$(dirname "$VENV")"
 [ -d "$VENV" ] || "$PYTHON" -m venv "$VENV"
 "$VENV/bin/pip" -q install --upgrade pip >/dev/null
-"$VENV/bin/pip" -q install "$VENDOR" tiktoken   # non-editable: copies the engine in, so a cache wipe can't break it
+"$VENV/bin/pip" -q install "$VENDOR" tiktoken   # deps (mcp, qdrant-client, fastembed, requests) + tiktoken into the STABLE venv
+# Force the ENGINE copy fresh. The vendored package version is a static 0.1.0 (pyproject), so a
+# plain `pip install` sees "already satisfied" and SKIPS re-copying changed code on a re-run —
+# the exact stale-engine trap (ADR-0018). --force-reinstall --no-deps guarantees the current
+# engine code lands without re-resolving the (already-present) heavy deps.
+"$VENV/bin/pip" -q install --force-reinstall --no-deps "$VENDOR"
+# Stamp the deployed plugin version so bin/skill-search-mcp can detect a future /plugin update
+# and AUTO-resync the engine (ADR-0018) instead of silently serving stale code.
+PLUGIN_VER="$("$PYTHON" -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
+printf '%s' "$PLUGIN_VER" > "$VENV/.engine-plugin-version"
+echo "  engine forced-fresh + stamped @ plugin v$PLUGIN_VER"
 
 echo "[2/4] Qdrant server (Docker container '$QNAME')"
 command -v docker >/dev/null 2>&1 || { echo "! docker not found — install Docker/OrbStack and re-run." >&2; exit 1; }
@@ -98,7 +108,8 @@ so it survives plugin reinstalls. To go live:
   • If skill-search was registered user-scope, remove it (single source = the plugin):
         claude mcp remove skill-search -s user
   • Restart Claude Code so the MCP + overrides take effect.
-  • Re-run setup.sh after a plugin UPDATE to refresh the engine.
+  • After a plugin UPDATE the launcher AUTO-resyncs the engine on next start (ADR-0018) —
+    a manual setup.sh rerun is only needed for a dependency change or a broken venv.
   • Qdrant + embed shim must be up each session:
         docker start $QNAME $ENAME
 EOF

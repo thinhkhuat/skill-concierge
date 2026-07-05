@@ -24,11 +24,12 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0010](0010-word-floor-5-to-3.md) | Word floor 5→3 — let the language-aware imperative-veto see 4–5-word commands | Accepted | 2026-06-29 |
 | [0011](0011-ledger-derived-offer-suppression.md) | Ledger-derived offer-suppression (`keep-off.json`) — auto-drop chronic never-take skills from the menu | Accepted | 2026-06-29 |
 | [0012](0012-multi-vector-max-pool-retrieval.md) | Multi-vector MAX-pool retrieval (trigger layer) — score each skill by its best phrase point | Accepted | 2026-06-30 |
-| [0013](0013-doctor-engine-freshness-check.md) | doctor `Engine freshness` check — detect a stale MCP venv engine after `/plugin update` | Accepted | 2026-07-01 |
+| [0013](0013-doctor-engine-freshness-check.md) | doctor `Engine freshness` check — detect a stale MCP venv engine after `/plugin update` | Accepted (amended by 0018) | 2026-07-01 |
 | [0014](0014-sessionstart-index-self-heal.md) | SessionStart index self-heal (`auto_reindex.py`) — detached/throttled incremental reindex | Accepted | 2026-07-01 |
 | [0015](0015-authorized-skip-tier-and-library-doctrine.md) | AUTHORIZED-SKIP tier + library doctrine — enforcer emits a `SKILL-CHECK:` authorization on its silent verdict legs | Accepted | 2026-07-04 |
 | [0016](0016-body-derived-trigger-points.md) | Body-derived trigger points — mine each skill body's labeled decision-sections into the MAX-pool trigger layer | Accepted | 2026-07-04 |
 | [0017](0017-enforcer-gate-thresholds-v2-widen-offer-menu.md) | Enforcer gate thresholds v2 — retain score floor 0.45, widen offer-menu TOP_K 5→8 (+ companion `search_skills` query fanout) | Accepted (supersedes 0009) | 2026-07-05 |
+| [0018](0018-self-healing-launcher-engine-resync.md) | Self-healing launcher — auto-resync the venv engine on plugin-version change (no more stale MCP after `/plugin update`) | Accepted (amends 0013) | 2026-07-05 |
 
 ## Status values
 
