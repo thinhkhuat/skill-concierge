@@ -73,4 +73,40 @@ because no turn was trivial enough to trigger it.
   `skill-usage-audit` window the handoff calls for (~50–100 organic offered turns).
 - **Body-trigger contribution** — not isolable from a single session; real measure is organic adoption
   via `analyze.py`, not the wrong-universe `eval/`.
+
+## Live addendum — session continued past the report (2026-07-04 ~12:05)
+
+The report above was written, then the operator kept the session live. Per their request this section
+extends the account to the turns that followed — including the very request to write this section. The
+artifact stops being a post-hoc summary and becomes a running log the governance layer stamps turn by turn.
+
+**6. Commit turn — governance was present but unremarkable.**
+Operator: "track & commit them all." The per-turn preview gave no candidates; I invoked `git-commit`
+(`USING:`) and made two focused conventional commits — `e72058b` (generate_catalogs research bundle, 4
+files) and `cc22a83` (this experience report). Tree moved to 3 ahead of `origin/main`, left unpushed per
+the operator-holds-the-push convention. A plain skill invocation; nothing about v0.12.0 was load-bearing.
+
+**7. First SEARCH-then-lawful-skip of the session — the v0.12.0 path I had not yet hit.**
+Operator: "update the report to include this very prompt and response." The preview surfaced only loose
+fits (`review` 21%, `ck:project-management` 20%, `ck:journal` 20%) — none governs "append a
+self-referential progress note to an existing report I authored." Under the library doctrine that is NOT
+grounds to skip: I ran `search_skills` first (query shown in chat), it returned nothing adaptable (top
+hit `football-data` 0.645 — pure noise), and only THEN did I take the lawful `SKIPPING` path to a
+mechanical Edit. This is the **SEARCH-before-skip leg (skill-first rule 2) firing for the first time this
+session** — every earlier turn had a fitting skill, so this is the first turn the doctrine forced me to
+*prove* "nothing fits" by search rather than assert it. Cost: one extra tool call; outcome-effect: none.
+That is the asymmetric-cost bet made real — a cheap needless search vs. the top-severity failure of a
+false "nothing fits" on real work.
+
+**8. The getaway AUTHORIZED-SKIP leg is STILL unexercised.**
+Turns 6–7 both classified cleanly — turn 6 had a fitting skill (`git-commit`), turn 7 resolved via a
+lawful search-then-skip. Neither tripped the enforcer's score-floor getaway leg (the D1-risk change).
+Across the whole extended session it has fired zero times. The regression-watch conclusion from the main
+report only hardens: the riskiest shipped change needs organic conversational/trivial turns to get any
+live pressure, and a focused work session like this one does not supply them.
+
+**9. The recursion itself.**
+This section documents the request to write this section; the report now contains an account of its own
+latest edit. Honest note on what "first-wild-run experience" means when the operator holds the session
+open — the governance layer keeps stamping each turn, and the record can keep pace with it.
  
