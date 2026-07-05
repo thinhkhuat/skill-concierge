@@ -111,22 +111,27 @@ by a Docker sidecar rather than cold-loaded per turn:
 
 ## The stale-engine trap (post-update)
 
-The most dangerous silent failure. The MCP launcher execs `skill-search` from the **stable venv**,
-where the engine was **copied** into site-packages by `setup.sh` (not an editable install). A
-`/plugin update` ships new code into the version-pinned **cache** but **never touches the venv
-copy** — so the cache is new, the venv engine is old, and the MCP runs the old one while every
-surface looks green. `Engine venv ✓` only proves the bin *exists*, not that it's *current*.
+Historically the most dangerous silent failure — **now self-healing as of v0.13.1.** The MCP
+launcher ([`bin/skill-search-mcp`](../bin/skill-search-mcp)) execs `skill-search` from the **stable
+venv**, where the engine is **copied** into site-packages by `setup.sh` (not an editable install).
+A `/plugin update` ships new code into the version-pinned **cache** but historically **never touched
+the venv copy** — so the MCP would silently serve old engine code while every surface looked green
+(`Engine venv ✓` only proves the bin *exists*, not that it's *current*). This is what left
+v0.13.0's query fanout dark after an update.
 
-- **Detect:** `doctor`'s **Engine freshness** check content-hashes the venv engine against the
-  deployed source and WARNs on mismatch ([ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md)).
-- **Fix:** re-run **`setup.sh`** (rebuilds the venv from deployed source), then restart Claude Code.
-- **Rule of thumb:** a `/plugin update` that changed engine code under `vendor/skill-search/`
-  needs a `setup.sh` rerun; a change that only touched hooks/doctrine/scripts (cache-run) does not.
-- Full symptom→fix: [caveats §11](../docs/caveats.md).
+**v0.13.1 auto-repairs it** ([ADR-0018](../docs/adr/0018-self-healing-launcher-engine-resync.md),
+which amends ADR-0013): the launcher stamps the deployed plugin version at
+`$VENV/.engine-plugin-version` and, on a version mismatch at spawn, resyncs the engine into the venv
+(`pip install --force-reinstall --no-deps`) before exec — an O(1) guard on the fast path, once per
+update, best-effort and **fail-open** (a failed resync never blocks the MCP connect). `setup.sh`
+force-reinstalls the engine for the same reason: the vendored package's static `0.1.0` version made
+a plain `pip install` "already satisfied"-skip the changed copy.
 
-> **Note — dangling ADR reference:** `setup.sh` (L47/L51/L111) cites **ADR-0018** for this trap and
-> the launcher auto-resync, but no `docs/adr/0018-*.md` file exists (the index stops at 0017). The
-> *mechanism* is real and correct; only the ADR record is missing. See [Open items](#open-items).
+- **Detect (belt-and-suspenders):** `doctor`'s **Engine freshness** check still content-hashes the
+  venv engine against the deployed source and WARNs on mismatch ([ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md)).
+- **Residual manual case:** a **dependency** change (not just engine code) still needs a `setup.sh`
+  rerun — the launcher resync is `--no-deps`.
+- Full symptom→fix background: [caveats §11](../docs/caveats.md).
 
 ## Runtime governance flags
 
@@ -160,8 +165,9 @@ is catalogue-specific).
   together, plus a `CHANGELOG.md` entry.** Never bump one alone — the downstream update keys on the
   version, so a mismatch is a silent no-op ([caveats §7](../docs/caveats.md)).
 - **A repo edit does not go live by itself:** bump the manifests, push to GitHub, then
-  `/plugin update` + restart — the runtime reads a version-pinned cache, and (for engine changes)
-  the stable venv needs a `setup.sh` rerun (the stale-engine trap above).
+  `/plugin update` + restart — the runtime reads a version-pinned cache. As of v0.13.1 the launcher
+  auto-resyncs the venv engine on an engine-code change; a **dependency** change still needs a
+  `setup.sh` rerun (see [the stale-engine trap](#the-stale-engine-trap-post-update)).
 - **Drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced) checks the
   version triple (`plugin.json` ↔ `marketplace.json` ↔ latest `CHANGELOG.md` heading), that every
   doc-referenced path exists, and that `AGENTS.md` / `CLAUDE.md` name the same scratch dirs. Run it
@@ -173,9 +179,6 @@ is catalogue-specific).
 
 ## Open items
 
-- **ADR-0018 is a dangling reference** — `setup.sh` cites it for the stale-engine trap / launcher
-  auto-resync, but the ADR file doesn't exist (records stop at 0017). Either write the ADR or fix
-  the citation.
 - **caveats §9 names a stale container** (`skill-search-embed-shim`); the code truth is
   `skill-concierge-embed-shim`.
 
