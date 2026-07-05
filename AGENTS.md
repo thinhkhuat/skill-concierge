@@ -70,3 +70,23 @@ count, so the doctrine's hardest-rule metric doesn't get inflated by lawful, hoo
 - The index holds **model-invocable `SKILL.md` skills only** — built-in slash-commands are excluded by design ([ADR-0001](docs/adr/0001-index-model-invocable-skills-only.md)). Don't "fix" their absence.
 - The vendored `eval/` recall@k is calibrated to a *different* skill universe; a near-zero score is a wrong-universe artifact, not a weak retriever ([caveats §1](docs/caveats.md)).
 - Hooks are **fail-silent and additive-only** — a telemetry failure must never block a turn.
+- **Ledger metrics are EPOCH-SCOPED — NEVER pool them across config changes.** This is the load-bearing
+  trap: this repo changes the very things the ledger measures (gate floors, retrieval engine, doctrine,
+  the embed shim) *almost daily*, so the invocation-ledger is a **sequence of short config epochs, not one
+  dataset**. A rate pooled across them describes *no real configuration* and manufactures a false "measured"
+  signal. Before citing ANY ledger rate (fallback / conversion / dodge / hit@k):
+  1. **Find the current epoch start** — the last commit touching `hooks/scripts/enforcer.py` (thresholds/gates),
+     `hooks/doctrine/skill-first.md`, `vendor/skill-search/skill_search/server.py` (retrieval), or
+     `scripts/embed_server.py`: `git log --date=format:'%Y-%m-%d %H:%M' --pretty='%cd %h %s' -- <those paths>`.
+  2. **Window to it:** `python3 scripts/analyze.py --since "<that datetime>"`. Never quote the all-time number.
+  3. **Exclude contamination:** subagent / harness / `<task-notification>` traffic and your *own* meta/self-session
+     turns are NOT representative (a heavy multi-agent session alone can swing the fallback rate 30+ points).
+  4. **Respect sample size:** a fresh epoch may be too small to conclude — say **"insufficient data"** rather than
+     pool backward to inflate n.
+  5. **Design vs environment:** a metric shift that does NOT line up with a config commit (e.g. a per-day spike
+     *between* releases) is **environmental** (shim/Docker/load), not a property of the code — do not attribute it
+     to a design decision.
+  This exact mistake — pooling ~15 epochs (v0.2→v0.12) and reading the aggregate as a current-state signal —
+  already invalidated a full multi-agent analysis once (see the *Data-validity note* in
+  `plans/reports/from-audit-and-openspace-syntheses-…-integrated-final-…-report.md`). Calibrate confidence to
+  data-validity: an epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured".
