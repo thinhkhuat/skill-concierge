@@ -112,5 +112,6 @@ the always-on entry point that calls `search_skills` at the start of any multi-s
 - [`docs/adr/`](../docs/adr/README.md) — accepted design decisions + rationale (immutable; the *why*).
 - [`docs/caveats.md`](../docs/caveats.md) — operational landmines (the loud gotchas list).
 - [`docs/skill-first-enforcement-mental-model.md`](../docs/skill-first-enforcement-mental-model.md) — the complete Enforce-organ mental model.
+- [`docs/anti-dodge-integration-v0.14.md`](../docs/anti-dodge-integration-v0.14.md) — **the v0.14.0 anti-dodge work**: the 5 mechanisms, the decision arc (study → red-team → owner Option B), and the loud accepted caveats.
 - [`docs/how-it-works-plain-language.md`](../docs/how-it-works-plain-language.md) — the non-technical explainer.
 - [`CHANGELOG.md`](../CHANGELOG.md) — per-version history.

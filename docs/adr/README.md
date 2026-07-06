@@ -30,6 +30,11 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0016](0016-body-derived-trigger-points.md) | Body-derived trigger points — mine each skill body's labeled decision-sections into the MAX-pool trigger layer | Accepted | 2026-07-04 |
 | [0017](0017-enforcer-gate-thresholds-v2-widen-offer-menu.md) | Enforcer gate thresholds v2 — retain score floor 0.45, widen offer-menu TOP_K 5→8 (+ companion `search_skills` query fanout) | Accepted (supersedes 0009) | 2026-07-05 |
 | [0018](0018-self-healing-launcher-engine-resync.md) | Self-healing launcher — auto-resync the venv engine on plugin-version change (no more stale MCP after `/plugin update`) | Accepted (amends 0013) | 2026-07-05 |
+| [0019](0019-over-fire-lane-and-gate-legibility.md) | H5 over-fire authorized-skip lane — narrow self-referential lane + whole-prompt task-verb veto (gate legibility deferred) | Accepted | 2026-07-06 |
+| [0020](0020-subagent-session-scoping.md) | H3 subagent session-scoping — suppress doctrine injection inside subagents (hook `agent_id`) + audit-side exclusion | Accepted | 2026-07-06 |
+| [0021](0021-rationalization-harvest-loop.md) | H1 rationalization harvest loop — capture verbatim false-skip excuses (scrubbed, gitignored) to feed doctrine | Accepted | 2026-07-06 |
+| [0022](0022-red-flags-rationalization-table.md) | H2 Red Flags table — rule-6/4 rationalizations as a symptom→refutation table | Accepted | 2026-07-06 |
+| [0023](0023-trigger-purity-lint.md) | H4 trigger-purity lint — reject workflow-summary phrases from the MAX-pool triggers (shadow-first) | Accepted | 2026-07-06 |
 
 ## Status values
 

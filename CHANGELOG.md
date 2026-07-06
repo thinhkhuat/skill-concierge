@@ -5,6 +5,33 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-07-06
+
+Anti-dodge integration — five superpowers-derived mechanisms fold anti-skip **doctrine craft** + a
+**measurement loop** into the enforcement layer. Full arc + accepted caveats:
+[`docs/anti-dodge-integration-v0.14.md`](docs/anti-dodge-integration-v0.14.md). Each ships default-ON
+behind a one-var revert, with a selftest and an ADR.
+
+### Added
+- **H5 — over-fire authorized-skip lane** (`ENFORCER_SELFREF_SKIP`, default-ON): a narrow self-referential
+  lane so the gate stops forcing pointless `search_skills` on trivial recap turns, guarded by a
+  whole-prompt task-verb veto ([ADR-0019](docs/adr/0019-over-fire-lane-and-gate-legibility.md)).
+- **H3 — subagent session-scoping** (`SKILL_SUBAGENT_STOP`, default-ON): `doctrine.py` suppresses
+  injection inside subagents via the hook payload's `agent_id`; the audit excludes subagent/dispatch
+  transcripts from the usage denominator ([ADR-0020](docs/adr/0020-subagent-session-scoping.md)).
+- **H1 — rationalization harvest loop**: the audit captures verbatim false-skip rationalizations
+  (scrubbed, gitignored) to feed doctrine, keeping `_skip_verdicts` pure
+  ([ADR-0021](docs/adr/0021-rationalization-harvest-loop.md)).
+- **H2 — Red Flags table**: `skill-first.md` rule-6/4 rationalizations rendered as a symptom→refutation
+  table ([ADR-0022](docs/adr/0022-red-flags-rationalization-table.md)).
+- **H4 — trigger-purity lint** (`SKILL_TRIGGER_PURITY`, shadow default / inert at release): rejects
+  workflow-summary phrases from the MAX-pool trigger surface; ships shadow-only
+  ([ADR-0023](docs/adr/0023-trigger-purity-lint.md)).
+
+### Changed
+- The `SKILL-CHECK` cross-file contract now recognizes the H5 SELFREF signature; count-side and
+  harvest-side share one `_AUTHORIZED_SIGNATURES` tuple (anti-drift).
+
 ## [0.13.1] — 2026-07-05
 
 Deploy-flow fix — the MCP engine can no longer go stale after a plugin update.

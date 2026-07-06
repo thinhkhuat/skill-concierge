@@ -17,6 +17,7 @@ the full product overview see [`README.md`](README.md); for the *why* behind eac
 | [`docs/adr/`](docs/adr/README.md) | accepted design decisions + rationale (immutable) |
 | [`docs/caveats.md`](docs/caveats.md) | operational landmines — read before judging the engine |
 | [`docs/plan.md`](docs/plan.md) | fusion build plan + dated build log |
+| [`docs/anti-dodge-integration-v0.14.md`](docs/anti-dodge-integration-v0.14.md) | the v0.14.0 anti-dodge work: 5 mechanisms, decision arc, accepted caveats |
 
 ## Repository layout
 

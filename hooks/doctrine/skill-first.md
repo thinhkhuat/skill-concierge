@@ -48,19 +48,24 @@ back-rationalizing the skip — the commitment is the whole point.
    (Dispatching work TO another agent is itself a task — that routes through 2 (SEARCH), not here.)
 
    If the per-turn preview arrived WITH candidates, a task is present — this class does NOT apply.
-   Everything else routes through 2 (SEARCH first). The turns below feel exempt but are the dodge —
-   they are NOT no-task turns, and your judgment is not the closed list:
-   - *"No skill governs this — it's a mechanical / domain call."* → your own judgment is not the list. SEARCH.
-   - *"I already searched last turn / earlier."* → a prior reply's search is spent. SEARCH again, here.
-   - *"You told me to use <tool>."* → a named tool is not a ruling against skills. SEARCH.
+   Everything else routes through 2 (SEARCH first). Three turns feel exempt but are the dodge — they
+   are NOT no-task turns, and your judgment is not the closed list; each is a row in the **Red Flags
+   table** under rule 6 (the first three rows), refuted there.
 
 5. **`USING:` is only ever followed by a real skill name.** There is no `USING: none` — a no-skill
    outcome is `SKIPPING: none`, never a `USING:`. Do not hybridize the two.
 
-6. **Refuse these standing rationalizations — and naming an unfit skill to pass the gate is a FALSE REPORT:**
-   - *"I can handle this unaided."* — Competence is irrelevant. The order is not about your ability.
-   - *"I'm confident none fit."* — Confidence is not a ruling. A ruling needs the search.
-   - *"Closest fit isn't perfect."* — Closest fit, adapted, is the standard.
+6. **Red Flags — refuse these standing rationalizations. Naming an unfit skill to pass the gate is a FALSE REPORT.** The excuse you catch yourself forming IS the key that retrieves its own refutation — match the symptom, read the counter, act on it (rows 1-3 are the rule-4 turns that "feel exempt"; rows 4-6 the confidence dodges; row 7 the over-fire mirror):
+
+   | Symptom — the rationalization you catch yourself forming | Refutation — what it actually is |
+   |---|---|
+   | *"No skill governs this — it's a mechanical / domain call."* | Your own judgment is not the closed list in 4. SEARCH. |
+   | *"I already searched last turn / earlier."* | A prior reply's search is spent. SEARCH again, here. |
+   | *"You told me to use `<tool>`."* | A named tool is not a ruling against skills. SEARCH. |
+   | *"I can handle this unaided."* | Competence is irrelevant — the order is not about your ability. |
+   | *"I'm confident none fit."* | Confidence is not a ruling. A ruling needs the search. |
+   | *"Closest fit isn't perfect."* | Closest fit, adapted, is the standard (rule 3). |
+   | *"This is just me explaining my own prior output — surely no skill."* | Correct that it needs no skill — but that is the enforcer's OVER-fire lane, not your skip to call. A pure recap of your own last message is authorized by the `SKILL-CHECK:` line the enforcer emits; if the turn carries ANY task tail, it is NOT a recap — SEARCH. |
 
 **Not:** "These 5 don't fit, I've got this." → ~~SKIPPING: none~~
 **Yes:** "5 don't fit → SEARCH('postgres schema migration') → `supabase-specialist` (38%) → USING."

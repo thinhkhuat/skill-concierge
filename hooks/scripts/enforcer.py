@@ -122,6 +122,36 @@ _VN_VERB_BIGRAMS = frozenset([
     ("sao", "chép"), ("rà", "lại"),
 ])
 
+# ── H5 self-referential over-fire lane (ADR-0019) ──────────────────────────
+# The gate OVER-fires when a turn merely asks the agent to explain/rephrase its OWN
+# immediately-prior message: no external task, no skill applies, yet the mandate would force a
+# pointless search_skills. This NARROW lane authorizes that skip. The enforcer sees ONLY the user
+# prompt (never the agent's self-narration, enforcer.py fires on UserPromptSubmit), so the detector
+# matches a 2nd-person request to operate on the assistant's prior message — and it FALLS THROUGH
+# (never fires) the moment any task verb or new-clause connector appears, so a self-ref opener with
+# a task tail ("explain your answer AND implement X") routes normally. Default-ON; export
+# ENFORCER_SELFREF_SKIP=0 to restore the old 2-lane behaviour. Fail-open: any error → normal routing.
+SELFREF_SKIP = os.environ.get("ENFORCER_SELFREF_SKIP", "1") != "0"
+
+# Gate 1 (positive anchor): opens — after fillers — with a recap verb operating on the assistant's
+# OWN prior message via a 2nd-person / deictic object. High precision: a generic "explain how DNS
+# works" has no such object and falls through. The recap verbs are deliberately NONE of the
+# _IMPERATIVE_VERBS, so gate 2 never self-vetoes on the opener.
+_SELFREF_RE = re.compile(
+    r"^\s*(?:please\s+|just\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
+    r"(?:explain|rephrase|reword|restate|clarify|expand(?:\s+on)?|elaborate(?:\s+on)?|"
+    r"summari[sz]e|recap|unpack|simplify)\s+"
+    r"(?:your|that|this|the\s+(?:above|last|previous|prior)|what\s+you)\b",
+    re.IGNORECASE)
+
+# Gate 3 (tail veto): a new-clause connector after the recap request = an external object → NOT a
+# pure recap. Kills the task-tail bypass ("... as a working config", "... by writing the code",
+# "... and then deploy") that the verb veto alone can miss when the tail carries no lexicon verb.
+_SELFREF_TAIL_RE = re.compile(
+    r"\b(?:and|then|also|plus|into|by|using)\b|\bas\s+an?\b|\bso\s+that\b|"
+    r"\bto\s+(?:a|an|the)\b|\bwith\s+(?:a|an|the)\b",
+    re.IGNORECASE)
+
 
 LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
@@ -322,16 +352,27 @@ INTENT_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " the intent-margin classifier judged this turn conversational/"
     "non-task. SKIPPING: none is pre-authorized — no further search_skills needed."
 )
+# H5 (ADR-0019): the 3rd AUTHORIZED-SKIP leg. Its signature phrase "self-referential recap lane" is
+# a LOCKED cross-file contract — the audit (audit_skill_usage.py `_is_authorized_skip_line` at :93, called :289) matches this exact
+# substring to count the lane as an authorized-skip, NOT a false-skip. It is prose-unlikely and MUST
+# NOT appear in the skill-first.md doctrine table, else a collision miscounts real dodges as authorized.
+SELFREF_SKIP_MSG = (
+    AUTHORIZED_SKIP_MARKER + " this turn only asks you to explain/rephrase your own "
+    "immediately-prior message — the self-referential recap lane — with no external task, so no "
+    "skill applies. SKIPPING: none is pre-authorized; no further search_skills needed."
+)
 
 
 def _authorized_skip_inject(kind: str, **fmt) -> None:
-    """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip")
-    when the kill-switch is on; no-op when off. Wrapped so a bad format kwarg or a stdout
-    error can never escape — this hook is additive-only and must never block a turn."""
+    """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip" |
+    "selfref") when the kill-switch is on; no-op when off. Wrapped so a bad format kwarg or a
+    stdout error can never escape — this hook is additive-only and must never block a turn."""
     if not AUTHORIZED_SKIP:
         return
     try:
-        msg = GETAWAY_SKIP_MSG if kind == "getaway" else INTENT_SKIP_MSG
+        msg = {"getaway": GETAWAY_SKIP_MSG,
+               "intent_skip": INTENT_SKIP_MSG,
+               "selfref": SELFREF_SKIP_MSG}[kind]
         _inject(msg.format(**fmt))
     except Exception:
         pass
@@ -430,6 +471,32 @@ def _is_imperative(prompt: str) -> bool:
     return i + 1 < len(toks) and (toks[i], toks[i + 1]) in _VN_VERB_BIGRAMS
 
 
+def _is_selfref(prompt: str) -> bool:
+    """H5 over-fire lane. True ONLY for a narrow class: a user prompt whose WHOLE payload is a
+    request to explain/rephrase the assistant's own immediately-prior message, with NO external
+    task. Three gates, all required:
+      (1) opens with a recap verb on a 2nd-person / deictic object (_SELFREF_RE);
+      (2) whole-prompt task-verb veto — ANY _IMPERATIVE_VERBS ∪ _VN_VERBS token (or VN bigram)
+          ANYWHERE → not selfref. This is the Red-Team F1 fix: _is_imperative checks only the
+          LEADING token, so "explain your answer and implement X" would slip a lead-token check;
+          scanning every token vetoes it.
+      (3) no new-clause connector introducing an external object (_SELFREF_TAIL_RE).
+    Fails toward NOT firing (→ normal routing): a missed selfref costs only a harmless forced
+    search, while a false-fire would bless real work — the exact dodge the doctrine fights."""
+    norm = unicodedata.normalize("NFC", prompt or "").strip()
+    if not _SELFREF_RE.match(norm):
+        return False
+    low = norm.lower()
+    toks = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)*", low)
+    if any(t in _IMPERATIVE_VERBS or t in _VN_VERBS for t in toks):
+        return False
+    if any((toks[i], toks[i + 1]) in _VN_VERB_BIGRAMS for i in range(len(toks) - 1)):
+        return False
+    if _SELFREF_TAIL_RE.search(low):
+        return False
+    return True
+
+
 def _intent_conversational(vector: list) -> bool:
     """Prior-independent actionability gate: True only when the prompt sits closer to
     CONVERSATIONAL space than ACTIONABLE space by a margin. Two label-filtered kNN queries
@@ -475,6 +542,14 @@ def main() -> int:
         if _REFUSAL_RE.search(prompt):
             _inject(MANDATE)
             _append_offer(sid, "negation", [], "skill_refusal", prompt)
+            return 0
+
+        # H5 over-fire lane (no I/O): a purely self-referential recap of the agent's OWN prior
+        # message needs no skill — authorize the skip instead of forcing a pointless search. Narrow
+        # by construction (see _is_selfref); any task tail falls through to normal routing below.
+        if SELFREF_SKIP and _is_selfref(prompt):
+            _append_offer(sid, "selfref_skip", [], "self_referential", prompt)
+            _authorized_skip_inject("selfref")
             return 0
 
         # Embed (HARD ~200ms timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
@@ -691,8 +766,9 @@ def _selftest() -> int:
         AUTHORIZED_SKIP = True
         _authorized_skip_inject("getaway", top=0.30, floor=0.45)
         _authorized_skip_inject("intent_skip")
-        if len(_captured) != 2:
-            bad.append("authorized-skip: expected 2 injects when flag ON, got %d" % len(_captured))
+        _authorized_skip_inject("selfref")
+        if len(_captured) != 3:
+            bad.append("authorized-skip: expected 3 injects when flag ON, got %d" % len(_captured))
         else:
             if not all(c.startswith(AUTHORIZED_SKIP_MARKER) for c in _captured):
                 bad.append("authorized-skip: injected text must start with the marker")
@@ -702,15 +778,53 @@ def _selftest() -> int:
                 bad.append("authorized-skip: getaway message did not interpolate top/floor")
             if "conversational" not in _captured[1]:
                 bad.append("authorized-skip: intent_skip message missing conversational rationale")
+            # H5 [xcut#1]: the selfref leg carries the LOCKED cross-file signature (audit matches
+            # this exact substring), and the signature is UNIQUE to it — a collision with the
+            # getaway/intent messages (or, downstream, the H2 doctrine-table row) makes the audit
+            # miscount real false-skips as authorized, masking the exact dodges H1 measures.
+            if "self-referential recap lane" not in _captured[2]:
+                bad.append("authorized-skip: selfref message missing the locked signature phrase")
+            if ("self-referential recap lane" in _captured[0]
+                    or "self-referential recap lane" in _captured[1]):
+                bad.append("authorized-skip: selfref signature must NOT appear in getaway/intent messages")
 
         _captured.clear()
         AUTHORIZED_SKIP = False
         _authorized_skip_inject("getaway", top=0.30, floor=0.45)
         _authorized_skip_inject("intent_skip")
+        _authorized_skip_inject("selfref")
         if _captured:
             bad.append("authorized-skip: must stay silent when the kill-switch is off")
     finally:
         _inject, AUTHORIZED_SKIP = _saved_inject, _saved_authorized_skip
+
+    # (8) H5 self-referential over-fire lane — fires ONLY on a pure recap of the agent's own prior
+    # message; the whole-prompt task-verb veto + connector veto keep any task-tail prompt OUT (the
+    # must-NOT-fire bypasses are the red-team's core H5 correctness case).
+    selfref_fire = [
+        "explain your last answer again",
+        "can you rephrase your previous response",
+        "summarize what you just said please",
+        "expand on that point a little more",
+        "reword your explanation more simply",
+        "clarify your previous answer",
+    ]
+    selfref_off = [
+        "explain your answer and implement the migration",   # task tail (verb veto)
+        "rephrase your last answer as a working config",     # task tail (connector veto)
+        "clarify your point by writing the actual code",     # task tail (connector veto)
+        "explain how the auth middleware works",             # external object, real question
+        "summarize the changes then deploy them",            # external object + task
+        "rephrase the readme into plain english",            # object is the readme, not the agent
+    ]
+    for t in selfref_fire:
+        if not _is_selfref(t):
+            bad.append("selfref MISS (should fire): " + repr(t))
+    for t in selfref_off:
+        if _is_selfref(t):
+            bad.append("selfref FALSE-FIRE (should route normally): " + repr(t))
+    if SELFREF_SKIP is not True:
+        bad.append("ENFORCER_SELFREF_SKIP must default ON")
 
     if bad:
         print("enforcer --selftest FAIL:")
@@ -720,8 +834,9 @@ def _selftest() -> int:
     print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share "
           "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse "
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
-          "(inject-on/silent-off)"
-          % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off)))
+          "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off)"
+          % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),
+             len(selfref_fire), len(selfref_off)))
     return 0
 
 

@@ -76,6 +76,22 @@ def test_trigger_phrases_combined_cap_respects_trig_max(monkeypatch):
     assert len(server._trigger_phrases(s)) <= server._TRIG_MAX
 
 
+def test_body_section_re_and_server_label_re_stay_aligned():
+    # `skills_discovery._BODY_SECTION_RE` and `server._LABEL_RE` are hand-mirrored
+    # (skills_discovery.py:60-69). Every label server._LABEL_RE recognizes must also
+    # open a body decision-section; the ONLY body-side extra is "when to use" (which
+    # only ever appears as a markdown header, never in a one-line description). If a
+    # future edit desyncs them, this fails.
+    shared = ["triggers", "trigger", "examples", "example",
+              "use when", "also use", "use this skill"]
+    for label in shared:
+        assert server._LABEL_RE.match(f"{label}: x"), f"server._LABEL_RE lost {label!r}"
+        assert sd._BODY_SECTION_RE.match(f"{label}: x"), f"_BODY_SECTION_RE lost {label!r}"
+    # "when to use" is the one body-only label — present body-side, absent server-side.
+    assert sd._BODY_SECTION_RE.match("when to use: x")
+    assert not server._LABEL_RE.match("when to use: x")
+
+
 def test_manifest_records_backend_and_dim(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "META_PATH", tmp_path / "meta.json")
     monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])

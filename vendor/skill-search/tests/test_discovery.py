@@ -91,6 +91,62 @@ def test_body_triggers_empty_when_no_labeled_section(tmp_path):
     assert s["body_triggers"] == []
 
 
+# --- trigger-purity lint (H4, SKILL_TRIGGER_PURITY, ADR-0023) --------------
+# One pure trigger-CONDITION + two impure workflow-SUMMARIES (a process-narration
+# line and a numbered step) in the same decision section.
+_PURITY_BODY = (
+    "\n## When to Use\n\n"
+    "- Setting up VLANs on a home network for the first time\n"
+    "- Runs the plan then cook then test pipeline end to end\n"
+    "- 1. Scaffold the project skeleton\n"
+)
+
+
+def test_purity_shadow_keeps_everything_but_logs(tmp_path, monkeypatch, caplog):
+    # SHADOW (default): index is byte-identical to today — impure phrases stay,
+    # would-drops are only LOGGED as (skill, phrase).
+    monkeypatch.setattr(sd, "SKILL_TRIGGER_PURITY", "shadow")
+    import logging
+    with caplog.at_level(logging.INFO, logger="skill_search"):
+        s = sd.parse_skill(make_skill(tmp_path, "net", body=_PURITY_BODY))
+    trigs = s["body_triggers"]
+    assert "Setting up VLANs on a home network for the first time" in trigs
+    assert any("test pipeline" in p for p in trigs)          # impure kept in shadow
+    assert any(p.startswith("1. Scaffold") for p in trigs)   # impure kept in shadow
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "would-drop" in logged and "'net'" in logged
+    assert "pipeline" in logged and "Scaffold" in logged
+
+
+def test_purity_active_drops_impure_keeps_pure(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_TRIGGER_PURITY", "active")
+    s = sd.parse_skill(make_skill(tmp_path, "net", body=_PURITY_BODY))
+    trigs = s["body_triggers"]
+    assert "Setting up VLANs on a home network for the first time" in trigs  # pure kept
+    assert not any("pipeline" in p for p in trigs)                           # summary dropped
+    assert not any(p.startswith("1. Scaffold") for p in trigs)               # step dropped
+
+
+def test_purity_off_is_byte_identical_to_today(tmp_path, monkeypatch):
+    # `off` skips the predicate entirely — same output as pre-H4 code.
+    monkeypatch.setattr(sd, "SKILL_TRIGGER_PURITY", "off")
+    s = sd.parse_skill(make_skill(tmp_path, "net", body=_PURITY_BODY))
+    assert any("pipeline" in p for p in s["body_triggers"])
+    assert any(p.startswith("1. Scaffold") for p in s["body_triggers"])
+
+
+def test_purity_conservative_keeps_generate_a_report_usecase(tmp_path, monkeypatch):
+    # A genuine use-CONDITION that merely mentions "report" must NOT be flagged —
+    # guards the false-drop risk the ADR calls out. NOTE it survives because the
+    # verb ("generate") is mid-line, not the line LEAD — the predicate is `^`-anchored,
+    # it does not read intent. A terse verb-LEAD bullet ("generate a report …") WOULD
+    # flag; that FP class is the locked v0 heuristic, disclosed in ADR-0023.
+    monkeypatch.setattr(sd, "SKILL_TRIGGER_PURITY", "active")
+    body = "\n## When to Use\n\n- When the user wants to generate a report from raw metrics\n"
+    s = sd.parse_skill(make_skill(tmp_path, "rep", body=body))
+    assert any("generate a report" in p.lower() for p in s["body_triggers"])
+
+
 # --- _namespaced_name (plugin id reconstruction) -------------------------
 
 def test_namespaced_name_cache_layout():

@@ -50,6 +50,20 @@ upstream is re-vendored:
   base vectors are untouched (no MEAN/centroid). **Requires re-copy into the stable venv
   (`pip install vendor/skill-search`) + a reindex to deploy.**
 
+- **Trigger-purity lint (v0.14.0, ADR-0023):** `skills_discovery.py` adds a purity predicate
+  (`_is_impure_trigger`) at the body-trigger EXTRACTION site — it flags workflow-SUMMARY phrases
+  (numbered-step leads; `runs|generates|produces|creates … pipeline|workflow|report|steps`) that embed
+  near generic process-prose instead of user intent, so they don't pollute the MAX-pool trigger surface
+  and bury the skill. Applies superpowers' SDO law (a trigger must be a trigger-CONDITION). Gated by
+  `SKILL_TRIGGER_PURITY` (states `shadow|active|off`, default **`shadow`**). `shadow` LOGS would-drops
+  `(skill, phrase)` and drops nothing — the index is **byte-identical** to pre-H4; `off` skips the
+  predicate (also byte-identical); `active` drops impure phrases. Deliberately conservative (only
+  unambiguous summaries flag). **ACTIVATION (`active`) needs a FULL reindex** (`--reindex --force`), NOT
+  the incremental path: the per-phrase `content_hash` reindex is correct for body edits but WRONG for a
+  filter-logic change — unchanged skills would keep their old unfiltered phrases, leaving a mixed-purity
+  index. Extends ADR-0016's body-trigger layer; base vectors untouched. **Requires re-copy into the
+  stable venv (`pip install vendor/skill-search`) + reindex + MCP restart to take effect.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

@@ -15,9 +15,13 @@ ONLY place skill discovery lives.
 No third-party deps and no network — safe to import from any script.
 """
 
+import os
 import re
 import glob
+import logging
 from pathlib import Path
+
+log = logging.getLogger("skill_search")
 
 # Directories Claude Code loads skills from, in precedence order
 # (personal first, then project — first writer wins on name collision).
@@ -71,8 +75,44 @@ _BODY_HEADER_RE = re.compile(r"^[ \t]{0,3}#{1,6}\s")
 _BODY_NEGATIVE_RE = re.compile(r"^[ \t]{0,3}(do\s*not|don'?t|never|avoid)\s+use\b", re.IGNORECASE)
 _BODY_BULLET_RE = re.compile(r"^[ \t]*[-*•]\s+")
 
+# Trigger-purity lint (H4, ADR-0023). A body decision-section can carry
+# workflow-SUMMARY lines — process narration ("Runs the plan→cook→test pipeline"),
+# numbered steps ("1. Scaffold …") — that embed near generic process-prose rather
+# than user INTENT, so indexing them as trigger points buries the real skill. This
+# predicate flags such phrases. Applies superpowers' SDO law (a trigger must be a
+# trigger-CONDITION, never a workflow summary — writing-skills/SKILL.md:152-158).
+#
+#   shadow (default): log would-drops `(skill, phrase)`, keep everything -> index
+#                     is BYTE-IDENTICAL to today (measurement only, drops nothing).
+#   active          : drop impure phrases. Filter-logic change -> needs a FULL
+#                     reindex (`--reindex --force`), not the incremental path, or
+#                     unchanged skills keep their old unfiltered phrases (mixed index).
+#   off             : predicate never runs -> byte-identical to today.
+#
+# Deliberately CONSERVATIVE (shadow-first): only unambiguous workflow-summaries are
+# flagged, so genuine triggering conditions ("use when …", task+domain noun phrases,
+# even "generate a report" as a use-case) stay. Precision is reviewed on the live
+# corpus before anyone flips this to `active` (see ADR-0023).
+SKILL_TRIGGER_PURITY = os.environ.get("SKILL_TRIGGER_PURITY", "shadow").lower()
 
-def _extract_body_triggers(body: str) -> list[str]:
+# Impure signal 1: a numbered step lead ("1. …", "2) …", "Step 3 …").
+_IMPURE_STEP_RE = re.compile(r"^\s*(?:\d+[.)]\s|step\s+\d+\b)", re.IGNORECASE)
+# Impure signal 2: a process-summary — a doing-verb lead whose object is a
+# pipeline/workflow/report/steps (the phrasing of a workflow narration, not a
+# use-condition). Both the verb AND the summary noun must be present to flag.
+_IMPURE_PROCESS_RE = re.compile(
+    r"^\s*(?:runs?|generates?|produces?|creates?)\b.*\b"
+    r"(?:pipeline|workflow|report|steps)\b", re.IGNORECASE)
+
+
+def _is_impure_trigger(phrase: str) -> bool:
+    """True when a phrase reads as a workflow-SUMMARY (process narration / numbered
+    step) rather than a triggering CONDITION. Kept narrow on purpose — see the
+    SKILL_TRIGGER_PURITY note above."""
+    return bool(_IMPURE_STEP_RE.match(phrase) or _IMPURE_PROCESS_RE.match(phrase))
+
+
+def _extract_body_triggers(body: str, skill_name: str = "") -> list[str]:
     """Short phrases from the body's labeled decision-sections only — never the
     whole body. A markdown header ("## When to Use") pulls in every line below it
     up to the next header OR a "Do NOT use when" style exclusion line, whichever
@@ -99,8 +139,16 @@ def _extract_body_triggers(body: str) -> list[str]:
             i += 1
         for line in block:
             line = _BODY_BULLET_RE.sub("", line).strip()
-            if line:
-                phrases.append(line)
+            if not line:
+                continue
+            # Trigger-purity lint (H4): in `active` drop workflow-summaries; in
+            # `shadow` (default) log the would-drop but keep it (byte-identical
+            # index); in `off` skip the check entirely.
+            if SKILL_TRIGGER_PURITY != "off" and _is_impure_trigger(line):
+                if SKILL_TRIGGER_PURITY == "active":
+                    continue
+                log.info("trigger-purity would-drop: (%r, %r)", skill_name, line)
+            phrases.append(line)
     return phrases
 
 
@@ -142,7 +190,7 @@ def parse_skill(path: Path) -> dict | None:
         # points even when the capped base text is unaffected. Feeds the
         # multi-vector trigger layer only (server.SKILL_BODY_TRIGGERS); leaves
         # `description`/`body` untouched.
-        "body_triggers": _extract_body_triggers(stripped_body),
+        "body_triggers": _extract_body_triggers(stripped_body, name),
         "path": str(path),
     }
 

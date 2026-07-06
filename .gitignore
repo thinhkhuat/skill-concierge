@@ -1,5 +1,8 @@
 # telemetry output — compounding runtime data, handled by logman, never committed
 logs/
+# H1 rationalization harvest sink — verbatim (scrubbed) false-skip SKIPPING clauses, local-only,
+# NEVER committed (may quote task text); default under logs/ but pinned explicitly too (ADR-0021)
+logs/skill-rationalizations*.txt
 
 # python
 __pycache__/
