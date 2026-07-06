@@ -18,6 +18,13 @@ source of truth, no hardcoded copy), extracts the body between `<!-- DOCTRINE-ST
 `<!-- DOCTRINE-END -->` markers, and emits it as `additionalContext`. A malformed edit degrades to
 over-injecting the whole file, never to silence.
 
+Session-scoping (v0.14.0, H3, [ADR-0020](../../docs/adr/0020-subagent-session-scoping.md)): if
+the SessionStart payload carries a positive `agent_id` field — present only inside a subagent
+call — and `SKILL_SUBAGENT_STOP=1` (default), injection is suppressed: a scoped worker that
+can't act on the doctrine isn't nagged, and the usage ledger stays clean. Any parse error or a
+top-level `--agent`/persona session (`agent_type` only, no `agent_id`) still fails **toward**
+injection — suppression needs positive proof, never absence of signal.
+
 The standing order it injects — the **SKILL-FIRST doctrine**:
 
 - **Line-1 token protocol.** Every task-bearing reply must open with one of
@@ -83,7 +90,7 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    SKILL-FIRST mandate: a ranked preview with relative %-share (shown for 2+ candidates) plus the
    line-1 `USING/SEARCH/SKIPPING` instruction. Ledger band `offer`.
 
-### The AUTHORIZED-SKIP tier (the two silent legs)
+### The AUTHORIZED-SKIP tier (three legs, two formerly silent)
 
 Legs A (getaway floor miss) and B (conversational) used to be **truly silent**, which backfired:
 the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdict the hook had
@@ -99,6 +106,19 @@ doctrine (`skill-first.md`), and **joined on** by the usage audit
 (`skills/skill-usage-audit/scripts/audit_skill_usage.py`) to exclude lawful hook-cleared skips
 from the false-SKIPPING count. Changing the literal silently breaks both. Set
 `ENFORCER_AUTHORIZED_SKIP=0` to restore the old silence.
+
+**Leg C — the self-referential recap lane (v0.14.0, H5, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)).**
+Unlike legs A/B, this leg was never silent — it ships already-authorized. The gate over-fired on
+turns that only ask the agent to explain/rephrase its own immediately-prior message (no external
+task, no skill applies), forcing a pointless search. `_is_selfref()` fires only when three gates
+all hold: (1) the prompt opens with a recap verb on a 2nd-person/deictic object; (2) **no**
+imperative verb (English or Vietnamese) appears **anywhere** in the prompt, not just the leading
+token — the Red-Team fix for a task-tail bypass ("explain your answer and implement X"); (3) no
+new-clause connector introduces an external object. Fails toward **not** firing: a missed case
+costs one harmless forced search, a false-fire would bless real work. Default ON,
+`ENFORCER_SELFREF_SKIP=0` reverts. The doctrine's Red Flags table (below) carries a matching row
+so the agent doesn't mistake its own recap turns for a self-authorized skip on a turn that
+actually carries a task tail.
 
 > **Many enforcer levers are default-INERT and env-gated** — per-skill tau
 > (`ENFORCER_PER_SKILL_TAU`), deterministic routes (`ENFORCER_DETERMINISTIC`), and the P6

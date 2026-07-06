@@ -82,6 +82,16 @@ phrases fill slots the median description left empty (descriptions used ~3 of 12
 [ADR-0016](../../docs/adr/0016-body-derived-trigger-points.md). Revert with `SKILL_BODY_TRIGGERS=0`
 **and a reindex** (byte-identical to description-only).
 
+**Trigger-purity lint (v0.14.0, H4, [ADR-0023](../../docs/adr/0023-trigger-purity-lint.md)).**
+`_is_impure_trigger()` flags body-derived phrases that read as workflow **summaries** (a numbered
+step, or a doing-verb + pipeline/workflow/report/steps object) rather than a triggering
+**condition** — a process narration buries the real skill instead of matching user intent.
+Controlled by `SKILL_TRIGGER_PURITY` (default `shadow`): shadow only *logs* would-drops and keeps
+every phrase (index byte-identical); `active` actually drops them, but needs a **full** reindex —
+an incremental one would leave unchanged skills with their old unfiltered phrases, a mixed index;
+`off` skips the check. Ships shadow-only at v0.14.0 — inert until someone reviews the logged
+would-drops and flips it to `active`.
+
 ### 3. Query fanout / `extra_queries` fusion (ADR-0017 companion)
 
 `search_skills(query, extra_queries=None)` lets the **caller** pass 2–3 phrasings of the same
@@ -106,6 +116,14 @@ once skills are set to `name-only` (see [operations.md](../operations.md#configu
 the retriever is the **sole** discovery path — a stale index hides skills. Staleness now self-heals
 via the SessionStart `auto_reindex` hook ([ADR-0014](../../docs/adr/0014-sessionstart-index-self-heal.md),
 [caveats §6](../../docs/caveats.md)).
+
+**The staleness *detector* itself was chronically wrong until v0.14.1.** `_disk_signature`
+fingerprinted `(path, mtime)` while `build_index`'s reindex-skip check fingerprints content — so any
+mtime-only event (a `/plugin update` re-materializing cache dirs, a re-clone, a bare `touch`) tripped
+"stale" forever even though nothing had actually changed, and scanning **every** cached plugin
+version (852 paths) dwarfed the ~530 deduped skills actually indexed. `_disk_signature` now
+fingerprints the **same** content signal reindex skips on, so the two finally agree.
+([ADR-0024](../../docs/adr/0024-staleness-detector-content-not-mtime.md).)
 
 ## The four MCP tools (exact behavior)
 

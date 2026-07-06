@@ -87,7 +87,12 @@ An epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured". This ex
 invalidated a whole multi-agent analysis. Full rule: [`AGENTS.md` → Guardrails](../AGENTS.md). And
 remember the ledger measures **gate compliance only** — for real *usage* use the
 **`skill-usage-audit`** skill against the transcript SKILL-FIRST trail, not this ledger
-([enforcement-gate.md](architecture/enforcement-gate.md#ledger--usage-a-hard-line)).
+([enforcement-gate.md](architecture/enforcement-gate.md#ledger--usage-a-hard-line)). Its script
+(`skills/skill-usage-audit/scripts/audit_skill_usage.py`) also takes `--harvest [PATH]` (v0.14.0,
+H1, [ADR-0021](../docs/adr/0021-rationalization-harvest-loop.md)): writes the deduped, secret-
+scrubbed corpus of verbatim false-skip `SKIPPING:` excuses to a gitignored sink (default
+`./logs/skill-rationalizations.txt`), to feed future doctrine authoring — never counts a lawful
+hook-authorized skip as a rationalization.
 
 ## The warm embed shim
 
@@ -135,16 +140,20 @@ a plain `pip install` "already satisfied"-skip the changed copy.
 
 ## Runtime governance flags
 
-Both **default ON**; each is a one-var revert.
+All are one-var reverts; all default ON except `SKILL_TRIGGER_PURITY`, which defaults to a
+non-boolean `shadow` mode (log-only, ships inert).
 
 | Variable | Default | Effect | ADR |
 |----------|---------|--------|-----|
-| `ENFORCER_AUTHORIZED_SKIP` | `1` | enforcer injects a `SKILL-CHECK:` authorization on its two silent verdict legs instead of nothing; `=0` restores the old silence | [0015](../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
+| `ENFORCER_AUTHORIZED_SKIP` | `1` | enforcer injects a `SKILL-CHECK:` authorization on its two formerly-silent verdict legs instead of nothing; `=0` restores the old silence | [0015](../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
 | `SKILL_BODY_TRIGGERS` | `1` | engine mines each skill body's labeled decision-sections into extra MAX-pool trigger points; `=0` **+ a reindex** reverts to description-only | [0016](../docs/adr/0016-body-derived-trigger-points.md) |
+| `ENFORCER_SELFREF_SKIP` | `1` | enforcer pre-authorizes a 3rd AUTHORIZED-SKIP leg for pure self-referential recap turns ("explain your last answer"); `=0` restores the old 2-leg behavior | [0019](../docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
+| `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
+| `SKILL_TRIGGER_PURITY` | `shadow` | engine flags workflow-summary body triggers; `shadow` only logs would-drops (index unchanged), `active` drops them (**needs a full reindex**), `off` skips the check | [0023](../docs/adr/0023-trigger-purity-lint.md) |
 
 Several enforcer levers are additionally **default-inert** and env-gated (`ENFORCER_DETERMINISTIC`,
 `ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) — see
-[enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-the-two-silent-legs).
+[enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-three-legs-two-formerly-silent).
 
 ## Configuration files
 
