@@ -64,6 +64,16 @@ upstream is re-vendored:
   index. Extends ADR-0016's body-trigger layer; base vectors untouched. **Requires re-copy into the
   stable venv (`pip install vendor/skill-search`) + reindex + MCP restart to take effect.**
 
+- **Staleness signal = content, not mtime (v0.14.1, ADR-0024):** `server.py` `_disk_signature` now
+  fingerprints each skill's CONTENT (`_content_hash(_skill_text(s))`, keyed by deduped skill name) — the
+  SAME signal `build_index` skips on — instead of `(path, mtime)`. Root-cause fix for the chronic false
+  `disk changed since last index` FAIL: a mtime-only event (`/plugin update` re-materializing cache dirs,
+  a re-clone, `touch`, a formatting-only save) no longer moves the signature, so the detector and the
+  reindex skip logic finally agree on "changed"; it also collapses the all-cached-versions path churn
+  (measured 852 paths) to the deduped indexed set (~530). Removed the now-unused `discover_skill_paths`
+  import. **Requires re-copy into the stable venv + a reindex to deploy** (the reindex rewrites the
+  manifest signature into the new content format).
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

@@ -53,7 +53,7 @@ import requests
 
 # Skill discovery is shared with generate_overrides.py so both halves operate
 # on the exact same set of skills/names — see skills_discovery.py.
-from skill_search.skills_discovery import discover_skills, discover_skill_paths
+from skill_search.skills_discovery import discover_skills
 
 
 # ---------------------------------------------------------------------------
@@ -108,22 +108,29 @@ else:
 # ---------------------------------------------------------------------------
 # Staleness tracking. The retriever is the SOLE discovery path once skills are
 # name-only, so a stale/missing index silently hides skills. These helpers make
-# that drift visible — cheaply (stat only, no file reads) on every search, and
-# in full via health().
+# that drift visible on search_skills()/health(). The signature fingerprints
+# CONTENT (not mtime) so it agrees with reindex's skip logic; the per-prompt
+# enforcer does NOT go through this path — only the infrequent search_skills()/
+# health() do.
 # ---------------------------------------------------------------------------
 def _disk_signature() -> dict:
-    """Cheap fingerprint of skills on disk: count + hash of (path, mtime).
-    Uses stat only — no file reads — so it's safe to call on every search."""
+    """Content fingerprint of skills on disk: count + hash of (name, content-hash),
+    keyed by deduped skill NAME using the SAME signal reindex skips on
+    (`_content_hash(_skill_text(s))`). This is the fix for the chronic false
+    'disk changed since last index': a mtime-only event (re-clone, `/plugin update`
+    re-materializing cache dirs, `touch`, a formatting-only save) leaves the CONTENT
+    unchanged, so the detector and the reindex skip logic now agree on what 'changed'
+    means — the flag stops false-firing, and it naturally collapses the multi-cached-
+    version path churn to the deduped set that is actually indexed."""
+    # ponytail: full re-parse per call; if search latency ever measures as a problem,
+    # cache the signature in-process and recompute only on a cheap count/mtime tripwire.
+    by_name = {}
+    for s in discover_skills():
+        by_name[s["name"]] = _content_hash(_skill_text(s))
     h = hashlib.md5()
-    n = 0
-    for p in sorted(str(x) for x in discover_skill_paths()):
-        try:
-            mtime = os.path.getmtime(p)
-        except OSError:
-            continue
-        h.update(f"{p}:{mtime}".encode())
-        n += 1
-    return {"count": n, "hash": h.hexdigest()}
+    for name in sorted(by_name):
+        h.update(f"{name}:{by_name[name]}".encode())
+    return {"count": len(by_name), "hash": h.hexdigest()}
 
 
 def _write_manifest(indexed: int) -> None:

@@ -25,7 +25,7 @@ def test_content_hash_deterministic():
     assert server._content_hash("x") != server._content_hash("y")
 
 
-def test_disk_signature_counts_and_staleness_round_trip(tmp_path, monkeypatch):
+def test_disk_signature_is_content_not_mtime(tmp_path, monkeypatch):
     d = tmp_path / "p" / "sk"
     d.mkdir(parents=True)
     f = d / "SKILL.md"
@@ -39,8 +39,10 @@ def test_disk_signature_counts_and_staleness_round_trip(tmp_path, monkeypatch):
     server._write_manifest(1)
     assert server._staleness_warning() is None            # fresh
     import os
-    os.utime(f, (1, 1))                                   # touch -> drift
-    assert server._staleness_warning() is not None
+    os.utime(f, (1, 1))                                   # mtime-only touch, content UNCHANGED
+    assert server._staleness_warning() is None            # ROOT-CAUSE FIX: mtime move must NOT false-flag stale
+    f.write_text("---\nname: sk\ndescription: d\n---\nCHANGED")   # a real content change
+    assert server._staleness_warning() is not None        # real drift IS still detected
 
 
 def test_trigger_phrases_body_on_adds_and_dedupes(monkeypatch):

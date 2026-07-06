@@ -5,6 +5,19 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-07-06
+
+### Fixed
+- **Chronic false `disk changed since last index` — root-caused and fixed** ([ADR-0024](docs/adr/0024-staleness-detector-content-not-mtime.md)).
+  `doctor`'s retrieval-health check FAILed constantly and every `search_skills` warned stale, cleared only
+  briefly by a reindex. Cause: the staleness detector (`server.py:_disk_signature`) fingerprinted
+  `(path, mtime)` while reindex skips on `_content_hash` — so any mtime-only event (`/plugin update`
+  re-materializing the version-pinned cache dirs, a re-clone, `touch`, a formatting-only save) tripped
+  "stale" forever, and a reindex only masked it by rewriting the mtime snapshot. Fix: `_disk_signature`
+  now fingerprints CONTENT (deduped skill name + `_content_hash`), the SAME signal reindex uses, so the
+  detector stops false-firing and the all-cached-versions path churn (852 paths) collapses to the deduped
+  indexed set (~530). Deploy runs a reindex (rewrites the manifest signature into the new content format).
+
 ## [0.14.0] — 2026-07-06
 
 Anti-dodge integration — five superpowers-derived mechanisms fold anti-skip **doctrine craft** + a

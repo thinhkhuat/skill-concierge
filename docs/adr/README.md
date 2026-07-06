@@ -35,6 +35,7 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0021](0021-rationalization-harvest-loop.md) | H1 rationalization harvest loop — capture verbatim false-skip excuses (scrubbed, gitignored) to feed doctrine | Accepted | 2026-07-06 |
 | [0022](0022-red-flags-rationalization-table.md) | H2 Red Flags table — rule-6/4 rationalizations as a symptom→refutation table | Accepted | 2026-07-06 |
 | [0023](0023-trigger-purity-lint.md) | H4 trigger-purity lint — reject workflow-summary phrases from the MAX-pool triggers (shadow-first) | Accepted | 2026-07-06 |
+| [0024](0024-staleness-detector-content-not-mtime.md) | Staleness detector fingerprints content, not mtime — fixes chronic false "disk changed since last index" | Accepted | 2026-07-06 |
 
 ## Status values
 
