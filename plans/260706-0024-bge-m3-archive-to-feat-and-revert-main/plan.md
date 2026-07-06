@@ -1,7 +1,7 @@
 ---
 title: "Archive bge-m3/Ollama migration to a feat branch, revert main to clean mpnet"
 description: "The bge-m3 dense migration is fully staged (uncommitted) on main. Measured verdict: lateral retrieval quality, no cross-lingual win, a weakened getaway-suppression layer, at real always-on-daemon + epoch-reset cost — defer deploy. This plan preserves the complete work on feat/bge-m3-ollama-migration (deployable later) and restores main to clean mpnet, with a fix-before-deploy list from the code review and a turnkey cutover runbook."
-status: executed — archived on feat/bge-m3-ollama-migration (a86d3d6); main reverted to clean mpnet 0.13.1; Phase 6 (deploy) deferred
+status: executed — archived on feat/bge-m3-ollama-migration (a86d3d6); main reverted to clean mpnet 0.13.1 per explicit OPERATOR decision to suspend the migration (not an automated verdict); Phase 6 (deploy) deferred
 priority: P2
 branch: main
 tags: [embedder, bge-m3, ollama, revert, archive, feat-branch, deferred, deploy-later]
@@ -14,7 +14,7 @@ source: skill
 
 ## Why (decision context)
 
-The migration was built and **measured** this session, not asserted. Verdict — **defer deploy**:
+The migration was built and **measured** this session, not asserted. **The operator made the explicit call to suspend/defer the migration** on that evidence — this was a human decision, not an automated or agent-side verdict. Verdict — **defer deploy**:
 
 - **No cross-lingual win** (the stated goal). bge-m3 ≈ mpnet on the top-1 band (mean 0.738 vs 0.734); the incumbent is already multilingual and beat bge-m3's margin on a native-VN query.
 - **Weakens the enforcer.** bge-m3's cosine band rides high → `GETAWAY_FLOOR=0.45` goes inert; suppression falls entirely on the relative actionability gate (measured 15/19 vs mpnet 17/19) → more skill-offers on chitchat turns.

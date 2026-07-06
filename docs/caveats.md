@@ -192,3 +192,26 @@ stable venv from the deployed source — then **restart Claude Code**. Rule of t
 rerun; a change that only touched hooks/doctrine/scripts (cache-run) does not. (Hooks read
 their code straight from the cache, so they update with the plugin; only the venv-resident
 engine needs the rerun.)
+
+---
+
+## §12 — bge-m3/Ollama dense-embedder migration: built, measured, then explicitly SUSPENDED by the operator — do not re-propose without new evidence
+
+**Symptom:** someone (agent or human) proposes swapping the embedder to a dense/Ollama model
+(bge-m3 or similar), assuming the idea is unexplored or was merely a technical dead end.
+
+**Cause:** it was already fully built and measured end-to-end on `feat/bge-m3-ollama-migration`
+(`a86d3d6`) — **feasible** on latency (159ms p95 warm, under the 200ms enforcer cap) but
+**lateral, not a win**, on retrieval quality (mean 0.738 vs mpnet's 0.734; the targeted
+cross-lingual EN→VN win never materialized), and it **weakens the getaway-suppression floor**
+(measured 10/10 non-task fire on bge-m3's cosine band vs mpnet's 4/10). **The operator personally
+decided to suspend/defer** the migration on that evidence — a human call, not an automated verdict
+or an agent's own judgment. `main` was reverted to clean mpnet 0.13.1; nothing was ever cut over
+live.
+
+**Do:** read the full journal
+(`docs/journals/journal-2026-07-06-bge-m3-migration-built-measured-lateral-archived.md`) and the
+archive plan (`plans/260706-0024-bge-m3-archive-to-feat-and-revert-main/plan.md`) before
+re-raising this migration. The work is **preserved, not abandoned** — deployable later via the
+runbook on the feat branch — but re-proposing it needs new evidence, not a repeat of the same
+measurement. A verified operator decision does not reverse on an abstract concern alone.
