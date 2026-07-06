@@ -32,7 +32,7 @@ show the contaminated optimistic ceiling. The verdict is read off the held-out c
 Run under the engine venv (same embedding space as the index):
   PYTHONPATH=vendor/skill-search SKILL_EMBED_BACKEND=fastembed \
   SKILL_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2 \
-  $HOME/.local/share/skill-concierge/venv/bin/python3 scripts/multivector_experiment.py
+  $HOME/.claude/skill-concierge/venv/bin/python3 scripts/multivector_experiment.py
 
   (no args)    build SHADOW then run the A/B and print the table
   --build      (re)build the SHADOW multi-vector index only

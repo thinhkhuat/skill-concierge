@@ -36,7 +36,7 @@ from pathlib import Path
 from collections import Counter, defaultdict, deque
 
 LEDGER = Path(os.environ.get(
-    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs")
+    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs")
 ) / "skill-invocation-ledger.log"
 
 

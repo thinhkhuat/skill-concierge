@@ -154,7 +154,7 @@ _SELFREF_TAIL_RE = re.compile(
 
 
 LOG_DIR = Path(os.environ.get(
-    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
+    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 
 # ── offer-suppression keep-off map (ADR-0011) ────────────────────────────

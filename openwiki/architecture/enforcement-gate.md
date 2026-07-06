@@ -129,7 +129,7 @@ actually carries a task tail.
 ## The Ledger — *what actually got used*
 
 [`hooks/scripts/ledger.py`](../../hooks/scripts/ledger.py) is registered for two events and writes
-append-only JSONL to `~/.claude/skill-telemetry/logs/skill-invocation-ledger.log`:
+append-only JSONL to `~/.claude/skill-concierge/logs/skill-invocation-ledger.log`:
 
 - **UserPromptSubmit** — a substantive prompt logs `{ev:"turn", q:<≤120c stripped>}`; a `/slash`
   prompt logs `{ev:"manual", name}` (the slash path never reaches PostToolUse). The prompt is
@@ -168,7 +168,20 @@ waited on). The reindex is incremental (only changed skills re-embed). Silent an
 injects no context. Disable by setting a huge `AUTO_REINDEX_THROTTLE_S`.
 See [ADR-0014](../../docs/adr/0014-sessionstart-index-self-heal.md).
 
-## The four plugin skills
+## Override self-heal — `auto_overrides.py`
+
+The index self-heals, but the `~/.claude/settings.json` name-only **budget** did not — it was a
+one-shot snapshot, so a newly installed skill leaked its full description every turn until someone
+re-ran the applier (the 2026-07-06 audit found 42 such leaks + 11 dead keys).
+[`hooks/scripts/auto_overrides.py`](../../hooks/scripts/auto_overrides.py) closes that: at SessionStart
+it fires a detached, throttled (`AUTO_OVERRIDES_THROTTLE_S`, default 1800s) `apply-overrides.py
+--if-changed` that reconciles the budget **only when the discovered catalogue drifted** (a no-op
+session never rewrites settings or churns a backup). Offline (no Qdrant — discovery is SKILL.md
+parsing), fail-silent, additive. `doctor`'s `Settings overrides` check now also **detects** the drift
+(`apply-overrides.py --check`), so it is visible + auto-fixable meanwhile.
+See [ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md).
+
+## The five plugin skills
 
 | Skill | Role |
 |-------|------|
@@ -176,5 +189,6 @@ See [ADR-0014](../../docs/adr/0014-sessionstart-index-self-heal.md).
 | [`skills/setup/SKILL.md`](../../skills/setup/SKILL.md) | first-time **bootstrap** / post-update refresh — runs the idempotent `setup.sh`. Re-run after any plugin update. |
 | [`skills/doctor/SKILL.md`](../../skills/doctor/SKILL.md) | deployment-layer **health check** + safe `--fix`. Includes the Engine-freshness check that catches a stale MCP serving old code. |
 | [`skills/skill-usage-audit/SKILL.md`](../../skills/skill-usage-audit/SKILL.md) | measures whether a gate-threshold change helped **real usage**, from the transcript SKILL-FIRST trail — **not** the ledger. |
+| [`skills/keep-on/SKILL.md`](../../skills/keep-on/SKILL.md) | curate the always-on **allowlist** — `list` / `add` / `remove` (via `scripts/keep-on.py`), editing the canonical `~/.claude/skill-concierge/keep-on.json` and re-applying the overrides ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). |
 
 Mechanics for setup/doctor/audit are in [operations.md](../operations.md).

@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 LOG_DIR = Path(os.environ.get(
-    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-telemetry" / "logs"))
+    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 SEARCH_TOOL = "skill-search__search_skills"  # suffix match; tolerates the mcp__[plugin_...]__ namespace prefix (drift-proof — the bare name broke when the tool got plugin-namespaced)
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")

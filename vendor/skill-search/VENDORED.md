@@ -12,7 +12,7 @@ The semantic retriever: `skill_search/server.py` (MCP tools `search_skills`, `ge
 `reindex`, `health`), `skills_discovery.py` (single discovery source of truth),
 `generate_overrides.py` (name-only budget overrides). Deps (`mcp[cli]`, `qdrant-client`,
 `fastembed`, `requests`) are NOT vendored — `setup.sh` installs them into a **stable** venv
-at `~/.local/share/skill-concierge/venv` (outside the plugin cache, so it survives reinstalls
+at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it survives reinstalls
 — see `docs/adr/0004-bundled-mcp-launcher-stable-venv.md`).
 
 > ⚠ **The `eval/` here is calibrated to the upstream author's environment** — its recall@k

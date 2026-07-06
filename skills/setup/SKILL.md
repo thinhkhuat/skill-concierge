@@ -55,7 +55,7 @@ If either is missing, tell the user and stop — `setup.sh` cannot proceed witho
 
 ## Notes
 
-- The venv lives at `~/.local/share/skill-concierge/venv` (outside the plugin cache, so it
+- The venv lives at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it
   survives reinstalls — ADR-0004). Override with `SKILL_CONCIERGE_VENV`.
 - `setup.sh` reads the embedder + Qdrant URL from `.mcp.json` so the built index can never
   diverge from the model the live MCP uses.

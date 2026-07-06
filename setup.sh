@@ -15,7 +15,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$ROOT/vendor/skill-search"
-VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
+VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
 QNAME="${SKILL_QDRANT_CONTAINER:-skill-search-qdrant}"
 QIMAGE="${SKILL_QDRANT_IMAGE:-qdrant/qdrant:1.18.2}"
 ENAME="${SKILL_EMBED_CONTAINER:-skill-concierge-embed-shim}"
@@ -36,6 +36,16 @@ read_mcp() { "$PYTHON" -c "import json,sys;print(json.load(open('$ROOT/.mcp.json
 QURL="${SKILL_QDRANT_URL:-$(read_mcp SKILL_QDRANT_URL)}"
 MODEL="${SKILL_EMBED_MODEL:-$(read_mcp SKILL_EMBED_MODEL)}"
 echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  model=$MODEL"
+
+# One-time migration to the canonical home (~/.claude/skill-concierge, ADR-0025): fold the
+# ledger/telemetry in from its old location. The venv is NOT migrated — it is rebuilt below (a
+# venv can't be relocated: absolute paths bake in). The old ~/.local/share/skill-concierge/venv
+# is orphaned after this and safe to delete.
+OLD_LOG="$HOME/.claude/skill-telemetry/logs"
+NEW_LOG="${SKILL_CONCIERGE_LOG:-$HOME/.claude/skill-concierge/logs}"
+if [ -d "$OLD_LOG" ] && [ ! -e "$NEW_LOG" ]; then
+  mkdir -p "$NEW_LOG" && cp -R "$OLD_LOG/." "$NEW_LOG/" && echo "  migrated ledger/telemetry -> $NEW_LOG (old copy kept at $OLD_LOG)"
+fi
 
 echo "[1/4] venv + deps at a STABLE path (survives plugin reinstalls)"
 mkdir -p "$(dirname "$VENV")"

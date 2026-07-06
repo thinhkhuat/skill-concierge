@@ -9,7 +9,7 @@ operating); this page maps the tooling and flags and points into it.
 [`setup.sh`](../setup.sh) is idempotent and safe to re-run; the **`skill-concierge:setup`** skill
 runs the same thing and verifies it. Four steps:
 
-1. **[1/4] Stable venv.** Build a venv at `~/.local/share/skill-concierge/venv` (outside the
+1. **[1/4] Stable venv.** Build a venv at `~/.claude/skill-concierge/venv` (outside the
    wipe-on-reinstall plugin cache — [ADR-0004](../docs/adr/0004-bundled-mcp-launcher-stable-venv.md)),
    pip-install the vendored engine + deps, then `--force-reinstall --no-deps` the engine (the
    vendored version is a static `0.1.0`, so plain pip would see "already satisfied" and skip
@@ -47,7 +47,7 @@ rebuilds the venv or the container — heavy bootstrap is handed off to `setup.s
 ## Telemetry — `analyze.py`
 
 [`scripts/analyze.py`](../scripts/analyze.py) is a read-only, **stdlib-only** analyzer over the
-append-only ledger at `~/.claude/skill-telemetry/logs/skill-invocation-ledger.log`. It reports:
+append-only ledger at `~/.claude/skill-concierge/logs/skill-invocation-ledger.log`. It reports:
 **uptake** (turn used a skill), **search rate**, **dodge** (no skill + no search — the behavior
 Enforce exists to kill), **substantive**, **hit@k** (used skill was in the offered set),
 **fallback rate** (offers degraded to mandate-only), **offered-turn conversion/dodge** (the clean
@@ -160,13 +160,17 @@ Several enforcer levers are additionally **default-inert** and env-gated (`ENFOR
 | File | Purpose |
 |------|---------|
 | [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, Qdrant URL, `SKILL_TOP_K=10` |
-| [`config/keep-on.json`](../config/keep-on.json) | curated always-on allowlist (**32 entries** in `keep_on`); applied by [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) to `~/.claude/settings.json` (atomic, backs up, refuses empty). **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
+| [`config/keep-on.json`](../config/keep-on.json) | the **shipped SEED** for the curated always-on allowlist (**32 entries** in `keep_on`); on first run it is seeded once into the canonical durable home `~/.claude/skill-concierge/keep-on.json` (survives `/plugin update`, [ADR-0025](../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) writes the policy to `~/.claude/settings.json` (atomic, backs up, refuses empty). Curate it with the `keep-on` skill / `scripts/keep-on.py`. **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
 | [`config/keep-off.json`](../config/keep-off.json) | ledger-derived offer-suppression — chronic never-take skills dropped from the enforcer menu ([ADR-0011](../docs/adr/0011-ledger-derived-offer-suppression.md)) |
 | [`config/deterministic-routes.json`](../config/deterministic-routes.json) | optional exact-route overrides — **inert unless `ENFORCER_DETERMINISTIC` is set** |
 
 `apply-overrides.py` uses the **same** discovery module as the index, so overrides and the
 retriever never drift, and it reports any `keep_on` entry missing on the target machine (the list
-is catalogue-specific).
+is catalogue-specific). It stays fresh on its own: the SessionStart `auto_overrides.py` hook runs
+`apply-overrides.py --if-changed` on catalogue drift, and `doctor` flags drift via `--check`
+([ADR-0025](../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). Curate the
+allowlist with the `keep-on` skill / `scripts/keep-on.py` (`list` / `add` / `remove`, reconciles
+immediately).
 
 ## Versioning & deploy discipline
 

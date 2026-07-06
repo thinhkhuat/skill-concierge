@@ -47,8 +47,11 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
 1. **SessionStart (once per session)** —
    [`hooks/scripts/doctrine.py`](../../hooks/scripts/doctrine.py) injects the full **SKILL-FIRST
    standing order** (read at runtime from [`hooks/doctrine/skill-first.md`](../../hooks/doctrine/skill-first.md)),
-   and [`hooks/scripts/auto_reindex.py`](../../hooks/scripts/auto_reindex.py) fires a detached,
-   throttled, incremental reindex so a stale index self-heals in the background.
+   and two SessionStart self-heals fire, both detached + throttled:
+   [`auto_reindex.py`](../../hooks/scripts/auto_reindex.py) runs an incremental reindex so a stale
+   index re-freshens, and [`auto_overrides.py`](../../hooks/scripts/auto_overrides.py) reconciles the
+   `~/.claude/settings.json` name-only budget when the installed catalogue drifts
+   ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)).
 2. **UserPromptSubmit (every turn)** — the **Enforce** organ:
    [`enforcer.py`](../../hooks/scripts/enforcer.py) runs the per-turn gate — embed the prompt via
    the warm shim → retrieve top-k from the **same** Qdrant index → apply the score/item floors +
@@ -66,7 +69,7 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
    distinction matters; see [enforcement-gate.md](enforcement-gate.md#ledger--usage-a-hard-line).
 
 ```
-SessionStart ──▶ doctrine (full standing order) + auto_reindex (self-heal)
+SessionStart ──▶ doctrine (standing order) + auto_reindex (index self-heal) + auto_overrides (budget self-heal)
                      │
 User message ──▶ [Enforce] enforcer: embed ▸ retrieve ▸ floors+intent gate ▸ mandate | SKILL-CHECK | silent
                      │                                    └─▶ [Ledger] turn / offer

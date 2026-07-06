@@ -3,7 +3,7 @@ name: doctor
 description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, the MCP seems to run old code after a plugin update, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, engine freshness, Qdrant, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start Qdrant, reindex, re-apply overrides).
 license: MIT
 metadata:
-  version: 0.2.0
+  version: 0.2.1
 ---
 
 # skill-concierge doctor
@@ -35,7 +35,7 @@ the engine's own `skill-search --health`, so the two never drift.
    | Enrichment overlay | legacy MEAN overlay state (now superseded by the multi-vector layer) |
    | Multi-vector layer | trigger points present (MAX-pool retrieval, ADR-0012); WARNs if `SKILL_MULTIVECTOR` is on but none exist |
    | Corpus health | per-skill calibration `ok`/`weak`/`no-signal` counts from `eval/thresholds.json` |
-   | Settings overrides | `skillOverrides` applied to `~/.claude/settings.json` |
+   | Settings overrides | `skillOverrides` applied to `~/.claude/settings.json`; now **detects drift** from the installed catalogue (`apply-overrides.py --check`) → WARN + auto-fix (ADR-0025) |
    | Ledger dir | the telemetry log directory is writable |
    | Duplicate MCP | warns if a leftover user-scope `skill-search` MCP also exists |
 
@@ -65,6 +65,8 @@ the engine's own `skill-search --health`, so the two never drift.
   is stale (copied engine, not refreshed by `/plugin update`). Fix: rerun setup.sh, then restart.
 - **search returns nothing or stale** → `Qdrant` / `Retrieval health`. Fix: `--fix` (reindex)
   — note the SessionStart `auto_reindex` hook now self-heals index staleness in the background.
-- **skills you expect aren't offered** → `Settings overrides`. Fix: `--fix` (re-apply).
+- **skills you expect aren't offered / a new skill leaks its full description** → `Settings overrides`
+  (now flags override **drift**). Fix: `--fix` (re-apply) — or nothing: the SessionStart
+  `auto_overrides` hook self-heals the budget on drift (ADR-0025).
 
 Full landmine reference: `docs/caveats.md`.

@@ -5,6 +5,40 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-06
+
+Autonomous `skillOverrides` freshness + seamless keep-on management
+([ADR-0025](docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). Closes the
+gap the 2026-07-06 name-only audit exposed: the retrieval index self-healed but the settings
+budget never did, so newly installed skills leaked their full description on every turn until
+someone re-ran apply-overrides. Additive, default-ON; no retrieval-scoring change (epoch anchor untouched).
+
+### Added
+- **Autonomous override self-heal** (`hooks/scripts/auto_overrides.py`): a SessionStart hook
+  mirroring `auto_reindex.py` (fail-silent, throttled `AUTO_OVERRIDES_THROTTLE_S`=1800, detached)
+  that reconciles `~/.claude/settings.json` `skillOverrides` **only when the discovered catalogue
+  drifted** — the name-only budget stays fresh with zero human discipline, and a no-op session
+  never rewrites settings or churns a backup.
+- **`apply-overrides.py --check / --if-changed`**: `--check` reports drift and exits 1 without
+  writing (the read-only detector); `--if-changed` reconciles only on real drift (the hook path).
+  Shared compute-diff core; all existing safety (backup, atomic write, refuse-empty) preserved.
+- **`scripts/keep-on.py` + the `keep-on` skill**: view / add / remove the always-ON allowlist
+  (`config/keep-on.json`); add/remove re-apply the overrides immediately. The seamless surface
+  for curating what stays fully-described vs name-only.
+
+### Changed
+- **`doctor` now detects override drift.** `check_overrides()` was existence-only — the blind
+  spot that hid the 42-skill leak. It now runs `apply-overrides.py --check` and WARNs
+  (auto-fixable) when the override map has drifted from the installed catalogue.
+- **Single canonical durable home — `~/.claude/skill-concierge/`.** All state that must survive a
+  `/plugin update` now lives under one user-owned dir, resolved in `scripts/_keepon.py`: the
+  keep-on allowlist (`keep-on.json`, seeded once from the shipped default), the engine venv
+  (`venv/`, was `~/.local/share/skill-concierge/venv`), and the ledger/logs/stamps (`logs/`, was
+  `~/.claude/skill-telemetry/logs`). Supersedes the storage paths in ADR-0004/0006.
+  **One-time deploy step:** the update carrying this needs a single `setup` run — it copies the
+  old ledger over and rebuilds the venv at the new home (a venv can't be moved); after that the
+  self-heal is normal.
+
 ## [0.14.1] — 2026-07-06
 
 ### Fixed

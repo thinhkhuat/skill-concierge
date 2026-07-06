@@ -66,7 +66,7 @@ outage degrades to mandate-only fallback (ADR-0002), not a crash.
 `/opt/homebrew/bin/python3.12`.
 
 **Do (workaround):** point the build at a known-good interpreter, or pre-create the stable
-venv (`~/.local/share/skill-concierge/venv`) with brew python, then rerun `setup.sh`.
+venv (`~/.claude/skill-concierge/venv`) with brew python, then rerun `setup.sh`.
 **Deferred fix:** harden the picker to test `venv`+`pip` per candidate and fall through
 (portability-only — the owner's machine already works).
 
@@ -101,18 +101,20 @@ Throttle: `AUTO_REINDEX_THROTTLE_S` (default 1800s).
 
 ---
 
-## §7 — Version-is-the-update-signal + cache/source keep-on drift
+## §7 — Version is the update signal (keep-on drift now self-heals)
 
-**Symptom:** a `/plugin marketplace update` does nothing; OR a cache `setup.sh` rerun reverts
-the router (`skill-concierge:skill-search`) to `name-only`.
+**Symptom:** a `/plugin marketplace update` does nothing.
 
-**Cause:** (a) downstream update keys on the version — if `plugin.json` and
-`marketplace.json` versions aren't bumped **together**, the update is a silent no-op.
-(b) The installed-cache copy of `config/keep-on.json` can lag the source; a cache `setup.sh`
-re-applies the *cached* policy.
+**Cause:** downstream update keys on the version — if `plugin.json` and `marketplace.json`
+versions aren't bumped **together**, the update is a silent no-op.
 
-**Do:** bump **both** manifests' versions on any shippable change; keep the installed plugin
-version in sync with source so the cached `keep-on.json` matches (ADR-0005).
+**Do:** bump **both** manifests' versions on any shippable change.
+
+> **The old cache/source keep-on drift is gone (v0.15.0, [ADR-0025](adr/0025-autonomous-override-freshness-and-keep-on-management.md)).**
+> The live allowlist no longer lives in the wipe-on-update plugin cache — it is seeded once into
+> the canonical home `~/.claude/skill-concierge/keep-on.json`, and the SessionStart
+> `auto_overrides.py` hook reconciles `settings.json` whenever the installed catalogue drifts, so
+> a new/removed skill no longer leaks its full description until someone re-runs the applier.
 
 ---
 
@@ -120,7 +122,7 @@ version in sync with source so the cached `keep-on.json` matches (ADR-0005).
 
 **Symptom (latent):** the compounding invocation ledger loses history after 90 days.
 
-**Cause:** the ledger (`~/.claude/skill-telemetry/logs/skill-invocation-ledger.log`) is
+**Cause:** the ledger (`~/.claude/skill-concierge/logs/skill-invocation-ledger.log`) is
 designed to compound forever (ADR-0006), but its downstream archiver **logman** defaults to
 `RETENTION_DAYS=90`, which **deletes** old archives.
 
@@ -142,7 +144,7 @@ falls back to mandate-only. The fallback works (never crashes), but enforcement 
 **Do:** `docker ps --filter name=skill-search-embed-shim` → expect `Up`. Container is
 `--restart unless-stopped`, so restart Docker or run `setup.sh` to recreate it.
 `skill-concierge:doctor --fix` auto-restarts the container if down. Monitor fallback rate
-in `~/.claude/skill-telemetry/logs/skill-invocation-ledger.log` (`offer` events with
+in `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` (`offer` events with
 `fallback: true`); sustained high rate signals a shim health problem.
 
 ---
@@ -168,7 +170,7 @@ once the repo is cloned standalone elsewhere.)
 shipped isn't live). `/mcp` shows skill-search connected; nothing looks broken.
 
 **Cause:** the MCP launcher EXECs `skill-search` from the **stable venv**
-(`~/.local/share/skill-concierge/venv`, ADR-0004), where the engine is **COPIED into
+(`~/.claude/skill-concierge/venv`, ADR-0004), where the engine is **COPIED into
 site-packages by `setup.sh` — not an editable install.** `/plugin update` ships new code into
 the version-pinned **cache** but **never touches the venv copy**. So the cache is new and the
 venv engine is old; the MCP runs the old one. `Engine venv ✓` only proves the bin *exists*,
@@ -181,7 +183,7 @@ equivalent — the decisive test:
 ```bash
 diff -rq \
   "$CLAUDE_PLUGIN_ROOT/vendor/skill-search/skill_search" \
-  "$HOME/.local/share/skill-concierge/venv/lib/python3.*/site-packages/skill_search"
+  "$HOME/.claude/skill-concierge/venv/lib/python3.*/site-packages/skill_search"
 ```
 
 Empty output = fresh; any difference = stale.

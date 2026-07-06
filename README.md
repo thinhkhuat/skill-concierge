@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.14.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.15.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -89,7 +89,7 @@ cd skill-concierge
 
 `setup.sh` is idempotent and safe to re-run. It performs four steps:
 
-1. **Stable venv** — installs the vendored engine + deps into `~/.local/share/skill-concierge/venv`
+1. **Stable venv** — installs the vendored engine + deps into `~/.claude/skill-concierge/venv`
    (outside the plugin cache, so it survives reinstalls — [ADR-0004](docs/adr/0004-bundled-mcp-launcher-stable-venv.md)).
 2. **Qdrant** — starts a `skill-search-qdrant` Docker container on ports `6333/6334`.
 3. **Index** — builds/refreshes the multilingual index, then runs a health check.
@@ -134,7 +134,7 @@ Every turn and skill/search invocation is logged to an append-only JSONL ledger.
 uptake, search rate, and dodge rate with the read-only, stdlib-only analyzer:
 
 ```bash
-python3 scripts/analyze.py        # reads ~/.claude/skill-telemetry/logs/skill-invocation-ledger.log
+python3 scripts/analyze.py        # reads ~/.claude/skill-concierge/logs/skill-invocation-ledger.log
 ```
 
 To compare a window — e.g. before vs after a fix or a go-live — use `--since` / `--until`
@@ -179,10 +179,10 @@ the built index can't diverge from the model the server uses):
 | Variable | Default |
 |----------|---------|
 | `SKILL_PYTHON` | first of `python3.12/3.11/3.10` on `PATH` |
-| `SKILL_CONCIERGE_VENV` | `~/.local/share/skill-concierge/venv` |
+| `SKILL_CONCIERGE_VENV` | `~/.claude/skill-concierge/venv` |
 | `SKILL_QDRANT_CONTAINER` | `skill-search-qdrant` |
 | `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:1.18.2` |
-| `SKILL_CONCIERGE_LOG` | `~/.claude/skill-telemetry/logs` (ledger directory) |
+| `SKILL_CONCIERGE_LOG` | `~/.claude/skill-concierge/logs` (ledger directory) |
 
 ### Runtime governance flags
 
@@ -194,13 +194,26 @@ to revert to the prior behavior:
 | `ENFORCER_AUTHORIZED_SKIP` | `1` (ON) | Enforcer (`hooks/scripts/enforcer.py`) injects a `SKILL-CHECK:` authorization line on its two previously-silent verdicts (getaway score-floor miss, conversational-intent skip) instead of nothing. `=0` restores the old silence. [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md). |
 | `SKILL_BODY_TRIGGERS` | `1` (ON) | Vendored engine mines each skill body's labeled decision sections into extra MAX-pool trigger points, on top of the existing description-derived ones. `=0` + a reindex reverts to description-only (byte-identical to before). [ADR-0016](docs/adr/0016-body-derived-trigger-points.md). |
 
-### Always-on policy (`config/keep-on.json`)
+### Always-on policy (the keep-on allowlist)
 
-A curated 32-skill always-on allowlist, applied to `~/.claude/settings.json` by
-[`scripts/apply-overrides.py`](scripts/apply-overrides.py) (an atomic keep-on writer — it
-does **not** call the upstream override generator; [ADR-0005](docs/adr/0005-overrides-target-and-applier.md)).
-The list is catalogue-specific — `apply-overrides.py` reports any entries missing on the
-target machine. Edit to taste.
+A curated 32-skill always-on allowlist; every other skill is `name-only` (retrieved on demand).
+The shipped default is [`config/keep-on.json`](config/keep-on.json); on first run it is **seeded
+once** into the canonical durable home `~/.claude/skill-concierge/keep-on.json`, which survives
+`/plugin update` ([ADR-0025](docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)).
+[`scripts/apply-overrides.py`](scripts/apply-overrides.py) writes the resulting policy atomically to
+`~/.claude/settings.json` (it does **not** call the upstream generator; [ADR-0005](docs/adr/0005-overrides-target-and-applier.md)).
+
+**It stays fresh on its own.** The SessionStart `auto_overrides.py` hook reconciles the budget
+whenever the installed catalogue drifts — a new skill no longer leaks its full description until
+someone remembers to re-apply — and `doctor` flags any drift meanwhile.
+
+**Curate it seamlessly** with the `keep-on` skill / [`scripts/keep-on.py`](scripts/keep-on.py):
+
+```bash
+python3 scripts/keep-on.py list                 # view the always-on set
+python3 scripts/keep-on.py add <skill-name>…    # add, then reconcile immediately
+python3 scripts/keep-on.py remove <skill-name>… # remove, then reconcile
+```
 
 ## Architecture
 
@@ -210,15 +223,17 @@ skill-concierge/
 ├── .mcp.json                                  # registers the MCP via bin/skill-search-mcp launcher
 ├── bin/skill-search-mcp                       # launcher → stable venv (survives cache wipes; ADR-0004)
 ├── setup.sh                                    # bootstrap: venv + Qdrant + reindex + apply-overrides
-├── scripts/apply-overrides.py                  # atomic keep-on writer → ~/.claude/settings.json (ADR-0005)
+├── scripts/apply-overrides.py                  # atomic keep-on writer → ~/.claude/settings.json (ADR-0005; --check/--if-changed drift modes)
+├── scripts/keep-on.py                          # view/add/remove the always-on allowlist (ADR-0025)
 ├── scripts/analyze.py                          # ledger analyzer (uptake / dodge / hit@k)
 ├── scripts/doctor.py                           # deployment health check + safe --fix
-├── config/keep-on.json                         # 32-skill always-on policy
-├── hooks/                                       # ledger capture: hooks.json + scripts/ledger.py
+├── config/keep-on.json                         # 32-skill always-on SEED (runtime copy → ~/.claude/skill-concierge/, ADR-0025)
+├── hooks/                                       # SessionStart self-heals (auto_reindex + auto_overrides) + ledger capture (ledger.py)
 ├── skills/skill-search/SKILL.md                # router skill (always-on entry point)
 ├── skills/setup/SKILL.md                       # skill-concierge:setup — bootstrap/refresh
 ├── skills/doctor/SKILL.md                      # skill-concierge:doctor — healthcheck + auto-fix
 ├── skills/skill-usage-audit/SKILL.md           # skill-concierge:skill-usage-audit — valid usage measurement (SKILL-FIRST trail)
+├── skills/keep-on/SKILL.md                     # skill-concierge:keep-on — curate the always-on allowlist (ADR-0025)
 ├── vendor/skill-search/                        # vendored MCP engine (MIT · sowhan/skill-search) + LICENSE + VENDORED.md
 ├── docs/adr/                                    # Architecture Decision Records (the WHY)
 ├── docs/caveats.md                             # operational landmines (the loud gotchas)
@@ -249,16 +264,17 @@ not embedded.
 
 ## Status & roadmap
 
-`0.14.1` — **published, stale-index root-cause fix (retrieval-health detector fingerprints CONTENT not mtime — no more false 'disk changed since last index', ADR-0024). 0.14.0: anti-dodge integration (H1–H5, ADRs 0019–0023) — folds anti-skip doctrine craft + a measurement loop into the enforcement layer; see [`docs/anti-dodge-integration-v0.14.md`](docs/anti-dodge-integration-v0.14.md). Prior: self-healing MCP launcher (engine auto-resyncs on `/plugin update`, ADR-0018); MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Recall upgrades: `search_skills` query fanout — the caller passes 2–3 phrasings, the server MAX-pools the union so a skill a single phrasing buries still surfaces; the enforcer offer menu widened 5→8 (ADR-0017, supersedes ADR-0009); `SKILL_TOP_K=10` for the pull tool. Multi-vector MAX-pool retrieval (ADR-0012) also mines each skill body's labeled decision-sections (ADR-0016); the enforcer's two silent verdict legs emit a `SKILL-CHECK:` authorization (ADR-0015). Everything default-ON behind env kill-switches.**
+`0.15.0` — **published, autonomous `skillOverrides` freshness + seamless keep-on management (ADR-0025): a SessionStart self-heal (`auto_overrides.py`) reconciles the name-only budget on catalogue drift the same way the index already self-heals, `doctor` now detects override drift, and `scripts/keep-on.py` + the `keep-on` skill make the always-on allowlist viewable/editable. 0.14.1: stale-index root-cause fix (retrieval-health detector fingerprints CONTENT not mtime — no more false 'disk changed since last index', ADR-0024). 0.14.0: anti-dodge integration (H1–H5, ADRs 0019–0023) — folds anti-skip doctrine craft + a measurement loop into the enforcement layer; see [`docs/anti-dodge-integration-v0.14.md`](docs/anti-dodge-integration-v0.14.md). Prior: self-healing MCP launcher (engine auto-resyncs on `/plugin update`, ADR-0018); MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Recall upgrades: `search_skills` query fanout — the caller passes 2–3 phrasings, the server MAX-pools the union so a skill a single phrasing buries still surfaces; the enforcer offer menu widened 5→8 (ADR-0017, supersedes ADR-0009); `SKILL_TOP_K=10` for the pull tool. Multi-vector MAX-pool retrieval (ADR-0012) also mines each skill body's labeled decision-sections (ADR-0016); the enforcer's two silent verdict legs emit a `SKILL-CHECK:` authorization (ADR-0015). Everything default-ON behind env kill-switches.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
 from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
 fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical
 `skill_first_nudge.py` is retired (deregistered from `~/.claude/settings.json`).
 
 The deployment now **self-guards against staleness**: doctor's `Engine freshness` check
-(ADR-0013) catches a stale MCP venv engine after a `/plugin update`, and the SessionStart
-`auto_reindex` hook (ADR-0014) self-heals a stale index in the background — no manual reindex
-or reminders. Full per-version history in [`CHANGELOG.md`](CHANGELOG.md).
+(ADR-0013) catches a stale MCP venv engine after a `/plugin update`, and two SessionStart hooks
+self-heal in the background — `auto_reindex` (ADR-0014) refreshes a stale index, and
+`auto_overrides` (ADR-0025) reconciles the name-only budget on catalogue drift — no manual
+reindex, re-apply, or reminders. Full per-version history in [`CHANGELOG.md`](CHANGELOG.md).
 
 Trajectory since the P1 fusion (`0.2.0`):
 - **`0.3.0` — SKILL-FIRST doctrine gate.** A SessionStart hook (`hooks/scripts/doctrine.py`)

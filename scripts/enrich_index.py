@@ -17,7 +17,7 @@ run time and ABORTS on drift (a 0.5.1 CLS index would fail here instead of silen
 corrupting). Run under the engine venv:
   PYTHONPATH=vendor/skill-search SKILL_EMBED_BACKEND=fastembed \
   SKILL_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2 \
-  $HOME/.local/share/skill-concierge/venv/bin/python3 scripts/enrich_index.py --shadow
+  $HOME/.claude/skill-concierge/venv/bin/python3 scripts/enrich_index.py --shadow
 
 WRITES are vector-only (PUT /points/vectors) — NEVER upsert (an upsert clears the payload
 -> skills go dark -> doctor FAILs -> auto-reindex reverts). Payload `enriched=true` +

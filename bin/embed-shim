@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # skill-concierge — warm embed shim launcher (host / service-free tier).
 # Mirrors bin/skill-search-mcp: EXECS the STABLE venv built by setup.sh
-# ($HOME/.local/share/skill-concierge/venv) so it survives plugin reinstalls.
+# ($HOME/.claude/skill-concierge/venv) so it survives plugin reinstalls.
 #
 # The DEPLOYED server tier runs the shim as a Docker sidecar next to the Qdrant
 # container (see Dockerfile + setup.sh). This launcher covers local dev,
 # the cosine-parity check, and the no-Docker embedded tier. Both run the same
 # scripts/embed_server.py, so parity holds across launch modes.
 set -euo pipefail
-VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
+VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
 PY="$VENV/bin/python"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ ! -x "$PY" ]; then

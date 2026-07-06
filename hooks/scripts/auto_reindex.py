@@ -27,9 +27,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".local/share/skill-concierge/venv"))
+VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 SS_BIN = VENV / "bin" / "skill-search"
-LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-telemetry/logs"))
+LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-concierge/logs"))
 STAMP = LOGDIR / ".auto-reindex-stamp"
 LOGFILE = LOGDIR / "auto-reindex.log"
 THROTTLE_S = int(os.environ.get("AUTO_REINDEX_THROTTLE_S", "1800"))

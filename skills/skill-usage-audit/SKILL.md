@@ -22,7 +22,7 @@ invocations" is the exact failure this skill exists to stop.
 
 | Source | Path | Measures | Use for |
 |---|---|---|---|
-| invocation-ledger | `~/.claude/skill-telemetry/logs/skill-invocation-ledger.log` | gate compliance (offer→take; `auto`/`manual`/`search`) | gate firing only — **NOT usage** |
+| invocation-ledger | `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` | gate compliance (offer→take; `auto`/`manual`/`search`) | gate firing only — **NOT usage** |
 | skill-usage-tracker | transcripts → `~/.claude/audits/skill-usage-stats/` | usage frequency (Skill tool + `/slash`) | how often each skill actually ran |
 | **SKILL-FIRST trail** | assistant text in `~/.claude/projects/**/*.jsonl` | agent KNEW + chose a skill (`USING`/`SEARCH`/`SKIPPING` declarations) | **the operator's metric** |
 

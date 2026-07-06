@@ -15,7 +15,7 @@ enriched — apples to apples. It compares LIVE vs the enriched SHADOW on the sa
 Queries embedded via the ENGINE path (same space as the index). Run under the engine venv:
   PYTHONPATH=vendor/skill-search SKILL_EMBED_BACKEND=fastembed \
   SKILL_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2 \
-  $HOME/.local/share/skill-concierge/venv/bin/python3 scripts/precision_eval.py
+  $HOME/.claude/skill-concierge/venv/bin/python3 scripts/precision_eval.py
 
   --selftest   ranking/metric math self-check (no network)
 """

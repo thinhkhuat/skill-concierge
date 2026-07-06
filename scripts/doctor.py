@@ -36,10 +36,10 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent              # skill-concierge/
-VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".local/share/skill-concierge/venv"))
+VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 QNAME = os.environ.get("SKILL_QDRANT_CONTAINER", "skill-search-qdrant")
 SETTINGS = Path(os.environ.get("SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude/settings.json"))
-LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-telemetry/logs"))
+LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-concierge/logs"))
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 MULTIVECTOR = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"   # multi-vector trigger layer (default on)
 
@@ -351,8 +351,18 @@ def check_overrides():
         return dict(id="overrides", label="Settings overrides", status=WARN,
                     detail="no skillOverrides — budget not applied", fix="overrides")
     on = sum(1 for v in ov.values() if v == "on")
-    return dict(id="overrides", label="Settings overrides", status=OK,
-                detail=f"{on} on / {len(ov) - on} name-only", fix=None)
+    base = f"{on} on / {len(ov) - on} name-only"
+    # Drift check: is the override map still in sync with the installed catalogue? The
+    # detector lives in apply-overrides.py (--check) so the discovery logic stays in ONE
+    # place. It exits 1 on drift AND on applier errors, so key off the "drift:" marker in
+    # stdout — an error (invalid keep-on / no skills) must not masquerade as drift. Fail-open.
+    py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
+    r = _run([str(py), str(ROOT / "scripts" / "apply-overrides.py"), "--check"])
+    if r.returncode == 1 and "drift:" in r.stdout:
+        return dict(id="overrides", label="Settings overrides", status=WARN,
+                    detail=f"{base} — {_last_line(r.stdout)} "
+                           f"(auto-heals on session start; or run apply-overrides)", fix="overrides")
+    return dict(id="overrides", label="Settings overrides", status=OK, detail=base, fix=None)
 
 
 def check_ledger():

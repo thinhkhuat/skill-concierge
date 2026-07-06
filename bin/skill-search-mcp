@@ -14,7 +14,7 @@
 # still execs the existing engine — never block the MCP connect, ADR-0004), and writes NOTHING
 # to stdout (this is a stdio MCP; stray stdout corrupts the protocol handshake).
 set -euo pipefail
-VENV="${SKILL_CONCIERGE_VENV:-$HOME/.local/share/skill-concierge/venv}"
+VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
 BIN="$VENV/bin/skill-search"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
