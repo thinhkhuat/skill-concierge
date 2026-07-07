@@ -116,7 +116,10 @@ by a Docker sidecar rather than cold-loaded per turn:
 
 ## The stale-engine trap (post-update)
 
-Historically the most dangerous silent failure — **now self-healing as of v0.13.1.** The MCP
+Historically the most dangerous silent failure — **self-healing since v0.13.1, and the settled
+behavior on every release since (current: v0.15.0).** The v0.13.1 tags below mark where each fix
+*shipped*, not the deployed version — confirm the live state with `doctor` (`Engine freshness`),
+never by reading a version out of this section. The MCP
 launcher ([`bin/skill-search-mcp`](../bin/skill-search-mcp)) execs `skill-search` from the **stable
 venv**, where the engine is **copied** into site-packages by `setup.sh` (not an editable install).
 A `/plugin update` ships new code into the version-pinned **cache** but historically **never touched
