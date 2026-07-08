@@ -28,6 +28,11 @@ ijfw/
 eval/triggers.json
 eval/thresholds.json
 
+# generated flywheel eval artifacts (rebuilt by scripts/llm_eval_gen.py / llm_triggers.py)
+eval/scenarios-shadow*/
+eval/.flywheel-cache.json
+eval/triggers.json.bak-*
+
 # python test cache + local env / secrets
 .pytest_cache/
 .env
