@@ -475,9 +475,84 @@ def check_corpus_health():
     return dict(id="corpus", label="Corpus health", status=status, detail=detail, fix=None)
 
 
+def _indexed_skill_names():
+    """Names of all kind="base" points in the live index (paged scroll, no vectors)."""
+    url = QURL.rstrip("/") + f"/collections/{COLLECTION}/points/scroll"
+    names, nxt = set(), None
+    while True:
+        body = {"limit": 256, "with_payload": True, "with_vector": False,
+                "filter": {"must": [{"key": "kind", "match": {"value": "base"}}]}}
+        if nxt is not None:
+            body["offset"] = nxt
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                      headers={"Content-Type": "application/json"})
+        res = json.loads(urllib.request.urlopen(req, timeout=5).read())["result"]
+        for pt in res.get("points", []):
+            n = pt.get("payload", {}).get("name")
+            if n:
+                names.add(n)
+        nxt = res.get("next_page_offset")
+        if nxt is None:
+            break
+    return names
+
+
+def check_flywheel():
+    """Retrieval-flywheel (ADR-0026 utterance layer) visibility. Read-only, fail-open: the
+    flywheel is optional (no LLM configured -> graceful fallback to description+body
+    retrieval), so this NEVER fails the doctor run — INFO/WARN only. Reports whether an
+    LLM endpoint is configured + reachable (via flywheel_llm.ping()), and how much of the
+    live index has LLM-generated utterance triggers (eval/triggers.json llm_triggers)."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import flywheel_llm
+
+    configured = "FLYWHEEL_LLM_ENDPOINT" in os.environ or "FLYWHEEL_LLM_MODEL" in os.environ
+    has_key = bool(os.environ.get("FLYWHEEL_LLM_API_KEY"))
+    fix = "run the skill-concierge:flywheel skill"
+
+    if not configured:
+        return dict(id="flywheel", label="Retrieval flywheel", status=OK,
+                    detail="not configured — utterance layer runs in fallback "
+                           "(description+body only)", fix=fix)
+
+    endpoint_detail = f"{flywheel_llm.ENDPOINT} ({flywheel_llm.MODEL}" \
+                       f"{', keyed' if has_key else ', no key'})"
+    ok, ping_detail = flywheel_llm.ping()
+    if not ok:
+        return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
+                    detail=f"configured ({endpoint_detail}) but unreachable — {ping_detail}",
+                    fix=fix)
+
+    # Coverage: indexed base-skill names vs eval/triggers.json entries with a non-empty
+    # llm_triggers.triggers list.
+    triggers_path = ROOT / "eval" / "triggers.json"
+    covered = set()
+    if triggers_path.exists():
+        try:
+            triggers = json.loads(triggers_path.read_text(encoding="utf-8"))
+            covered = {k for k, v in triggers.items() if v.get("llm_triggers", {}).get("triggers")}
+        except Exception:
+            pass
+    try:
+        indexed = _indexed_skill_names()
+    except Exception:
+        return dict(id="flywheel", label="Retrieval flywheel", status=OK,
+                    detail=f"configured + reachable ({endpoint_detail}); "
+                           "coverage unknown (index unreachable)", fix=fix)
+
+    have = indexed & covered
+    missing = sorted(indexed - covered)
+    n, m = len(have), len(indexed)
+    detail = f"configured + reachable ({endpoint_detail}); {n}/{m} skills have utterances"
+    if missing:
+        examples = ", ".join(missing[:5])
+        detail += f"; {len(missing)} missing (examples: {examples})"
+    return dict(id="flywheel", label="Retrieval flywheel", status=OK, detail=detail, fix=fix)
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
-          check_corpus_health, check_overrides, check_ledger, check_dup_mcp]
+          check_corpus_health, check_flywheel, check_overrides, check_ledger, check_dup_mcp]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------

@@ -184,6 +184,20 @@ the built index can't diverge from the model the server uses):
 | `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:1.18.2` |
 | `SKILL_CONCIERGE_LOG` | `~/.claude/skill-concierge/logs` (ledger directory) |
 
+### Flywheel LLM config (utterance generation — ADR-0027)
+
+Configures the offline generator that writes the utterance layer. One OpenAI-compatible client covers
+LM-Studio, Ollama (`/v1`), and any 3rd-party gateway; put these in `~/.claude/settings.json` env. Run
+the **`skill-concierge:flywheel`** skill to see coverage + endpoint health and to generate; full setups
+in [`references/flywheel-llm-providers.md`](references/flywheel-llm-providers.md).
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `FLYWHEEL_LLM_ENDPOINT` | `http://localhost:4310/v1/chat/completions` | OpenAI-compatible chat endpoint (LM-Studio / Ollama `/v1` / gateway). |
+| `FLYWHEEL_LLM_MODEL` | `gemma-4-12b-it-optiq` | must match the endpoint's exact served model name. |
+| `FLYWHEEL_LLM_API_KEY` | unset | when set, sent as `Authorization: Bearer <key>` — for 3rd-party gateways. |
+| `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` (strict, LM-Studio) \| `json_object` (Ollama/loose) \| `off` (prompt-only). |
+
 ### Runtime governance flags
 
 Behavior-changing kill-switches, both **default ON** — set to `0` (and reindex, where noted)
@@ -236,6 +250,7 @@ skill-concierge/
 ├── skills/doctor/SKILL.md                      # skill-concierge:doctor — healthcheck + auto-fix
 ├── skills/skill-usage-audit/SKILL.md           # skill-concierge:skill-usage-audit — valid usage measurement (SKILL-FIRST trail)
 ├── skills/keep-on/SKILL.md                     # skill-concierge:keep-on — curate the always-on allowlist (ADR-0025)
+├── skills/flywheel/SKILL.md                    # skill-concierge:flywheel — utterance coverage + generation (ADR-0027)
 ├── vendor/skill-search/                        # vendored MCP engine (MIT · sowhan/skill-search) + LICENSE + VENDORED.md
 ├── docs/adr/                                    # Architecture Decision Records (the WHY)
 ├── docs/caveats.md                             # operational landmines (the loud gotchas)

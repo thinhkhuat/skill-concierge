@@ -23,7 +23,7 @@ the full product overview see [`README.md`](README.md); for the *why* behind eac
 
 The full tree is in the README's *Architecture* section. The parts you will touch most:
 
-- `skills/{skill-search,setup,doctor,skill-usage-audit,keep-on}/SKILL.md` — the five plugin skills (router + maintenance + usage-audit + keep-on allowlist manager)
+- `skills/{skill-search,setup,doctor,skill-usage-audit,keep-on,flywheel}/SKILL.md` — the plugin skills (router + maintenance + usage-audit + keep-on allowlist manager + flywheel utterance coverage/generation, ADR-0027)
 - `scripts/` — `doctor.py` (health check), `analyze.py` (ledger; `--since`/`--until` window it by event time for before/after compares — don't split the ledger by hand), `apply-overrides.py` (keep-on writer; `--check`/`--if-changed` drift modes), `keep-on.py` (view/add/remove the always-on allowlist), `embed_server.py` (warm embed sidecar)
 - `hooks/` — the in-generation governance layer: `enforcer.py` (per-turn SKILL-FIRST gate: embed→retrieve→floors/intent→ranked mandate, plus the AUTHORIZED-SKIP tier on its two silent legs — ADR-0015), `ledger.py` (invocation capture), `doctrine.py` (SessionStart standing-order injection), `auto_reindex.py` + `auto_overrides.py` (SessionStart self-heal: index + settings-override drift), `doctrine/skill-first.md` (the library doctrine text — burden of proof on SKIP, escalate to `find-skills`)
 - `vendor/skill-search/` — vendored MCP engine (MIT · sowhan/skill-search) — **do not diverge silently**; the body-derived trigger points (`_extract_body_triggers`/`_trigger_phrases`, ADR-0016) are a direct engine-code patch, logged in [`VENDORED.md`](vendor/skill-search/VENDORED.md) — re-apply it if the engine is ever re-vendored from upstream

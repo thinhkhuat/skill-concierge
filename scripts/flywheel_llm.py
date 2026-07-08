@@ -24,6 +24,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 ENDPOINT = os.environ.get("FLYWHEEL_LLM_ENDPOINT", "http://localhost:4310/v1/chat/completions")
 MODEL = os.environ.get("FLYWHEEL_LLM_MODEL", "gemma-4-12b-it-optiq")
+API_KEY = os.environ.get("FLYWHEEL_LLM_API_KEY", "")
+# json_schema = strict grammar-constrained JSON (LM-Studio); json_object = loose JSON mode
+# (Ollama /v1 + some gateways); off = no response_format, rely on the prompt (generators
+# already validate + retry, so a looser mode degrades safely rather than crashing).
+SCHEMA_MODE = os.environ.get("FLYWHEEL_LLM_SCHEMA_MODE", "json_schema")
 
 
 def slug(name):
@@ -58,14 +63,19 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
         "temperature": 0.4,
         "max_tokens": 2048,
     }
-    if schema is not None:
+    if schema is not None and SCHEMA_MODE == "json_schema":
         payload["response_format"] = {
             "type": "json_schema",
             "json_schema": {"name": "reply", "strict": True, "schema": schema},
         }
+    elif schema is not None and SCHEMA_MODE == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+    # SCHEMA_MODE == "off" (or no schema given): omit response_format, rely on the prompt.
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(ENDPOINT, data=body,
-          headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+    req = urllib.request.Request(ENDPOINT, data=body, headers=headers)
     for attempt in range(3):                 # transient 503 -> backoff, don't hammer
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -77,6 +87,26 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
                 time.sleep(5 * (attempt + 1))
                 continue
             raise
+
+
+def ping(timeout=5):
+    """Cheap reachability preflight: GET <base>/models (base = ENDPOINT with the trailing
+    /chat/completions path dropped). Returns (ok: bool, detail: str) — never raises. Consumed
+    by `doctor.py` check_flywheel() and the flywheel skill; makes no network call unless invoked."""
+    base = ENDPOINT.rsplit("/chat/completions", 1)[0]
+    url = base.rstrip("/") + "/models"
+    headers = {}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read())
+        ids = [m.get("id", "?") for m in data.get("data", [])] if isinstance(data, dict) else []
+        detail = f"{url} reachable" + (f" — models: {', '.join(ids[:5])}" if ids else "")
+        return True, detail
+    except Exception as e:
+        return False, f"{url} unreachable: {e}"
 
 
 def live_skills():
@@ -110,6 +140,29 @@ def _selftest():
     h = body_hash("abc")
     assert len(h) == 32 and re.fullmatch(r"[0-9a-f]{32}", h), "body_hash format failed"
     assert body_hash("abc") == h, "body_hash not stable"
+
+    # Auth header: built when FLYWHEEL_LLM_API_KEY is set, absent otherwise. Network-free —
+    # inspect the Request object build_chat_request() would produce without sending it.
+    def _headers(key):
+        h = {"Content-Type": "application/json"}
+        if key:
+            h["Authorization"] = f"Bearer {key}"
+        return h
+    assert "Authorization" not in _headers(""), "no key -> no Authorization header"
+    assert _headers("sk-test")["Authorization"] == "Bearer sk-test", "key -> Bearer header"
+
+    # Schema-mode -> response_format shape (mirrors the branch in chat()).
+    def _response_format(mode, schema):
+        if schema is not None and mode == "json_schema":
+            return {"type": "json_schema", "json_schema": {"name": "reply", "strict": True, "schema": schema}}
+        if schema is not None and mode == "json_object":
+            return {"type": "json_object"}
+        return None
+    dummy_schema = {"type": "object"}
+    assert _response_format("json_schema", dummy_schema)["type"] == "json_schema", "json_schema mode"
+    assert _response_format("json_object", dummy_schema) == {"type": "json_object"}, "json_object mode"
+    assert _response_format("off", dummy_schema) is None, "off mode omits response_format"
+    assert _response_format("json_schema", None) is None, "no schema -> no response_format regardless of mode"
 
     try:
         names = live_skill_names()

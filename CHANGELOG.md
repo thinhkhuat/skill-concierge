@@ -5,6 +5,31 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-07-08
+
+Retrieval flywheel promoted to **first-class** ([ADR-0027](docs/adr/0027-flywheel-first-class-multi-provider.md)).
+The utterance layer (ADR-0026) was the biggest 0.16.x gain but was buried behind a manual,
+single-endpoint generation step. Now it's multi-provider, visible in `doctor`, and self-service via a
+menu skill. The graceful fallback (no utterances → description+body) is unchanged — first-class is not
+mandatory.
+
+### Added
+- **Multi-provider flywheel LLM routing** (`scripts/flywheel_llm.py`): `FLYWHEEL_LLM_API_KEY`
+  (optional `Authorization: Bearer` → any OpenAI-compatible gateway) and `FLYWHEEL_LLM_SCHEMA_MODE`
+  (`json_schema` | `json_object` | `off`, for endpoints that don't honor strict schemas), plus a
+  `ping()` reachability preflight. Covers LM-Studio, Ollama (`/v1`), and 3rd-party gateways — see
+  `references/flywheel-llm-providers.md`.
+- **`skill-concierge:flywheel` skill** (`skills/flywheel/`): menu-visible. Status mode (default,
+  read-only) shows endpoint health + per-skill utterance coverage; `--generate` runs the incremental
+  generator (only new/changed skills call the LLM) then reindexes, gated on a live `ping()`.
+- **`doctor` flywheel check** (`scripts/doctor.py` `check_flywheel()`): read-only, fail-open — reports
+  configured? / reachable? / coverage (which skills lack utterances), so the flywheel is discoverable.
+
+### Deferred (proposed, not shipped)
+- The "just works" `auto_flywheel` SessionStart hook (auto-generate utterances for new skills when a
+  LLM endpoint is configured + reachable), mirroring `auto_reindex`. Designed in ADR-0027 / the plan;
+  Phase 2 pending operator green-light.
+
 ## [0.16.1] — 2026-07-08
 
 ### Fixed
