@@ -217,3 +217,44 @@ archive plan (`plans/260706-0024-bge-m3-archive-to-feat-and-revert-main/plan.md`
 re-raising this migration. The work is **preserved, not abandoned** — deployable later via the
 runbook on the feat branch — but re-proposing it needs new evidence, not a repeat of the same
 measurement. A verified operator decision does not reverse on an abstract concern alone.
+
+## §13 — The LIVE plugin code is the VERSIONED cache dir, not `marketplaces/` and not the repo
+
+**Symptom:** you verify a deployed fix by reading
+`~/.claude/plugins/cache/skill-concierge/skill-concierge/<version>/` — or worse
+`~/.claude/plugins/marketplaces/skill-concierge/` — and get a wrong/absent answer.
+
+**Cause:** there are THREE copies and only one is live. (1) the **repo working copy**
+(`in-PROD/.../skill-concierge/`) is your source you edit + push; (2)
+`~/.claude/plugins/marketplaces/skill-concierge/` is the **marketplace registration** checkout,
+NOT what the harness runs; (3) the harness actually runs the **versioned cache** at
+`~/.claude/plugins/cache/skill-concierge/skill-concierge/<version>/` (e.g. `.../0.16.1/`) — that
+is the live, in-use code (its `bin/skill-search-mcp` is what `.mcp.json` launches, and the stable
+venv is stamped to that version in `~/.claude/skill-concierge/venv/.engine-plugin-version`).
+
+**Do:** to check deployed state, read the **versioned cache** dir for that version and confirm the
+venv `.engine-plugin-version` stamp matches. A repo edit only reaches the cache after a push +
+`/plugin marketplace update` (+ reload/restart). Note the DISCOVERY scope is the opposite nuance
+(skills are indexed from `cache/**/skills/`, deliberately **not** `marketplaces/**` — see
+[retrieval-engine.md](retrieval-engine.md) / §5); §13 is about which PLUGIN CODE runs, §5 is about
+which SKILL files get indexed.
+
+## §14 — A background reindex must receive the engine flags, or it silently reverts them (v0.16.1)
+
+**Symptom:** you enable an engine trigger flag (`SKILL_LLM_TRIGGERS`, `TRIGGERS_MAX`) in
+`.mcp.json`, reindex, confirm the index is right — and a session or two later the index is back to
+the old shape (utterance points gone), with no error.
+
+**Cause:** the query MCP is launched by Claude Code with the FULL `.mcp.json` env, but the
+`auto_reindex.py` SessionStart hook runs the reindex via its own `_mcp_env()`, which historically
+forwarded only `SKILL_QDRANT_URL`/`SKILL_EMBED_BACKEND`/`SKILL_EMBED_MODEL` from `.mcp.json`. So
+the detached reindex rebuilt at engine DEFAULTS (`SKILL_LLM_TRIGGERS` off, `TRIGGERS_MAX` 12) and
+pruned the utterance points — an index unstable by design. Fixed in **v0.16.1**: the `_mcp_env()`
+whitelist now also forwards `SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/`SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS`.
+
+**Do:** any engine-config env that must shape the INDEX has to reach the DETACHED indexer, not just
+the query MCP. Two durable layers: (a) forward it in `auto_reindex._mcp_env()` (portable, in the
+plugin), and (b) put it in `~/.claude/settings.json` env → `os.environ` → `merged = dict(os.environ)`
+wins over `.mcp.json` regardless of the whitelist. The machine-local `SKILL_TRIGGERS` path (the
+gitignored ~733K `eval/triggers.json`) lives in settings.json env for exactly this reason —
+absent elsewhere it degrades gracefully to description+body. [ADR-0026](adr/0026-llm-utterance-trigger-layer.md), CHANGELOG [0.16.1].

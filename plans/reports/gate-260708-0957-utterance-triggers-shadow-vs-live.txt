@@ -1,0 +1,31 @@
+
+full 495-way precision_eval  (6513 positives / 2601 negatives across 532 skills)   floor=0.2
+metric                          LIVE    SHADOW         Δ
+--------------------------------------------------------
+correct rank-1 %                35.1      42.1      +7.0
+correct top-5 %                 60.6      69.0      +8.4
+clears-floor %                  99.6     100.0      +0.4
+true-neg false-fire %            4.4       4.0      -0.4
+--------------------------------------------------------
+recall counts  rank1 2287->2745  top5 3950->4492  floor 6490->6512  (of 6513)
+true-neg fires 114->105  (of 2601)
+
+OFFER-SET CROWDING (skills clearing floor=0.2 per query — the real precision gate):
+  LIVE    mean  424.1  median  461  p95  495  (of 495)
+  SHADOW  mean  474.1  median  495  p95  495  (of 495)
+  -> if SHADOW crowds far above LIVE, the global floor MUST be re-tuned before the
+     enriched index improves OFFERS (rank gains are scale-invariant and stand regardless).
+
+SHADOW confusion (who steals a positive when correct isn't rank-1):
+    61x  ck:backend-development
+    39x  ck:payment-integration
+    32x  ck:databases
+    29x  plugins:caveman
+    26x  ponytail:ponytail-review
+    24x  agent-skills:security-and-hardening
+    24x  ck:devops
+    24x  gitnexus-exploring
+    23x  officecli-data-dashboard
+    23x  repo-local-analysis
+    23x  ck:frontend-development
+    23x  tavily-search

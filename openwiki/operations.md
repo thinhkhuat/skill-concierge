@@ -117,7 +117,7 @@ by a Docker sidecar rather than cold-loaded per turn:
 ## The stale-engine trap (post-update)
 
 Historically the most dangerous silent failure — **self-healing since v0.13.1, and the settled
-behavior on every release since (current: v0.16.0).** The v0.13.1 tags below mark where each fix
+behavior on every release since (current: v0.16.1).** The v0.13.1 tags below mark where each fix
 *shipped*, not the deployed version — confirm the live state with `doctor` (`Engine freshness`),
 never by reading a version out of this section. The MCP
 launcher ([`bin/skill-search-mcp`](../bin/skill-search-mcp)) execs `skill-search` from the **stable
@@ -159,6 +159,18 @@ non-boolean `shadow` mode (log-only, ships inert).
 Several enforcer levers are additionally **default-inert** and env-gated (`ENFORCER_DETERMINISTIC`,
 `ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) — see
 [enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-three-legs-two-formerly-silent).
+
+> **Utterance-layer deploy caveat.** [`.mcp.json`](../.mcp.json) ships `SKILL_LLM_TRIGGERS=1` +
+> `TRIGGERS_MAX=16`, but the utterance **corpus** (`eval/triggers.json`, ~733 KB, **gitignored** —
+> it regenerates from the flywheel scripts) is **not** in the repo, and its path is read from
+> `SKILL_TRIGGERS`, which lives **machine-local** in `~/.claude/settings.json` `env` — not in
+> `.mcp.json`. So a fresh clone enables the flag but degrades gracefully to desc/body triggers
+> until `SKILL_TRIGGERS` points at a generated `triggers.json`. **v0.16.1 fix:** the detached
+> SessionStart `auto_reindex` hook ([`hooks/scripts/auto_reindex.py`](../hooks/scripts/auto_reindex.py)
+> `_mcp_env()`) now forwards `SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/`SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS`
+> to the background reindex — before that it rebuilt at engine defaults and **pruned the utterance
+> points on every session** ([ADR-0026](../docs/adr/0026-llm-utterance-trigger-layer.md), CHANGELOG
+> [0.16.1]).
 
 ## Configuration files
 

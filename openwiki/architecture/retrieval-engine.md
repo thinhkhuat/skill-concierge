@@ -121,7 +121,9 @@ signature/model/dim so `health` can detect an embedder swap or a stale index.
 once skills are set to `name-only` (see [operations.md](../operations.md#configuration-files)),
 the retriever is the **sole** discovery path — a stale index hides skills. Staleness now self-heals
 via the SessionStart `auto_reindex` hook ([ADR-0014](../../docs/adr/0014-sessionstart-index-self-heal.md),
-[caveats §6](../../docs/caveats.md)).
+[caveats §6](../../docs/caveats.md)) — which since **v0.16.1** forwards the trigger-layer env to the
+detached rebuild so the background reindex no longer prunes the utterance points (deploy detail in
+[operations.md](../operations.md#runtime-governance-flags)).
 
 **The staleness *detector* itself was chronically wrong until v0.14.1.** `_disk_signature`
 fingerprinted `(path, mtime)` while `build_index`'s reindex-skip check fingerprints content — so any
@@ -151,6 +153,10 @@ CLI entrypoint `skill-search` (`server.main()`): no args → MCP stdio server; `
   CLS pooling and silently mismatches the 0.8.0-built index (retrieval degrades with no error).
 - **Never run the upstream `generate_overrides.py`** — it targets the wrong settings file with a
   2-item keep-on default and nukes the curated allowlist ([caveats §2](../../docs/caveats.md)).
+- **`enrich_index.py` is STALE for this index — do not use it.** It is single-vector-era
+  (centroids trigger phrases into one vector) and cannot address the multi-vector index; the first
+  utterance-layer attempt via it correctly aborted on the embed-parity gate. Utterance and body
+  phrases are added as NEW MAX-pool points via the indexer instead ([ADR-0026](../../docs/adr/0026-llm-utterance-trigger-layer.md)).
 - **The vendored `eval/` is a smoke-test, not a quality bar** ([caveats §1](../../docs/caveats.md)).
 - **Engine patches are direct source edits** — re-apply from `VENDORED.md` if re-vendored, and
   redeploy by rebuilding the stable venv (`setup.sh`) + a reindex, not just editing the source.
