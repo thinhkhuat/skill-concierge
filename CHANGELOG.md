@@ -5,6 +5,17 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-07-09
+
+### Fixed
+- **Flywheel regen cache moved to the canonical durable home.** `.flywheel-cache.json` now resolves to
+  `~/.claude/skill-concierge/.flywheel-cache.json` (`SKILL_CONCIERGE_HOME`,
+  [ADR-0025](docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)) instead of
+  `ROOT/eval/` — the versioned plugin cache dir that `/plugin update` wipes. A cache under the ephemeral
+  dir went cold after every update, so the next run treated all ~530 skills as cache-misses and
+  regenerated the whole catalogue against the local LLM. `flywheel_llm.py` now owns the path
+  (`CACHE_FILE`), shared by both generators (`llm_triggers.py`, `llm_eval_gen.py`).
+
 ## [0.18.0] — 2026-07-08
 
 Flywheel Phase 2 ([ADR-0027](docs/adr/0027-flywheel-first-class-multi-provider.md)): the "just works"

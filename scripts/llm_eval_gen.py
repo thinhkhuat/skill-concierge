@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import flywheel_llm  # noqa: E402
 
 DEFAULT_OUT = ROOT / "eval" / "scenarios-shadow"
-CACHE_FILE = ROOT / "eval" / ".flywheel-cache.json"
+CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_triggers.py
 
 SYSTEM_PROMPT = (
     "You generate a retrieval eval set for a developer-tool skill. Output STRICT "

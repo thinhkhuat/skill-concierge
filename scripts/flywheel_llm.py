@@ -22,6 +22,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+# Regen cache lives in the canonical durable home (ADR-0025), NOT ROOT/eval/ — ROOT is the
+# versioned plugin cache dir (…/<version>/), wiped on every /plugin update. A cache under the
+# ephemeral dir goes cold after each update, forcing a full-catalogue regeneration. Both
+# generators (llm_triggers.py, llm_eval_gen.py) share this single path.
+HOME = Path(os.environ.get("SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "skill-concierge"))
+CACHE_FILE = HOME / ".flywheel-cache.json"
+
 ENDPOINT = os.environ.get("FLYWHEEL_LLM_ENDPOINT", "http://localhost:4310/v1/chat/completions")
 MODEL = os.environ.get("FLYWHEEL_LLM_MODEL", "gemma-4-12b-it-optiq")
 API_KEY = os.environ.get("FLYWHEEL_LLM_API_KEY", "")

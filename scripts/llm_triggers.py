@@ -33,7 +33,7 @@ import flywheel_llm  # noqa: E402
 from build_triggers import MAX_TRIGGERS  # noqa: E402 — same per-skill cap build_triggers.py uses
 
 TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
-CACHE_FILE = ROOT / "eval" / ".flywheel-cache.json"
+CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_eval_gen.py
 CACHE_PREFIX = "triggers:"  # namespaced — cache file is shared with llm_eval_gen.py
 
 SYSTEM_PROMPT = (
