@@ -5,6 +5,16 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-07-08
+
+### Fixed
+- **Utterance layer was unstable across reindexes** ([ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md)):
+  the detached SessionStart `auto_reindex` hook forwarded only the embedder/store keys from `.mcp.json`,
+  so it rebuilt the index at engine defaults (`SKILL_LLM_TRIGGERS` off, `TRIGGERS_MAX` 12) and pruned the
+  utterance points on every run. `hooks/scripts/auto_reindex.py` `_mcp_env()` now also forwards
+  `SKILL_LLM_TRIGGERS`, `TRIGGERS_MAX`, `SKILL_TRIGGERS`, `SKILL_BODY_TRIGGERS` so the indexer builds the
+  same index the query server serves. Found by the v0.16.0 go-live verification.
+
 ## [0.16.0] — 2026-07-08
 
 LLM-utterance trigger layer landed live ([ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md)).
