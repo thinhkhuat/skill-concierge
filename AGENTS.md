@@ -57,10 +57,11 @@ after a version bump or after editing a fact shared between these docs.
 
 ## Runtime flags
 
-Both **default ON**; each is a one-var revert to the prior behavior:
+Each is a one-var revert to the prior behavior (`ENFORCER_AUTHORIZED_SKIP` and `SKILL_BODY_TRIGGERS` default ON; `SKILL_LLM_TRIGGERS` default OFF):
 
 - `ENFORCER_AUTHORIZED_SKIP` (`hooks/scripts/enforcer.py`) — injects a `SKILL-CHECK:` line on the enforcer's two previously-silent verdicts (getaway score-floor miss, conversational-intent skip) so the agent knows the hook already cleared the turn. `=0` restores the old silence. [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md).
 - `SKILL_BODY_TRIGGERS` (`vendor/skill-search/skill_search/server.py`) — folds each skill body's labeled decision-section phrases into the MAX-pool trigger layer alongside the description-derived ones. `=0` + a reindex reverts to description-only. [ADR-0016](docs/adr/0016-body-derived-trigger-points.md).
+- `SKILL_LLM_TRIGGERS` (`vendor/skill-search/skill_search/server.py`) — default **OFF**; layers the offline flywheel-generated natural-utterance phrases (`eval/triggers.json` `llm_triggers` block, EN+VN) FIRST in the MAX-pool trigger layer, ahead of description/body, capped COMBINED at `TRIGGERS_MAX` (live deploy uses `16` so utterances add slots rather than evict). Reads `SKILL_TRIGGERS` (path to the gitignored `eval/triggers.json`; absent → no utterances, graceful). `=1` + a reindex enables. [ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md).
 
 `skills/skill-usage-audit/scripts/audit_skill_usage.py` recognizes the `SKILL-CHECK:` marker: a
 hook-authorized skip is tallied separately as `authorized_skip` and excluded from the false-SKIPPING

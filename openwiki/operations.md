@@ -117,7 +117,7 @@ by a Docker sidecar rather than cold-loaded per turn:
 ## The stale-engine trap (post-update)
 
 Historically the most dangerous silent failure — **self-healing since v0.13.1, and the settled
-behavior on every release since (current: v0.15.0).** The v0.13.1 tags below mark where each fix
+behavior on every release since (current: v0.16.0).** The v0.13.1 tags below mark where each fix
 *shipped*, not the deployed version — confirm the live state with `doctor` (`Engine freshness`),
 never by reading a version out of this section. The MCP
 launcher ([`bin/skill-search-mcp`](../bin/skill-search-mcp)) execs `skill-search` from the **stable
@@ -150,6 +150,8 @@ non-boolean `shadow` mode (log-only, ships inert).
 |----------|---------|--------|-----|
 | `ENFORCER_AUTHORIZED_SKIP` | `1` | enforcer injects a `SKILL-CHECK:` authorization on its two formerly-silent verdict legs instead of nothing; `=0` restores the old silence | [0015](../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
 | `SKILL_BODY_TRIGGERS` | `1` | engine mines each skill body's labeled decision-sections into extra MAX-pool trigger points; `=0` **+ a reindex** reverts to description-only | [0016](../docs/adr/0016-body-derived-trigger-points.md) |
+| `SKILL_LLM_TRIGGERS` | `0` | layers offline flywheel-generated natural-utterance phrases (EN+VN) FIRST in the MAX-pool trigger layer; `=1` **+ a reindex** enables (needs `SKILL_TRIGGERS` → `eval/triggers.json`) | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
+| `TRIGGERS_MAX` | `12` | per-skill COMBINED cap across all trigger sources; live deploy uses `16` so utterances add slots rather than evict desc/body | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
 | `ENFORCER_SELFREF_SKIP` | `1` | enforcer pre-authorizes a 3rd AUTHORIZED-SKIP leg for pure self-referential recap turns ("explain your last answer"); `=0` restores the old 2-leg behavior | [0019](../docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
 | `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
 | `SKILL_TRIGGER_PURITY` | `shadow` | engine flags workflow-summary body triggers; `shadow` only logs would-drops (index unchanged), `active` drops them (**needs a full reindex**), `off` skips the check | [0023](../docs/adr/0023-trigger-purity-lint.md) |

@@ -5,6 +5,30 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-07-08
+
+LLM-utterance trigger layer landed live ([ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md)).
+An offline free-local-LLM flywheel generated per-skill natural-utterance trigger phrases (532/532
+skills, 100% bilingual EN+VN); these now feed the multivector index as MAX-pooled trigger points,
+lifting retrieval recall without diluting the base vector. The generative model never touches the
+≤300ms enforcer hot path — it runs offline at generation time only.
+
+### Added
+- **LLM-utterance trigger source** (`vendor/skill-search/skill_search/server.py` `_trigger_phrases`,
+  behind `SKILL_LLM_TRIGGERS`, default OFF = byte-identical): layers the offline-generated utterance
+  phrases (`eval/triggers.json` `llm_triggers` block) FIRST in the MAX-pool trigger layer, ahead of
+  description- and body-derived phrases, deduped and capped COMBINED at `TRIGGERS_MAX` (raised to 16
+  in the live deploy so utterances add slots rather than evict). Mirrors ADR-0016's engine-only fold;
+  `build_triggers.py` carries a sync note. [VENDORED.md v0.16.0].
+- **Flywheel generators** (`scripts/flywheel_llm.py`, `llm_eval_gen.py`, `llm_triggers.py`): offline
+  LM-Studio client producing the per-skill eval corpus (`eval/scenarios-shadow/`) and utterance-trigger
+  layer. Strict `json_schema`, thinking-off. Generated data is gitignored (regenerates from the scripts).
+
+### Changed
+- **`scripts/precision_eval.py` ranks skills, not points** — `search()` now uses `group_by name`
+  MAX-pool (`/points/query/groups`), mirroring the live engine, so the shadow-vs-live gate measures
+  skill-rank correctly on the multivector index (a raw point-search inflated rank/floor/crowding).
+
 ## [0.15.0] — 2026-07-06
 
 Autonomous `skillOverrides` freshness + seamless keep-on management

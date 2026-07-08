@@ -53,11 +53,11 @@ def _post(url, payload, timeout=30.0):
         return json.loads(r.read())
 
 
-# SYNC NOTE (v0.15.0): this function is the hand-mirrored twin of server.py `_split_phrases`
+# SYNC NOTE (v0.16.0): this function is the hand-mirrored twin of server.py `_split_phrases`
 # (keep them identical). The engine's `_trigger_phrases` additionally layers LLM-utterance
 # phrases (eval/triggers.json `llm_triggers`, written by scripts/llm_triggers.py) FIRST, behind
 # SKILL_LLM_TRIGGERS — that is an engine-CONSUMER concern with no twin here (this script only
-# PRODUCES the base prose-phrase block). Do not mirror it into build_triggers. See VENDORED.md v0.15.0.
+# PRODUCES the base prose-phrase block). Do not mirror it into build_triggers. See VENDORED.md v0.16.0.
 def split_phrases(description: str) -> list[str]:
     """Description -> deduped, intent-bearing phrases (order-preserving)."""
     if not description:

@@ -86,7 +86,7 @@ MULTIVECTOR     = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"
 # Default ON; set SKILL_BODY_TRIGGERS=0 + reindex to revert to description-only
 # triggers (today's behavior, byte-identical). No effect when MULTIVECTOR is off.
 SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
-# LLM-utterance trigger points (v0.15.0): layer the offline-generated per-skill
+# LLM-utterance trigger points (v0.16.0, ADR-0026): layer the offline-generated per-skill
 # utterance triggers (eval/triggers.json `llm_triggers` block, produced by
 # scripts/llm_triggers.py) into the SAME MAX-pool trigger layer, FIRST (highest
 # quality phrases win the capped slots), ahead of description/body phrases.

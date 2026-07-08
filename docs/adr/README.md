@@ -37,6 +37,7 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0023](0023-trigger-purity-lint.md) | H4 trigger-purity lint — reject workflow-summary phrases from the MAX-pool triggers (shadow-first) | Accepted | 2026-07-06 |
 | [0024](0024-staleness-detector-content-not-mtime.md) | Staleness detector fingerprints content, not mtime — fixes chronic false "disk changed since last index" | Accepted | 2026-07-06 |
 | [0025](0025-autonomous-override-freshness-and-keep-on-management.md) | Autonomous `skillOverrides` freshness (SessionStart self-heal + doctor drift detection) + seamless keep-on management | Accepted | 2026-07-06 |
+| [0026](0026-llm-utterance-trigger-layer.md) | LLM-utterance trigger layer — offline flywheel-generated natural-utterance phrases (EN+VN) as MAX-pool trigger points, utterances-first, gated `SKILL_LLM_TRIGGERS` | Accepted | 2026-07-08 |
 
 ## Status values
 

@@ -64,18 +64,24 @@ its phrase points. A skill scores by its *closest* phrasing to the query, not a 
 This was validated at ~2.2× rank-1 separation with flat false-fire. See
 [ADR-0012](../../docs/adr/0012-multi-vector-max-pool-retrieval.md).
 
-### 2. Trigger phrases — description + body (ADR-0016)
+### 2. Trigger phrases — utterance + description + body (ADR-0016, ADR-0026)
 
-`_trigger_phrases()` builds each skill's phrase set:
+`_trigger_phrases()` builds each skill's phrase set, layered in QUALITY order and capped COMBINED at
+`TRIGGERS_MAX` (default 12; the live deploy raises it to **16**):
 
-- **Description-derived** first: split the description on sentence/clause boundaries, strip label
-  prefixes (`Triggers:`, `Use when:`), keep phrases ≥ 3 words / 12 chars, dedup, cap at 12.
-- **Body-derived** next (when `SKILL_BODY_TRIGGERS` is on — the default): phrases mined by
+- **LLM-utterance-derived** first (when `SKILL_LLM_TRIGGERS` is on — **off** by default): the offline
+  flywheel-generated natural-utterance phrases (EN+VN) for this skill, read from the `llm_triggers`
+  block of `eval/triggers.json` (path via `SKILL_TRIGGERS`; absent → skipped, graceful). Highest
+  register-match, so they take the capped slots first. See
+  [ADR-0026](../../docs/adr/0026-llm-utterance-trigger-layer.md).
+- **Description-derived** next: split the description on sentence/clause boundaries, strip label
+  prefixes (`Triggers:`, `Use when:`), keep phrases ≥ 3 words / 12 chars, dedup.
+- **Body-derived** last (when `SKILL_BODY_TRIGGERS` is on — the default): phrases mined by
   `skills_discovery._extract_body_triggers()` from the skill body's **labeled decision sections**
   (`## When to Use`, `Triggers:`, `Use when:`, `Examples:`…). A section is read until the next
   header **or** a `Do NOT use`-style exclusion line, so negative bullets naming *other* skills
   don't leak in. Body triggers are mined from the **full** body (not the 4000-char-capped copy),
-  deduped against the description phrases, and the **combined** set is capped at 12.
+  deduped against the earlier phrases; the **combined** set (all three sources) is capped at `TRIGGERS_MAX`.
 
 Effect on index size: total points rose **2231 → 3570 (+60%)** when body triggers landed — body
 phrases fill slots the median description left empty (descriptions used ~3 of 12). See

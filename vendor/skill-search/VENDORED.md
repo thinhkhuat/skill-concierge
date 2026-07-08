@@ -74,7 +74,7 @@ upstream is re-vendored:
   import. **Requires re-copy into the stable venv + a reindex to deploy** (the reindex rewrites the
   manifest signature into the new content format).
 
-- **LLM-utterance trigger points (v0.15.0):** `server.py` adds a third source to the SAME MAX-pool
+- **LLM-utterance trigger points (v0.16.0, ADR-0026):** `server.py` adds a third source to the SAME MAX-pool
   trigger layer — the offline-generated per-skill utterance phrases (`eval/triggers.json` `llm_triggers`
   block, produced by `scripts/llm_triggers.py`). New `SKILL_LLM_TRIGGERS` flag (default **OFF** =
   byte-identical to today) + `_llm_utterance_phrases(name)` loader (cached; keyed on the SAME `name` the
