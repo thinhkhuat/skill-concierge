@@ -44,10 +44,26 @@ def _post(url, payload, timeout=60.0):
 
 
 def search(collection, qvec, k=TOPK):
-    """Return [(name, score), ...] top-k from a collection (cosine)."""
-    res = _post(f"{QDRANT}/collections/{collection}/points/search",
-                {"vector": qvec, "limit": k, "with_payload": ["name"]})
-    return [(p["payload"]["name"], p["score"]) for p in res.get("result", [])]
+    """Return [(name, score), ...] top-k SKILLS from a collection (cosine).
+
+    Ranks SKILLS via group_by name + group_size=1 — MAX-pool, mirroring the live
+    engine's search_skills (server.py query_points_groups). This is REQUIRED for
+    the multivector index: a raw /points/search ranks POINTS, so one skill's base
+    + trigger points crowd the list and inflate rank/floor/crowding numbers. On a
+    single-vector collection (1 point/skill) grouping collapses to the same top-k,
+    so this stays correct for the old shadow too."""
+    res = _post(f"{QDRANT}/collections/{collection}/points/query/groups",
+                {"query": qvec, "group_by": "name", "limit": k, "group_size": 1,
+                 "with_payload": ["name"]})
+    groups = res.get("result", {}).get("groups", [])
+    out = []
+    for g in groups:
+        hits = g.get("hits") or []
+        if not hits:
+            continue
+        name = (hits[0].get("payload") or {}).get("name", g.get("id"))
+        out.append((name, hits[0]["score"]))
+    return out
 
 
 def rank_of(ranked, name):
