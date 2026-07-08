@@ -46,7 +46,12 @@ def _mcp_env():
     except Exception:
         pass
     merged = dict(os.environ)
-    for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL"):
+    # Forward the embedder/store keys AND the trigger-layer keys from .mcp.json so the
+    # DETACHED reindex builds the SAME index the query server serves. Without the trigger
+    # keys, an auto-reindex silently rebuilds at engine defaults (SKILL_LLM_TRIGGERS off,
+    # TRIGGERS_MAX 12) and prunes the utterance points — ADR-0026. real env still wins.
+    for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
+              "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS"):
         if k in env and k not in os.environ:
             merged[k] = env[k]
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")
