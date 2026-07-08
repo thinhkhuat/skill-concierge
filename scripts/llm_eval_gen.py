@@ -110,6 +110,9 @@ def save_cache(cache):
 
 
 def run(out_dir, limit=None, only=None, rate=6.0):
+    """Returns a list of {"name", "status": "generated"|"error", "detail"} records —
+    one per skill actually attempted this call (cache-hit/unchanged skills are skipped
+    silently and produce no record, consumed by flywheel.py's manifest writer)."""
     skills = flywheel_llm.live_skills()
     names = sorted(skills) if only is None else [only]
     if limit:
@@ -117,6 +120,7 @@ def run(out_dir, limit=None, only=None, rate=6.0):
 
     cache = load_cache()
     out_dir = Path(out_dir)
+    results = []
     for name in names:
         desc = skills.get(name, "")
         h = flywheel_llm.body_hash(desc)
@@ -134,10 +138,15 @@ def run(out_dir, limit=None, only=None, rate=6.0):
                     print(f"WARN: {name}: still <2 Vietnamese positives after retry (kept)")
         except Exception as e:
             print(f"WARN: skipping {name}: chat failed ({e})")
+            results.append({"name": name, "status": "error", "detail": f"chat failed: {e}"})
             continue
         if write_scenario(name, reply, out_dir):
             cache[name] = h
             save_cache(cache)
+            results.append({"name": name, "status": "generated", "detail": None})
+        else:
+            results.append({"name": name, "status": "error", "detail": "malformed reply"})
+    return results
 
 
 def _selftest():

@@ -1,9 +1,11 @@
 ---
-name: keep-on
+name: skill-concierge:keep-on
+user-invocable: true
 description: Manage skill-concierge's always-ON allowlist — the skills kept fully described in every turn instead of name-only. Use this skill when the user wants to view, add, or remove always-on skills, asks "which skills are always on", "add X to always-on", "remove X from the keep-on list", "manage the always-on skills", or wants to curate what stays injected vs retrieved on demand. Runs scripts/keep-on.py (list / add / remove), which edits the always-on allowlist under the canonical durable home (~/.claude/skill-concierge/keep-on.json) and re-applies the settings.json overrides.
+argument-hint: "[list | add <skill> | remove <skill>]"
 license: MIT
 metadata:
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # skill-concierge keep-on

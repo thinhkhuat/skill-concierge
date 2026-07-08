@@ -1,11 +1,13 @@
 ---
-name: skill-search
+name: skill-concierge:skill-search
+user-invocable: true
 description: Find the right skills for a task before acting. Use at the start of any multi-step or unfamiliar request to retrieve relevant skills by meaning, not name. Triggers when the user asks to build, set up, design, deploy, fix, or automate something and the right skill isn't obvious.
+argument-hint: "[task description]"
 license: MIT
 compatibility: Requires the skill-search MCP server (provides the search_skills tool) registered in Claude Code. See https://github.com/sowhan/skill-search
 metadata:
   author: Sowhan Mohammed
-  version: 0.1.0
+  version: 0.1.1
   mcp-server: skill-search
 ---
 

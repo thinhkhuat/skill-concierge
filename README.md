@@ -197,6 +197,9 @@ in [`references/flywheel-llm-providers.md`](references/flywheel-llm-providers.md
 | `FLYWHEEL_LLM_MODEL` | `gemma-4-12b-it-optiq` | must match the endpoint's exact served model name. |
 | `FLYWHEEL_LLM_API_KEY` | unset | when set, sent as `Authorization: Bearer <key>` — for 3rd-party gateways. |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` (strict, LM-Studio) \| `json_object` (Ollama/loose) \| `off` (prompt-only). |
+| `SKILL_AUTO_FLYWHEEL` | `1` (ON) | the `auto_flywheel` SessionStart hook auto-generates utterances for new/changed skills when the endpoint is reachable (detached, throttled, fail-open — ADR-0027). `=0` disables; manual `skill-concierge:flywheel --generate` still works. |
+| `AUTO_FLYWHEEL_THROTTLE_S` | `21600` (6h) | min seconds between background auto-flywheel runs. |
+| `AUTO_FLYWHEEL_MAX_PER_RUN` | `25` | cap on skills generated per background run (protects metered endpoints). |
 
 ### Runtime governance flags
 

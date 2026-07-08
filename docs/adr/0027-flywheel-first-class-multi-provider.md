@@ -34,14 +34,37 @@ the fallback as the safety net (first-class ≠ mandatory).
   `ping()` (fails loud at a dead endpoint, pointing at the providers doc). Bare `name: flywheel` per
   the component-building doc — the plugin supplies the `skill-concierge:` namespace.
 
-## The deferred auto-hook (recorded, NOT built this cut)
-The "just works" endpoint is a `hooks/scripts/auto_flywheel.py` SessionStart hook mirroring
-`auto_reindex`: when an endpoint is configured AND `ping()` succeeds, detect skills missing
-utterances, generate for just those, reindex — detached, throttled (longer than reindex; generation
-is heavier), per-run capped, `SKILL_AUTO_FLYWHEEL`-gated, fully fail-open. **Deliberately deferred to
-Phase 2** at the operator's direction (this cut = a/b/c; the auto-hook is the proposal). a/b/c are its
-prerequisites and stand on their own. Open Phase-2 questions: default ON vs OFF; paid-gateway
-cost/latency budget per run; triggers-only vs also refreshing the scenario eval corpus.
+## Phase 2 — the auto-hook (BUILT in v0.18.0)
+Shipped as `hooks/scripts/auto_flywheel.py` (SessionStart, mirrors `auto_reindex`) +
+`scripts/flywheel_manifest.py` (global run manifest) + smart `--generate` (`--triggers-only`/`--limit`)
++ `doctor`/flywheel-skill manifest surfacing. Operator-firmed decisions, all implemented:
+
+- **Default ON** (`SKILL_AUTO_FLYWHEEL=1`). Fully fail-open — unconfigured or `ping()` fails → silent
+  no-op → today's description+body fallback, untouched.
+- **Non-blocking background process** (detached, mirrors `auto_reindex`): the SessionStart hook returns
+  immediately; generation + reindex run in a spawned process that outlives the hook. Throttled
+  (`AUTO_FLYWHEEL_THROTTLE_S`, long — generation is heavier than a reindex), per-run capped so a bulk
+  skill import can't stampede the LLM.
+- **Global run manifest** at `~/.claude/skill-concierge/flywheel-manifest.json` (canonical durable home,
+  ADR-0025). Every run appends/updates: timestamp, endpoint+model, per-skill `{status, when}`,
+  totals, resulting coverage, and last error. Any agent or the user can read it to verify what the
+  background flywheel did — no need to watch a live process. **Surfaced in both** the
+  `skill-concierge:flywheel` skill (status shows the last-run manifest summary) and `doctor`
+  (`check_flywheel` reports the last run + coverage from the manifest).
+- **Smart `--generate` / auto-run scope** (uniform for the hook and the skill): the generators already
+  detect new/modified skills by `body_hash(description)` and skip unchanged ones. Policy:
+  **new skill → generate BOTH** (scenarios + triggers); **modified skill (description hash changed) →
+  regenerate BOTH** (both are description-derived; the old ones describe the old skill); **unchanged →
+  skip**. A `--triggers-only` flag skips the measurement-only scenario regen when the operator wants to
+  economize LLM calls.
+- **Coverage is index-driven** → symlinked skills (global `~/.claude/skills` + project
+  `.claude/skills`, incl. dev-source symlinks) are automatically covered: they are discovered by the
+  one-level `*/SKILL.md` globs and land in the live index, which is what the flywheel enumerates.
+  Verified: 17/18 symlinked dirs indexed (the 1 miss is a non-skill helper dir); `cognee-memory-doctor`
+  (symlinked) is in the index.
+
+a/b/c (shipped in 0.17.0) are the prerequisites. Remaining open item: paid-gateway cost/latency budget
+per run (the throttle + per-run cap matter most for metered endpoints; a local endpoint is free).
 
 ## Evidence (this cut, verified by the overseer live)
 - `flywheel_llm.py --selftest` PASS; `ping()` live against LM-Studio `:4310` → `(True, '…/models

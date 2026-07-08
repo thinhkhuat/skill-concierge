@@ -131,6 +131,9 @@ def save_cache(cache):
 
 
 def run(limit=None, only=None, rate=6.0):
+    """Returns a list of {"name", "status": "generated"|"error", "detail"} records —
+    one per skill actually attempted this call (cache-hit/unchanged skills are skipped
+    silently and produce no record, consumed by flywheel.py's manifest writer)."""
     skills = flywheel_llm.live_skills()
     names = sorted(skills) if only is None else [only]
     if limit:
@@ -138,6 +141,7 @@ def run(limit=None, only=None, rate=6.0):
 
     triggers = load_triggers()
     cache = load_cache()
+    results = []
     for name in names:
         desc = skills.get(name, "")
         h = flywheel_llm.body_hash(desc)
@@ -155,15 +159,19 @@ def run(limit=None, only=None, rate=6.0):
                     print(f"WARN: {name}: still <2 Vietnamese triggers after retry (kept)")
         except Exception as e:
             print(f"WARN: skipping {name}: chat failed ({e})")
+            results.append({"name": name, "status": "error", "detail": f"chat failed: {e}"})
             continue
         err = validate_reply(reply)
         if err:
             print(f"WARN: skipping {name}: {err}")
+            results.append({"name": name, "status": "error", "detail": err})
             continue
         merge_utterance_layer(triggers, name, reply["triggers"])
         cache[key] = h
         save_triggers(triggers)
         save_cache(cache)
+        results.append({"name": name, "status": "generated", "detail": None})
+    return results
 
 
 def _selftest():

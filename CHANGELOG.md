@@ -5,6 +5,32 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-07-08
+
+Flywheel Phase 2 ([ADR-0027](docs/adr/0027-flywheel-first-class-multi-provider.md)): the "just works"
+auto-flywheel + a first-class slash surface. Utterances now flow to new skills automatically, with a
+readable audit trail, and every skill-concierge slash command shows its argument hint.
+
+### Added
+- **`auto_flywheel` SessionStart hook** (`hooks/scripts/auto_flywheel.py`): when a LLM endpoint is
+  configured **and** reachable, it detects skills missing utterances, generates for just those, and
+  reindexes — **detached/non-blocking**, throttled (`AUTO_FLYWHEEL_THROTTLE_S`, default 6h), per-run
+  capped (`AUTO_FLYWHEEL_MAX_PER_RUN`, default 25), gated `SKILL_AUTO_FLYWHEEL` (**default ON**), fully
+  fail-open (unconfigured/unreachable → silent no-op → description+body fallback).
+- **Global run manifest** (`~/.claude/skill-concierge/flywheel-manifest.json`, `scripts/flywheel_manifest.py`):
+  every run (auto or manual) records timestamp, endpoint+model, per-skill status, totals, coverage,
+  last error (last 20 runs). Any agent or user can read what the background flywheel did. Surfaced in
+  the flywheel skill's status output and in `doctor`.
+- **Smart `--generate`**: runs BOTH scenarios + triggers for new/changed skills (each generator
+  content-hashes the description); `--triggers-only` skips the measurement-only scenario pass;
+  `--limit <N>` caps skills per pass.
+- **Namespaced slash commands + argument hints on all six skills**: `name: skill-concierge:<skill>` +
+  `user-invocable: true` + `argument-hint` (the ClaudeKit pattern) so the hint surfaces on the
+  `/skill-concierge:<skill>` form the menu shows (fixes the bare-`name:` hint-invisibility, CC #22063).
+
+### Changed
+- `doctor` `check_flywheel()` now also reports the last flywheel run from the manifest.
+
 ## [0.17.0] — 2026-07-08
 
 Retrieval flywheel promoted to **first-class** ([ADR-0027](docs/adr/0027-flywheel-first-class-multi-provider.md)).

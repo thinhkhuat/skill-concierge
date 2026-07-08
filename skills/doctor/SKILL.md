@@ -1,9 +1,11 @@
 ---
-name: doctor
+name: skill-concierge:doctor
+user-invocable: true
 description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, the MCP seems to run old code after a plugin update, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, engine freshness, Qdrant, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start Qdrant, reindex, re-apply overrides).
+argument-hint: "[--fix]"
 license: MIT
 metadata:
-  version: 0.2.1
+  version: 0.2.2
 ---
 
 # skill-concierge doctor
@@ -35,6 +37,7 @@ the engine's own `skill-search --health`, so the two never drift.
    | Enrichment overlay | legacy MEAN overlay state (now superseded by the multi-vector layer) |
    | Multi-vector layer | trigger points present (MAX-pool retrieval, ADR-0012); WARNs if `SKILL_MULTIVECTOR` is on but none exist |
    | Corpus health | per-skill calibration `ok`/`weak`/`no-signal` counts from `eval/thresholds.json` |
+   | Retrieval flywheel | is the utterance-generation LLM configured + reachable, per-skill utterance coverage (which skills lack utterances), and the **last flywheel run** from the global manifest (`~/.claude/skill-concierge/flywheel-manifest.json`). Read-only, **fail-open** (never FAIL — the flywheel is optional). [ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md) |
    | Settings overrides | `skillOverrides` applied to `~/.claude/settings.json`; now **detects drift** from the installed catalogue (`apply-overrides.py --check`) → WARN + auto-fix (ADR-0025) |
    | Ledger dir | the telemetry log directory is writable |
    | Duplicate MCP | warns if a leftover user-scope `skill-search` MCP also exists |

@@ -258,3 +258,23 @@ plugin), and (b) put it in `~/.claude/settings.json` env → `os.environ` → `m
 wins over `.mcp.json` regardless of the whitelist. The machine-local `SKILL_TRIGGERS` path (the
 gitignored ~733K `eval/triggers.json`) lives in settings.json env for exactly this reason —
 absent elsewhere it degrades gracefully to description+body. [ADR-0026](adr/0026-llm-utterance-trigger-layer.md), CHANGELOG [0.16.1].
+
+## §15 — Plugin skill argument-hints need the SELF-NAMESPACED `name:` (the ClaudeKit pattern)
+
+**Symptom:** you add `argument-hint:` to a plugin skill's `SKILL.md`, but the muted hint never shows
+when you type the `/skill-concierge:<skill>` form the menu displays.
+
+**Cause + fix (proven against ClaudeKit, which does this right):** CC uses the frontmatter `name:`
+field *directly* as the slash command (issue #22063). A **bare** `name: flywheel` therefore registers
+`/flywheel` (with the hint) plus a separate auto-namespaced `/skill-concierge:flywheel` **without** the
+hint — so the hint is invisible on the form users actually see. The fix is NOT to omit `name:` (that
+risks losing the hint entirely per #43401). It is to put the FULL namespaced name in the field, exactly
+like ck: `name: skill-concierge:<skill>` + `user-invocable: true` + `argument-hint: "…"`. Then the slash
+command *is* `/skill-concierge:<skill>` and the hint rides on it. skill-concierge's own engine already
+supports this — `skills_discovery._namespaced_name` skips re-prefixing when `name:` already starts with
+the plugin id (v0.10.2 guard), so the indexed name stays `skill-concierge:<skill>` (no double-prefix).
+
+**Do:** all six skill-concierge skills use `name: skill-concierge:<dir>` (v0.18.0). The ENFORCED
+`~/.claude/docs/claude-code-component-building.md` entry on #22063 recommends *omitting* `name:` — that
+is the weaker branch; prefer the self-namespaced-name pattern (verified live to surface the hint). Note:
+personal/project skills (not plugin-installed) keep their bare `name:` — this applies to plugin skills.

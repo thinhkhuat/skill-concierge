@@ -505,6 +505,25 @@ def check_flywheel():
     live index has LLM-generated utterance triggers (eval/triggers.json llm_triggers)."""
     sys.path.insert(0, str(ROOT / "scripts"))
     import flywheel_llm
+    import flywheel_manifest
+
+    def _last_run_suffix():
+        """Read-only, fail-open manifest summary appended to `detail` — never affects
+        pass/fail. None when no run has ever completed (fresh install, hook never fired)."""
+        try:
+            run = flywheel_manifest.last_run()
+        except Exception:
+            return ""
+        if not run:
+            return ""
+        t = run.get("totals", {})
+        c = run.get("coverage", {})
+        s = (f"; last run {run.get('timestamp', '?')}: "
+             f"generated={t.get('generated', 0)} error={t.get('error', 0)} skipped={t.get('skipped', 0)}, "
+             f"coverage {c.get('have', '?')}/{c.get('total', '?')}")
+        if run.get("last_error"):
+            s += f", last_error={run['last_error']}"
+        return s
 
     configured = "FLYWHEEL_LLM_ENDPOINT" in os.environ or "FLYWHEEL_LLM_MODEL" in os.environ
     has_key = bool(os.environ.get("FLYWHEEL_LLM_API_KEY"))
@@ -513,14 +532,15 @@ def check_flywheel():
     if not configured:
         return dict(id="flywheel", label="Retrieval flywheel", status=OK,
                     detail="not configured — utterance layer runs in fallback "
-                           "(description+body only)", fix=fix)
+                           f"(description+body only){_last_run_suffix()}", fix=fix)
 
     endpoint_detail = f"{flywheel_llm.ENDPOINT} ({flywheel_llm.MODEL}" \
                        f"{', keyed' if has_key else ', no key'})"
     ok, ping_detail = flywheel_llm.ping()
     if not ok:
         return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
-                    detail=f"configured ({endpoint_detail}) but unreachable — {ping_detail}",
+                    detail=f"configured ({endpoint_detail}) but unreachable — "
+                           f"{ping_detail}{_last_run_suffix()}",
                     fix=fix)
 
     # Coverage: indexed base-skill names vs eval/triggers.json entries with a non-empty
@@ -547,6 +567,7 @@ def check_flywheel():
     if missing:
         examples = ", ".join(missing[:5])
         detail += f"; {len(missing)} missing (examples: {examples})"
+    detail += _last_run_suffix()
     return dict(id="flywheel", label="Retrieval flywheel", status=OK, detail=detail, fix=fix)
 
 

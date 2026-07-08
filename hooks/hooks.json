@@ -1,5 +1,5 @@
 {
-  "description": "skill-concierge — SKILL-FIRST doctrine + semantic enforcer + invocation ledger + index self-heal + override self-heal. SessionStart: inject the full standing-order doctrine (doctrine.py, read from hooks/doctrine/skill-first.md), fire a detached/throttled incremental reindex so the index self-refreshes (auto_reindex.py), and reconcile the settings.json skillOverrides on drift (auto_overrides.py). UserPromptSubmit: inject the cheap per-turn gate trigger + semantic top-k candidates (enforcer) and log turns/manual use (ledger). PostToolUse: log Claude's auto skill / semantic-search invocations. Fail-silent, additive-only. No post-turn gate — governance is in-generation, caveman-style.",
+  "description": "skill-concierge — SKILL-FIRST doctrine + semantic enforcer + invocation ledger + index self-heal + override self-heal + flywheel self-heal. SessionStart: inject the full standing-order doctrine (doctrine.py, read from hooks/doctrine/skill-first.md), fire a detached/throttled incremental reindex so the index self-refreshes (auto_reindex.py), reconcile the settings.json skillOverrides on drift (auto_overrides.py), and — if a flywheel LLM endpoint is configured and reachable — fire a detached/throttled/capped retrieval-flywheel generation run (auto_flywheel.py, default ON via SKILL_AUTO_FLYWHEEL, fail-open when unconfigured). UserPromptSubmit: inject the cheap per-turn gate trigger + semantic top-k candidates (enforcer) and log turns/manual use (ledger). PostToolUse: log Claude's auto skill / semantic-search invocations. Fail-silent, additive-only. No post-turn gate — governance is in-generation, caveman-style.",
   "hooks": {
     "SessionStart": [
       {
@@ -18,6 +18,11 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto_overrides.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto_flywheel.py\"",
             "timeout": 10
           }
         ]
