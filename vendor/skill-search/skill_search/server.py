@@ -86,6 +86,14 @@ MULTIVECTOR     = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"
 # Default ON; set SKILL_BODY_TRIGGERS=0 + reindex to revert to description-only
 # triggers (today's behavior, byte-identical). No effect when MULTIVECTOR is off.
 SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
+# LLM-utterance trigger points (v0.15.0): layer the offline-generated per-skill
+# utterance triggers (eval/triggers.json `llm_triggers` block, produced by
+# scripts/llm_triggers.py) into the SAME MAX-pool trigger layer, FIRST (highest
+# quality phrases win the capped slots), ahead of description/body phrases.
+# Default OFF = byte-identical to today; set SKILL_LLM_TRIGGERS=1 + reindex to enable.
+SKILL_LLM_TRIGGERS = os.environ.get("SKILL_LLM_TRIGGERS", "0") != "0"
+_LLM_TRIG_PATH = os.environ.get(
+    "SKILL_TRIGGERS", str(Path(__file__).resolve().parent.parent.parent.parent / "eval" / "triggers.json"))
 # Index manifest: lets us detect drift between disk and the index cheaply.
 META_PATH       = Path(os.environ.get(
     "SKILL_META_PATH", str(Path.home() / ".cache" / "skill-search" / "index_meta.json")))
@@ -280,23 +288,48 @@ def _split_phrases(description: str) -> list:
     return out[:_TRIG_MAX]
 
 
+_LLM_TRIG_CACHE = None
+
+
+def _llm_utterance_phrases(name: str) -> list:
+    """LLM-utterance trigger phrases for `name` from eval/triggers.json (cached).
+    Reads the `llm_triggers.triggers` block (scripts/llm_triggers.py output); [] if
+    the file is absent/unreadable or the skill has no llm layer."""
+    global _LLM_TRIG_CACHE
+    if _LLM_TRIG_CACHE is None:
+        try:
+            d = json.loads(Path(_LLM_TRIG_PATH).read_text(encoding="utf-8"))
+            _LLM_TRIG_CACHE = {
+                k: ((v.get("llm_triggers") or {}).get("triggers") or [])
+                for k, v in d.items() if isinstance(v, dict)}
+        except Exception:
+            _LLM_TRIG_CACHE = {}
+    return _LLM_TRIG_CACHE.get(name, [])
+
+
 def _trigger_phrases(s: dict) -> list:
-    """Trigger-point phrases for one skill: description-derived first, then (if
-    SKILL_BODY_TRIGGERS) body-derived, deduped against the description and capped
-    COMBINED at _TRIG_MAX — so per-skill triggers never exceed the SAME ceiling (12)
-    description-only already had. Growth is BOUNDED, not additive-on-top; but the
-    TOTAL point count DOES rise, because most skills left slots empty (median
-    description uses ~3 of 12) that body phrases now fill. Measured live: 2231 ->
-    3570 (+60%) — well under full-body chunking's 2-4x. Already-verbose descriptions
-    at the cap get no body phrases."""
-    phrases = _split_phrases(s["description"])
-    if SKILL_BODY_TRIGGERS:
-        seen = {p.lower() for p in phrases}
-        body_text = "\n".join(s.get("body_triggers") or [])
-        for p in _split_phrases(body_text):
-            if p.lower() not in seen:
-                seen.add(p.lower())
+    """Trigger-point phrases for one skill, deduped (case-insensitive) and capped
+    COMBINED at _TRIG_MAX. Sources in QUALITY order: (if SKILL_LLM_TRIGGERS) the
+    offline-generated utterance triggers FIRST, then description-derived, then (if
+    SKILL_BODY_TRIGGERS) body-derived. Utterances-first means the best phrases win
+    the capped slots; the cap keeps per-skill growth bounded (raise TRIGGERS_MAX to
+    add slots rather than evict). TOTAL point count still rises because most skills
+    left description slots empty. Flags default OFF/prior — byte-identical to before
+    when unset."""
+    phrases, seen = [], set()
+
+    def _add(src):
+        for p in src:
+            k = p.lower()
+            if k not in seen:
+                seen.add(k)
                 phrases.append(p)
+
+    if SKILL_LLM_TRIGGERS:
+        _add(_llm_utterance_phrases(s["name"]))
+    _add(_split_phrases(s["description"]))
+    if SKILL_BODY_TRIGGERS:
+        _add(_split_phrases("\n".join(s.get("body_triggers") or [])))
     return phrases[:_TRIG_MAX]
 
 

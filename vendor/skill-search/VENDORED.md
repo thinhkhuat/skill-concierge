@@ -74,6 +74,21 @@ upstream is re-vendored:
   import. **Requires re-copy into the stable venv + a reindex to deploy** (the reindex rewrites the
   manifest signature into the new content format).
 
+- **LLM-utterance trigger points (v0.15.0):** `server.py` adds a third source to the SAME MAX-pool
+  trigger layer — the offline-generated per-skill utterance phrases (`eval/triggers.json` `llm_triggers`
+  block, produced by `scripts/llm_triggers.py`). New `SKILL_LLM_TRIGGERS` flag (default **OFF** =
+  byte-identical to today) + `_llm_utterance_phrases(name)` loader (cached; keyed on the SAME `name` the
+  index/`build_triggers.py` use) + a rewritten `_trigger_phrases` that layers sources in QUALITY order:
+  utterances FIRST, then description, then (`SKILL_BODY_TRIGGERS`) body — deduped case-insensitively and
+  capped COMBINED at `_TRIG_MAX`. Utterances-first means the best phrases win the capped slots; raise
+  `TRIGGERS_MAX` (e.g. 16) to add slots instead of evicting. Loader default path is a dev-tree
+  convenience — the DEPLOYED venv copy must be given `SKILL_TRIGGERS=<repo>/eval/triggers.json`
+  explicitly at reindex. **Mirror status:** engine-only, like ADR-0016's body-trigger fold. `build_triggers.py`
+  is a *producer* (writes the base prose-phrase block) with no `_trigger_phrases` twin to sync; its only
+  overlapping twin is `split_phrases`≡`_split_phrases`, left UNCHANGED. Extends ADR-0012/0016's trigger
+  layer; base vectors untouched. **Requires re-copy into the stable venv (`pip install vendor/skill-search`)
+  + `SKILL_LLM_TRIGGERS=1` reindex (shadow first) to deploy.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.
