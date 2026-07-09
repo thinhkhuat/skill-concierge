@@ -34,19 +34,43 @@ from build_triggers import MAX_TRIGGERS  # noqa: E402 — same per-skill cap bui
 
 TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
 CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_eval_gen.py
-CACHE_PREFIX = "triggers:"  # namespaced — cache file is shared with llm_eval_gen.py
 
+# Bump when SYSTEM_PROMPT changes. The cache key hashes only the skill DESCRIPTION,
+# so without a version in the prefix a prompt rewrite regenerates nothing — every
+# skill looks "unchanged" forever and keeps its old, worse utterances.
+PROMPT_VERSION = 2
+CACHE_PREFIX = f"triggers:v{PROMPT_VERSION}:"  # namespaced — cache file is shared with llm_eval_gen.py
+
+# v2 (2026-07-09). v1 asked for "short intent phrases a user might type to invoke this
+# skill", which primed the model to restate the description in its own vocabulary. The
+# result scored ~1.0 against queries that already echoed the skill name and ~0.57 against
+# a genuine paraphrase — i.e. it lifted recall exactly where recall was already fine.
+#
+# Measured on the live embedder (paraphrase-multilingual-mpnet-base-v2), best-trigger
+# similarity to "turn a messy pile of incoming bug reports into prioritized work":
+#     v1  short phrases echoing the description ......... 0.5731  (absent from top-10)
+#     v1a long first-person "frustrated user" sentences .. 0.6473  (dilutes: 0.34-0.50 each)
+#     v2  short phrases, deliberately different vocab .... 0.7558  (rank 1)
+# Long natural sentences LOSE on this embedder — it rewards short topical phrases. The
+# lever is not sentence-likeness, it is vocabulary distance from the description.
 SYSTEM_PROMPT = (
-    "You generate short retrieval trigger phrases for a developer-tool skill. Output "
-    'STRICT JSON: {"triggers": [...]}. 6-8 short intent phrases (3-8 words) a user might '
-    "type to invoke this skill, natural phrasing. IMPORTANT: at least 2 of the phrases "
-    "MUST be in natural Vietnamese (tiếng Việt), the rest in English. No skill names in "
-    "the phrases. No markdown. Return valid JSON with double-quoted keys."
+    "You write retrieval trigger phrases for a developer-tool skill. Output STRICT JSON: "
+    '{"triggers": [...]}. Write 10 SHORT phrases (3-8 words each) that a user would type '
+    "when they need this skill but do not know its name.\n\n"
+    "RULES:\n"
+    "1. Name the user's PROBLEM or the OUTCOME they want — never the tool, never the skill name.\n"
+    "2. AVOID the distinctive nouns and verbs of the description. Reach for synonyms and "
+    "everyday words instead. If the description says 'triage', use words like 'sort', "
+    "'prioritise', 'backlog', 'incoming'.\n"
+    "3. Cover DIFFERENT angles: the symptom, the goal, the artifact involved, the moment it happens.\n"
+    "4. Keep every phrase short and topical. No first-person sentences, no 'I need', no 'how do I'.\n"
+    "5. At least 3 phrases MUST be natural Vietnamese (tiếng Việt); the rest English.\n"
+    "6. No markdown. Valid JSON, double-quoted keys."
 )
 
 VN_RETRY = (
     " Your previous reply had too few Vietnamese phrases. Return the full set again with "
-    "AT LEAST 2 of the trigger phrases in natural Vietnamese (tiếng Việt)."
+    "AT LEAST 3 of the trigger phrases in natural Vietnamese (tiếng Việt)."
 )
 
 
