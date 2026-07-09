@@ -89,6 +89,57 @@ upstream is re-vendored:
   layer; base vectors untouched. **Requires re-copy into the stable venv (`pip install vendor/skill-search`)
   + `SKILL_LLM_TRIGGERS=1` reindex (shadow first) to deploy.**
 
+- **Installed + enabled plugin scoping (`skills_discovery.py`):** `PLUGIN_GLOB`'s `**` matched *every*
+  version directory the plugin cache has ever held, and every plugin regardless of whether the user still
+  has it enabled. Measured on a live install: 587 `SKILL.md` collapsed to 256 unique `(plugin, skill)`
+  pairs, 89 of them served by more than one version; dedup is first-writer-wins over glob order, which
+  pinned `skill-concierge:doctor` and `:skill-search` to **0.3.0** while **0.18.1** was installed (31
+  versions cached). Disabled plugins were indexed too — `superpowers:systematic-debugging` was being
+  offered while `enabledPlugins` had it `False`, i.e. a result Claude Code cannot invoke. Both are the
+  same class of pollution `PLUGIN_GLOB` already avoids for `marketplaces/`.
+  Fix: new `_installed_plugin_roots()` reads Claude Code's own manifests —
+  `~/.claude/plugins/installed_plugins.json` (`plugins[<id>@<mkt>][].installPath`) and
+  `~/.claude/settings.json` (`enabledPlugins[<id>@<mkt>]`, absent ⇒ enabled) — and `_plugin_paths()`
+  keeps only cache paths under an installed **and** enabled root. **Fails open**: unreadable manifests, or
+  a filter that matches nothing, fall back to the unfiltered cache and log a warning — an index with no
+  plugin skills is worse than a stale one. Escape hatch `SKILL_PLUGIN_FILTER=0` restores prior behaviour.
+  Test seams: `SKILL_INSTALLED_PLUGINS`, `SKILL_CLAUDE_SETTINGS`. Deployed result: 548 → 427 indexed
+  skills, 206 points pruned, zero in-use skills lost. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex from a fresh process** —
+  long-lived MCP servers hold the old module in memory (ADR-0018).
+  Also hardened the `SKILL_DIRS` comment: those globs are deliberately **one level deep**. A `**` there
+  would walk the whole project tree (on the dev machine: 6,334 `SKILL.md` under `CLONED/`, 8,163
+  workbench-wide). Guarded by `test_project_glob_is_not_recursive`.
+
+- **Scope-tagged points + scope-bounded prune + scope-filtered query (`skills_discovery.py`,
+  `server.py`):** Claude Code spawns one MCP server per session, each with its own CWD, and they all
+  write ONE Qdrant collection — while `SKILL_DIRS[1]` is `Path.cwd()/.claude/skills`. So each session
+  saw a different skill set, and `build_index`'s `removed = [pid for pid in existing if pid not in
+  desired]` deleted whatever the *other* session's project contributed. Observed live: a reindex from
+  `LANDING_ZONE/...` reported `deleted: 32`, wiping the project points a reindex from `MY-WORKBENCH`
+  had just written; last writer won, forever, on a 30-minute hook throttle.
+  Fix: `_scope_for(path)` tags every skill `personal` | `plugin` | `project:<root>`; `visible_scopes()`
+  names what this process owns. `build_index` writes `scope` into every point payload;
+  `_existing_points()` returns `(content_hash, scope)`; `_point_changed()` re-embeds when the text OR
+  the scope changed (this is what migrates legacy scope-less points — a description that never changed
+  would otherwise keep a scope-less payload forever and be filtered out of every search); `_prunable()`
+  deletes only ids that are gone from disk **and** owned by a visible scope, so a foreign project's
+  points are "not mine", not "deleted". `search_skills` and `_indexed_names` apply `_scope_filter()`
+  (visible scopes ∪ `scope is null`, the null arm keeping legacy points searchable until the migrating
+  reindex lands). Filtering `_indexed_names` is also what killed the chronic false
+  `4 skill(s) on disk but not indexed` — `health()` was diffing a CWD-scoped disk view against a
+  globally shared index, and that false alarm is what invited a destructive reindex in the first place.
+  Verified live: reindex from the owning CWD → `deleted: 0`, 27 project points written; reindex from a
+  foreign CWD → `deleted: 0`, all 27 survive; `health()` from the owner → `status: ok, dark: none`;
+  a project-scoped skill ranks #1 for its own query in the owning session and is absent in a foreign one.
+
+- **Per-project index manifest (`server.py` `META_PATH`, `skills_discovery.manifest_key()`):** the
+  manifest stores `_disk_signature()`, which is CWD-scoped, but the file was global. Two sessions with
+  different project roots therefore overwrote each other's signature and both reported a permanent
+  `skills changed on disk since last index`. `META_PATH` now defaults to
+  `~/.cache/skill-search/index_meta-<md5(PROJECT_ROOT)[:8]>.json`. `SKILL_META_PATH` still overrides.
+  `hooks/scripts/auto_flywheel.py::_meta_path()` mirrors the derivation (same CWD ⇒ same file).
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

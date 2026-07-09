@@ -186,3 +186,115 @@ def test_discover_includes_and_namespaces_plugin(tmp_path, monkeypatch):
                         str(tmp_path / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md"))
     names = {s["name"] for s in sd.discover_skills()}
     assert "myplugin:sk" in names
+
+
+# --- installed + enabled plugin scoping ----------------------------------
+# The cache keeps EVERY historical version of every plugin, installed or not.
+# Globbing it wholesale indexed skills from ancient versions and from plugins the
+# user has disabled — i.e. results Claude Code cannot actually invoke.
+
+def _make_plugin(root: Path, mkt: str, plug: str, ver: str, skill: str, desc: str) -> Path:
+    d = root / "plugins" / "cache" / mkt / plug / ver / "skills" / skill
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\nname: {skill}\ndescription: {desc}\n---\nbody")
+    return root / "plugins" / "cache" / mkt / plug / ver
+
+
+def _plugin_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB",
+                        str(tmp_path / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md"))
+
+
+def test_only_the_installed_version_is_indexed(tmp_path, monkeypatch):
+    """Cache holds every historical version; index only the installed one."""
+    _make_plugin(tmp_path, "mkt", "myplugin", "0.3.0", "sk", "ANCIENT")
+    cur = _make_plugin(tmp_path, "mkt", "myplugin", "0.18.1", "sk", "CURRENT")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: {str(cur)})
+
+    found = {s["name"]: s for s in sd.discover_skills()}
+    assert "CURRENT" in found["myplugin:sk"]["description"]
+    assert "ANCIENT" not in found["myplugin:sk"]["description"]
+
+
+def test_disabled_plugins_are_not_indexed(tmp_path, monkeypatch):
+    """A plugin the user disabled must not be offered — it cannot be invoked."""
+    keep = _make_plugin(tmp_path, "mkt", "kept", "1.0.0", "yes", "d")
+    _make_plugin(tmp_path, "mkt", "dropped", "1.0.0", "no", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: {str(keep)})
+
+    names = {s["name"] for s in sd.discover_skills()}
+    assert "kept:yes" in names
+    assert "dropped:no" not in names
+
+
+def test_unreadable_manifest_fails_open(tmp_path, monkeypatch):
+    """If Claude Code's manifests can't be read, keep every cache path rather than
+    silently emptying the index. A retriever with no skills is worse than a stale one."""
+    _make_plugin(tmp_path, "mkt", "myplugin", "1.0.0", "sk", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: None)
+
+    assert {s["name"] for s in sd.discover_skills()} == {"myplugin:sk"}
+
+
+# --- scope tagging (multi-session shared collection) ----------------------
+# Claude Code spawns one MCP server per session, each with its own CWD, and they
+# all write ONE Qdrant collection. SKILL_DIRS[1] is CWD-relative, so without an
+# explicit owning scope a reindex in session A prunes session B's project points.
+
+def test_discover_tags_scope_for_each_source(tmp_path, monkeypatch):
+    personal, project = tmp_path / "personal", tmp_path / "project"
+    make_skill(personal, "p_only", desc="personal")
+    make_skill(project, "j_only", desc="project")
+    monkeypatch.setattr(sd, "PERSONAL_ROOT", personal)
+    monkeypatch.setattr(sd, "PROJECT_ROOT", project)
+    monkeypatch.setattr(sd, "SKILL_DIRS", [personal, project])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+
+    found = {s["name"]: s for s in sd.discover_skills()}
+    assert found["p_only"]["scope"] == "personal"
+    assert found["j_only"]["scope"] == f"project:{project}"
+
+
+def test_plugin_skills_get_plugin_scope(tmp_path, monkeypatch):
+    root = _make_plugin(tmp_path, "mkt", "myplugin", "1.0.0", "sk", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: {str(root)})
+    found = {s["name"]: s for s in sd.discover_skills()}
+    assert found["myplugin:sk"]["scope"] == "plugin"
+
+
+def test_visible_scopes_covers_this_session_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "PROJECT_ROOT", tmp_path / "mine")
+    vis = sd.visible_scopes()
+    assert "personal" in vis and "plugin" in vis
+    assert f"project:{tmp_path / 'mine'}" in vis
+    assert f"project:{tmp_path / 'theirs'}" not in vis
+
+
+def test_manifest_key_differs_per_project(tmp_path, monkeypatch):
+    """The index manifest records a CWD-scoped disk signature. One shared manifest
+    file therefore flip-flops between sessions with different project roots, and
+    each reports 'disk changed since last index' forever. Key it per project."""
+    monkeypatch.setattr(sd, "PROJECT_ROOT", tmp_path / "a")
+    a = sd.manifest_key()
+    monkeypatch.setattr(sd, "PROJECT_ROOT", tmp_path / "b")
+    b = sd.manifest_key()
+    assert a != b
+    monkeypatch.setattr(sd, "PROJECT_ROOT", tmp_path / "a")
+    assert sd.manifest_key() == a          # stable for the same root
+
+
+def test_project_glob_is_not_recursive(tmp_path, monkeypatch):
+    """REGRESSION GUARD. A `**` here would walk the whole project tree. On this
+    machine that means MY-WORKBENCH/CLONED/ — 6,334 SKILL.md across 208 cloned
+    repos (8,163 workbench-wide). SKILL_DIRS must stay exactly one level deep."""
+    proj = tmp_path / "proj"
+    (proj / "deep" / "nested" / "sk").mkdir(parents=True)
+    (proj / "deep" / "nested" / "sk" / "SKILL.md").write_text("---\nname: sk\ndescription: d\n---\nb")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [proj])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    assert sd.discover_skill_paths() == []

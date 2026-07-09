@@ -105,6 +105,48 @@ def test_manifest_records_backend_and_dim(tmp_path, monkeypatch):
     assert m["backend"] == "fastembed"
 
 
+# --- scope-bounded pruning (multi-session shared collection) --------------
+# All sessions share one Qdrant collection. A reindex must only delete points in
+# scopes it can actually see, or session A silently deletes session B's project
+# skills and the two flip-flop the index forever.
+
+def test_prunable_skips_foreign_project_scope():
+    existing = {
+        "mine":    ("h1", "project:/my/proj/.claude/skills"),
+        "theirs":  ("h2", "project:/their/proj/.claude/skills"),
+        "personal": ("h3", "personal"),
+    }
+    desired = {}                       # nothing on disk -> everything "gone"
+    visible = {"personal", "plugin", "project:/my/proj/.claude/skills"}
+
+    prunable = server._prunable(existing, desired, visible)
+    assert "mine" in prunable          # mine, visible, gone -> delete
+    assert "personal" in prunable
+    assert "theirs" not in prunable    # NOT mine -> never touch
+
+
+def test_prunable_keeps_points_still_on_disk():
+    existing = {"a": ("h1", "personal")}
+    desired = {"a": ("txt", "h1", {})}
+    assert server._prunable(existing, desired, {"personal"}) == []
+
+
+def test_prunable_treats_legacy_scopeless_points_as_prunable():
+    """Points written before scope tagging carry no scope. They must remain
+    prunable, else they linger forever and never get re-embedded with a scope."""
+    existing = {"old": ("h1", None)}
+    assert server._prunable(existing, {}, {"personal"}) == ["old"]
+
+
+def test_scope_change_forces_reembed():
+    """A point whose scope changed must count as changed even if its text didn't,
+    otherwise the one-time migration to scoped payloads never happens."""
+    assert server._point_changed(("h1", "personal"), "h1", "project:/x") is True
+    assert server._point_changed(("h1", "personal"), "h1", "personal") is False
+    assert server._point_changed(("h1", "personal"), "h2", "personal") is True
+    assert server._point_changed(None, "h1", "personal") is True
+
+
 # --- end-to-end (loads the embedder; opt-in) -----------------------------
 
 @pytest.mark.integration

@@ -17,7 +17,9 @@ No third-party deps and no network — safe to import from any script.
 
 import os
 import re
+import json
 import glob
+import hashlib
 import logging
 from pathlib import Path
 
@@ -25,15 +27,71 @@ log = logging.getLogger("skill_search")
 
 # Directories Claude Code loads skills from, in precedence order
 # (personal first, then project — first writer wins on name collision).
-SKILL_DIRS = [
-    Path.home() / ".claude" / "skills",                 # personal (all projects)
-    Path.cwd()  / ".claude" / "skills",                 # project-scoped
-]
+# Exactly ONE level deep, never recursive: a `**` here would walk the entire
+# project tree, sweeping up vendored/cloned repos that ship their own SKILL.md.
+PERSONAL_ROOT = Path.home() / ".claude" / "skills"      # personal (all projects)
+PROJECT_ROOT = Path.cwd() / ".claude" / "skills"        # project-scoped, CWD-relative
+SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT]
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
 # source checkouts including skills that aren't installed, which would pollute the
 # index with un-invokable results.
 PLUGIN_GLOB = str(Path.home() / ".claude" / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md")
+
+# The cache is append-only: it retains EVERY version ever installed, and keeps
+# plugins the user has since disabled. Globbing it wholesale therefore indexed
+# skills that Claude Code will not load — ancient versions (observed:
+# skill-concierge:doctor resolving to 0.3.0 while 0.18.1 was installed, across 31
+# cached versions) and disabled plugins (observed: superpowers:* offered while
+# `enabledPlugins` had it False). Both classes are un-invokable results, the exact
+# pollution PLUGIN_GLOB already avoids for marketplaces/.
+#
+# Claude Code's own manifests are the source of truth, so read them rather than
+# guessing from version strings:
+#   installed_plugins.json -> plugins[<id>@<marketplace>][].installPath
+#   settings.json          -> enabledPlugins[<id>@<marketplace>] : bool
+INSTALLED_PLUGINS_JSON = Path(os.environ.get(
+    "SKILL_INSTALLED_PLUGINS",
+    Path.home() / ".claude" / "plugins" / "installed_plugins.json"))
+CLAUDE_SETTINGS_JSON = Path(os.environ.get(
+    "SKILL_CLAUDE_SETTINGS",
+    Path.home() / ".claude" / "settings.json"))
+# Escape hatch: `=0` restores the pre-filter behaviour (index the whole cache).
+SKILL_PLUGIN_FILTER = os.environ.get("SKILL_PLUGIN_FILTER", "1") != "0"
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _installed_plugin_roots() -> set[str] | None:
+    """Install directories of the currently installed AND enabled plugins.
+
+    Returns None when the manifests cannot be read, which callers treat as
+    "don't filter" — an index missing every plugin skill is far worse than one
+    carrying a few stale entries.
+    """
+    installed = _read_json(INSTALLED_PLUGINS_JSON)
+    if not isinstance(installed, dict) or "plugins" not in installed:
+        return None
+    settings = _read_json(CLAUDE_SETTINGS_JSON) or {}
+    enabled = settings.get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        enabled = {}
+
+    roots: set[str] = set()
+    for key, entries in installed["plugins"].items():
+        # A plugin absent from enabledPlugins is enabled by default.
+        if not enabled.get(key, True):
+            continue
+        for entry in entries or []:
+            p = entry.get("installPath")
+            if p:
+                roots.add(str(p).rstrip("/"))
+    return roots or None
 
 
 def _namespaced_name(path: Path, base_name: str) -> str:
@@ -195,14 +253,70 @@ def parse_skill(path: Path) -> dict | None:
     }
 
 
+def _plugin_paths() -> list[Path]:
+    """Cache SKILL.md paths, narrowed to the installed + enabled plugin versions."""
+    hits = glob.glob(PLUGIN_GLOB, recursive=True)
+    if not SKILL_PLUGIN_FILTER:
+        return [Path(p) for p in hits]
+
+    roots = _installed_plugin_roots()
+    if roots is None:
+        log.warning("plugin manifests unreadable — indexing the whole cache "
+                    "(stale versions and disabled plugins included)")
+        return [Path(p) for p in hits]
+
+    kept = [p for p in hits if any(p.startswith(r + os.sep) for r in roots)]
+    if not kept:
+        log.warning("installed/enabled filter matched no cache skills — "
+                    "falling back to the unfiltered cache")
+        return [Path(p) for p in hits]
+    if len(kept) < len(hits):
+        log.info("plugin cache: kept %d of %d SKILL.md (installed+enabled only)",
+                 len(kept), len(hits))
+    return [Path(p) for p in kept]
+
+
 def discover_skill_paths() -> list[Path]:
     """Every SKILL.md path across personal dirs, project dirs, and plugins."""
     paths: list[Path] = []
     for d in SKILL_DIRS:
         if d.exists():
             paths += [Path(p) for p in glob.glob(str(d / "*" / "SKILL.md"))]
-    paths += [Path(p) for p in glob.glob(PLUGIN_GLOB, recursive=True)]
+    paths += _plugin_paths()
     return paths
+
+
+def _scope_for(path: Path) -> str:
+    """The scope that OWNS this skill: 'personal' | 'plugin' | 'project:<root>'.
+
+    Claude Code runs one MCP server per session, each with its own CWD, and they
+    all share one Qdrant collection. Points must record who owns them so a
+    reindex in session A cannot prune session B's project skills (they simply
+    look "deleted from disk" from A's vantage point).
+    """
+    p = str(path)
+    if p.startswith(str(PERSONAL_ROOT) + os.sep):
+        return "personal"
+    if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
+        return "plugin"
+    return f"project:{PROJECT_ROOT}"
+
+
+def visible_scopes() -> set[str]:
+    """Scopes THIS process is authoritative for — may prune and may search."""
+    return {"personal", "plugin", f"project:{PROJECT_ROOT}"}
+
+
+def manifest_key() -> str:
+    """Short, stable id for this session's project root.
+
+    The index manifest stores a disk signature computed from THIS session's view
+    (personal + plugin + this project). A single shared manifest file therefore
+    ping-pongs between sessions with different project roots, and every one of
+    them reports a false 'disk changed since last index'. Keying the manifest per
+    project root gives each session a signature it can actually match.
+    """
+    return hashlib.md5(str(PROJECT_ROOT).encode()).hexdigest()[:8]
 
 
 def discover_skills() -> list[dict]:
@@ -211,5 +325,6 @@ def discover_skills() -> list[dict]:
     for p in discover_skill_paths():
         skill = parse_skill(p)
         if skill and skill["name"]:
+            skill["scope"] = _scope_for(p)
             found.setdefault(skill["name"], skill)   # first writer wins
     return list(found.values())

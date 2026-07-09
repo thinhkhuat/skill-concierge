@@ -53,6 +53,7 @@ import requests
 
 # Skill discovery is shared with generate_overrides.py so both halves operate
 # on the exact same set of skills/names — see skills_discovery.py.
+from skill_search import skills_discovery as sd
 from skill_search.skills_discovery import discover_skills
 
 
@@ -94,9 +95,12 @@ SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
 SKILL_LLM_TRIGGERS = os.environ.get("SKILL_LLM_TRIGGERS", "0") != "0"
 _LLM_TRIG_PATH = os.environ.get(
     "SKILL_TRIGGERS", str(Path(__file__).resolve().parent.parent.parent.parent / "eval" / "triggers.json"))
-# Index manifest: lets us detect drift between disk and the index cheaply.
+# Index manifest: lets us detect drift between disk and the index cheaply. Keyed per
+# project root — the signature it stores is CWD-scoped, so one shared file would make
+# every session with a different project report a false 'disk changed since last index'.
 META_PATH       = Path(os.environ.get(
-    "SKILL_META_PATH", str(Path.home() / ".cache" / "skill-search" / "index_meta.json")))
+    "SKILL_META_PATH",
+    str(Path.home() / ".cache" / "skill-search" / f"index_meta-{sd.manifest_key()}.json")))
 
 mcp = FastMCP("skill-search")
 
@@ -368,22 +372,53 @@ def _ensure_collection() -> None:
         pass
 
 
-def _existing_points() -> dict[str, str]:
-    """Map point-id -> stored content_hash for everything currently indexed.
-    Used to decide what actually needs re-embedding."""
-    existing: dict[str, str] = {}
+def _existing_points() -> dict[str, tuple]:
+    """Map point-id -> (stored content_hash, stored scope) for everything indexed.
+    The hash decides what needs re-embedding; the scope decides what this process
+    is allowed to delete. Legacy points predating scope tagging carry scope=None."""
+    existing: dict[str, tuple] = {}
     if not _qdrant.collection_exists(COLLECTION):
         return existing
     offset = None
     while True:
         points, offset = _qdrant.scroll(
             collection_name=COLLECTION, limit=256,
-            with_payload=["content_hash"], with_vectors=False, offset=offset)
+            with_payload=["content_hash", "scope"], with_vectors=False, offset=offset)
         for p in points:
-            existing[str(p.id)] = (p.payload or {}).get("content_hash")
+            pl = p.payload or {}
+            existing[str(p.id)] = (pl.get("content_hash"), pl.get("scope"))
         if offset is None:
             break
     return existing
+
+
+def _point_changed(stored: tuple | None, want_hash: str, want_scope: str) -> bool:
+    """Re-embed when the text changed OR the owning scope changed. The scope arm
+    is what migrates legacy scope-less points onto the scoped payload; without it
+    an unchanged description would keep its scope-less payload forever and be
+    filtered out of every search."""
+    if stored is None:
+        return True
+    return stored[0] != want_hash or stored[1] != want_scope
+
+
+def _prunable(existing: dict[str, tuple], desired: dict, visible: set[str]) -> list[str]:
+    """Point-ids this process may delete: gone from disk AND owned by a scope we
+    can see. A point in another session's project scope is invisible here — it is
+    'not mine', not 'deleted'. Legacy scope-less points stay prunable so the
+    migration can clear them."""
+    return [pid for pid, (_h, scope) in existing.items()
+            if pid not in desired and (scope is None or scope in visible)]
+
+
+def _scope_filter():
+    """Restrict a query to scopes this session owns. `scope is null` keeps legacy
+    points searchable in the window between deploying this code and reindexing."""
+    vis = sd.visible_scopes()
+    return models.Filter(should=[
+        *[models.FieldCondition(key="scope", match=models.MatchValue(value=s)) for s in sorted(vis)],
+        models.IsNullCondition(is_null=models.PayloadField(key="scope")),
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -418,20 +453,25 @@ def build_index(force: bool = False) -> dict:
     for s in skills:
         text = _skill_text(s)
         h = _content_hash(text)
+        scope = s.get("scope", "personal")
         desired[_point_id(s["name"])] = (text, h, {
             "name": s["name"], "description": s["description"],
-            "path": s["path"], "content_hash": h, "kind": "base"})
+            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope})
         if MULTIVECTOR:
             for i, ph in enumerate(_trigger_phrases(s)):
                 ph_h = _content_hash(ph)
                 desired[_point_id(f"{s['name']}::trig::{i}")] = (ph, ph_h, {
                     "name": s["name"], "description": s["description"],
-                    "content_hash": ph_h, "kind": "trigger"})
+                    "content_hash": ph_h, "kind": "trigger", "scope": scope})
 
-    # Embed only what's new or whose text changed; delete what's gone (incl. orphaned
-    # trigger slots when a description shortens, and ALL triggers if MULTIVECTOR is turned off).
-    changed = [(pid, d) for pid, d in desired.items() if existing.get(pid) != d[1]]
-    removed = [pid for pid in existing if pid not in desired]
+    # Embed only what's new or whose text/scope changed. Delete what's gone (incl.
+    # orphaned trigger slots when a description shortens, and ALL triggers if
+    # MULTIVECTOR is turned off) — but ONLY within the scopes this session owns:
+    # every session shares this collection, and another session's project skills
+    # are invisible here, not deleted.
+    changed = [(pid, d) for pid, d in desired.items()
+               if _point_changed(existing.get(pid), d[1], d[2]["scope"])]
+    removed = _prunable(existing, desired, sd.visible_scopes())
 
     # Embed AND upsert per chunk — upserting all points in one call overflows Qdrant's
     # 33MB request limit once the multi-vector layer pushes the point count into the thousands.
@@ -452,12 +492,17 @@ def build_index(force: bool = False) -> dict:
 
 
 def _indexed_names() -> set[str]:
-    """Names currently present as points in the Qdrant collection."""
+    """Names indexed AND visible to this session.
+
+    Scope-filtered on purpose: the collection is shared across sessions, so an
+    unfiltered count diffed against this session's CWD-scoped disk view reported
+    another project's skills as 'dark' (and this project's as 'stale') — a false
+    alarm that invited a destructive reindex."""
     names: set[str] = set()
     offset = None
     while True:
         points, offset = _qdrant.scroll(
-            collection_name=COLLECTION, limit=256,
+            collection_name=COLLECTION, limit=256, scroll_filter=_scope_filter(),
             with_payload=["name"], with_vectors=False, offset=offset)
         names.update((p.payload or {}).get("name") for p in points)
         if offset is None:
@@ -502,9 +547,13 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     # group_by name + group_size=1 keeps each skill's single BEST point (on the
     # multi-vector index, its best-matching phrase point — the recall lever).
     queries = [query] + [q for q in (extra_queries or []) if q and q.strip()]
+    # query_filter: never surface another session's project skills — this process
+    # cannot invoke them, so offering them is a dead recommendation.
+    scope_filter = _scope_filter()
     group_lists = [
         _qdrant.query_points_groups(
             collection_name=COLLECTION, query=qv, group_by="name",
+            query_filter=scope_filter,
             limit=TOP_K, group_size=1, with_payload=True).groups
         for qv in embed_batch(queries)
     ]
