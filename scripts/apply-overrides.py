@@ -35,13 +35,23 @@ VENDOR = ROOT / "vendor" / "skill-search"
 
 def discover_skill_names():
     """Skill names from the SAME source the index uses (vendored skills_discovery),
-    so overrides and the retriever never drift. Test override: a newline file."""
+    so overrides and the retriever never drift. Test override: a newline file.
+
+    Project-scoped skills are EXCLUDED. `skillOverrides` lives in the global
+    ~/.claude/settings.json, but discovery's project dir is `Path.cwd()/.claude/skills`
+    — so a map built in one project and a map built in another differ by that project's
+    skills. Each session would see the other's keys as drift and rewrite the global file
+    (churning a backup every time). Same failure the index had before ADR-0028: a
+    CWD-scoped view driving a globally shared artifact. Project skills belong in that
+    project's settings, not in every session's.
+    """
     f = os.environ.get("SKILL_CONCIERGE_SKILLS_FILE")
     if f:
         return [ln.strip() for ln in Path(f).read_text(encoding="utf-8").splitlines() if ln.strip()]
     sys.path.insert(0, str(VENDOR))
     from skill_search.skills_discovery import discover_skills  # vendored engine
-    return [s["name"] for s in discover_skills()]
+    return [s["name"] for s in discover_skills()
+            if not str(s.get("scope", "")).startswith("project:")]
 
 
 def _compute_overrides(keep_on, names):

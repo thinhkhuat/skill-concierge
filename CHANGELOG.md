@@ -5,6 +5,24 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-07-09
+
+### Fixed
+- **The global override map is no longer built from a CWD-scoped view.** `skillOverrides` lives in the
+  global `~/.claude/settings.json`, but `discover_skill_names()` fed it from `discover_skills()`, whose
+  project dir is `Path.cwd()/.claude/skills`. A map computed in one project and a map computed in
+  another differ by that project's skills, so each session saw the other's keys as drift and rewrote
+  the global file — churning a backup every time. This is the same failure the index had before
+  [ADR-0028](docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md): a CWD-scoped
+  view driving a globally shared artifact. Project-scoped skills are now excluded; the map is
+  identical from every CWD (verified: 427 names from three different working directories).
+
+### Notes
+- `doctor`'s `-121 stale` override warning in 0.19.0 was **not** an `auto_overrides` bug. The hook runs
+  the *installed* plugin copy, which at 0.18.1 had no installed/enabled plugin filter and so discovered
+  548 skills — no drift from its own vantage point. It heals on its own once `/plugin update` lands
+  0.19.x. The stale keys were pruned here (548 → 427; the 32 keep-on entries preserved).
+
 ## [0.19.0] — 2026-07-09
 
 Concurrent Claude Code sessions each run their own MCP server against one shared Qdrant collection.
