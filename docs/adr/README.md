@@ -39,6 +39,7 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0025](0025-autonomous-override-freshness-and-keep-on-management.md) | Autonomous `skillOverrides` freshness (SessionStart self-heal + doctor drift detection) + seamless keep-on management | Accepted | 2026-07-06 |
 | [0026](0026-llm-utterance-trigger-layer.md) | LLM-utterance trigger layer — offline flywheel-generated natural-utterance phrases (EN+VN) as MAX-pool trigger points, utterances-first, gated `SKILL_LLM_TRIGGERS` | Accepted | 2026-07-08 |
 | [0027](0027-flywheel-first-class-multi-provider.md) | Flywheel promoted to first-class — multi-provider LLM routing (LM-Studio/Ollama/gateway), `doctor` visibility, `skill-concierge:flywheel` skill; auto-hook deferred to Phase 2 | Accepted | 2026-07-08 |
+| [0028](0028-multi-session-index-scoping-and-installed-plugin-filter.md) | Scope-tagged points so concurrent sessions stop pruning each other's project skills; index only the installed+enabled plugin version; per-project manifest; flywheel defers on a stale index; utterance prompt v2 (vocabulary distance, not sentence-likeness) | Accepted | 2026-07-09 |
 
 ## Status values
 

@@ -5,6 +5,54 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-07-09
+
+Concurrent Claude Code sessions each run their own MCP server against one shared Qdrant collection.
+They were quietly deleting each other's project skills, and the index described plugin versions
+nobody had installed. See [ADR-0028](docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md).
+
+### Fixed
+- **Sessions no longer prune each other's skills.** `SKILL_DIRS[1]` is `Path.cwd()/.claude/skills`, so
+  every session saw a different skill set, while `build_index()` deleted any indexed point absent from
+  *its* view. A reindex from one project reported `"deleted": 32` and wiped the project points another
+  had just written; last writer won, forever, on a 30-minute hook throttle. Points now carry an owning
+  `scope` (`personal` | `plugin` | `project:<root>`), `_prunable()` deletes only within
+  `visible_scopes()`, and `search_skills` / `_indexed_names` filter to them. Verified live: a reindex
+  from a foreign CWD reports `deleted: 0` and leaves all foreign project points intact.
+- **Only the installed, enabled plugin version is indexed.** The plugin cache is append-only: 587
+  `SKILL.md` collapsed to 256 unique `(plugin, skill)` pairs, 89 of them served by multiple versions
+  and resolved by arbitrary glob order. `skill-concierge:doctor` was being scored against its **0.3.0**
+  description while **0.18.1** was installed (31 versions cached), and `superpowers:*` was recommended
+  while `enabledPlugins` had it `false`. `_installed_plugin_roots()` now reads Claude Code's own
+  `installed_plugins.json` + `enabledPlugins`. **Fails open** (unreadable manifests → unfiltered cache
+  + warning); `SKILL_PLUGIN_FILTER=0` reverts. Index: 548 → 427 skills, nothing invocable lost.
+- **`health()` stops false-alarming.** It diffed a CWD-scoped disk view against the shared index and
+  reported another project's skills as `dark_skills` — the alarm that invited the destructive reindex.
+- **Per-project index manifest.** `_disk_signature()` is CWD-scoped but the manifest was one global
+  file, so sessions overwrote each other and all reported a permanent `skills changed on disk since
+  last index`. `META_PATH` → `index_meta-<md5(PROJECT_ROOT)[:8]>.json`; `SKILL_META_PATH` still wins.
+- **`auto_flywheel` no longer arms its throttle against a stale index.** It and `auto_reindex` fire
+  detached and unordered; coverage measured before the reindex lands reports a false `0 missing`, and
+  stamping on that silenced the flywheel for 6h — a dozen new skills went a whole morning without
+  utterances while the hook ran exactly as written. It now defers **without stamping**, and fails open
+  on unknown counts.
+
+### Changed
+- **Utterance prompt v2 (ADR-0026 layer).** v1 asked for phrases "a user might type **to invoke this
+  skill**", which primed the model to restate the description: ~1.0 against queries that already echoed
+  the skill name, 0.5731 against a real paraphrase. Measured on the live embedder, long first-person
+  sentences score *worse* (0.34–0.50 each); short phrases with **deliberately different vocabulary**
+  score **0.7558** and take rank 1. The lever is vocabulary distance, not sentence-likeness.
+- **`PROMPT_VERSION` namespaces the utterance cache key.** It hashed only the skill description, so a
+  prompt rewrite regenerated nothing. Bumping it invalidates the cache; `auto_flywheel` regenerates
+  `AUTO_FLYWHEEL_MAX_PER_RUN` (25) per session rather than one long GPU burn.
+
+### Added
+- `tests/test_auto_flywheel.py` — first tests for the hook layer (stale-index deferral, fail-open).
+- Engine tests for scope tagging, scope-bounded pruning, installed/enabled filtering, and a regression
+  guard pinning `SKILL_DIRS` to a **non-recursive** glob (a `**` there would walk the whole project
+  tree — 6,334 `SKILL.md` under `CLONED/` on the dev machine).
+
 ## [0.18.1] — 2026-07-09
 
 ### Fixed
