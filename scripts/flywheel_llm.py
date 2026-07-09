@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-flywheel_llm.py — shared local-Qwen client for the retrieval-flywheel generator
-scripts (llm_eval_gen.py, llm_triggers.py). Stdlib only.
+flywheel_llm.py — shared local-LLM client for the retrieval-flywheel generator
+scripts (llm_eval_gen.py, llm_triggers.py). Stdlib only. Any OpenAI-compatible
+endpoint; the production model is gemma-4-e4b-it-qat-optiq (thinking OFF).
 
 Endpoint/model/rate are env-configurable so generation coexists with cognee on
 the shared LAN GPU (see plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 0).
@@ -30,7 +31,7 @@ HOME = Path(os.environ.get("SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "sk
 CACHE_FILE = HOME / ".flywheel-cache.json"
 
 ENDPOINT = os.environ.get("FLYWHEEL_LLM_ENDPOINT", "http://localhost:4310/v1/chat/completions")
-MODEL = os.environ.get("FLYWHEEL_LLM_MODEL", "gemma-4-12b-it-optiq")
+MODEL = os.environ.get("FLYWHEEL_LLM_MODEL", "gemma-4-e4b-it-qat-optiq")
 API_KEY = os.environ.get("FLYWHEEL_LLM_API_KEY", "")
 # json_schema = strict grammar-constrained JSON (LM-Studio); json_object = loose JSON mode
 # (Ollama /v1 + some gateways); off = no response_format, rely on the prompt (generators
@@ -63,7 +64,9 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
     NOTE: the generation model must have THINKING OFF. Reasoning is incompatible with a
     response_format (empties the content) and, run schema-less, exhausts the token budget
     on this task's complex prompt — proven dead by every path (reports/qwen35-9b-thinking-*).
-    gemma-4-12b-it-optiq (no thinking mode) is the production model."""
+    gemma-4-e4b-it-qat-optiq (no thinking mode) is the production model; set it via
+    FLYWHEEL_LLM_MODEL. It replaced gemma-4-12b-it-qat-optiq: on a 20-probe held-out
+    retrieval eval it roughly doubled MRR (0.231 -> 0.462) and cut mean rank 56.6 -> 13.1."""
     payload = {
         "model": MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],

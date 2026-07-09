@@ -7,7 +7,7 @@ home as `SKILL_TRIGGERS`):
 | Var | Default | Purpose |
 |---|---|---|
 | `FLYWHEEL_LLM_ENDPOINT` | `http://localhost:4310/v1/chat/completions` | full chat-completions URL |
-| `FLYWHEEL_LLM_MODEL` | `gemma-4-12b-it-optiq` | model id sent in the request body |
+| `FLYWHEEL_LLM_MODEL` | `gemma-4-e4b-it-qat-optiq` | model id sent in the request body |
 | `FLYWHEEL_LLM_API_KEY` | unset | sent as `Authorization: Bearer <key>` when set |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` \| `json_object` \| `off` |
 
@@ -21,7 +21,7 @@ default.
 
 ```
 FLYWHEEL_LLM_ENDPOINT=http://localhost:4310/v1/chat/completions
-FLYWHEEL_LLM_MODEL=gemma-4-12b-it-optiq
+FLYWHEEL_LLM_MODEL=gemma-4-e4b-it-qat-optiq
 # FLYWHEEL_LLM_API_KEY unset
 # FLYWHEEL_LLM_SCHEMA_MODE unset (defaults to json_schema)
 ```

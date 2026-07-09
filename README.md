@@ -194,7 +194,7 @@ in [`references/flywheel-llm-providers.md`](references/flywheel-llm-providers.md
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `FLYWHEEL_LLM_ENDPOINT` | `http://localhost:4310/v1/chat/completions` | OpenAI-compatible chat endpoint (LM-Studio / Ollama `/v1` / gateway). |
-| `FLYWHEEL_LLM_MODEL` | `gemma-4-12b-it-optiq` | must match the endpoint's exact served model name. |
+| `FLYWHEEL_LLM_MODEL` | `gemma-4-e4b-it-qat-optiq` | must match the endpoint's exact served model name. |
 | `FLYWHEEL_LLM_API_KEY` | unset | when set, sent as `Authorization: Bearer <key>` — for 3rd-party gateways. |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` (strict, LM-Studio) \| `json_object` (Ollama/loose) \| `off` (prompt-only). |
 | `SKILL_AUTO_FLYWHEEL` | `1` (ON) | the `auto_flywheel` SessionStart hook auto-generates utterances for new/changed skills when the endpoint is reachable (detached, throttled, fail-open — ADR-0027). `=0` disables; manual `skill-concierge:flywheel --generate` still works. |

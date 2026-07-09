@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-llm_triggers.py — generate short LLM utterance-style trigger phrases via the LAN
-Qwen client and merge them additively into eval/triggers.json alongside the
+llm_triggers.py — generate short LLM utterance-style trigger phrases via the shared
+flywheel_llm client and merge them additively into eval/triggers.json alongside the
 existing prose-phrase layer build_triggers.py writes.
 
 See plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 3.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 llm_eval_gen.py — generate dense per-skill eval scenarios (positive/negative
-utterances) via the LAN Qwen client, one JSON file per skill matching the
-gold schema in eval/scenarios/*.json.
+utterances) via the shared flywheel_llm client, one JSON file per skill matching
+the gold schema in eval/scenarios/*.json.
 
 See plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 1.
 

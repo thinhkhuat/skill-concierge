@@ -5,6 +5,26 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **Flywheel generation model is now `gemma-4-e4b-it-qat-optiq`** (was `gemma-4-12b-it-qat-optiq`).
+  Set it via `FLYWHEEL_LLM_MODEL`; the code default in `scripts/flywheel_llm.py` follows. Measured on a
+  full `--generate` pass (408 skills, 0 errors) plus a 20-probe held-out retrieval eval scored 433-way
+  offline against both trigger sets: MRR `0.231 → 0.462`, mean rank `56.6 → 13.1`, top-3 `5/20 → 13/20`.
+  Prompt compliance improved too — triggers/skill `7.70 → 9.05`, Vietnamese phrases/skill `2.32 → 3.33`.
+  False-fire pressure on true-negative chit-chat queries did **not** rise (mean max-score `0.545 → 0.525`).
+  Caveats: on the 14 like-for-like probes (skills both models wrote triggers for) 7 improved and 5
+  regressed (`come-clean` 1→7, `git-commit` 9→22); the headline MRR gain is partly carried by 6 newly
+  added skills that previously had no utterances at all. `precision_eval.py` could not adjudicate this
+  swap because the same run regenerated `eval/scenarios`, making it circular.
+
+### Fixed
+- **The `FLYWHEEL_LLM_MODEL` code default pointed at a model no endpoint serves.** It was
+  `gemma-4-12b-it-optiq`; the LM-Studio host serves the `-qat-` variant (`gemma-4-12b-it-qat-optiq`).
+  Any machine that never set the env var was configured against a non-existent model. README and
+  `references/flywheel-llm-providers.md` documented the same dead default.
+- Module docstrings in `flywheel_llm.py`, `llm_eval_gen.py`, and `llm_triggers.py` still described a
+  "LAN Qwen client"; Qwen was dropped as the generator well before this swap (32% Vietnamese coverage).
+
 ## [0.19.1] — 2026-07-09
 
 ### Fixed
