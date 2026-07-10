@@ -5,6 +5,8 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-10
+
 ### Changed
 - **Flywheel generation model is now `gemma-4-e4b-it-qat-optiq`** (was `gemma-4-12b-it-qat-optiq`).
   Set it via `FLYWHEEL_LLM_MODEL`; the code default in `scripts/flywheel_llm.py` follows. Measured on a
@@ -18,6 +20,26 @@ All notable changes to **skill-concierge**. Format loosely follows
   swap because the same run regenerated `eval/scenarios`, making it circular.
 
 ### Fixed
+- **A truncated completion no longer silently drops a skill from the utterance layer.**
+  `flywheel_llm.chat()` read only `choices[0].message.content` and never inspected
+  `finish_reason`; its retry loop fires on HTTP 503 alone. So a completion cut short at
+  `max_tokens` surfaced as an opaque `JSONDecodeError`, which `llm_triggers.run()` catches with
+  a bare `except`, prints `WARN`, and skips — costing that skill its triggers with no signal
+  beyond a stdout line. `chat()` now raises `TruncatedCompletion` on any explicit
+  `finish_reason != "stop"` (an *absent* field is tolerated: some OpenAI-compatible gateways
+  omit it, and absence is not evidence of truncation). The guard keys on the field, never on
+  whether the body parses — a `length` cut can leave syntactically valid but semantically short
+  JSON that `json.loads` accepts happily. Regression tests: `tests/test_flywheel_llm_truncation.py`.
+
+  Root cause, reproduced and independently validated: LM Studio enforces `json_schema` strictly,
+  `pattern` and `minItems` included. A regex the model is unlikely to satisfy (e.g. requiring a
+  Vietnamese character while the prompt asks for English) masks the string-closing quote until
+  that obligation is met; the model emits non-quote characters until the token cap. Confirmed on
+  `gemma-4-e4b-it-qat-optiq` and `gemma-4-12b-it-qat-optiq`. It is **not** unicode-specific — an
+  ASCII regex requiring a digit reproduces it — and **not** a broken grammar: the same regex with
+  a Vietnamese prompt returns valid JSON at `finish_reason: stop`. The live SCHEMA carries no
+  `pattern`, so this was dormant, not active. Analysis:
+  `plans/reports/library-fit-evaluation-260710-1634-chonkie-outlines-recommendation-report.md`.
 - **The `FLYWHEEL_LLM_MODEL` code default pointed at a model no endpoint serves.** It was
   `gemma-4-12b-it-optiq`; the LM-Studio host serves the `-qat-` variant (`gemma-4-12b-it-qat-optiq`).
   Any machine that never set the env var was configured against a non-existent model. README and
