@@ -39,6 +39,17 @@ API_KEY = os.environ.get("FLYWHEEL_LLM_API_KEY", "")
 SCHEMA_MODE = os.environ.get("FLYWHEEL_LLM_SCHEMA_MODE", "json_schema")
 
 
+class TruncatedCompletion(RuntimeError):
+    """The endpoint returned a reply that did not finish cleanly (finish_reason != "stop").
+
+    Most often `finish_reason == "length"`: the schema carried a constraint the model was
+    unlikely to satisfy (e.g. a `pattern` requiring a character the prompt steers it away
+    from), so the grammar masked the string-closing quote until that obligation was met and
+    generation ran to `max_tokens`. Raised rather than swallowed because a truncated reply
+    can still PARSE — see chat().
+    """
+
+
 def slug(name):
     """Skill name -> filesystem-safe slug: any run of non [A-Za-z0-9._-] chars
     collapses to a single '-', leading/trailing '-' stripped. Filenames only —
@@ -66,7 +77,10 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
     on this task's complex prompt — proven dead by every path (reports/qwen35-9b-thinking-*).
     gemma-4-e4b-it-qat-optiq (no thinking mode) is the production model; set it via
     FLYWHEEL_LLM_MODEL. It replaced gemma-4-12b-it-qat-optiq: on a 20-probe held-out
-    retrieval eval it roughly doubled MRR (0.231 -> 0.462) and cut mean rank 56.6 -> 13.1."""
+    retrieval eval it roughly doubled MRR (0.231 -> 0.462) and cut mean rank 56.6 -> 13.1.
+
+    Raises TruncatedCompletion when the endpoint reports finish_reason != "stop", and
+    HTTPError on a non-503 transport failure (503 is retried with backoff)."""
     payload = {
         "model": MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -89,7 +103,21 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
     for attempt in range(3):                 # transient 503 -> backoff, don't hammer
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                out = json.loads(r.read())["choices"][0]["message"]["content"]
+                choice = json.loads(r.read())["choices"][0]
+            finish = choice.get("finish_reason")
+            out = (choice.get("message") or {}).get("content", "")
+            # Guard on the FIELD, never on whether the body parses. A `length` cut can
+            # leave syntactically valid but semantically short JSON (4 triggers where 10
+            # were asked), which json.loads accepts happily. Absent field -> tolerate:
+            # some OpenAI-compatible gateways omit it, and absence is not evidence of a
+            # truncation. Explicit non-"stop" -> fail loud, so the caller reports a real
+            # cause instead of dropping the skill on an opaque JSONDecodeError.
+            if finish is not None and finish != "stop":
+                raise TruncatedCompletion(
+                    f"completion did not finish cleanly (finish_reason={finish!r}, "
+                    f"{len(out)} chars). Not retried: given the same prompt+schema this "
+                    f"is deterministic. Raise max_tokens, or relax the schema constraint "
+                    f"the model cannot satisfy.")
             time.sleep(rate_s)
             return parse_json_reply(out)
         except urllib.error.HTTPError as e:
