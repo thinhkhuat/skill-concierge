@@ -20,6 +20,11 @@
           "file": "README.md",
           "regex": "`([0-9]+\\.[0-9]+\\.[0-9]+)`[^\\n]*\\*\\*published",
           "occurrence": "first"
+        },
+        {
+          "file": "openwiki/quickstart.md",
+          "regex": "\\*\\*Version:\\*\\*\\s*`([0-9]+\\.[0-9]+\\.[0-9]+)`",
+          "occurrence": "first"
         }
       ]
     }
@@ -42,7 +47,9 @@
     "skills/skill-search/SKILL.md",
     "skills/setup/SKILL.md",
     "skills/doctor/SKILL.md",
-    "skills/skill-usage-audit/SKILL.md"
+    "skills/skill-usage-audit/SKILL.md",
+    "openwiki/quickstart.md",
+    "openwiki/.last-update.json"
   ],
   "command_checks": [
     {

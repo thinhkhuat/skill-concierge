@@ -1,0 +1,20 @@
+{
+  "enabledPlugins": {
+    "openwiki@openwiki-cc": true,
+    "caveman@caveman": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/scripts/openwiki_parity_guard.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
