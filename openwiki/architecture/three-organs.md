@@ -47,11 +47,14 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
 1. **SessionStart (once per session)** —
    [`hooks/scripts/doctrine.py`](../../hooks/scripts/doctrine.py) injects the full **SKILL-FIRST
    standing order** (read at runtime from [`hooks/doctrine/skill-first.md`](../../hooks/doctrine/skill-first.md)),
-   and two SessionStart self-heals fire, both detached + throttled:
+   and three SessionStart self-heals fire, all detached + throttled:
    [`auto_reindex.py`](../../hooks/scripts/auto_reindex.py) runs an incremental reindex so a stale
-   index re-freshens, and [`auto_overrides.py`](../../hooks/scripts/auto_overrides.py) reconciles the
+   index re-freshens, [`auto_overrides.py`](../../hooks/scripts/auto_overrides.py) reconciles the
    `~/.claude/settings.json` name-only budget when the installed catalogue drifts
-   ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)).
+   ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)), and
+   [`auto_flywheel.py`](../../hooks/scripts/auto_flywheel.py) generates flywheel utterances for new
+   skills when a local LLM endpoint is configured and reachable
+   ([ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)).
 2. **UserPromptSubmit (every turn)** — the **Enforce** organ:
    [`enforcer.py`](../../hooks/scripts/enforcer.py) runs the per-turn gate — embed the prompt via
    the warm shim → retrieve top-k from the **same** Qdrant index → apply the score/item floors +
@@ -69,7 +72,7 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
    distinction matters; see [enforcement-gate.md](enforcement-gate.md#ledger--usage-a-hard-line).
 
 ```
-SessionStart ──▶ doctrine (standing order) + auto_reindex (index self-heal) + auto_overrides (budget self-heal)
+SessionStart ──▶ doctrine + auto_reindex (index) + auto_overrides (budget) + auto_flywheel (utterances)
                      │
 User message ──▶ [Enforce] enforcer: embed ▸ retrieve ▸ floors+intent gate ▸ mandate | SKILL-CHECK | silent
                      │                                    └─▶ [Ledger] turn / offer
@@ -88,7 +91,7 @@ retriever. It embeds the prompt through the **same** warm embedding shim and que
 Qdrant collection that the `search_skills` tool uses. That is why the embed shim and index model
 must stay in lock-step (fastembed version + model parity) — if the shim's vectors drift from the
 index, both organs degrade silently. The mechanics are in
-[retrieval-engine.md](retrieval-engine.md) and the parity trap is in [operations.md](operations.md#the-warm-embed-shim).
+[retrieval-engine.md](retrieval-engine.md) and the parity trap is in [operations.md](../operations.md#the-warm-embed-shim).
 
 ## See also
 

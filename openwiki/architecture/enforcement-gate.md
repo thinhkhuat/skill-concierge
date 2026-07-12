@@ -63,30 +63,37 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
 2. **Refusal guard.** A regex anchoring negation + an invocation verb (use/invoke/apply/call/…)
    catches "don't use skill X" — mpnet cosine doesn't encode negation, so a refused skill still
    retrieves at full score. On match → mandate-only.
-3. **Embed.** POST the prompt to the warm shim (`http://127.0.0.1:6363/embed`) under a **hard
+3. **Self-referential recap skip (leg C).** `_is_selfref(prompt)` — fires **here, before any I/O**
+   (`enforcer.py:550`), so a pure "explain your last answer" turn never reaches the embed. Detail in
+   [leg C](#the-authorized-skip-tier-three-legs-two-formerly-silent) below.
+4. **Embed.** POST the prompt to the warm shim (`http://127.0.0.1:6363/embed`) under a **hard
    200 ms** socket timeout (`EMBED_TIMEOUT_S = 0.20`). Timeout → mandate-only, ledger band
    `fallback/embed_timeout`; other error → `fallback/embed_down`. (History: a 90 ms cap caused
    ~60% timeouts under CPU contention on a single-threaded shim → the shim was made threaded and
    the cap relaxed to 200 ms within a ≲300 ms budget — [ADR-0008](../../docs/adr/0008-warm-embed-shim-timeout-calibration.md).)
-4. **Retrieve.** POST the vector to Qdrant `points/query/groups` with `group_by:"name"`,
+5. **Retrieve.** POST the vector to Qdrant `points/query/groups` with `group_by:"name"`,
    `limit=TOP_K`, `group_size:1` (the same MAX-pool retrieval as the tool). `TOP_K = 8` — widened
    from 5 by the operator on 2026-07-05 ([ADR-0017](../../docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md)).
    Qdrant unreachable → mandate-only, `fallback/qdrant_down`.
-5. **Keep-off drop.** Remove chronic never-take skills (`config/keep-off.json`,
+6. **Keep-off drop.** Remove chronic never-take skills (`config/keep-off.json`,
    [ADR-0011](../../docs/adr/0011-ledger-derived-offer-suppression.md)) from the menu **before**
    the floors, gate, and ranking. Fail-open to the empty set.
-6. **Getaway floor.** `GETAWAY_FLOOR = 0.45`: if the top candidate scores below it → **silent
+7. **Deterministic routes** (`_deterministic_hits`, `enforcer.py:582`). **Inert unless
+   `ENFORCER_DETERMINISTIC` is set** — but when a route *does* hit, it leads the menu and
+   **bypasses both the getaway floor and the intent gate** below (`if not det and …`). Worth knowing
+   the step exists in the sequence even though it ships off.
+8. **Getaway floor.** `GETAWAY_FLOOR = 0.45`: if the top candidate scores below it → **silent
    verdict leg A** (see AUTHORIZED-SKIP). This floor is **operator-set over the data that argued
    against it** (taken offers historically scored *lower* than dodged ones) — a pinned
    do-not-change note guards it; [ADR-0009](../../docs/adr/0009-operator-set-gate-thresholds.md).
-7. **Actionability / imperative-veto intent gate.** Suppress an offer **only** when the prompt is
+9. **Actionability / imperative-veto intent gate.** Suppress an offer **only** when the prompt is
    *not* imperative **and** classified conversational. `_is_imperative()` skips leading fillers and
    "can you"-style openers (including Vietnamese `làm ơn` / `vui lòng`), then checks the leading
    token/bigram against English and Vietnamese verb lists — imperative turns are **never**
    suppressed. `_intent_conversational()` runs two label-filtered kNN queries over a `prompt_intent`
    corpus and suppresses only if conversational mean beats actionable mean by a margin. Fails
    **open** (offers) on any error. On suppress → **silent verdict leg B**.
-8. **Offer.** Keep candidates `≥ ITEM_FLOOR = 0.18` (or fall back to top-1) and inject a ranked
+10. **Offer.** Keep candidates `≥ ITEM_FLOOR = 0.18` (or fall back to top-1) and inject a ranked
    SKILL-FIRST mandate: a ranked preview with relative %-share (shown for 2+ candidates) plus the
    line-1 `USING/SEARCH/SKIPPING` instruction. Ledger band `offer`.
 
@@ -180,8 +187,22 @@ session never rewrites settings or churns a backup). Offline (no Qdrant — disc
 parsing), fail-silent, additive. `doctor`'s `Settings overrides` check now also **detects** the drift
 (`apply-overrides.py --check`), so it is visible + auto-fixable meanwhile.
 See [ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md).
+## Utterance self-heal — `auto_flywheel.py`
 
-## The five plugin skills
+The utterance layer (ADR-0026) was the biggest v0.16.x retrieval gain, but a new skill got no
+flywheel-generated natural-utterance phrases until someone ran the manual generator.
+[`hooks/scripts/auto_flywheel.py`](../../hooks/scripts/auto_flywheel.py) (v0.18.0,
+[ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)) closes that: at SessionStart,
+when a local LLM endpoint is configured **and** reachable (a `ping()` preflight), it detects skills
+missing utterances, generates for just those (capped at `AUTO_FLYWHEEL_MAX_PER_RUN`, default 25),
+and reindexes — fully **detached/non-blocking**, throttled (`AUTO_FLYWHEEL_THROTTLE_S`, default 6h),
+gated `SKILL_AUTO_FLYWHEEL` (**default ON**). Unconfigured/unreachable → silent no-op → the
+description+body fallback still serves. It defers **without stamping** when the index lags disk
+(measured coverage before a reindex lands would false-report `0 missing`), and fails open on
+unknown counts. Every run (auto or manual) is recorded in the global manifest
+(`~/.claude/skill-concierge/flywheel-manifest.json`, `scripts/flywheel_manifest.py`).
+
+## The six plugin skills
 
 | Skill | Role |
 |-------|------|
@@ -190,5 +211,6 @@ See [ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-man
 | [`skills/doctor/SKILL.md`](../../skills/doctor/SKILL.md) | deployment-layer **health check** + safe `--fix`. Includes the Engine-freshness check that catches a stale MCP serving old code. |
 | [`skills/skill-usage-audit/SKILL.md`](../../skills/skill-usage-audit/SKILL.md) | measures whether a gate-threshold change helped **real usage**, from the transcript SKILL-FIRST trail — **not** the ledger. |
 | [`skills/keep-on/SKILL.md`](../../skills/keep-on/SKILL.md) | curate the always-on **allowlist** — `list` / `add` / `remove` (via `scripts/keep-on.py`), editing the canonical `~/.claude/skill-concierge/keep-on.json` and re-applying the overrides ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). |
+| [`skills/flywheel/SKILL.md`](../../skills/flywheel/SKILL.md) | **retrieval-flywheel** surface — status mode (default, read-only) shows endpoint health + per-skill utterance coverage; `--generate` runs the incremental utterance generator (only new/changed skills call the LLM) then reindexes ([ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)). |
 
 Mechanics for setup/doctor/audit are in [operations.md](../operations.md).

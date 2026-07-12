@@ -131,17 +131,19 @@ The ledger code itself never rotates/caps/deletes — the risk is entirely in lo
 
 ---
 
-## §9 — Embed shim must be running (Docker sidecar, `skill-search-embed-shim`)
+## §9 — Embed shim must be running (Docker sidecar, `skill-concierge-embed-shim`)
 
-**Symptom:** per-turn latency spikes over budget (≲150ms); enforcer telemetry shows
+**Symptom:** per-turn latency spikes over budget; enforcer telemetry shows
 high `fallback: true` rate in `offer` events.
 
 **Cause:** the warm embedding shim (`scripts/embed_server.py`) runs as a Docker sidecar
-(`skill-search-embed-shim` container, `127.0.0.1:6363`). If the container is stopped or
-crashed, or the model fails to load in-memory, the enforcer hook hits the 90ms timeout and
+(`skill-concierge-embed-shim` container, `127.0.0.1:6363`; overridable via
+`SKILL_EMBED_CONTAINER` — `setup.sh:21`). If the container is stopped or
+crashed, or the model fails to load in-memory, the enforcer hook hits the 200ms timeout
+(`EMBED_TIMEOUT_S`, `enforcer.py:63` — relaxed from 90ms per ADR-0008) and
 falls back to mandate-only. The fallback works (never crashes), but enforcement degrades.
 
-**Do:** `docker ps --filter name=skill-search-embed-shim` → expect `Up`. Container is
+**Do:** `docker ps --filter name=skill-concierge-embed-shim` → expect `Up`. Container is
 `--restart unless-stopped`, so restart Docker or run `setup.sh` to recreate it.
 `skill-concierge:doctor --fix` auto-restarts the container if down. Monitor fallback rate
 in `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` (`offer` events with

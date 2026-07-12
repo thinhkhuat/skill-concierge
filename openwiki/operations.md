@@ -33,11 +33,13 @@ the built index can never diverge from the model the live MCP server uses.
 ## Health — `doctor.py`
 
 [`scripts/doctor.py`](../scripts/doctor.py) (or the **`skill-concierge:doctor`** skill) is the
-read-only deployment health check; a green `status: OK` is the bar to claim "done". It runs **13
-checks** and delegates the retrieval diagnostic to `skill-search --health` (DRY): Python, venv,
-**engine freshness**, MCP wiring, Qdrant, engine health (stale-but-serving = WARN, not FAIL),
-enrichment, multi-vector layer, prompt-intent corpus, corpus health (reads `eval/thresholds.json`),
-overrides, ledger dir, and duplicate-MCP. Exit 0 unless a check FAILs.
+read-only deployment health check; a green `status: OK` is the bar to claim "done". It runs **14
+checks** (`check_python` returns N/A once the venv exists, so a healthy deploy shows 13) and
+delegates the retrieval diagnostic to `skill-search --health` (DRY): Python, venv, **engine
+freshness**, MCP wiring, Qdrant, engine health (stale-but-serving = WARN, not FAIL), enrichment,
+multi-vector layer, prompt-intent corpus, corpus health (reads `eval/thresholds.json`), **retrieval
+flywheel** (configured? / reachable? / utterance coverage), overrides, ledger dir, and
+duplicate-MCP. Exit 0 unless a check FAILs.
 
 `--fix` performs only **fast, safe** repairs (`AUTO_FIXERS`): start a stopped Qdrant, reindex,
 re-apply the enrichment overlay, re-apply overrides, rebuild the prompt-intent corpus. It **never**
@@ -108,16 +110,15 @@ by a Docker sidecar rather than cold-loaded per turn:
   deployed embed env.
 - **Container:** `skill-concierge-embed-shim` on `127.0.0.1:6363`, `--restart unless-stopped`.
 
-> ⚠ **Doc drift:** [caveats §9](../docs/caveats.md) names this container `skill-search-embed-shim`
-> — that is **stale**. The code truth ([`setup.sh:21`](../setup.sh)) is
-> **`skill-concierge-embed-shim`** (env-overridable via `SKILL_EMBED_CONTAINER`). Verify health
-> with `docker ps --filter name=skill-concierge-embed-shim`. A stopped/slow shim shows up as a
-> sustained `fallback: true` rate in the ledger's `offer` events; `doctor --fix` restarts it.
+Verify health with `docker ps --filter name=skill-concierge-embed-shim` (the name is
+env-overridable via `SKILL_EMBED_CONTAINER`, [`setup.sh:21`](../setup.sh)). A stopped/slow shim
+shows up as a sustained `fallback: true` rate in the ledger's `offer` events; `doctor --fix`
+restarts it. See [caveats §9](../docs/caveats.md).
 
 ## The stale-engine trap (post-update)
 
 Historically the most dangerous silent failure — **self-healing since v0.13.1, and the settled
-behavior on every release since (current: v0.16.1).** The v0.13.1 tags below mark where each fix
+behavior on every release since (current: v0.20.0).** The v0.13.1 tags below mark where each fix
 *shipped*, not the deployed version — confirm the live state with `doctor` (`Engine freshness`),
 never by reading a version out of this section. The MCP
 launcher ([`bin/skill-search-mcp`](../bin/skill-search-mcp)) execs `skill-search` from the **stable
@@ -143,8 +144,10 @@ a plain `pip install` "already satisfied"-skip the changed copy.
 
 ## Runtime governance flags
 
-All are one-var reverts; all default ON except `SKILL_TRIGGER_PURITY`, which defaults to a
-non-boolean `shadow` mode (log-only, ships inert).
+All are one-var reverts. Most default ON, with three exceptions: `SKILL_LLM_TRIGGERS` is **off in
+code** (but shipped **on** via `.mcp.json` — see the deploy caveat below), `TRIGGERS_MAX` is a
+number rather than a boolean, and `SKILL_TRIGGER_PURITY` defaults to a non-boolean `shadow` mode
+(log-only, ships inert).
 
 | Variable | Default | Effect | ADR |
 |----------|---------|--------|-----|
@@ -155,6 +158,7 @@ non-boolean `shadow` mode (log-only, ships inert).
 | `ENFORCER_SELFREF_SKIP` | `1` | enforcer pre-authorizes a 3rd AUTHORIZED-SKIP leg for pure self-referential recap turns ("explain your last answer"); `=0` restores the old 2-leg behavior | [0019](../docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
 | `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
 | `SKILL_TRIGGER_PURITY` | `shadow` | engine flags workflow-summary body triggers; `shadow` only logs would-drops (index unchanged), `active` drops them (**needs a full reindex**), `off` skips the check | [0023](../docs/adr/0023-trigger-purity-lint.md) |
+| `SKILL_PLUGIN_FILTER` | `1` | index **only** the installed + enabled plugin version (read from Claude Code's own `installed_plugins.json` / `enabledPlugins`) instead of every cached version — 548 → 427 skills, nothing invocable lost; `=0` reverts to the unfiltered cache. Fails open on an unreadable manifest | [0028](../docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md) |
 
 Several enforcer levers are additionally **default-inert** and env-gated (`ENFORCER_DETERMINISTIC`,
 `ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) — see
@@ -171,6 +175,38 @@ Several enforcer levers are additionally **default-inert** and env-gated (`ENFOR
 > to the background reindex — before that it rebuilt at engine defaults and **pruned the utterance
 > points on every session** ([ADR-0026](../docs/adr/0026-llm-utterance-trigger-layer.md), CHANGELOG
 > [0.16.1]).
+## The retrieval flywheel (v0.17.0+, ADR-0027)
+
+The flywheel generates **natural-utterance trigger phrases** (EN+VN) for each skill offline via a
+local LLM, then layers them FIRST in the MAX-pool trigger layer (ADR-0026). Without it, retrieval
+relies on description + body triggers only — the graceful fallback is unchanged.
+
+**Configuration** (all machine-local, none in the repo):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `FLYWHEEL_LLM_ENDPOINT` | `http://localhost:4310/v1/chat/completions` | the OpenAI-compatible chat endpoint. **This is what "configured" means:** `auto_flywheel.py` treats the presence of `FLYWHEEL_LLM_ENDPOINT` *or* `FLYWHEEL_LLM_MODEL` in the env as the signal to run at all — with neither set it silently no-ops |
+| `FLYWHEEL_LLM_API_KEY` | *(unset)* | optional `Authorization: Bearer` → any OpenAI-compatible gateway (LM-Studio, Ollama `/v1`, 3rd-party) |
+| `FLYWHEEL_LLM_MODEL` | `gemma-4-e4b-it-qat-optiq` | the generation model (swapped in v0.20.0 from `gemma-4-12b-it-qat-optiq`; MRR `0.231 → 0.462`) |
+| `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` / `json_object` / `off` (for endpoints that don't honor strict schemas) |
+| `SKILL_AUTO_FLYWHEEL` | `1` | the SessionStart `auto_flywheel` hook generates utterances for new skills when the endpoint is reachable; `=0` disables |
+| `AUTO_FLYWHEEL_THROTTLE_S` | `21600` (6h) | minimum interval between auto-flywheel runs |
+| `AUTO_FLYWHEEL_MAX_PER_RUN` | `25` | per-run skill cap (avoids one long GPU burn) |
+
+**Usage:**
+- **`skill-concierge:flywheel`** skill — status mode (default, read-only) shows endpoint health +
+  per-skill utterance coverage; `--generate` runs the incremental generator (only new/changed
+  skills call the LLM) then reindexes.
+- **`auto_flywheel`** SessionStart hook — runs the same generator detached + throttled when a
+  local LLM endpoint is configured + reachable. Every run is recorded in the global manifest
+  (`~/.claude/skill-concierge/flywheel-manifest.json`). The regeneration cache lives in the
+  canonical durable home (`~/.claude/skill-concierge/.flywheel-cache.json`, v0.18.1 fix — was under
+  the versioned cache dir that `/plugin update` wipes).
+
+**v0.20.0 hardening:** `flywheel_llm.chat()` now raises `TruncatedCompletion` on any explicit
+`finish_reason != "stop"` — a truncated completion previously surfaced as an opaque `JSONDecodeError`
+that the catch-loop silently swallowed, costing that skill its triggers. See
+`references/flywheel-llm-providers.md` for provider setup.
 
 ## Configuration files
 
@@ -207,13 +243,8 @@ immediately).
 - **The vendored engine** must not diverge from upstream silently — log any customization in
   [`vendor/skill-search/VENDORED.md`](../vendor/skill-search/VENDORED.md).
 
-## Open items
-
-- **caveats §9 names a stale container** (`skill-search-embed-shim`); the code truth is
-  `skill-concierge-embed-shim`.
-
 ## See also
 
-- [`docs/caveats.md`](../docs/caveats.md) — the full 11-item landmine list (canonical).
+- [`docs/caveats.md`](../docs/caveats.md) — the full 15-item landmine list (canonical).
 - [`docs/adr/README.md`](../docs/adr/README.md) — the decisions behind these choices.
 - [`README.md` → Troubleshooting](../README.md) — the symptom→fix table.

@@ -10,7 +10,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.16.1` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json)
+- **Version:** `0.20.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -29,7 +29,7 @@ skill-concierge separates three failure modes the default conflates:
 
 | Organ | Question | Mechanism | Deep page |
 |-------|----------|-----------|-----------|
-| **Retrieve** | *Which* skill fits? | semantic search over the catalogue (Qdrant + multilingual embeddings), a MAX-pool trigger layer mined from each skill's description **and** its body's labeled decision-sections | [architecture/retrieval-engine.md](architecture/retrieval-engine.md) |
+| **Retrieve** | *Which* skill fits? | semantic search over the catalogue (Qdrant + multilingual embeddings), a MAX-pool trigger layer mined from each skill's description, its body's labeled decision-sections, **and** offline flywheel-generated natural-utterance phrases (EN+VN) | [architecture/retrieval-engine.md](architecture/retrieval-engine.md) |
 | **Enforce** | *Whether* the model uses a skill at all | a per-turn `UserPromptSubmit` hook that hands over ranked candidates under a use-mandate; on its two silent verdicts it emits a `SKILL-CHECK:` authorization | [architecture/enforcement-gate.md](architecture/enforcement-gate.md) |
 | **Ledger** | *What actually got used* | a compounding, append-only skill-invocation log → data-backed always-on curation | [architecture/enforcement-gate.md](architecture/enforcement-gate.md#the-ledger--what-actually-got-used) |
 
@@ -109,6 +109,7 @@ the always-on entry point that calls `search_skills` at the start of any multi-s
 
 - [`README.md`](../README.md) — full product overview, install, usage, architecture.
 - [`AGENTS.md`](../AGENTS.md) — canonical agent-contributor instructions + guardrails.
+- [`AGENTS-ONBOARDING.md`](../AGENTS-ONBOARDING.md) — the 5-minute orientation (read-order, mental model, first-week traps); `AGENTS.md` wins on any conflict.
 - [`docs/adr/`](../docs/adr/README.md) — accepted design decisions + rationale (immutable; the *why*).
 - [`docs/caveats.md`](../docs/caveats.md) — operational landmines (the loud gotchas list).
 - [`docs/skill-first-enforcement-mental-model.md`](../docs/skill-first-enforcement-mental-model.md) — the complete Enforce-organ mental model.
