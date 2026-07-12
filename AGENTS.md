@@ -71,7 +71,12 @@ count, so the doctrine's hardest-rule metric doesn't get inflated by lawful, hoo
 
 - The index holds **model-invocable `SKILL.md` skills only** — built-in slash-commands are excluded by design ([ADR-0001](docs/adr/0001-index-model-invocable-skills-only.md)). Don't "fix" their absence.
 - The vendored `eval/` recall@k is calibrated to a *different* skill universe; a near-zero score is a wrong-universe artifact, not a weak retriever ([caveats §1](docs/caveats.md)).
-- Hooks are **fail-silent and additive-only** — a telemetry failure must never block a turn.
+- Hooks are **fail-silent and additive-only** — a telemetry failure must never block a turn. The one deliberate exception is the openwiki commit gate below, which is a *gate*, not telemetry, and blocks by design.
+- **`git commit` is gated on openwiki parity.** `.claude/settings.json` wires a `PreToolUse(Bash)` hook to `scripts/openwiki_parity_guard.py`. Non-commit Bash calls pass through silently; a `git commit` (including compound `git add . && git commit` and `git -C <path> commit`) is **denied** if either deterministic check fails:
+  1. **Version parity** — `openwiki/quickstart.md` is registered as a `driftcheck.json` mirror, so its `**Version:**` line must match `.claude-plugin/plugin.json` (the SSOT) alongside marketplace/CHANGELOG/README. There is no second version checker to drift.
+  2. **Link integrity** — every relative link under `openwiki/` must resolve on disk. This catches the corrupted/half-finished-edit class that shipped a clobbered sentence and a dead link once already.
+
+  It does **not** judge whether the wiki's prose is semantically current — nothing cheap can, and a guard pretending to would be theater; that is what `/openwiki:wiki update` is for. Verify locally with `python3 scripts/driftcheck.py driftcheck.json` (must exit 0). The guard **fails open** on any internal error — a broken guard must never wedge the repo — and `OPENWIKI_GUARD=0` is the emergency override. `.claude/settings.json` is un-ignored on purpose (`.gitignore`: `.claude/*` + `!.claude/settings.json`) so the wiring exists on every clone; the rest of `.claude/` stays ignored.
 - **Ledger metrics are EPOCH-SCOPED — NEVER pool them across config changes.** This is the load-bearing
   trap: this repo changes the very things the ledger measures (gate floors, retrieval engine, doctrine,
   the embed shim) *almost daily*, so the invocation-ledger is a **sequence of short config epochs, not one
