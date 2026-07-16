@@ -21,7 +21,8 @@ runs the same thing and verifies it. Four steps:
 3. **[3/4] Index.** `skill-search --reindex` (multi-vector built by the reindex itself).
    **[3b/4]** Build the actionability-gate `prompt_intent` corpus (fail-soft).
 4. **[4/4] Overrides.** `apply-overrides.py` writes the curated always-on policy to
-   `~/.claude/settings.json`.
+   `~/.claude/settings.json` (Claude Code's `skillOverrides`). In Codex this step is a harmless
+   no-op — Codex doesn't use `skillOverrides`; governance works via the hooks alone.
 
 The model and store are read from [`.mcp.json`](../.mcp.json) as the single source of truth, so
 the built index can never diverge from the model the live MCP server uses.
@@ -273,15 +274,17 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
 
 ## Versioning & deploy discipline
 
-- **Bump BOTH `.claude-plugin/plugin.json` AND `.claude-plugin/marketplace.json` versions
-  together, plus a `CHANGELOG.md` entry.** Never bump one alone — the downstream update keys on the
-  version, so a mismatch is a silent no-op ([caveats §7](../docs/caveats.md)).
+- **Bump ALL OF `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, AND
+  `.codex-plugin/plugin.json` versions together, plus a `CHANGELOG.md` entry.** Never bump one
+  alone — the downstream update keys on the version, so a mismatch is a silent no-op
+  ([caveats §7](../docs/caveats.md)).
 - **A repo edit does not go live by itself:** bump the manifests, push to GitHub, then
   `/plugin update` + restart — the runtime reads a version-pinned cache. As of v0.13.1 the launcher
   auto-resyncs the venv engine on an engine-code change; a **dependency** change still needs a
   `setup.sh` rerun (see [the stale-engine trap](#the-stale-engine-trap-post-update)).
 - **Drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced) checks the
-  version triple (`plugin.json` ↔ `marketplace.json` ↔ latest `CHANGELOG.md` heading), that every
+  version across all six sources (`plugin.json` ↔ `marketplace.json` ↔ `.codex-plugin/plugin.json`
+  ↔ latest `CHANGELOG.md` heading ↔ `README.md` ↔ `openwiki/quickstart.md`), that every
   doc-referenced path exists, and that `AGENTS.md` / `CLAUDE.md` name the same scratch dirs. Run it
   after a version bump or after editing a fact shared across docs.
 - **ADRs are immutable** — supersede with a new one, never edit an accepted record.

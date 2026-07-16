@@ -25,6 +25,10 @@
           "file": "openwiki/quickstart.md",
           "regex": "\\*\\*Version:\\*\\*\\s*`([0-9]+\\.[0-9]+\\.[0-9]+)`",
           "occurrence": "first"
+        },
+        {
+          "file": ".codex-plugin/plugin.json",
+          "regex": "\"version\":\\s*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
         }
       ]
     }
@@ -48,8 +52,11 @@
     "skills/setup/SKILL.md",
     "skills/doctor/SKILL.md",
     "skills/skill-usage-audit/SKILL.md",
+    "skills/keep-on/SKILL.md",
+    "skills/flywheel/SKILL.md",
     "openwiki/quickstart.md",
-    "openwiki/.last-update.json"
+    "openwiki/.last-update.json",
+    ".codex-plugin/plugin.json"
   ],
   "command_checks": [
     {
