@@ -12,6 +12,11 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}/scripts/openwiki_parity_guard.py\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/scripts/graph_staleness_notice.py\"",
+            "timeout": 30
           }
         ]
       }

@@ -37,6 +37,10 @@ eval/triggers.json.bak-*
 .pytest_cache/
 .env
 
+# graphify knowledge-graph outputs (rebuilt from source by the graphify skill;
+# graph.json/graph.html are derived artifacts, cache/ holds per-file extraction hashes)
+graphify-out/
+
 # local Claude Code project state — shared plugin config lives in .claude-plugin/, not here.
 # EXCEPTION: settings.json is committed on purpose — it wires the openwiki parity guard
 # (PreToolUse gate on `git commit`), which is only a gate if it exists on every clone.

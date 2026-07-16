@@ -225,6 +225,52 @@ is catalogue-specific). It stays fresh on its own: the SessionStart `auto_overri
 allowlist with the `keep-on` skill / `scripts/keep-on.py` (`list` / `add` / `remove`, reconciles
 immediately).
 
+## Commit guardrails — two `PreToolUse(Bash)` hooks
+
+Both are wired in [`.claude/settings.json`](../.claude/settings.json) (project scope, **not** the
+plugin's `hooks/hooks.json` — a plugin hook would fire in every project the plugin is enabled in,
+where these paths don't exist). `.claude/settings.json` is un-ignored on purpose (`.gitignore`:
+`.claude/*` + `!.claude/settings.json`) so the wiring exists on every clone.
+
+They intercept the **agent's own `git commit` tool call**, not the shell — a `PreToolUse` verdict
+lands in the agent's context with the reason and the fix, so it corrects course. Both match on
+`Bash` (not `Bash(git commit*)`, which would miss the compound `git add . && git commit`), let
+non-commit calls pass silently, and **fail open** on any internal error.
+
+| Hook | Verdict | Checks | Override |
+|------|---------|--------|----------|
+| [`scripts/openwiki_parity_guard.py`](../scripts/openwiki_parity_guard.py) | **DENY** | version parity (delegated to `driftcheck.py` — the wiki's `**Version:**` line is registered as one more mirror, so there is no second version checker to drift) + every relative link under `openwiki/` resolves on disk | `OPENWIKI_GUARD=0` |
+| [`scripts/graph_staleness_notice.py`](../scripts/graph_staleness_notice.py) | **WARN — never blocks** | which **git-tracked** files are new/modified since `graphify-out/manifest.json`, via graphify's own `detect_incremental()` | `GRAPH_NOTICE=0` |
+
+**Why one denies and the other only warns.** `openwiki/` is *committed*: a stale wiki ships to
+every clone and gets read as authoritative, and the fix is a sub-second text edit — blocking is
+proportionate. `graphify-out/` is *gitignored*: it never ships, so a stale graph harms only the
+local session, and the fix is asymmetric — code drift rebuilds via AST for free, but doc drift
+costs LLM calls. This repo is doc-heavy and writes plans/reports constantly, so a deny there would
+tax every commit and buy nothing the post-commit rebuild already gives. **A gate must be
+proportionate to the harm and the cost of the fix.**
+
+Two further design notes, both load-bearing:
+
+- The notice never emits `permissionDecision`. An `"allow"` there would auto-approve *every*
+  `git commit` and silently disable the permission prompt — a far worse bug than a stale graph.
+  It uses `additionalContext` (reaches the agent) + `systemMessage` (reaches the user).
+- It is scoped to **git-tracked files only**. graphify indexes scratch dirs (`.remember/`,
+  `.memsearch/`, `.gjc/`) that churn every turn; unscoped, it would fire on *every* commit forever,
+  and a warning that always fires is one you train yourself to ignore.
+
+Neither guard judges whether prose is *semantically* current — nothing cheap can, and a guard
+pretending to would be theater. They enforce what is mechanically decidable; refreshing the
+content is what `/openwiki:wiki update` and `/graphify . --update` are for.
+
+**Graph freshness** is otherwise maintained by graphify's own git hooks (`graphify hook install`
+→ post-commit + post-checkout): after each commit it re-runs AST on changed **code** files and
+rebuilds the graph — free, no LLM. It deliberately ignores doc changes, which is exactly the gap
+the notice covers. Check with `graphify hook status`.
+
+This section reconciles with the repo's fail-silent hook doctrine: the notice is telemetry and
+never blocks; the openwiki guard is the **sole deliberate exception** that denies.
+
 ## Versioning & deploy discipline
 
 - **Bump BOTH `.claude-plugin/plugin.json` AND `.claude-plugin/marketplace.json` versions
@@ -239,7 +285,7 @@ immediately).
   doc-referenced path exists, and that `AGENTS.md` / `CLAUDE.md` name the same scratch dirs. Run it
   after a version bump or after editing a fact shared across docs.
 - **ADRs are immutable** — supersede with a new one, never edit an accepted record.
-- **Tool state is not source:** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/` are gitignored scratch.
+- **Tool state is not source:** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/`, `graphify-out/` are gitignored scratch.
 - **The vendored engine** must not diverge from upstream silently — log any customization in
   [`vendor/skill-search/VENDORED.md`](../vendor/skill-search/VENDORED.md).
 
