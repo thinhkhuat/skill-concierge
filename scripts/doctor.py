@@ -583,9 +583,61 @@ def check_flywheel():
     return dict(id="flywheel", label="Retrieval flywheel", status=OK, detail=detail, fix=fix)
 
 
+def _junk_triggers():
+    """{skill: [bad phrase, ...]} for LIVE-indexed skills whose stored utterance layer
+    contains phrases `clean_triggers()` would reject. Raises on an unreadable/absent
+    triggers file or an unreachable index — callers decide the fail-open policy."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from llm_triggers import clean_triggers   # single definition of "junk" — do not restate it here
+
+    triggers = json.loads(TRIGGERS.read_text(encoding="utf-8"))
+    live = set(_indexed_skill_names())
+    out = {}
+    for name in live:
+        entry = triggers.get(name)
+        if not isinstance(entry, dict):
+            continue
+        stored = (entry.get("llm_triggers", {}) or {}).get("triggers", []) or []
+        if not stored:
+            continue
+        kept = clean_triggers(stored)
+        # clean_triggers() drops junk AND collapses duplicates, so a shrink means the
+        # stored layer holds phrases that would not survive generation today.
+        if len(kept) < len(stored):
+            keep = {p.lower() for p in kept}
+            out[name] = [p for p in stored
+                         if not isinstance(p, str) or " ".join(p.split()).strip().lower() not in keep]
+    return out
+
+
+def check_trigger_hygiene():
+    """Junk ALREADY AT REST in the utterance layer. Coverage measures presence, not validity:
+    a skill whose triggers are empty strings / one-char noise / a repeated phrase still counts
+    as 'covered', so a degraded generation run hides behind a green coverage number and the
+    generator then SKIPS it forever (cache-hit + layer present). clean_triggers() gates new
+    writes; nothing audited what earlier runs already stored. Read-only, fail-open."""
+    if not TRIGGERS.exists():
+        return dict(id="hygiene", label="Trigger hygiene", status=OK,
+                    detail=f"no triggers file at {TRIGGERS} — utterance layer unused")
+    try:
+        bad = _junk_triggers()
+    except Exception as e:
+        return dict(id="hygiene", label="Trigger hygiene", status=OK,
+                    detail=f"not audited ({type(e).__name__}: {e})")
+    if not bad:
+        return dict(id="hygiene", label="Trigger hygiene", status=OK,
+                    detail="no junk phrases stored in the utterance layer")
+    examples = ", ".join(f"{n} ({len(v)})" for n, v in list(sorted(bad.items()))[:4])
+    return dict(id="hygiene", label="Trigger hygiene", status=WARN,
+                detail=f"{len(bad)} skills store junk utterances — a degraded model wrote them "
+                       f"and the generator now skips them as 'covered' (examples: {examples})",
+                fix="purge_junk")
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
-          check_corpus_health, check_flywheel, check_overrides, check_ledger, check_dup_mcp]
+          check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
+          check_ledger, check_dup_mcp]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -644,9 +696,55 @@ def fix_prompt_intent():
     return (r.returncode == 0), (_last_line(r.stdout) or r.stderr.strip() or "rebuilt prompt_intent")
 
 
+def fix_purge_junk():
+    """Drop junk utterance layers and their generation-cache keys, then reindex.
+
+    Deliberately does NOT regenerate: that needs the LLM endpoint, which doctor never calls.
+    Purging is the whole repair — a purged skill falls back to description+body retrieval
+    (no worse than junk phrases pointing the wrong way) and, with its cache key gone, the
+    next flywheel run rewrites it properly instead of skipping it as already covered.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import llm_triggers
+
+    try:
+        bad = _junk_triggers()
+    except Exception as e:
+        return False, f"could not audit triggers ({type(e).__name__}: {e})"
+    if not bad:
+        return True, "nothing to purge"
+
+    backup = TRIGGERS.with_suffix(f".json.bak-junk-{int(time.time())}")
+    try:
+        shutil.copy2(TRIGGERS, backup)
+        triggers = json.loads(TRIGGERS.read_text(encoding="utf-8"))
+        for name in bad:
+            entry = triggers.get(name) or {}
+            prose = entry.get("prose_triggers") or []
+            if prose:   # keep the hand/prose layer; only the LLM layer was poisoned
+                triggers[name] = {"source": "prose-phrase", "triggers": prose, "n": len(prose)}
+            else:
+                triggers.pop(name, None)
+        TRIGGERS.write_text(json.dumps(triggers, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        cache = llm_triggers.load_cache()
+        for name in bad:
+            cache.pop(llm_triggers.CACHE_PREFIX + name, None)
+        llm_triggers.save_cache(cache)
+    except Exception as e:
+        return False, f"purge failed ({type(e).__name__}: {e}); backup at {backup}"
+
+    msg = (f"purged {len(bad)} junk utterance layers (backup: {backup.name}); "
+           f"the flywheel will regenerate them")
+    if not SS_BIN.exists():
+        return True, msg + " — reindex skipped (venv missing)"
+    r = _run([str(SS_BIN), "--reindex"], env=_engine_env())
+    return True, msg + ("; reindexed" if r.returncode == 0 else "; reindex FAILED — rerun doctor --fix")
+
+
 AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
                "reapply": fix_reapply, "overrides": fix_overrides,
-               "prompt_intent": fix_prompt_intent}
+               "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk}
 
 
 # ---------- run + report ----------
@@ -676,7 +774,8 @@ def _selftest():
     assert overall([mk(WARN), mk(FAIL)]) == FAIL
     assert overall([]) == OK
     assert QURL.startswith("http")
-    assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides", "prompt_intent"}
+    assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides", "prompt_intent",
+                                "purge_junk"}
     # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
     healthy_emb = {"reachable": True}
     serving_qd = {"reachable": True, "indexed": 495}

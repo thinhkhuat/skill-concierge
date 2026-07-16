@@ -38,6 +38,7 @@ the engine's own `skill-search --health`, so the two never drift.
    | Multi-vector layer | trigger points present (MAX-pool retrieval, ADR-0012); WARNs if `SKILL_MULTIVECTOR` is on but none exist |
    | Corpus health | per-skill calibration `ok`/`weak`/`no-signal` counts from `eval/thresholds.json` |
    | Retrieval flywheel | is the utterance-generation LLM configured + reachable, per-skill utterance coverage (which skills lack utterances), and the **last flywheel run** from the global manifest (`~/.claude/skill-concierge/flywheel-manifest.json`). Read-only, **fail-open** (never FAIL — the flywheel is optional). [ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md) |
+   | Trigger hygiene | junk **already stored** in the utterance layer — empty / one-char / repeated phrases a degraded model wrote. Coverage only measures *presence*, so such a skill still counts as "covered" and the generator then skips it forever; this row is what catches it. WARN + auto-fix (purge). Read-only, fail-open |
    | Settings overrides | `skillOverrides` applied to `~/.claude/settings.json`; now **detects drift** from the installed catalogue (`apply-overrides.py --check`) → WARN + auto-fix (ADR-0025) |
    | Ledger dir | the telemetry log directory is writable |
    | Duplicate MCP | warns if a leftover user-scope `skill-search` MCP also exists |
@@ -49,11 +50,19 @@ the engine's own `skill-search --health`, so the two never drift.
    ```
 
    `--fix` applies only fast, safe repairs, then re-checks: start a stopped Qdrant
-   container, `--reindex` a stale/dark index, and re-apply the settings overrides.
+   container, `--reindex` a stale/dark index, re-apply the settings overrides, and purge
+   junk utterance layers.
 
    > **Heads-up:** the overrides fix writes `~/.claude/settings.json` (backed up first) via
    > `scripts/apply-overrides.py`. The user invoking doctor is consent for that; mention it
    > before running `--fix` so the change isn't a surprise.
+   >
+   > **The `Trigger hygiene` fix DELETES data** — it drops each junk utterance layer from
+   > `eval/triggers.json` (backed up to `triggers.json.bak-junk-<ts>` first) and clears that
+   > skill's generation-cache key, then reindexes. It does **not** regenerate: doctor never
+   > calls the LLM. A purged skill falls back to description+body retrieval (no worse than
+   > junk phrases pointing the wrong way) until the next flywheel run rewrites it — which it
+   > now will, because the cleared cache key stops the generator skipping it as "covered".
 
 4. **Handle what `--fix` can't.** doctor never auto-builds the venv or the container
    (slow, heavyweight). If `Engine venv` is FAIL **or `Engine freshness` is WARN**, run the

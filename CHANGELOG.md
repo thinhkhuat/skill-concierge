@@ -5,6 +5,31 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.2] — 2026-07-17
+
+### Added
+- **`doctor` now audits junk ALREADY AT REST in the utterance layer** (`Trigger hygiene`).
+  0.20.1 stopped a degraded model from *writing* junk; nothing audited what earlier runs had
+  already stored. Found in the wild immediately after: 5 skills held empty strings, one-char
+  noise and a phrase repeated three times, written by a degraded model before the write-side
+  filter existed.
+  The reason it hid so well is the load-bearing part: **coverage measures presence, not
+  validity.** A skill whose utterances are all junk still has a non-empty `llm_triggers`
+  block, so it counts toward `N/M skills have utterances`, never appears in the "missing"
+  list — and the generator then skips it *forever* (cache-hit + layer present). A green
+  `467/467` was hiding junk. The check re-runs `clean_triggers()` over each live skill's
+  stored layer and WARNs when the layer would not survive generation today; the junk
+  definition is imported, never restated, so the check cannot drift from the generator.
+- **`doctor --fix` purges junk utterance layers.** Drops the poisoned layer (keeping any
+  prose layer), clears the skill's generation-cache key, and reindexes — backing up
+  `eval/triggers.json` first. It deliberately does **not** regenerate: doctor never calls the
+  LLM. Purging IS the repair — a purged skill falls back to description+body retrieval (no
+  worse than junk phrases pointing the wrong way) and, with the cache key gone, the next
+  flywheel run rewrites it properly instead of skipping it as already covered.
+  Known limit, unchanged from 0.20.1: this is a *mechanical* junk filter. Semantically-wrong
+  but well-formed output (a degraded model echoing the prompt's own example vocabulary) still
+  passes — utterance quality depends on a healthy endpoint, and no check substitutes for that.
+
 ## [0.20.1] — 2026-07-17
 
 ### Fixed
