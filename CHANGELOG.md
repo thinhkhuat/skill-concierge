@@ -5,6 +5,69 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-07-17
+
+### Fixed
+- **The flywheel could never reach an uncovered skill.** `auto_flywheel` runs
+  `flywheel.py --generate --limit 25`, but `llm_triggers.run()` / `llm_eval_gen.run()` sliced the
+  *alphabetically sorted full skill list* to `limit` **before** filtering out the skills that were
+  already covered. The first 25 names alphabetically were all covered, so every capped run spent its
+  entire budget on no-ops and reported `generated=0` while 29 skills sat with no utterances —
+  permanently, no matter how often the hook fired. The cap now applies **after** filtering to
+  work-needed skills (measured on the live index: 0/25 → 25/25 slots doing real work). This restores
+  the behaviour `openwiki/architecture/enforcement-gate.md` already documented ("generates for just
+  those"); the docs were right and the code never matched them.
+- **`doctor` reported `0/467` utterance coverage on a fully-covered install.** `check_flywheel()`
+  read `ROOT/eval/triggers.json` while every other tool honours the `SKILL_TRIGGERS` env seam. Run
+  from the plugin cache — which has no `eval/` — it read an absent file, took the empty set as
+  "nothing covered", and contradicted the last-run record it printed on the same line. It now honours
+  `SKILL_TRIGGERS`, and reports **"coverage unknown"** (WARN) when the file is missing or unreadable
+  instead of miscounting: an absent file is not evidence of zero coverage.
+- **A degraded local model could poison the live index.** `validate_reply()` only checked "a list of
+  ≥4 strings", so a model that had gone off the rails passed schema validation with empty strings,
+  one-character noise (`'>'`, `'Đ'`) and the same phrase repeated — and those merged into
+  `triggers.json` and were reindexed into retrieval. The Vietnamese-parity retry made it worse:
+  pressed for Vietnamese, a degraded model echoed the literal words `'tiếng Việt'`, which then
+  counted as a Vietnamese trigger and satisfied the retry. Validation now runs on *cleaned* phrases
+  (`clean_triggers()`): empties, sub-4-character noise, low-variety strings, duplicates and that VN
+  echo are dropped before both the count check and the merge. Known limit: this catches malformed
+  junk, **not** semantically-wrong-but-well-formed output (a degraded model echoing the prompt's own
+  example vocabulary still passes) — utterance quality still depends on a healthy endpoint.
+
+### Added
+- **`git commit` is gated on openwiki parity** — a `PreToolUse(Bash)` hook (`scripts/openwiki_parity_guard.py`,
+  wired in `.claude/settings.json`) **denies** the agent's `git commit` tool call when `openwiki/quickstart.md`
+  names a different version than `.claude-plugin/plugin.json`, or when any relative link under `openwiki/` is
+  broken. Version parity is delegated to `driftcheck.py` (the wiki's `**Version:**` line is registered as one
+  more mirror) rather than reimplemented, so there is no second checker to drift against. Matches on `Bash`, not
+  `Bash(git commit*)`, so the compound `git add . && git commit` cannot bypass it. Fails open on internal error;
+  `OPENWIKI_GUARD=0` overrides. A stale wiki gets read as authoritative — the commit is the checkpoint.
+- **Graph-staleness NOTICE on `git commit`** — a second `PreToolUse(Bash)` hook
+  (`scripts/graph_staleness_notice.py`) reports which **git-tracked** files have moved ahead of
+  `graphify-out/manifest.json`, using graphify's own `detect_incremental()` rather than a second staleness
+  definition. It **warns and never blocks**, and never emits `permissionDecision` (an `"allow"` there would
+  auto-approve every commit and silently disable the permission prompt). Deliberately not a deny: `graphify-out/`
+  is gitignored so a stale graph never ships, and doc refreshes cost LLM calls — a gate must be proportionate to
+  the harm and the cost of the fix. Scoped to tracked files because graphify indexes scratch dirs that churn every
+  turn, and a warning that always fires is one you learn to ignore. `GRAPH_NOTICE=0` overrides.
+- **graphify post-commit / post-checkout hooks** (`graphify hook install`) — auto-rebuild the knowledge graph's
+  code layer (AST only, no LLM) after each commit. Doc changes are deliberately ignored by that hook; the notice
+  above covers that gap.
+
+### Changed
+- **`graphify-out/` is gitignored scratch** — the knowledge-graph build (`graph.json`, `graph.html`,
+  `GRAPH_REPORT.md`, per-file extraction cache) is derived output, rebuildable from source. Added to the
+  tool-state line in `AGENTS.md` / `CLAUDE.md` / `openwiki/operations.md` (kept in parity by
+  `scripts/check_doc_parity.py`).
+- **Flywheel generation model set to `gemma-4-12b-it-qat-optiq`** via `FLYWHEEL_LLM_MODEL` in
+  `~/.claude/settings.json`. This **reverses the 0.20.0 swap to `gemma-4-e4b-it-qat-optiq`** on
+  reliability grounds, not on retrieval quality: the e4b model degraded mid-run, emitting junk and
+  then regurgitating the system prompt's own example words (`triage`/`sort`/`backlog`/`incoming`)
+  as triggers for unrelated skills. 0.20.0's measured case for e4b (MRR `0.231 → 0.462`) is **not**
+  refuted here and no re-measurement was run — this is an operational fix for an endpoint that was
+  producing unusable output. The code default in `scripts/flywheel_llm.py` is deliberately left at
+  e4b; the env var is the live seam and overrides it.
+
 ## [0.20.0] — 2026-07-10
 
 ### Changed

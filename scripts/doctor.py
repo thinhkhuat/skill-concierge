@@ -22,7 +22,8 @@ Usage:
   python3 scripts/doctor.py --fix    # attempt safe fixes, then re-check
 
 Env seams (mirror setup.sh): SKILL_CONCIERGE_VENV, SKILL_QDRANT_URL, SKILL_QDRANT_CONTAINER,
-SKILL_EMBED_BACKEND, SKILL_EMBED_MODEL, SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERGE_LOG.
+SKILL_EMBED_BACKEND, SKILL_EMBED_MODEL, SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERGE_LOG,
+SKILL_TRIGGERS.
 """
 import argparse
 import hashlib
@@ -40,6 +41,9 @@ VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-
 QNAME = os.environ.get("SKILL_QDRANT_CONTAINER", "skill-search-qdrant")
 SETTINGS = Path(os.environ.get("SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude/settings.json"))
 LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-concierge/logs"))
+# Same seam as flywheel.py/llm_triggers.py: the engine reads triggers from SKILL_TRIGGERS, which
+# need not live under ROOT — when doctor runs from the plugin cache, ROOT/eval/ does not exist.
+TRIGGERS = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 MULTIVECTOR = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"   # multi-vector trigger layer (default on)
 
@@ -545,14 +549,22 @@ def check_flywheel():
 
     # Coverage: indexed base-skill names vs eval/triggers.json entries with a non-empty
     # llm_triggers.triggers list.
-    triggers_path = ROOT / "eval" / "triggers.json"
     covered = set()
-    if triggers_path.exists():
-        try:
-            triggers = json.loads(triggers_path.read_text(encoding="utf-8"))
-            covered = {k for k, v in triggers.items() if v.get("llm_triggers", {}).get("triggers")}
-        except Exception:
-            pass
+    if not TRIGGERS.exists():
+        # Absent triggers file is NOT "nothing covered" — reporting 0/N here reads as a dead
+        # flywheel when the real cause is a misresolved path. Say so instead of miscounting.
+        return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
+                    detail=f"configured + reachable ({endpoint_detail}); coverage unknown — "
+                           f"no triggers file at {TRIGGERS} (set SKILL_TRIGGERS)"
+                           f"{_last_run_suffix()}", fix=fix)
+    try:
+        triggers = json.loads(TRIGGERS.read_text(encoding="utf-8"))
+        covered = {k for k, v in triggers.items()
+                   if isinstance(v, dict) and (v.get("llm_triggers", {}) or {}).get("triggers")}
+    except Exception as e:
+        return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
+                    detail=f"configured + reachable ({endpoint_detail}); coverage unknown — "
+                           f"unreadable triggers file {TRIGGERS}: {e}{_last_run_suffix()}", fix=fix)
     try:
         indexed = _indexed_skill_names()
     except Exception:

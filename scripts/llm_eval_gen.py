@@ -115,17 +115,28 @@ def run(out_dir, limit=None, only=None, rate=6.0):
     silently and produce no record, consumed by flywheel.py's manifest writer)."""
     skills = flywheel_llm.live_skills()
     names = sorted(skills) if only is None else [only]
-    if limit:
-        names = names[:limit]
 
     cache = load_cache()
     out_dir = Path(out_dir)
+
+    def _needs_work(name):
+        """Unchanged + already generated -> nothing to do."""
+        h = flywheel_llm.body_hash(skills.get(name, ""))
+        return not (cache.get(name) == h
+                    and (out_dir / f"{flywheel_llm.slug(name)}.json").exists())
+
+    # Cap AFTER filtering to the skills that actually need work — see llm_triggers.run().
+    if only is None:
+        names = [n for n in names if _needs_work(n)]
+    if limit:
+        names = names[:limit]
+
     results = []
     for name in names:
         desc = skills.get(name, "")
         h = flywheel_llm.body_hash(desc)
         out_file = out_dir / f"{flywheel_llm.slug(name)}.json"
-        if cache.get(name) == h and out_file.exists():
+        if not _needs_work(name):
             continue  # unchanged + already generated
         try:
             reply = flywheel_llm.chat(SYSTEM_PROMPT, user_prompt(name, desc), rate_s=rate, schema=SCHEMA)

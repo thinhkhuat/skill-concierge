@@ -94,15 +94,50 @@ def user_prompt(name, description):
     return f"Skill: {name}\nDescription: {description}"
 
 
+MIN_PHRASE_CHARS = 4          # 'BCTT' is a real query; 'Hà' / 'Đ' / '>' are noise
+_VN_ECHO = {"tiếng việt", "tieng viet", "vietnamese"}
+
+
+def clean_triggers(strings):
+    """Normalize and drop degenerate phrases, returning the usable list.
+
+    A local model that degrades mid-run still emits schema-valid output: empty strings,
+    one-character noise, and the same phrase repeated. The JSON schema (a list of >=N
+    strings) accepts all of it, so junk reaches the index and pollutes every query. The
+    VN retry makes this worse — pressed for Vietnamese, a degraded model echoes the
+    literal words 'tiếng Việt', which then counts as a Vietnamese trigger.
+    """
+    seen, out = set(), []
+    for s in strings:
+        if not isinstance(s, str):
+            continue
+        p = " ".join(s.split()).strip().strip('",')
+        if len(p) < MIN_PHRASE_CHARS:
+            continue
+        if p.lower() in _VN_ECHO:                    # retry echo, not a user query
+            continue
+        if len(set(p.replace(" ", ""))) < 3:         # 'aaaa', '>>>>', '....'
+            continue
+        key = p.lower()
+        if key in seen:                              # repetition loop
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
 def validate_reply(reply):
-    """Return an error string if `reply` doesn't meet the expected shape, else None."""
+    """Return an error string if `reply` doesn't meet the expected shape, else None.
+    Judged on the CLEANED phrases — raw count is meaningless when a model repeats itself."""
     if not isinstance(reply, dict) or "triggers" not in reply:
         return f"missing 'triggers' key: {reply!r}"
     trig = reply["triggers"]
     if not isinstance(trig, list) or not all(isinstance(x, str) for x in trig):
         return "triggers must be a list of strings"
-    if len(trig) < MIN_TRIGGERS:
-        return f"only {len(trig)} triggers (need >={MIN_TRIGGERS})"
+    cleaned = clean_triggers(trig)
+    if len(cleaned) < MIN_TRIGGERS:
+        return (f"only {len(cleaned)} usable triggers after cleaning "
+                f"(need >={MIN_TRIGGERS}) — model may be degraded: {trig!r}")
     return None
 
 
@@ -160,26 +195,40 @@ def run(limit=None, only=None, rate=6.0):
     silently and produce no record, consumed by flywheel.py's manifest writer)."""
     skills = flywheel_llm.live_skills()
     names = sorted(skills) if only is None else [only]
-    if limit:
-        names = names[:limit]
 
     triggers = load_triggers()
     cache = load_cache()
+
+    def _needs_work(name):
+        """Unchanged + already merged -> nothing to do."""
+        h = flywheel_llm.body_hash(skills.get(name, ""))
+        return not (cache.get(CACHE_PREFIX + name) == h
+                    and "llm_triggers" in triggers.get(name, {}))
+
+    # Cap AFTER filtering to the skills that actually need work. Slicing the raw sorted
+    # list first made a capped run (auto_flywheel passes --limit) spend its whole budget
+    # on already-covered skills and generate nothing — the uncovered tail was never
+    # reachable, no matter how often it ran.
+    if only is None:
+        names = [n for n in names if _needs_work(n)]
+    if limit:
+        names = names[:limit]
+
     results = []
     for name in names:
         desc = skills.get(name, "")
         h = flywheel_llm.body_hash(desc)
         key = CACHE_PREFIX + name
-        if cache.get(key) == h and "llm_triggers" in triggers.get(name, {}):
+        if not _needs_work(name):
             continue  # unchanged + already merged
         try:
             reply = flywheel_llm.chat(SYSTEM_PROMPT, user_prompt(name, desc), rate_s=rate, schema=SCHEMA)
             # VN parity with llm_eval_gen: re-ask once if the model skipped Vietnamese,
             # keep-and-warn if still short (don't lose the skill).
-            if isinstance(reply, dict) and vn_count(reply.get("triggers", [])) < 2:
+            if isinstance(reply, dict) and vn_count(clean_triggers(reply.get("triggers", []))) < 2:
                 reply = flywheel_llm.chat(SYSTEM_PROMPT + VN_RETRY, user_prompt(name, desc),
                                           rate_s=rate, schema=SCHEMA)
-                if vn_count(reply.get("triggers", [])) < 2:
+                if vn_count(clean_triggers(reply.get("triggers", []))) < 2:
                     print(f"WARN: {name}: still <2 Vietnamese triggers after retry (kept)")
         except Exception as e:
             print(f"WARN: skipping {name}: chat failed ({e})")
@@ -190,7 +239,7 @@ def run(limit=None, only=None, rate=6.0):
             print(f"WARN: skipping {name}: {err}")
             results.append({"name": name, "status": "error", "detail": err})
             continue
-        merge_utterance_layer(triggers, name, reply["triggers"])
+        merge_utterance_layer(triggers, name, clean_triggers(reply["triggers"]))
         cache[key] = h
         save_triggers(triggers)
         save_cache(cache)
