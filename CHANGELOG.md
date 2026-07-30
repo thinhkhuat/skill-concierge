@@ -5,6 +5,36 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.3] — 2026-07-30
+
+### Fixed
+- **Skill identity is the DIRECTORY name — `skillOverrides` finally apply.** `parse_skill()`
+  read frontmatter `name:` and fell back to the directory, with a comment claiming that
+  "matches Claude Code rule". It does not: Claude Code identifies a skill by its directory and
+  ignores frontmatter `name:` entirely. Verified against a live catalogue — `~/.claude/skills/zread-cli`
+  ships `name: zread`, a perfectly valid slug rather than an unparseable one, and Claude Code
+  still lists and overrides it as `zread-cli`.
+  Every skill whose two names differed therefore had its name-only budget override written under
+  a key Claude Code never looks up. The override silently never applied and the skill's full
+  description stayed resident in every turn — while `apply-overrides --check` reported
+  "in sync, no drift", because it only ever compared its own computed map against itself.
+  Measured on a 606-skill catalogue before the fix: **122 skills mismatched** (121 personal,
+  1 plugin), **~9.6k est. tokens** of description resident per session, and **21 of 32** curated
+  `keep-on` entries silently unmatched ("not present on this machine"). After: 0 mismatches,
+  all 32 keep-on entries resolve.
+  Regression test added covering all three shapes seen in the wild — a valid slug that simply
+  differs (`zread` / `zread-cli`), a legacy namespace (`ak:plan` / `ak-plan`), and a spaced
+  display name (`Excel Analysis` / `excel-analysis`).
+
+### Changed
+- `driftcheck.json` no longer mirrors the version into `.codex-plugin/plugin.json`. That file is
+  part of the in-flight dual-harness work and is not in this release; the declaration had been
+  committed ahead of the file, leaving the drift guard red at HEAD. The dual-harness branch
+  restores it.
+- `README.md` version badge and Status lead corrected — both had been bumped to `0.21.0` ahead
+  of the release they describe.
+
+
 ## [0.20.2] — 2026-07-17
 
 ### Added

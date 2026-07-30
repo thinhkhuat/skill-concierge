@@ -30,11 +30,31 @@ def test_parse_skill_basic(tmp_path):
     assert s["body"] == "BODY"
 
 
-def test_parse_skill_name_falls_back_to_dir(tmp_path):
+def test_parse_skill_name_is_dir_when_frontmatter_omits_it(tmp_path):
     d = tmp_path / "mydir"
     d.mkdir()
     (d / "SKILL.md").write_text("---\ndescription: x\n---\nbody")
     assert sd.parse_skill(d / "SKILL.md")["name"] == "mydir"
+
+
+def test_parse_skill_name_is_dir_even_when_frontmatter_disagrees(tmp_path):
+    """The directory name IS the skill's identity — frontmatter `name:` is ignored.
+
+    Regression: discovery used to prefer frontmatter, so a skill shipping a `name:`
+    that differed from its directory got its budget override written under a key
+    Claude Code never looks up. The override silently never applied and the full
+    description stayed resident every turn. Both shapes below occur in the wild:
+      - a valid slug that simply differs  (zread-cli ships `name: zread`)
+      - a namespaced/legacy id            (ak-plan ships `name: ak:plan`)
+    """
+    valid_slug = make_skill(tmp_path, "zread", dirname="zread-cli")
+    assert sd.parse_skill(valid_slug)["name"] == "zread-cli"
+
+    legacy_ns = make_skill(tmp_path, "ak:plan", dirname="ak-plan")
+    assert sd.parse_skill(legacy_ns)["name"] == "ak-plan"
+
+    spaced = make_skill(tmp_path, "Excel Analysis", dirname="excel-analysis")
+    assert sd.parse_skill(spaced)["name"] == "excel-analysis"
 
 
 def test_parse_skill_no_frontmatter_returns_none(tmp_path):

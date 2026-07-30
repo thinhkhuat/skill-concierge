@@ -111,8 +111,9 @@ def _namespaced_name(path: Path, base_name: str) -> str:
         si = sub.index("skills")
         if si >= 3:                       # cache / <marketplace> / <plugin> / .../ skills
             plugin_id = sub[si - 2]
-            # Some plugins self-namespace their frontmatter `name:` already
-            # (e.g. ClaudeKit ships `name: ck:plan`) — don't double-prefix to `ck:ck:plan`.
+            # Defensive: never double-prefix a name that already carries the plugin id.
+            # base_name is now the skill's directory name, which in practice never
+            # contains a colon — this only fires on an oddly-named directory.
             if base_name.startswith(f"{plugin_id}:"):
                 return base_name
             return f"{plugin_id}:{base_name}"
@@ -222,9 +223,16 @@ def parse_skill(path: Path) -> dict | None:
         return None
     frontmatter, body = fm.group(1), fm.group(2)
 
-    # name: explicit frontmatter, else directory name (matches Claude Code rule).
-    name_m = re.search(r"^name:\s*(.+)$", frontmatter, re.MULTILINE)
-    name = name_m.group(1).strip() if name_m else path.parent.name
+    # name: the DIRECTORY name, always — that is how Claude Code identifies a skill.
+    # Frontmatter `name:` is NOT the identity and must not be read here. Verified
+    # against a live catalogue: ~/.claude/skills/zread-cli ships `name: zread` — a
+    # perfectly valid slug, so this is not merely a fallback for unparseable names —
+    # and Claude Code still lists and overrides it as `zread-cli`.
+    # Preferring frontmatter silently mismatched every skill whose two names differ:
+    # the override key was written under a name Claude Code never looks up, so the
+    # skill's budget override never applied and its full description stayed resident
+    # in every turn, while apply-overrides still reported "in sync, no drift".
+    name = path.parent.name
     # Plugin skills are referenced namespaced (plugin:skill) — apply that here so
     # search results, get_skill lookups, and budget overrides all use one id.
     name = _namespaced_name(path, name)
