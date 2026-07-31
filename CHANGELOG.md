@@ -5,6 +5,25 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.5] — 2026-07-31
+
+### Fixed
+- **`setup.sh` rebuilt the index without the trigger layer the server queries with.**
+  `env_run()` forwarded only `SKILL_QDRANT_URL` / `SKILL_EMBED_BACKEND` / `SKILL_EMBED_MODEL`
+  from `.mcp.json`, so `--reindex` ran at engine defaults — `SKILL_LLM_TRIGGERS` **off**
+  (default `"0"`) and `TRIGGERS_MAX` **12** (server: `1` and `16`). Every setup run therefore
+  pruned the utterance points and built a layer composition the query server does not serve.
+  Observed: trigger points dropped 4605 → 4520, and the MCP reported `stale: true` with
+  "disk changed since last index" on a *freshly built* index — so every `search_skills`
+  reply carried a spurious "run reindex()" warning while `dark_skills` and `stale_points`
+  were both empty.
+  This is the same gap `auto_reindex._mcp_env()` closed in 0.16.1 (ADR-0026); `setup.sh`
+  was never updated. It now resolves `SKILL_LLM_TRIGGERS`, `TRIGGERS_MAX`, `SKILL_TRIGGERS`
+  and `SKILL_BODY_TRIGGERS` through the existing `read_mcp()` single-source-of-truth helper
+  — the same key list `auto_reindex` uses — and exports each only when non-empty, because an
+  empty `SKILL_LLM_TRIGGERS` reads as `"" != "0"` and would switch the layer ON by accident.
+
+
 ## [0.20.4] — 2026-07-31
 
 ### Fixed

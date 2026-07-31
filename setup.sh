@@ -35,6 +35,15 @@ fi
 read_mcp() { "$PYTHON" -c "import json,sys;print(json.load(open('$ROOT/.mcp.json'))['mcpServers']['skill-search']['env'].get(sys.argv[1],''))" "$1"; }
 QURL="${SKILL_QDRANT_URL:-$(read_mcp SKILL_QDRANT_URL)}"
 MODEL="${SKILL_EMBED_MODEL:-$(read_mcp SKILL_EMBED_MODEL)}"
+# ...and the TRIGGER-LAYER keys, for the same reason. Without them the reindex below
+# rebuilds at engine defaults (SKILL_LLM_TRIGGERS off, TRIGGERS_MAX 12) and prunes the
+# utterance points, while the query server serves with the layer ON — the server then
+# reports its own index as stale forever. auto_reindex.py got this fix in 0.16.1;
+# setup.sh had the identical gap. Same key list as auto_reindex._mcp_env() (ADR-0026).
+LLM_TRIGGERS="${SKILL_LLM_TRIGGERS:-$(read_mcp SKILL_LLM_TRIGGERS)}"
+TRIGGERS_MAX_V="${TRIGGERS_MAX:-$(read_mcp TRIGGERS_MAX)}"
+TRIGGERS_PATH="${SKILL_TRIGGERS:-$(read_mcp SKILL_TRIGGERS)}"
+BODY_TRIGGERS="${SKILL_BODY_TRIGGERS:-$(read_mcp SKILL_BODY_TRIGGERS)}"
 echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  model=$MODEL"
 
 # One-time migration to the canonical home (~/.claude/skill-concierge, ADR-0025): fold the
@@ -92,7 +101,16 @@ else
 fi
 
 echo "[3/4] build/refresh the multilingual index @ $QURL"
-env_run() { SKILL_QDRANT_URL="$QURL" SKILL_EMBED_BACKEND=fastembed SKILL_EMBED_MODEL="$MODEL" "$@"; }
+# Only export a trigger key when it actually has a value — exporting an EMPTY
+# SKILL_LLM_TRIGGERS would read as "" != "0" and switch the layer ON by accident.
+env_run() {
+  local -a e=(SKILL_QDRANT_URL="$QURL" SKILL_EMBED_BACKEND=fastembed SKILL_EMBED_MODEL="$MODEL")
+  if [ -n "$LLM_TRIGGERS" ];   then e+=(SKILL_LLM_TRIGGERS="$LLM_TRIGGERS"); fi
+  if [ -n "$TRIGGERS_MAX_V" ]; then e+=(TRIGGERS_MAX="$TRIGGERS_MAX_V"); fi
+  if [ -n "$TRIGGERS_PATH" ];  then e+=(SKILL_TRIGGERS="$TRIGGERS_PATH"); fi
+  if [ -n "$BODY_TRIGGERS" ];  then e+=(SKILL_BODY_TRIGGERS="$BODY_TRIGGERS"); fi
+  env "${e[@]}" "$@"
+}
 env_run "$VENV/bin/skill-search" --reindex
 # Multi-vector trigger layer (ADR-0012) is built + maintained by --reindex itself (default on).
 # The LEGACY MEAN enrichment overlay is superseded and must NOT run on a multi-vector index — it
