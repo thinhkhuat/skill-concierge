@@ -211,6 +211,11 @@ def _extract_body_triggers(body: str, skill_name: str = "") -> list[str]:
     return phrases
 
 
+# Lookahead ending a frontmatter value: the next `key:` line, or end of frontmatter.
+# `[\w-]` not `\w` — hyphenated keys are common in SKILL.md frontmatter.
+_FM_NEXT_KEY = r"(?=\n[\w-]+:|\Z)"
+
+
 def parse_skill(path: Path) -> dict | None:
     """Return {name, description, body, path} or None if no valid frontmatter."""
     try:
@@ -238,9 +243,15 @@ def parse_skill(path: Path) -> dict | None:
     name = _namespaced_name(path, name)
 
     # description + optional when_to_use (both feed the semantic index).
-    desc_m = re.search(r"^description:\s*(.+?)(?=\n\w+:|\Z)", frontmatter,
+    # The value runs until the NEXT frontmatter key. That terminator must admit
+    # hyphens: `\w` is [A-Za-z0-9_] and excludes `-`, so keys like `user-invocable:`,
+    # `argument-hint:` and `allowed-tools:` did not stop the capture and were swallowed
+    # into the description — polluting the skill listing and, worse, the embedded text
+    # (a vector carrying the literal "user-invocable: true" is noise that degrades
+    # retrieval). Observed on 168 of 356 personal skills.
+    desc_m = re.search(r"^description:\s*(.+?)" + _FM_NEXT_KEY, frontmatter,
                        re.MULTILINE | re.DOTALL)
-    when_m = re.search(r"^when_to_use:\s*(.+?)(?=\n\w+:|\Z)", frontmatter,
+    when_m = re.search(r"^when_to_use:\s*(.+?)" + _FM_NEXT_KEY, frontmatter,
                        re.MULTILINE | re.DOTALL)
     description = (desc_m.group(1).strip() if desc_m else "")
     if when_m:

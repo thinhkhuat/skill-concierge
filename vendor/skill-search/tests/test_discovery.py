@@ -57,6 +57,38 @@ def test_parse_skill_name_is_dir_even_when_frontmatter_disagrees(tmp_path):
     assert sd.parse_skill(spaced)["name"] == "excel-analysis"
 
 
+def test_parse_skill_description_stops_at_hyphenated_keys(tmp_path):
+    """A frontmatter value ends at the next key — including a HYPHENATED one.
+
+    Regression: the terminator was `(?=\\n\\w+:|\\Z)`, and `\\w` excludes `-`, so
+    `user-invocable:`, `argument-hint:` and `allowed-tools:` did not stop the capture.
+    Their raw key/value lines were swallowed into `description`, which then went into
+    the skill listing AND into the embedded text — a vector carrying the literal
+    "user-invocable: true" is retrieval noise. Hit 168 of 356 personal skills.
+    """
+    d = tmp_path / "sk"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\n"
+        "name: sk\n"
+        "description: Plan implementations and roadmaps.\n"
+        "user-invocable: true\n"
+        'argument-hint: "[task] [--fast]"\n'
+        "allowed-tools: Read, Write\n"
+        "when_to_use: Invoke when work needs phases.\n"
+        "category: utilities\n"
+        "---\nbody"
+    )
+    s = sd.parse_skill(d / "SKILL.md")
+    assert "user-invocable" not in s["description"]
+    assert "argument-hint" not in s["description"]
+    assert "allowed-tools" not in s["description"]
+    assert "category" not in s["description"]
+    assert s["description"].startswith("Plan implementations and roadmaps.")
+    # when_to_use is still captured and appended, and likewise stops at the next key
+    assert "Invoke when work needs phases." in s["description"]
+
+
 def test_parse_skill_no_frontmatter_returns_none(tmp_path):
     p = tmp_path / "f" / "SKILL.md"
     p.parent.mkdir()

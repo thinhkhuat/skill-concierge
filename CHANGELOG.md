@@ -5,6 +5,27 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.4] — 2026-07-31
+
+### Fixed
+- **Frontmatter values no longer swallow the next key when that key is hyphenated.**
+  `parse_skill()` ended a `description:` / `when_to_use:` value at `(?=\n\w+:|\Z)`. `\w` is
+  `[A-Za-z0-9_]` and excludes `-`, so a hyphenated key did not terminate the capture and its
+  raw key/value line was folded into the value. Common offenders on a real catalogue:
+  `user-invocable:` (97), `argument-hint:` (31), `allowed-tools:` (23),
+  `disable-model-invocation:` (16), `compatible-tools:` (1).
+  The damage was twofold: the polluted text went into the skill listing, and — the part that
+  matters — into the text that gets EMBEDDED. A skill vector carrying the literal
+  "user-invocable: true" is retrieval noise, so this quietly degraded ranking for every
+  affected skill. Measured before the fix: **168 of 356** personal skills polluted, ~6.8k
+  characters (~1.7k est. tokens) of frontmatter junk in the index. After: **0**.
+  The terminator is now the named `_FM_NEXT_KEY = r"(?=\n[\w-]+:|\Z)"`, shared by both
+  patterns so they cannot drift apart. Regression test pins all four offending key shapes.
+
+  **Requires a full reindex** (`--reindex --force`) to re-embed the cleaned descriptions —
+  an incremental pass will skip unchanged files and keep the polluted vectors.
+
+
 ## [0.20.3] — 2026-07-30
 
 ### Fixed
