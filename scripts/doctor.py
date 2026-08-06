@@ -195,6 +195,77 @@ def check_engine_freshness():
                 detail="venv engine matches deployed source", fix=None)
 
 
+def _etime_seconds(etime: str):
+    """`ps -o etime=` -> seconds. Formats: MM:SS, HH:MM:SS, DD-HH:MM:SS. None if unparseable."""
+    try:
+        days, _, rest = etime.strip().rpartition("-")
+        parts = [int(p) for p in rest.split(":")]
+        if len(parts) == 2:
+            secs = parts[0] * 60 + parts[1]
+        elif len(parts) == 3:
+            secs = parts[0] * 3600 + parts[1] * 60 + parts[2]
+        else:
+            return None
+        return secs + (int(days) * 86400 if days else 0)
+    except Exception:
+        return None
+
+
+def check_running_engine():
+    """Is a LIVE MCP server still executing an engine build older than the venv's?
+
+    `check_engine_freshness` compares two files on disk (venv vs deployed source) and is
+    blind to the process dimension: a server that started BEFORE the venv was refreshed
+    keeps running the bytes it imported, and no amount of re-copying changes that. The
+    symptom is not "search is old" — it is a permanent false `stale: true`, because the
+    running build and every fresh CLI process derive different disk signatures from the
+    same unchanged files, so each reindex hands the false alarm back to the other side.
+    Only a restart clears it. Fail-open (N/A) whenever the venv, the engine dir, or `ps`
+    is unavailable — this is a diagnostic, never a gate.
+    """
+    engine = _venv_engine_dir()
+    if not SS_BIN.exists() or engine is None or not shutil.which("ps"):
+        return None
+    try:
+        # ctime as well as mtime: `cp -p`, `rsync -a`, `tar -x` and shutil.copytree all
+        # PRESERVE source mtimes, which would date the engine to whenever it was built
+        # rather than when it landed here — and a preserved-old mtime silently turns a
+        # genuinely stale server into a false all-clear. ctime tracks the local write.
+        newest = max(max(f.stat().st_ctime, f.stat().st_mtime) for f in engine.rglob("*.py"))
+    except (ValueError, OSError):
+        return None                             # empty dir, or a file vanished mid-glob
+    # -A not -e: on Darwin -e means "show the environment too"; -A is "all processes" on
+    # both Darwin and procps. -ww defeats width truncation — output goes to a PIPE here,
+    # so BSD ps would otherwise clip at ~79 columns and cut off the very path we match on,
+    # returning a reassuring "no stale server" on exactly the platform this is written for.
+    try:
+        proc = _run(["ps", "-A", "-ww", "-o", "pid=,etime=,command="])
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    now, stale_pids = time.time(), []
+    for line in proc.stdout.splitlines():
+        if str(SS_BIN) not in line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        secs = _etime_seconds(parts[1])
+        if secs is None:
+            continue
+        if now - secs < newest:                 # started before the current engine landed
+            stale_pids.append(parts[0])
+    if stale_pids:
+        return dict(id="engine_running", label="Running engine", status=WARN,
+                    detail=f"{len(stale_pids)} live MCP server(s) started before the current "
+                           f"engine build (pid {', '.join(stale_pids)}) — they still execute the "
+                           f"OLD code, which shows up as a false 'disk changed since last index'. "
+                           f"Restart Claude Code; reindexing will not fix it", fix=None)
+    return dict(id="engine_running", label="Running engine", status=OK,
+                detail="no live MCP server predates the current engine build", fix=None)
+
+
 def check_mcp_wiring():
     launcher = ROOT / "bin" / "skill-search-mcp"
     probs = []
@@ -276,6 +347,19 @@ def check_engine_health():
     if rep.get("status") == "ok" and not issues:
         return dict(id="health", label="Retrieval health", status=OK,
                     detail=f"{idx} skills indexed; embedder + qdrant reachable{_fresh(rep)}", fix=None)
+    # Engine-build drift is NOT a stale index. The live server and this CLI parse skills
+    # with different builds, so nothing a reindex does can reconcile them — only a restart.
+    # Falling through to the FAIL/fix="reindex" branch below would (a) flip the ordinary
+    # post-update run red, and (b) auto-run the exact reindex whose own message says it
+    # won't help — which clears the CLI-side symptom, re-embeds every point whose text
+    # moved under the new parser, and leaves the live server just as broken. Keyed on the
+    # additive `engine_build` field, never on matching issue strings.
+    drift = rep.get("engine_build") or {}
+    if drift:
+        return dict(id="health", label="Retrieval health", status=WARN,
+                    detail=f"index built by engine {drift.get('index_written_by')}, this process "
+                           f"runs {drift.get('running')} — a live MCP server is on an older build; "
+                           f"restart Claude Code (reindex will not fix it)", fix=None)
     # Stale-but-serving is degraded, not broken: WARN (auto-fixable via reindex) so the
     # exit code distinguishes "index needs a refresh" from "retrieval is down".
     if _stale_only(rep):
@@ -634,7 +718,8 @@ def check_trigger_hygiene():
                 fix="purge_junk")
 
 
-CHECKS = [check_python, check_venv, check_engine_freshness, check_mcp_wiring, check_qdrant,
+CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
+          check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_ledger, check_dup_mcp]
@@ -804,6 +889,17 @@ def _selftest():
         assert _tree_digest(a) != _tree_digest(b)
         assert _tree_digest(Path(d) / "absent") is None
     assert any(getattr(fn, "__name__", "") == "check_engine_freshness" for fn in CHECKS)
+    # ps etime -> seconds, all three formats the field can take, plus the junk cases
+    assert _etime_seconds("05:30") == 330
+    assert _etime_seconds("01:02:03") == 3723
+    assert _etime_seconds("2-03:04:05") == 2 * 86400 + 3 * 3600 + 4 * 60 + 5
+    assert _etime_seconds("garbage") is None and _etime_seconds("1:2:3:4") is None
+    assert any(getattr(fn, "__name__", "") == "check_running_engine" for fn in CHECKS)
+    # Engine drift must never be auto-"fixed" by a reindex: the remedy is a restart, and
+    # a reindex would clear the CLI-side symptom while the live server stays broken.
+    drift_rep = {"status": "degraded", "issues": ["engine ... restart"],
+                 "engine_build": {"running": "aaaa", "index_written_by": "bbbb"}}
+    assert _stale_only(drift_rep) is False
     print("selftest ok")
     return 0
 
