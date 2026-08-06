@@ -140,6 +140,21 @@ upstream is re-vendored:
   `~/.cache/skill-search/index_meta-<md5(PROJECT_ROOT)[:8]>.json`. `SKILL_META_PATH` still overrides.
   `hooks/scripts/auto_flywheel.py::_meta_path()` mirrors the derivation (same CWD ⇒ same file).
 
+- **YAML scalar unwrapping (v0.20.6):** `skills_discovery.py` adds `_unwrap_scalar`, applied to both
+  `description:` and `when_to_use:`. The regex capture returns a frontmatter value exactly as authored,
+  scalar syntax included — so `description: >-` kept the literal `">-"` plus every continuation line's
+  newline and indent, and `description: "…"` kept its surrounding quotes. All of that went into the
+  embedded base vector, so the retriever scored skills partly on punctuation. Measured 210 of 416 skills
+  affected, 25 of them in the always-on set; after the fix, 0. Handles the three shapes frontmatter
+  actually uses — block scalars (`|`/`>` with chomping and indent indicators; literal keeps line breaks,
+  folded folds them to spaces on paragraph boundaries), quoted flow scalars (quotes stripped, `\"` and
+  `''` unescaped), and plain wrapped scalars (newline+indent folded to one space). Deliberately not a
+  YAML parser — this module is dependency-free by contract. Distinct from the v0.20.4 terminator fix,
+  which stopped hyphenated NEXT KEYS being swallowed; this one cleans the value's own syntax. Pinned by
+  `tests/test_discovery.py::test_parse_skill_description_unwraps_yaml_scalars`. **Requires re-copy into
+  the stable venv + a FORCED reindex** (`--reindex --force`): the parsed text changes while the file
+  content hash does not, so the incremental path would skip every skill.
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

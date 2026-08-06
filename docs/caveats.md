@@ -280,3 +280,84 @@ the plugin id (v0.10.2 guard), so the indexed name stays `skill-concierge:<skill
 `~/.claude/docs/claude-code-component-building.md` entry on #22063 recommends *omitting* `name:` — that
 is the weaker branch; prefer the self-namespaced-name pattern (verified live to surface the hint). Note:
 personal/project skills (not plugin-installed) keep their bare `name:` — this applies to plugin skills.
+
+---
+
+## §16 — `skillOverrides` CANNOT demote a plugin skill, and the listing silently drops descriptions when over budget
+
+**Symptom:** `apply-overrides.py` reports "in sync: N on / M name-only, no drift", yet every
+plugin-bundled skill still ships its full description in the turn's skill listing — and, worse,
+some skills you deliberately kept `on` render as a bare `- name` with no description at all.
+
+**Cause — two separate mechanisms in Claude Code. Both are DOCUMENTED upstream; neither is a bug,
+and neither is anything `apply-overrides.py` can fix.** Sources: the official `skills.md`
+(*"Override skill visibility from settings"* and *"Skill descriptions are cut short"*) and
+`settings.md`, both carried in the `working-with-claude-code` skill's `references/`; mechanism
+below confirmed against the 2.1.223 binary.
+
+**1. Plugin skills bypass overrides entirely.** Upstream states it plainly — *"Plugin skills are not
+affected by `skillOverrides`. Manage those through `/plugin` instead."* The resolver returns `"on"`
+for anything plugin-sourced before it ever reads the map:
+
+```js
+function $3e(e){
+  if(e.type!=="prompt" || e.source==="plugin") return "on";   // ← plugin skills never consult skillOverrides
+  let n = r?.[e.name] ?? (e.unqualifiedName!=null ? r?.[e.unqualifiedName] : void 0) ?? "on";
+  ...
+}
+```
+
+This is **not** a key-format mismatch — writing `plugin:skill`, the bare `skill`, or both changes
+nothing. For personal/project skills the same line shows the lookup *does* fall back from the
+qualified name to `unqualifiedName`, so those keys are forgiving; plugin skills simply never reach
+that code. Measured cost on the maintainer's machine: 63 plugin skills ≈ 21,100 chars ≈ **5,280
+tokens/turn** that no allowlist can touch. The only lever is `/plugin disable` on plugins whose
+skills do not earn their listing cost. Note this cost is NOT inert: plugin skills are contenders in
+the same budget as your curated keep-on set (mechanism 2), so a dormant plugin actively evicts
+descriptions you paid to keep.
+
+**2. Over budget, descriptions are DROPPED, not truncated.** `skillListingBudgetFraction` (default
+`0.01`, this deployment `0.03`) yields `budget = contextWindow × 4 × fraction`. If the rendered
+listing exceeds it, Claude Code switches to `budgetMode: "priority"`: name-only and bundled skills
+are exempt, the rest are sorted by a usage score and greedily fitted, and every skill that does not
+fit renders as a bare `- name`. The score is:
+
+```js
+Q4t(name) = usageCount × max(0.5 ^ (daysSinceLastUse / 7), 0.1)     // 0 if never invoked
+```
+
+read from `skillUsage` in `~/.claude.json` — Claude Code's own counter, **not** skill-concierge's
+ledger and not the transcript trail. The fit is greedy *with continuation*: an expensive entry that
+does not fit is skipped while cheaper, lower-priority ones still land. So a 512-char description is
+structurally disadvantaged — a high-usage skill can lose its description to a never-used one that is
+simply shorter.
+
+**Consequences that bite:**
+- A skill being `on` guarantees nothing. Confirm by reading the actual listing, never by trusting
+  `apply-overrides.py`'s "in sync".
+- Long descriptions are the failure mode. `skillListingMaxDescChars` (512 here, upstream default
+  1536) caps the render, but a capped-length entry is exactly the one greedy fitting drops first.
+  Keep an always-on description **well under the cap** — the goal is to be cheap, not to be maximal.
+- Demoting a never-used skill helps twice: it leaves the contender pool AND frees budget for the
+  ones that matter.
+- Raising `skillListingBudgetFraction` ends truncation but bills the full listing every turn,
+  including the plugin block you cannot demote. Trim descriptions first.
+
+**Do:** treat the always-on set as a **budget**, not a list — upstream's own remedies, in the order
+they cost least:
+
+1. **Trim `description` + `when_to_use` at the source, key use case first.** Upstream's wording:
+   *"put the key use case first, since each entry's combined text is capped … regardless of budget."*
+   Cheapest fix, and the only one that shrinks the listing rather than paying more for it.
+2. **Demote low-priority entries to `name-only`.** They leave the contender pool AND free budget.
+3. **Raise `skillListingBudgetFraction`** (or set `SLASH_COMMAND_TOOL_CHAR_BUDGET` to a fixed char
+   count). Last resort: it bills the full listing every turn, including the plugin block you cannot
+   demote.
+
+**Measure, don't infer:** `/doctor` estimates the listing's context cost and names its biggest
+contributors, and the Skills row in `/context` reports the size *after* the budget is applied (so it
+matches what the model actually receives). An over-budget listing also writes a warning to the debug
+log, visible with `--debug`. Confirm from one of these — never from `apply-overrides.py`'s "in sync".
+
+**Timing:** `skillOverrides` is applied **on the next turn**, not the next session. The keep-on
+skill's own note ("takes effect next session") is conservative; a demotion lands almost immediately.
