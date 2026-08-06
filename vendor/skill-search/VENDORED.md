@@ -155,6 +155,41 @@ upstream is re-vendored:
   the stable venv + a FORCED reindex** (`--reindex --force`): the parsed text changes while the file
   content hash does not, so the incremental path would skip every skill.
 
+- **Engine-build identity (v0.20.6, extended v0.20.7):** `server.py` adds `_engine_build()` and the
+  module-level `_ENGINE_BUILD` — an md5 over `server.py` + `skills_discovery.py`, computed **at import
+  on purpose**. A long-lived MCP server keeps executing the bytes it imported at start, so when the venv
+  engine is replaced underneath it, that server and every fresh process parse the same `SKILL.md` files
+  with different parsers and derive different `_disk_signature()` values from an UNCHANGED disk;
+  whichever writes the manifest last hands the other a permanent false `disk changed since last index`.
+  Computing the id lazily would hash the NEW bytes the process is not running, making the whole
+  mechanism inert. `_write_manifest` stamps it as `engine`; `_engine_drift()` compares, treating a
+  missing key or an `"unknown"` sentinel on either side as "cannot tell", never as drift. On a mismatch
+  `_health()` sets `stale` to `None` (unknowable across builds, not false) and names the remedy —
+  **restart**, not reindex.
+  *(This entry was missing for v0.20.6 and is recorded here retroactively; re-vendoring would have
+  silently dropped the mechanism.)*
+  **v0.20.7 extends it two ways.** (1) `_health()` now emits `engine_build {running, index_written_by}`
+  on **every** report rather than only under drift — which build a process runs is a fact about that
+  process, and the one reader that needs a *healthy* process's build could not otherwise get it without
+  re-deriving `_engine_build()`'s hashing rule in a second copy free to stop agreeing. Consumers key on
+  `index_written_by` being non-null; mere presence no longer means drift. (2) New `SERVER_RECORDS`
+  (seam `SKILL_SERVER_RECORDS`, default `~/.cache/skill-search/servers/`) and `_record_server_build()`,
+  called only from `main()`'s `mcp.run()` branch: each live server writes `<pid>.json` = `{pid, build,
+  started_at}` so an external reader can look up which build a running server executes instead of
+  inferring it from file timestamps — which cannot work, because `setup.sh` re-copies the engine on
+  every run and moves those timestamps without moving the bytes (see `docs/caveats.md` §17).
+  Best-effort and exception-swallowing by contract: it sits on the server's startup path, where losing
+  a diagnostic is acceptable and failing to start is not. The write is write-then-`os.replace` because
+  the file is read by a concurrent process by design — a truncating write would let a reader see a torn
+  file and report the build as unknown. It prints nothing (stdout would corrupt the stdio handshake)
+  and catches `Exception`, not `BaseException`, so `KeyboardInterrupt` still propagates. Pinned by
+  `tests/test_indexing.py::test_health_reports_drift_not_false_disk_changed`,
+  `::test_health_always_reports_running_engine_build`,
+  `::test_health_reports_running_build_even_without_a_manifest`,
+  `::test_server_records_its_own_build_for_live_lookup`, `::test_server_build_record_never_raises`,
+  `::test_cli_paths_write_no_server_record`. The seam is pinned in `.mcp.json` so the reader
+  resolves the same directory the writer used — see `docs/caveats.md` §17.
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

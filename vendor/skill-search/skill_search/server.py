@@ -101,6 +101,11 @@ _LLM_TRIG_PATH = os.environ.get(
 META_PATH       = Path(os.environ.get(
     "SKILL_META_PATH",
     str(Path.home() / ".cache" / "skill-search" / f"index_meta-{sd.manifest_key()}.json")))
+# One file per live MCP server, `<pid>.json`, recording the engine build that process
+# actually runs. NOT keyed per project root — a reader (doctor) asks "which builds are
+# live on this machine", a question no single project's manifest can answer.
+SERVER_RECORDS  = Path(os.environ.get(
+    "SKILL_SERVER_RECORDS", str(Path.home() / ".cache" / "skill-search" / "servers")))
 
 mcp = FastMCP("skill-search")
 
@@ -177,6 +182,46 @@ def _engine_build() -> str:
 
 
 _ENGINE_BUILD = _engine_build()
+
+
+def _record_server_build():
+    """Publish "pid P runs build B" so a reader can look it up instead of guessing it.
+
+    Nothing outside this process can otherwise learn which engine a long-lived server
+    imported. The obvious substitute — dating the process against the engine files'
+    mtime/ctime — does not work: setup.sh re-copies the engine on EVERY run, so the
+    timestamps advance even when the bytes are byte-identical, and every live server gets
+    accused of running old code after a routine no-op re-run. A build id moves only when
+    the code moves, which is the actual question.
+
+    `started_at` is what makes the record safe to trust. Pids are recycled; a stale
+    record left by a dead server would otherwise hand its build to whatever process
+    inherits the number — reintroducing the same false accusation, one layer down.
+
+    Called only from the MCP-server path. CLI invocations (`--health`, `--reindex`) are
+    short-lived and would just litter the directory with records for dead pids.
+
+    Returns the path written, or None if anything went wrong: this sits on the server's
+    startup path, and losing a diagnostic is acceptable where failing to start is not.
+    """
+    try:
+        SERVER_RECORDS.mkdir(parents=True, exist_ok=True)
+        path = SERVER_RECORDS / f"{os.getpid()}.json"
+        body = json.dumps({
+            "pid": os.getpid(),
+            "build": _ENGINE_BUILD,
+            "started_at": time.time(),
+        })
+        # Write-then-rename, because this file is read by a CONCURRENT process by design.
+        # A plain write truncates first, so a reader arriving mid-write sees an empty or
+        # half-written file, fails to parse it, and reports the server's build as unknown.
+        # os.replace is atomic within a directory, so a reader sees old or new, never torn.
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(body)
+        os.replace(tmp, path)
+        return path
+    except Exception:
+        return None
 
 
 def _write_manifest(indexed: int) -> None:
@@ -702,7 +747,13 @@ def _health() -> dict:
                                 f"('{COLLECTION}') — run reindex()")
 
     # Freshness: when was the index last built, and has disk changed since?
+    # Which build we run is a FACT about this process, true with or without an index, so
+    # it is published on every report rather than only when something is wrong. doctor
+    # reads it as the yardstick for every live server; making it a drift-only flag would
+    # mean the yardstick exists only once drift already does — and would push doctor into
+    # re-deriving `_engine_build()`'s rule itself, a second copy free to stop agreeing.
     manifest = _read_manifest()
+    report["engine_build"] = {"running": _ENGINE_BUILD, "index_written_by": None}
     if manifest:
         report["indexed_at"] = manifest.get("indexed_at")
         drift = _engine_drift(manifest)
@@ -716,7 +767,7 @@ def _health() -> dict:
             # False would tell every consumer the index matches disk. None reads as falsy
             # for the callers that only gate on it, and stays honest for the rest.
             report["stale"] = None
-            report["engine_build"] = {"running": _ENGINE_BUILD, "index_written_by": drift}
+            report["engine_build"]["index_written_by"] = drift
             # "this process", not "this server": _health() is also reached via the CLI
             # `--health` (that is how doctor calls it), where the stale build belongs to
             # some OTHER, long-lived server — saying "this server" inverts the roles.
@@ -757,6 +808,7 @@ def main() -> None:
         print(json.dumps(report, indent=2))
         sys.exit(0 if report["status"] == "ok" else 1)
     else:
+        _record_server_build()      # only the long-lived path: CLI pids die immediately
         mcp.run()
 
 

@@ -8,7 +8,8 @@
         "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
         "SKILL_TOP_K": "10",
         "SKILL_LLM_TRIGGERS": "1",
-        "TRIGGERS_MAX": "16"
+        "TRIGGERS_MAX": "16",
+        "SKILL_SERVER_RECORDS": "${HOME}/.cache/skill-search/servers"
       }
     }
   }

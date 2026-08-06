@@ -3,6 +3,8 @@ end-to-end test (marked `integration`) actually embeds + indexes via the
 default service-free tier and is skipped unless run explicitly."""
 
 import json
+import os
+import time
 import uuid
 
 import pytest
@@ -175,6 +177,83 @@ def test_health_reports_drift_not_false_disk_changed(tmp_path, monkeypatch):
     joined = " ".join(str(i) for i in rep["issues"])
     assert "disk changed since last index" not in joined     # the false alarm is gone
     assert "restart" in joined                               # names the real remedy
+
+
+# --- the running build is a FACT, published unconditionally ---------------
+# Reporting `engine_build` only under drift makes it a drift FLAG, so the only way for a
+# reader to learn which build a process runs is for something to already be wrong. doctor
+# needs the build of a healthy process — it is the yardstick every live server is measured
+# against — and it must not have to re-hash the engine itself to get it: a second copy of
+# `_engine_build()`'s rule silently stops agreeing the day this one changes.
+
+def test_health_always_reports_running_engine_build(tmp_path, monkeypatch):
+    """No drift: `running` is still published, and `index_written_by` is None (not absent)."""
+    meta = tmp_path / "meta.json"
+    monkeypatch.setattr(server, "META_PATH", meta)
+    monkeypatch.setattr(server, "_ENGINE_BUILD", "aaaaaaaaaaaa")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    meta.write_text(json.dumps({"indexed": 5, "indexed_at": 1.0,
+                                "signature": server._disk_signature(),
+                                "engine": "aaaaaaaaaaaa"}))
+    rep = server._health()
+    assert rep["engine_build"] == {"running": "aaaaaaaaaaaa", "index_written_by": None}
+    assert rep["stale"] is False                  # same build, same disk -> a real answer
+
+
+def test_health_reports_running_build_even_without_a_manifest(tmp_path, monkeypatch):
+    """Which build we run does not depend on an index existing. A fresh machine (no
+    manifest) must still answer it, or doctor's yardstick vanishes exactly when the
+    post-install checks need it most."""
+    monkeypatch.setattr(server, "META_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr(server, "_ENGINE_BUILD", "aaaaaaaaaaaa")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    rep = server._health()
+    assert rep["engine_build"] == {"running": "aaaaaaaaaaaa", "index_written_by": None}
+
+
+# --- pid -> build registry (what a LIVE server is actually running) -------
+# Timestamps cannot answer this. setup.sh re-copies the engine on EVERY run, so file
+# mtime/ctime move even when the bytes are identical, and any check that dates a server
+# against them flags every live process after a routine, no-op re-run. The server knows
+# its own build; having it say so turns an inference into a lookup.
+
+def test_server_records_its_own_build_for_live_lookup(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "SERVER_RECORDS", tmp_path / "servers")
+    monkeypatch.setattr(server, "_ENGINE_BUILD", "aaaaaaaaaaaa")
+    before = time.time()
+    path = server._record_server_build()
+    after = time.time()
+    rec = json.loads(path.read_text())
+    assert rec["pid"] == os.getpid()
+    assert rec["build"] == "aaaaaaaaaaaa"
+    assert path.name == f"{os.getpid()}.json"
+    # started_at anchors the record to THIS process: a recycled pid must not inherit it.
+    # Bracketed by the call, not merely "close to now" — the loose form cannot fail.
+    assert before <= rec["started_at"] <= after
+    assert not list((tmp_path / "servers").glob("*.tmp")), "left a temp file behind"
+
+
+def test_cli_paths_write_no_server_record(tmp_path, monkeypatch):
+    """Only the long-lived server publishes a record. A CLI run dies immediately, so its
+    record would be a lie the moment it lands — a dead pid claiming to run a build."""
+    records = tmp_path / "servers"
+    monkeypatch.setattr(server, "SERVER_RECORDS", records)
+    monkeypatch.setattr(server, "_health", lambda: {"status": "ok"})
+    monkeypatch.setattr(server.sys, "argv", ["skill-search", "--health"])
+    with pytest.raises(SystemExit):
+        server.main()
+    assert not records.exists() or not list(records.glob("*.json"))
+
+
+def test_server_build_record_never_raises(tmp_path, monkeypatch):
+    """Best-effort by contract. This runs on the server's startup path, where an
+    unwritable cache dir must cost a diagnostic, never the server."""
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a directory")
+    monkeypatch.setattr(server, "SERVER_RECORDS", blocker / "servers")
+    assert server._record_server_build() is None
 
 
 # --- scope-bounded pruning (multi-session shared collection) --------------
