@@ -10,12 +10,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/scripts/openwiki_parity_guard.py\"",
+            "command": "F=\"${CLAUDE_PROJECT_DIR}/scripts/openwiki_parity_guard.py\"; [ -f \"$F\" ] || exit 0; exec python3 \"$F\"",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}/scripts/graph_staleness_notice.py\"",
+            "command": "F=\"${CLAUDE_PROJECT_DIR}/scripts/graph_staleness_notice.py\"; [ -f \"$F\" ] || exit 0; exec python3 \"$F\"",
             "timeout": 30
           }
         ]
