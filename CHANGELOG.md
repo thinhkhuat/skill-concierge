@@ -5,6 +5,68 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.7] — 2026-08-07
+
+### Fixed
+- **doctor's `Running engine` check accused every live server after a routine `setup.sh`.**
+  0.20.6 added the check to catch a server executing an engine build older than the one on
+  disk. It answered that question with timestamps: each process's start time (from
+  `ps -o etime=`) against `max(st_ctime, st_mtime)` of the venv engine's `*.py` files. But
+  `setup.sh` re-copies the engine on EVERY run — it is idempotent by design — so those
+  timestamps advance even when the bytes do not move. The first deploy of 0.20.6 proved it
+  within minutes: engine content unchanged (`server.py` md5 identical before and after), mtime
+  pushed to 23:30:54, a server started 23:28:43 → three servers flagged, while the engine's own
+  `health()` correctly reported `stale: false`. Two diagnostics of the same fact, disagreeing.
+  The check now compares **build identity**, which moves only when the code moves. Each MCP
+  server publishes the build it runs to `~/.cache/skill-search/servers/<pid>.json` at startup
+  (`SKILL_SERVER_RECORDS`), and doctor looks it up instead of inferring it. A no-op re-copy is
+  invisible here by construction. `started_at` in each record guards pid reuse — a dead
+  server's leftover record can no longer lend its build to whatever process inherits the
+  number, which would have been the same false accusation one layer down. CLI runs are
+  excluded by their flags: a `skill-search --reindex` can run for minutes and matches the same
+  binary path, but writes no record, so counting it would report a permanent unknown-build
+  server that is really just a busy reindex. Fail-open (N/A) against an engine too old to
+  publish an id, so upgrading doctor ahead of the venv reports nothing rather than everything.
+  Pinned by `doctor.py --selftest` (`_classify_servers`, `_parse_server_lines`).
+  Adversarial review of the fix itself caught three more instances of the same class before
+  release, each now pinned by a selftest case: a record naming **no** build (the engine's own
+  `"unknown"` fail-open sentinel) was reported as *proven* drift, so the remedy — restart — would
+  re-derive the same sentinel and never clear it; the pid-reuse guard used a **symmetric**
+  time window, but the gap it must absorb is one-sided (a record is stamped after the launcher's
+  prelude, which contains the ADR-0018 pip resync — long exactly when a plugin update makes
+  drift matter most), so a slow start filed a healthy server as unprovable for its whole life;
+  and the unknown-build warning **asserted a cause** ("started before this engine") that four of
+  its five paths do not share, sending users to restart on the ones a restart cannot fix.
+- **`doctor --fix` could report failure after a successful repair.** The `--health` memo added
+  above was module-scoped and never invalidated, so the post-fix re-check — whose entire purpose
+  is to observe what changed — replayed the report captured *before* the fix ran. Starting a
+  stopped Qdrant container or reindexing a stale index would repair the system, then reprint the
+  identical failure and exit 1. The memo is now cleared at the top of `run_all()`, keeping the
+  within-pass saving (two checks, one engine spawn) and dropping the across-pass staleness.
+  Caught in review before release; pinned by `doctor.py --selftest`.
+
+### Added
+- **`SKILL_SERVER_RECORDS` is pinned in `.mcp.json`** and doctor resolves the pin **before** any
+  environment variable — inverted from every other seam on purpose. Doctor is reading an artifact
+  the *server* writes, and the server's environment is the one `.mcp.json` hands it, so a shell
+  export on the reader's side could only split the two: doctor would read an empty directory and
+  report every live server as unproven. This repo has shipped that writer/reader split twice
+  (`auto_reindex._mcp_env()` v0.16.1, `setup.sh env_run()` v0.20.5). Records are written
+  write-then-`os.replace`, since they are read by a concurrent process by design and a truncating
+  write would let a reader see a torn file and call the build unknown.
+
+### Changed
+- **`health()` publishes `engine_build` on every report, not only under drift.** Which build a
+  process runs is a fact about that process, true with or without an index; emitting it only
+  when something is already wrong made it a drift flag, so the one reader that needs a *healthy*
+  process's build — doctor, measuring every live server against it — could not get it, and
+  would have had to re-derive `_engine_build()`'s hashing rule in a second copy free to stop
+  agreeing. Shape is unchanged, `{running, index_written_by}`; `index_written_by` is now `null`
+  when there is no drift. Consumers must key on `index_written_by`, **not** on the field's
+  presence — `doctor.py::_is_engine_drift` does, and mere-presence keying would flag every
+  healthy run. Pinned by `test_health_always_reports_running_engine_build` and
+  `test_health_reports_running_build_even_without_a_manifest`.
+
 ## [0.20.6] — 2026-08-06
 
 ### Fixed
