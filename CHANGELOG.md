@@ -5,6 +5,71 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.8] — 2026-08-07
+
+### Fixed
+- **The engine-drift message named a cause it could not observe, and ruled out the remedy that
+  usually works.** One symptom — the manifest was written by a different engine build — hides two
+  causes with opposite fixes: a server still live on the old build (only a **restart** helps; a
+  reindex writes our build and that server hands the mismatch straight back), or a manifest merely
+  left over from the previous release (a **reindex** re-stamps it and clears). The text asserted
+  the first — *"a live MCP server is on a different build … reindexing will not fix it"* — while
+  **every engine upgrade lands in the second**, because changing the engine necessarily changes
+  the build id. Seen on 0.20.7's own deploy: doctor printed `Running engine: 3 servers publish no
+  build id` directly above `Retrieval health: a live MCP server is on an older build; restart
+  (reindex will not fix it)` — two rows of one pass contradicting each other, one blaming the
+  wrong remedy. An engine process can see its own build and no other process, so both emitters
+  (`_staleness_warning`, `_health`) now state the observation, name **no** remedy, and route to
+  doctor — which holds the live-server records and decides.
+  **They must not swing to the opposite error either, and the first draft did.** Offering "run
+  `reindex()`" reads as an instruction to the *model*: `_staleness_warning` rides in every
+  `search_skills` reply, and `reindex()` is an MCP tool that runs **inside the very process whose
+  build is in question**. Build ids are unordered md5 hashes, so a server cannot tell whether its
+  own build is the newer or the older one — and if it is the older one, reindexing there re-embeds
+  with the stale parser and re-stamps the manifest **backward**, flip-flopping against the
+  session-start rebuild. The deleted "reindexing will not fix it" had been the only brake on that.
+  Both emitters now say plainly not to reindex from the suspect process. Caught in adversarial
+  review before release. Pinned by `test_drift_text_never_rules_out_a_reindex`,
+  `test_drift_text_never_orders_a_reindex_from_the_suspect_process`, and
+  `test_drift_text_never_asserts_a_live_old_server`.
+- **`_write_manifest` truncated a file that a live server reads concurrently.** The SessionStart
+  reindex rewrites the manifest while a server may be reading it; a plain `write_text` truncates
+  first, so a reader could parse nothing and report "no index manifest — never indexed" on a
+  perfectly good index. Write-then-`os.replace` now, matching the server records.
+- **`doctor --selftest` mutated real state.** It called the live `_running_engine_state()`, which
+  spawns the engine, scans `ps`, and **deletes files from `~/.cache/skill-search/servers/`** — a
+  diagnostic self-test with side effects on the thing it diagnoses, and one that could hang on the
+  un-timed subprocess. Everything in that assertion is stubbed now: 2.43s → 0.15s, records dir
+  untouched.
+- **doctor's `Running engine` row could report a server population its own classification never
+  saw.** It scanned `ps` a second time for the row's count, after the classification had already
+  scanned it — so a server starting or dying between the two calls put the count and the
+  drift/unknown split out of step. One scan per pass now, with the live list carried alongside
+  the classification it produced.
+
+### Changed
+- **doctor decides the drift remedy instead of relaying the engine's guess.** It holds the
+  live-server evidence in the same pass, so `_drift_remedy` resolves which of the two causes
+  applies and prints only that one — naming the specific pids. When the fleet is proven entirely
+  on the current build it also becomes auto-fixable (`fix="reindex"`), so `doctor --fix` clears a
+  leftover manifest. That is the **only** state that auto-fixes: a live server on an older build,
+  an unproven fleet, and absent evidence all stay `fix=None`, because auto-reindexing past a live
+  old server is the v0.20.6 defect re-armed. Any **other** issue in the same report (Qdrant
+  unreachable, an embedder dim mismatch) also drops the auto-fix and is surfaced alongside —
+  firing a reindex into a broken store repairs nothing and hides the real fault.
+- **`_running_engine_state()` returns a named tuple, and the seam it feeds is tested.** The shape
+  grew a `live` field mid-change and every consumer had to be renumbered by hand; named fields make
+  that class of mis-wire impossible. The seam itself — `check_engine_health` handing the right
+  fields to `_drift_remedy` — is now pinned by a stubbed `_selftest` case, after review reproduced a
+  plausible mis-wire that reported "pid 11, 22 still run an older build" on a **clean** fleet with
+  the selftest green: the same failure shape this release exists to retire, one layer up.
+- **The two per-pass caches are cleared from one place** (`_reset_pass_caches`, called at the top
+  of `run_all()`), and `_selftest` now asserts the **wiring** rather than the helper: it drives the
+  real `run_all()` with a probe check that records what a check actually observes. The previous
+  assertion called the reset helper directly and stayed green while `run_all()` referenced a
+  renamed function — verified with a negative control, which fails as intended when the reset call
+  is removed.
+
 ## [0.20.7] — 2026-08-07
 
 ### Fixed
