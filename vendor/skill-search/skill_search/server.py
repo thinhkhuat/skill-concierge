@@ -228,7 +228,11 @@ def _write_manifest(indexed: int) -> None:
     """Record what the index reflects, so later runs can detect drift."""
     sig = _disk_signature()
     META_PATH.parent.mkdir(parents=True, exist_ok=True)
-    META_PATH.write_text(json.dumps({
+    # Write-then-rename: a live server reads this file while the SessionStart reindex writes
+    # it. A truncating write lets that reader see an empty or half-written file, parse nothing,
+    # and report "no index manifest — never indexed" on a perfectly good index.
+    _tmp = META_PATH.with_suffix(f".{os.getpid()}.tmp")
+    _tmp.write_text(json.dumps({
         "indexed": indexed,
         "indexed_at": time.time(),
         "backend": EMBED_BACKEND,
@@ -237,6 +241,7 @@ def _write_manifest(indexed: int) -> None:
         "signature": sig,
         "engine": _ENGINE_BUILD,
     }, indent=2))
+    os.replace(_tmp, META_PATH)          # atomic within the directory: old or new, never torn
 
 
 def _read_manifest() -> dict | None:
@@ -271,9 +276,24 @@ def _staleness_warning() -> str | None:
         if manifest is None:
             return "index manifest missing — run reindex() (results may be empty/stale)"
         if _engine_drift(manifest):
-            return ("this server is running a different engine build than the one that "
-                    "built the index — restart Claude Code (rerun setup.sh first if "
-                    "doctor reports the venv stale); reindexing will not fix it")
+            # Two causes, opposite remedies, and this process can see neither: it knows its
+            # own build and nothing about other processes. Leftover manifest from a previous
+            # release -> a reindex re-stamps it. A server still live on the old build -> only
+            # a restart helps. Naming one as fact is a coin flip every engine upgrade loses,
+            # since changing the engine necessarily changes the build id.
+            #
+            # This string is read by the MODEL — it rides in every search_skills reply — so it
+            # must not order a reindex either. `reindex()` is an MCP tool that runs INSIDE this
+            # process, the one whose build is in question, and build ids are unordered hashes:
+            # a server cannot tell whether its own build is the newer or the older one. If it
+            # is the older one, reindexing here re-embeds with the stale parser and re-stamps
+            # the manifest BACKWARD, fighting the session-start rebuild. Route to doctor, which
+            # holds the live-server records and decides; the leftover case clears itself.
+            return ("the index was built by a different engine build than this server runs, "
+                    "so disk-vs-index comparison is unavailable — do not reindex from here, "
+                    "this server's own build is what is in question. Run skill-concierge "
+                    "doctor for the decided fix; the common case clears itself at the next "
+                    "session start")
         if _disk_signature() != manifest.get("signature"):
             return ("skills changed on disk since last index — run reindex() "
                     "or some skills will be missing/stale in results")
@@ -760,21 +780,28 @@ def _health() -> dict:
         if drift:
             # Different builds parse skills differently, so the signature comparison is
             # meaningless here — reporting it would be the false 'disk changed' alarm.
-            # Say what is actually wrong and what actually fixes it (a restart, not a
-            # reindex): a reindex just rewrites the manifest with THIS build's signature
-            # and hands the false alarm to the next process.
             # None, not False: across builds the comparison is UNKNOWABLE, not negative.
             # False would tell every consumer the index matches disk. None reads as falsy
             # for the callers that only gate on it, and stays honest for the rest.
             report["stale"] = None
             report["engine_build"]["index_written_by"] = drift
+            # State the OBSERVATION and offer both remedies as alternatives. Which one
+            # applies turns on whether any OTHER process is still live on the old build —
+            # invisible from here, and the reason `engine_build` is published as data:
+            # doctor holds the live-server evidence and renders the decided remedy from it.
+            # An earlier version asserted "a live MCP server is on a different build" and
+            # "reindexing will not fix it". Both are false in the commoner case, a manifest
+            # merely left over from the previous release — which EVERY engine upgrade
+            # produces, because changing the engine necessarily changes the build id.
             # "this process", not "this server": _health() is also reached via the CLI
-            # `--health` (that is how doctor calls it), where the stale build belongs to
-            # some OTHER, long-lived server — saying "this server" inverts the roles.
+            # `--health` (that is how doctor calls it), where the older build, if any live
+            # process really holds it, belongs to some OTHER long-lived server.
             report["issues"].append(
-                f"index was built by engine {drift} but this process runs {_ENGINE_BUILD} "
-                f"— a live MCP server is on a different build; restart Claude Code (rerun "
-                f"setup.sh first if doctor reports the venv stale); reindexing will not fix it")
+                f"index was built by engine {drift} but this process runs {_ENGINE_BUILD}, so "
+                f"disk-vs-index comparison is unavailable — which fix applies turns on whether "
+                f"any live server is still on {drift}, invisible from here. Run skill-concierge "
+                f"doctor: it holds the live-server records and decides. Do not reindex from an "
+                f"MCP server whose own build is what is in question")
         else:
             report["stale"] = _disk_signature() != manifest.get("signature")
             if report["stale"]:

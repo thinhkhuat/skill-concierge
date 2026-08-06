@@ -189,6 +189,23 @@ upstream is re-vendored:
   `::test_server_records_its_own_build_for_live_lookup`, `::test_server_build_record_never_raises`,
   `::test_cli_paths_write_no_server_record`. The seam is pinned in `.mcp.json` so the reader
   resolves the same directory the writer used — see `docs/caveats.md` §17.
+  **v0.20.8 reworded both drift emitters** (`_staleness_warning`, `_health`). One symptom hides two
+  causes with opposite remedies — a server still live on the old build (restart; a reindex hands the
+  mismatch back) versus a manifest merely left over from the previous release (reindex; it re-stamps
+  and clears) — and an engine process can see neither, since it knows its own build and nothing about
+  other processes. The earlier text asserted the first while **every** engine upgrade lands in the
+  second, because `_ENGINE_BUILD` hashes these two modules and so changes whenever either does. Both
+  emitters now state the observation, name **no** remedy, and route to doctor, whose `_drift_remedy`
+  holds the live-server evidence and decides. They must not offer one either: both strings are read
+  by the MODEL, and `reindex()` runs INSIDE the process whose build is in question — if that build is
+  the older one, reindexing there re-stamps the manifest backward and fights the session-start
+  rebuild. Do not re-add a remedy here, unconditional or conditional — see `docs/caveats.md` §18.
+  Pinned by `::test_drift_text_never_rules_out_a_reindex`,
+  `::test_drift_text_never_orders_a_reindex_from_the_suspect_process`, and
+  `::test_drift_text_never_asserts_a_live_old_server`.
+  **`_write_manifest` is write-then-`os.replace`** for the same reason the records are: the
+  SessionStart reindex rewrites it while a live server reads it, and a truncating write let that
+  reader parse nothing and report "never indexed" on a healthy index.
 
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the

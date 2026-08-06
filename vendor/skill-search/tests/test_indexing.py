@@ -176,7 +176,72 @@ def test_health_reports_drift_not_false_disk_changed(tmp_path, monkeypatch):
     assert rep["engine_build"] == {"running": "aaaaaaaaaaaa", "index_written_by": "bbbbbbbbbbbb"}
     joined = " ".join(str(i) for i in rep["issues"])
     assert "disk changed since last index" not in joined     # the false alarm is gone
-    assert "restart" in joined                               # names the real remedy
+    # This once asserted `"restart" in joined`, on the belief that a restart WAS the remedy.
+    # It is the remedy for only one of the two states that produce drift, and not the one an
+    # engine upgrade lands in; the engine can distinguish neither, so it now names no remedy
+    # and routes to the component that holds the live-server evidence. Tightened, not relaxed:
+    # the three tests below pin what the text may no longer claim.
+    assert "doctor" in joined
+
+
+# --- the drift remedy is CONDITIONAL, and the engine cannot resolve it -----
+# A manifest built by another engine means one of two things, with OPPOSITE remedies:
+# a live server is still on the old build (restart — a reindex just hands the mismatch
+# back), or the manifest is simply left over from a previous release and no old server
+# survives (reindex — it re-stamps the manifest and clears). An engine process can see
+# neither case: it knows only its own build. Asserting either one is a coin flip that the
+# post-upgrade path loses every time, since changing server.py necessarily changes the
+# build id, so EVERY engine release hits the leftover-manifest case first.
+
+def _drift_messages(tmp_path, monkeypatch):
+    """The drift text from both emitters: search-time warning and health()."""
+    meta = tmp_path / "meta.json"
+    meta.write_text(json.dumps({"indexed": 5, "indexed_at": 1.0,
+                                "signature": {"count": 99, "hash": "nope"},
+                                "engine": "bbbbbbbbbbbb"}))
+    monkeypatch.setattr(server, "META_PATH", meta)
+    monkeypatch.setattr(server, "_ENGINE_BUILD", "aaaaaaaaaaaa")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    return {
+        "_staleness_warning": server._staleness_warning(),
+        "_health": " ".join(str(i) for i in server._health()["issues"] if "engine" in str(i)),
+    }
+
+
+def test_drift_text_never_rules_out_a_reindex(tmp_path, monkeypatch):
+    """'reindexing will not fix it' is false whenever no live server is on the old build —
+    which is exactly the state every engine upgrade lands in."""
+    for where, msg in _drift_messages(tmp_path, monkeypatch).items():
+        assert "will not fix" not in msg.lower(), f"{where} rules out a remedy that often works"
+
+
+def test_drift_text_never_orders_a_reindex_from_the_suspect_process(tmp_path, monkeypatch):
+    """...and must not swing to the opposite error by ordering one either.
+
+    These strings are read by the MODEL: `_staleness_warning` rides in every search_skills
+    reply, and `_health` surfaces through the health() tool. The `reindex()` tool runs INSIDE
+    this process — the one whose build is in question. Build ids are md5 hashes with no
+    order, so a server cannot tell whether its own build is the newer or the older one. If it
+    is the older one, reindexing from here re-embeds with the stale parser and re-stamps the
+    manifest BACKWARD, flip-flopping against the session-start rebuild. Describing a reindex
+    as something the deployment layer may do is fine; instructing one from here is not.
+    """
+    for where, msg in _drift_messages(tmp_path, monkeypatch).items():
+        low = msg.lower()
+        assert "run reindex" not in low, f"{where} orders a reindex from the suspect process"
+        assert "call reindex" not in low, f"{where} orders a reindex from the suspect process"
+        assert "reindex()" not in low or "do not" in low, f"{where} names the tool as an action"
+
+
+def test_drift_text_never_asserts_a_live_old_server(tmp_path, monkeypatch):
+    """The emitting process cannot see other processes, so it must not claim one exists —
+    and must hand the decision to the component that CAN see them."""
+    for where, msg in _drift_messages(tmp_path, monkeypatch).items():
+        low = msg.lower()
+        assert "is on a different build" not in low, f"{where} asserts an unobserved process"
+        assert "is on an older build" not in low, f"{where} asserts an unobserved process"
+        assert "doctor" in low, f"{where} does not route to the component holding the evidence"
 
 
 # --- the running build is a FACT, published unconditionally ---------------
