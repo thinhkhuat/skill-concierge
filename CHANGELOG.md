@@ -5,6 +5,80 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.20.6] — 2026-08-06
+
+### Fixed
+- **Frontmatter values were embedded with their YAML scalar syntax attached.**
+  `skills_discovery.parse_skill` took the regex capture verbatim, so `description: >-`
+  carried the literal `">-"` plus every continuation line's newline and indent into the
+  indexed text, and `description: "…"` kept its surrounding quotes. That text IS the base
+  vector, so the retriever was scoring skills partly on punctuation. New `_unwrap_scalar`
+  handles the three shapes frontmatter uses — block scalars (`|` literal keeps line breaks,
+  `>` folded folds to spaces on paragraph boundaries; chomping and indent indicators
+  tolerated), quoted flow scalars (quotes stripped, `\"` / `''` unescaped), and plain wrapped
+  scalars (newline+indent folded to one space) — and is applied to `description:` **and**
+  `when_to_use:`. Still dependency-free: not a YAML parser.
+  **Measured on the maintainer's catalogue: 210 of 416 skills carried the leak → 0.**
+  Distinct from 0.20.4, which fixed the value TERMINATOR (hyphenated next-keys being
+  swallowed); this fixes the value's own syntax. Pinned by
+  `tests/test_discovery.py::test_parse_skill_description_unwraps_yaml_scalars`.
+  **Deploying needs a FORCED reindex** — the parsed text changes while the file content hash
+  does not, so the incremental path skips every skill.
+- **A replaced engine under a running server was reported as "disk changed".**
+  A long-lived MCP server keeps executing the engine bytes it imported at start. When the venv
+  engine is replaced underneath it — a `setup.sh` re-copy, or a repo build overwriting the
+  deployed one — that server and every fresh CLI process parse the same `SKILL.md` files with
+  DIFFERENT parsers, so they derive different `_disk_signature()` values from an UNCHANGED
+  disk. Whichever writes the manifest last hands the other a false `disk changed since last
+  index — run reindex()`, for the life of that process; the reindex then hands it straight
+  back. Observed three times in one evening while deploying this release's own `_unwrap_scalar`
+  change (which moves parsed text by design): the server computed `c197a923` while a fresh CLI
+  computed `aa2c4f1d` — same CWD, same env, same manifest file.
+  `_write_manifest` now stamps the writing engine's build id (`_ENGINE_BUILD`, hashed at import
+  from `server.py` + `skills_discovery.py`; computing it lazily would hash the NEW bytes the
+  process is not running and the check would be inert). On a mismatch `health()` reports
+  `engine_build {running, index_written_by}`, sets `stale` to `null` — unknowable across
+  builds, not false — and names the remedy: **restart**, not reindex. Legacy manifests with no
+  `engine` key, and an `"unknown"` sentinel on either side, are never treated as drift.
+  Pinned by `tests/test_indexing.py::test_health_reports_drift_not_false_disk_changed`.
+- **The commit-gate hooks wedged every Bash call when `CLAUDE_PROJECT_DIR` pointed elsewhere.**
+  `.claude/settings.json` ran both guards as `python3 "${CLAUDE_PROJECT_DIR}/scripts/…"` on
+  matcher `Bash`. In a session launched from another directory that path does not exist, python
+  exits non-zero, and a PreToolUse hook error rejects the tool call — so every shell command in
+  this repo failed, including the verification the guard exists to protect. Each script's own
+  fail-open never applied, because the script never started. Both now no-op when the file is
+  absent and `exec` it otherwise, so exit code and stdout still pass through untouched and the
+  gate is unchanged wherever the script exists.
+
+### Added
+- **doctor: `Running engine`** — flags live MCP servers that started before the current venv
+  engine build, naming their pids. `Engine freshness` compares two files on disk (venv vs
+  deployed source) and is blind to the process dimension: a server that started before the
+  refresh keeps executing the old bytes, and no amount of re-copying changes that. Reported as
+  WARN with **no auto-fix**, because the remedy is a restart — routing it through the reindex
+  auto-fixer would clear the CLI-side symptom while the live server stayed broken. Compares
+  process start time against `max(ctime, mtime)` of the venv engine (`cp -p`, `rsync -a`,
+  `tar -x` and `shutil.copytree` all PRESERVE mtimes, which would date the engine to its build
+  time and yield a false all-clear), and runs `ps -A -ww` so BSD width-truncation cannot clip
+  the match target when stdout is a pipe.
+
+### Documentation
+- **`docs/caveats.md` §16 — the always-on allowlist is a budget, not a list.** Two upstream
+  behaviours were silently defeating curated keep-on sets, both confirmed against the official
+  Claude Code docs (`skills.md`, `settings.md`) and the 2.1.223 binary:
+  (1) **`skillOverrides` does not apply to plugin skills at all** — the resolver returns `"on"`
+  for anything plugin-sourced before reading the map, so no key format works; measured 63
+  plugin skills ≈ 5,280 tok/turn that only `/plugin disable` can reclaim. `apply-overrides.py`
+  still reports "in sync" the whole time.
+  (2) **Over budget, descriptions are DROPPED, not truncated** — `skillListingBudgetFraction`
+  yields `contextWindow × 4 × fraction`; past it, entries are sorted by
+  `usageCount × 0.5^(daysSinceUse/7)` (from Claude Code's own `skillUsage` in `~/.claude.json`,
+  not this repo's ledger) and greedily fitted, so a long description loses its slot to a shorter,
+  less-used skill. Records the remedy order (trim at source → demote → raise the fraction) and
+  the measurement paths (`/doctor`, the `/context` Skills row, `--debug`). Also corrects the
+  keep-on skill's timing note: overrides apply on the **next turn**, not the next session.
+
+
 ## [0.20.5] — 2026-07-31
 
 ### Fixed
