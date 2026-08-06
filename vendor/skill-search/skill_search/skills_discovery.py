@@ -21,6 +21,7 @@ import json
 import glob
 import hashlib
 import logging
+import textwrap
 from pathlib import Path
 
 log = logging.getLogger("skill_search")
@@ -215,6 +216,47 @@ def _extract_body_triggers(body: str, skill_name: str = "") -> list[str]:
 # `[\w-]` not `\w` — hyphenated keys are common in SKILL.md frontmatter.
 _FM_NEXT_KEY = r"(?=\n[\w-]+:|\Z)"
 
+# A block-scalar header: `|`, `>`, plus optional chomping (`+`/`-`) and indent digits.
+_BLOCK_SCALAR = re.compile(r"^([|>])[0-9+\-]*$")
+
+
+def _unwrap_scalar(raw: str) -> str:
+    """Reduce a raw frontmatter value to the plain text YAML would have yielded.
+
+    The value arrives exactly as authored, scalar syntax and all. Untouched,
+    `description: >-` keeps the literal ">-" plus every continuation line's newline
+    and indent, and `description: "…"` keeps its surrounding quotes. That text is
+    what gets embedded, so the retriever ends up scoring skills partly on punctuation
+    noise. Measured on 210 of 416 skills on the maintainer's machine.
+
+    Deliberately NOT a YAML parser — this module is dependency-free by contract (see
+    the header) and frontmatter values only ever take three shapes: a block scalar,
+    a quoted flow scalar, or a plain (possibly line-wrapped) scalar.
+    """
+    if not raw:
+        return ""
+    lines = raw.split("\n")
+    m = _BLOCK_SCALAR.match(lines[0].strip())
+    if m:
+        body = "\n".join(lines[1:])
+        # Common leading indent is YAML block structure, not content.
+        body = textwrap.dedent(body).strip()
+        if m.group(1) == "|":            # literal: line breaks are content
+            return body
+        # folded: a blank line is a paragraph break, every other newline folds to a space
+        paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", body)]
+        return "\n".join(p for p in paras if p).strip()
+
+    # Flow scalar. A wrapped plain/quoted value folds its newlines to spaces first,
+    # so the quote test below sees the true first and last characters.
+    text = " ".join(ln.strip() for ln in lines).strip()
+    for quote in ('"', "'"):
+        if len(text) >= 2 and text[0] == quote and text[-1] == quote:
+            text = text[1:-1]
+            text = text.replace('\\"', '"') if quote == '"' else text.replace("''", "'")
+            break
+    return text.strip()
+
 
 def parse_skill(path: Path) -> dict | None:
     """Return {name, description, body, path} or None if no valid frontmatter."""
@@ -253,9 +295,10 @@ def parse_skill(path: Path) -> dict | None:
                        re.MULTILINE | re.DOTALL)
     when_m = re.search(r"^when_to_use:\s*(.+?)" + _FM_NEXT_KEY, frontmatter,
                        re.MULTILINE | re.DOTALL)
-    description = (desc_m.group(1).strip() if desc_m else "")
-    if when_m:
-        description += "  " + when_m.group(1).strip()
+    description = _unwrap_scalar(desc_m.group(1)) if desc_m else ""
+    when_to_use = _unwrap_scalar(when_m.group(1)) if when_m else ""
+    if when_to_use:
+        description += "  " + when_to_use
 
     stripped_body = body.strip()
     return {

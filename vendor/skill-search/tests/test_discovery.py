@@ -89,6 +89,49 @@ def test_parse_skill_description_stops_at_hyphenated_keys(tmp_path):
     assert "Invoke when work needs phases." in s["description"]
 
 
+def test_parse_skill_description_unwraps_yaml_scalars(tmp_path):
+    """A frontmatter value is stored as its TEXT, never with its YAML scalar syntax.
+
+    Regression: the value was taken verbatim from the regex, so `description: >-`
+    kept the literal ">-" plus each continuation line's newline and indent, and
+    `description: "…"` kept its surrounding quotes. That raw text is what gets
+    embedded — the retriever scored skills partly on punctuation. Hit 210 of 416
+    skills on the maintainer's machine, 25 of them in the always-on set.
+    """
+    def parse(fm_body):
+        d = tmp_path / f"sk{abs(hash(fm_body))}"
+        d.mkdir()
+        (d / "SKILL.md").write_text(f"---\n{fm_body}---\nbody")
+        return sd.parse_skill(d / "SKILL.md")["description"]
+
+    # double-quoted flow scalar
+    got = parse('description: "Plan roadmaps."\ncategory: utilities\n')
+    assert got == "Plan roadmaps."
+
+    # single-quoted flow scalar
+    assert parse("description: 'Generate briefings.'\n") == "Generate briefings."
+
+    # folded block scalar: marker gone, indent gone, newlines folded to spaces
+    got = parse("description: >-\n  Force an agent to own\n  a rule-dodge.\nversion: 1\n")
+    assert got == "Force an agent to own a rule-dodge."
+
+    # literal block scalar keeps its line breaks but loses marker and indent
+    got = parse("description: |\n  line one\n  line two\n")
+    assert got == "line one\nline two"
+
+    # plain wrapped scalar folds to one line
+    got = parse("description: Plan roadmaps\n  across phases.\n")
+    assert got == "Plan roadmaps across phases."
+
+    # when_to_use is unwrapped too, and still appended
+    got = parse('description: "Alpha."\nwhen_to_use: "When alpha."\n')
+    assert got == "Alpha.  When alpha."
+
+    # a value that merely CONTAINS quotes is left intact
+    got = parse('description: Use the "fast" path.\n')
+    assert got == 'Use the "fast" path.'
+
+
 def test_parse_skill_no_frontmatter_returns_none(tmp_path):
     p = tmp_path / "f" / "SKILL.md"
     p.parent.mkdir()
