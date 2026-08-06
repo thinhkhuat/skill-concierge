@@ -361,3 +361,49 @@ log, visible with `--debug`. Confirm from one of these — never from `apply-ove
 
 **Timing:** `skillOverrides` is applied **on the next turn**, not the next session. The keep-on
 skill's own note ("takes effect next session") is conservative; a demotion lands almost immediately.
+
+---
+
+## §17 — A file timestamp is not a build identity: `setup.sh` re-copies the engine on EVERY run
+
+**Symptom:** doctor's `Running engine` row accuses live MCP servers of executing an older engine
+build, right after a routine `setup.sh` — while the engine's own `health()` reports `stale: false`
+in the same minute. Two diagnostics of the same fact, disagreeing. Restarting "fixes" it, so the
+alarm looks real; it is not.
+
+**Cause:** `setup.sh` is idempotent by design and re-copies the engine into the stable venv on
+every run, whether or not the bytes changed. `st_mtime` and `st_ctime` therefore advance on a
+no-op re-copy. Any check that dates a process against those timestamps concludes that every
+server predating the copy is running old code — including servers running the exact same bytes.
+Measured 2026-08-06 while deploying v0.20.6: `server.py` md5 identical before and after the
+re-copy, mtime pushed to 23:30:54, a live server started 23:28:43 → three false accusations.
+
+**The general rule:** "did the code change?" is a question about **content**, never about
+timestamps. `check_engine_freshness` was always right for the same reason — it content-hashes
+two trees. The process dimension needs the same discipline, which is why each MCP server now
+publishes its own build id (`~/.cache/skill-search/servers/<pid>.json`, seam
+`SKILL_SERVER_RECORDS`) and doctor **looks it up** rather than inferring it. A no-op re-copy
+moves no id, so it is invisible to the check by construction (v0.20.7).
+
+**Do NOT "fix" a false alarm here by loosening the comparison** (a tolerance window, a
+"recently copied" grace period). That trades a false positive for a false negative on the same
+axis and leaves the real bug — the permanent false `stale: true` of §11's cousin — undetected.
+Compare identities, or report N/A.
+
+**Corollary for anything reading `health()`:** `engine_build` is emitted on **every** report
+since v0.20.7, not only under drift. Key on `engine_build.index_written_by` being non-null.
+Keying on the block's *presence* — which was sufficient in v0.20.6 — now flags every healthy run.
+
+**`SKILL_SERVER_RECORDS` is pinned in `.mcp.json`, and doctor reads the pin FIRST — do not
+"fix" that to an env-var-wins precedence.** It is the one seam where the reader must resolve
+what the *writer* used, and the writer's environment is the one `.mcp.json` hands it. An env
+export in the reader's shell would only split the two, and doctor would then find an empty
+directory and report every live server as unproven, permanently. This repo has already shipped
+that writer/reader split twice — `auto_reindex._mcp_env()` (v0.16.1) and `setup.sh env_run()`
+(v0.20.5) — both recorded as "a seam honoured by one side and not the other".
+
+**Related trap when reading a diagnostic twice:** doctor memoizes `skill-search --health` for
+one check pass, because two checks need it and spawning the engine is its slowest step. That
+memo is cleared at the top of `run_all()` and must stay cleared there. `doctor --fix` runs a
+second pass whose whole purpose is to observe what the fix changed; a memo carried across that
+boundary makes the re-check reprint the failure it just repaired and exit 1 on a healthy system.
