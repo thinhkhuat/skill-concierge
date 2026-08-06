@@ -23,7 +23,7 @@ Usage:
 
 Env seams (mirror setup.sh): SKILL_CONCIERGE_VENV, SKILL_QDRANT_URL, SKILL_QDRANT_CONTAINER,
 SKILL_EMBED_BACKEND, SKILL_EMBED_MODEL, SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERGE_LOG,
-SKILL_TRIGGERS.
+SKILL_TRIGGERS, SKILL_SERVER_RECORDS.
 """
 import argparse
 import hashlib
@@ -68,10 +68,77 @@ def read_mcp_env():
 QURL, BACKEND, MODEL = read_mcp_env()
 SS_BIN = VENV / "bin" / "skill-search"
 PY_BIN = VENV / "bin" / "python"
+def read_server_records_dir():
+    """Where live MCP servers publish their build id — resolved from `.mcp.json` FIRST.
+
+    Deliberately inverted from the other seams, where an env var wins. Here doctor is
+    reading an artifact the SERVER writes, and the server's environment is the one
+    `.mcp.json` hands it — so the pinned value is what the writer actually used, and a
+    shell export in the reader's environment would only make the two disagree. Doctor
+    would then find an empty directory and report every live server as unproven, forever.
+    This repo has shipped that exact writer/reader seam split twice already (v0.16.1
+    `auto_reindex._mcp_env`, v0.20.5 `setup.sh env_run`), both as "a seam honoured by one
+    side and not the other".
+
+    `${HOME}`/`$HOME` are expanded because Claude Code expands them for the server.
+    """
+    try:
+        env = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
+        pinned = env.get("SKILL_SERVER_RECORDS")
+    except Exception:
+        pinned = None
+    raw = pinned or os.environ.get("SKILL_SERVER_RECORDS") or str(Path.home() / ".cache/skill-search/servers")
+    return Path(os.path.expandvars(raw)).expanduser()
+
+
+# One `<pid>.json` per live MCP server, naming the engine build that process actually runs.
+SERVER_RECORDS = read_server_records_dir()
 
 
 def _run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+_HEALTH_RUN = None
+
+
+def _health_run():
+    """`skill-search --health`, executed at most once per CHECK PASS and shared.
+
+    Spawning the engine is by far the slowest thing doctor does, and two checks need the
+    same answer — which cannot change within a single pass. It very much CAN change between
+    passes, which is why `run_all()` clears the memo before every one; see `_reset_health_memo`.
+    """
+    global _HEALTH_RUN
+    if _HEALTH_RUN is None:
+        _HEALTH_RUN = _run([str(SS_BIN), "--health"], env=_engine_env())
+    return _HEALTH_RUN
+
+
+def _reset_health_memo():
+    """Drop the cached --health result so the next pass re-measures. The scope of the memo
+    is ONE pass; `--fix` runs a second pass whose entire purpose is to observe what changed."""
+    global _HEALTH_RUN
+    _HEALTH_RUN = None
+
+
+def _health_json():
+    """Parsed --health report, or None when the engine is missing or its output is not JSON."""
+    if not SS_BIN.exists():
+        return None
+    try:
+        return json.loads(_health_run().stdout)
+    except Exception:
+        return None
+
+
+def _is_engine_drift(rep):
+    """Drift is the index's writer differing from us — NOT the mere presence of the field.
+
+    `engine_build` rides on every report now (it states which build is running), so keying
+    on presence, as the first version did, would flag every healthy run as drift.
+    """
+    return bool((rep.get("engine_build") or {}).get("index_written_by"))
 
 
 def _engine_env():
@@ -211,29 +278,35 @@ def _etime_seconds(etime: str):
         return None
 
 
-def check_running_engine():
-    """Is a LIVE MCP server still executing an engine build older than the venv's?
+# Exactly the flags `server.main()` dispatches on. A process carrying one of these took a
+# CLI branch and wrote no build record, so counting it would report a permanent unknown-build
+# server that is really just a busy reindex. Matching this SET rather than "any `--` token"
+# is deliberate: an unrecognized flag falls through to the server branch upstream and does
+# write a record, so excluding it would make every server invisible and turn this diagnostic
+# silently green — a false all-clear is worse here than a false alarm.
+CLI_FLAGS = ("--reindex", "--rebuild", "--health")
 
-    `check_engine_freshness` compares two files on disk (venv vs deployed source) and is
-    blind to the process dimension: a server that started BEFORE the venv was refreshed
-    keeps running the bytes it imported, and no amount of re-copying changes that. The
-    symptom is not "search is old" — it is a permanent false `stale: true`, because the
-    running build and every fresh CLI process derive different disk signatures from the
-    same unchanged files, so each reindex hands the false alarm back to the other side.
-    Only a restart clears it. Fail-open (N/A) whenever the venv, the engine dir, or `ps`
-    is unavailable — this is a diagnostic, never a gate.
-    """
-    engine = _venv_engine_dir()
-    if not SS_BIN.exists() or engine is None or not shutil.which("ps"):
-        return None
-    try:
-        # ctime as well as mtime: `cp -p`, `rsync -a`, `tar -x` and shutil.copytree all
-        # PRESERVE source mtimes, which would date the engine to whenever it was built
-        # rather than when it landed here — and a preserved-old mtime silently turns a
-        # genuinely stale server into a false all-clear. ctime tracks the local write.
-        newest = max(max(f.stat().st_ctime, f.stat().st_mtime) for f in engine.rglob("*.py"))
-    except (ValueError, OSError):
-        return None                             # empty dir, or a file vanished mid-glob
+
+def _parse_server_lines(stdout, now):
+    """`ps -o pid=,etime=,command=` output -> [(pid, start_epoch)] for MCP *servers* only."""
+    live = []
+    for line in stdout.splitlines():
+        if str(SS_BIN) not in line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        if any(tok in CLI_FLAGS for tok in parts[2].split()):
+            continue                            # a CLI run, not a server
+        secs = _etime_seconds(parts[1])
+        if secs is None:
+            continue
+        live.append((parts[0], now - secs))
+    return live
+
+
+def _live_servers():
+    """[(pid, start_epoch)] for every live MCP server process. None if ps is unusable."""
     # -A not -e: on Darwin -e means "show the environment too"; -A is "all processes" on
     # both Darwin and procps. -ww defeats width truncation — output goes to a PIPE here,
     # so BSD ps would otherwise clip at ~79 columns and cut off the very path we match on,
@@ -244,26 +317,164 @@ def check_running_engine():
         return None
     if proc.returncode != 0:
         return None
-    now, stale_pids = time.time(), []
-    for line in proc.stdout.splitlines():
-        if str(SS_BIN) not in line:
+    return _parse_server_lines(proc.stdout, time.time())
+
+
+def _read_server_records():
+    """{pid: record} for every build record on disk. Unreadable/garbage entries are
+    dropped — a record we cannot parse is simply a build we do not know."""
+    out = {}
+    try:
+        paths = sorted(SERVER_RECORDS.glob("*.json"))
+    except OSError:
+        return out
+    for p in paths:
+        try:
+            rec = json.loads(p.read_text())
+        except Exception:
             continue
-        parts = line.split(None, 2)
-        if len(parts) < 3:
-            continue
-        secs = _etime_seconds(parts[1])
-        if secs is None:
-            continue
-        if now - secs < newest:                 # started before the current engine landed
-            stale_pids.append(parts[0])
-    if stale_pids:
+        if isinstance(rec, dict):
+            out[p.stem] = rec
+    return out
+
+
+def _pid_alive(pid):
+    """Does a process with this pid exist? Signal 0 checks without delivering anything.
+    PermissionError means it exists and belongs to someone else — alive, not gone."""
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+    return True
+
+
+def _prune_server_records(records_dir=None):
+    """Drop records whose process no longer exists. Without this the directory grows one
+    file per Claude Code restart, forever. Best-effort: a failed unlink costs nothing.
+
+    Keyed on pid liveness, NOT on the `ps` scan that drives the check. The records dir is
+    shared by every skill-concierge install on the machine, while `_live_servers()` only
+    matches THIS venv's binary — so pruning by that result would delete a second install's
+    LIVE record and leave its doctor reporting an unknown build. It also closes the race
+    against a server writing its record while doctor sweeps: a just-started pid is alive.
+    """
+    root = SERVER_RECORDS if records_dir is None else records_dir
+    try:
+        paths = sorted(root.glob("*.json"))
+    except OSError:
+        return
+    for p in paths:
+        if not _pid_alive(p.stem):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
+# The gap between a process's start and its record's timestamp is ONE-SIDED: ps dates the
+# pid from the launcher's exec, while `started_at` is stamped after the launcher's prelude
+# has run. So the record is always the LATER of the two, by however long that prelude took —
+# and the prelude contains the ADR-0018 pip resync, which fires on exactly the occasion this
+# check matters most (a plugin update) and can reach the network. A leftover record from a
+# recycled pid is the opposite shape: it always PREDATES the process that inherited the pid.
+# Hence a tight floor (the reuse guard, all it needs) and a generous ceiling (startup slack).
+PID_START_SLOP = 5              # seconds a record may precede its process: ps etime is
+                                # whole-seconds, so allow rounding — but not a real gap.
+PID_START_MAX_PRELUDE = 3600    # seconds the launcher's prelude may take before its record
+
+
+def _classify_servers(live, records, current):
+    """Split live MCP servers into (drift, unknown) by BUILD ID, never by timestamp.
+
+    live    — [(pid, start_epoch)] from ps
+    records — {pid: {"build":…, "started_at":…}} each server wrote at its own startup
+    current — the build a process starting right now would run
+
+    drift   — the record proves a different build; a restart is the only remedy.
+    unknown — no usable record, or one naming no build. Its build is unproven, so it is
+              reported separately rather than folded into a proven mismatch.
+    """
+    drift, unknown = [], []
+    for pid, started in live:
+        rec = records.get(pid)
+        try:
+            delta = float(rec.get("started_at")) - started
+            mine = -PID_START_SLOP <= delta <= PID_START_MAX_PRELUDE
+        except (AttributeError, TypeError, ValueError):
+            mine = False
+        build = rec.get("build") if mine and isinstance(rec, dict) else None
+        # A sentinel or absent id identifies no build, so it cannot evidence a mismatch.
+        # `server._engine_drift()` refuses to accuse on the same grounds, and for the same
+        # reason: the remedy printed here is "restart", and a restart re-derives the same
+        # sentinel — a permanent warning that doing what it says will never clear.
+        if not build or build == "unknown":
+            unknown.append(pid)
+        elif build != current:
+            drift.append(pid)
+    return drift, unknown
+
+
+def check_running_engine():
+    """Is a LIVE MCP server executing an engine build other than the one on disk now?
+
+    `check_engine_freshness` compares two file trees (venv vs deployed source) and is blind
+    to the process dimension: a server that started BEFORE the venv was refreshed keeps
+    running the bytes it imported, and no amount of re-copying changes that. The symptom is
+    not "search is old" — it is a permanent false `stale: true`, because the running build
+    and every fresh CLI process derive different disk signatures from the same unchanged
+    files, so each reindex hands the false alarm back to the other side. Only a restart
+    clears it.
+
+    Identity, not timestamps. The first version of this check dated each process against
+    the engine files' newest mtime/ctime, which looked equivalent and was not: setup.sh
+    re-copies the engine on EVERY run, so those timestamps advance even when the bytes are
+    byte-identical, and a routine re-run accused every live server of running old code
+    while the engine's own health() correctly reported no drift. Builds are compared now —
+    each server publishes the id it runs at startup, and a no-op re-copy moves no id.
+
+    Fail-open (N/A) whenever the venv, `ps`, or a published build id is unavailable —
+    including against an engine too old to publish one, where every server would look
+    unknown. This is a diagnostic, never a gate.
+    """
+    if not SS_BIN.exists() or not shutil.which("ps"):
+        return None
+    rep = _health_json()
+    if rep is None or "engine_build" not in rep:
+        return None                             # engine predates the published id
+    current = (rep.get("engine_build") or {}).get("running")
+    if not current or current == "unknown":
+        return None                             # no id to measure against
+    live = _live_servers()
+    if live is None:
+        return None
+    records = _read_server_records()
+    _prune_server_records()
+    drift, unknown = _classify_servers(live, records, current)
+    if drift:
         return dict(id="engine_running", label="Running engine", status=WARN,
-                    detail=f"{len(stale_pids)} live MCP server(s) started before the current "
-                           f"engine build (pid {', '.join(stale_pids)}) — they still execute the "
-                           f"OLD code, which shows up as a false 'disk changed since last index'. "
-                           f"Restart Claude Code; reindexing will not fix it", fix=None)
+                    detail=f"{len(drift)} live MCP server(s) run a DIFFERENT engine build than "
+                           f"the one on disk ({current}) — pid {', '.join(drift)}. They execute "
+                           f"the OLD code, which shows up as a false 'disk changed since last "
+                           f"index'. Restart Claude Code; reindexing will not fix it", fix=None)
+    if unknown:
+        # State the OBSERVATION, not a cause. Several paths land here and they do not share a
+        # remedy: a server predating this engine (a restart clears it), an unwritable records
+        # dir, a `SKILL_SERVER_RECORDS` that differs between the server's env and this one, or
+        # a record naming no build. Asserting "started before this engine" would send the user
+        # to restart on the ones a restart cannot fix.
+        return dict(id="engine_running", label="Running engine", status=WARN,
+                    detail=f"no build record for {len(unknown)} live MCP server(s) (pid "
+                           f"{', '.join(unknown)}), so their engine cannot be compared with the "
+                           f"one on disk ({current}). Usual cause: they started before this "
+                           f"engine was installed — restart Claude Code and it clears. If it "
+                           f"persists after a restart, check {SERVER_RECORDS} is writable and "
+                           f"that SKILL_SERVER_RECORDS is not set differently for the server "
+                           f"than for this shell", fix=None)
     return dict(id="engine_running", label="Running engine", status=OK,
-                detail="no live MCP server predates the current engine build", fix=None)
+                detail=f"{len(live)} live MCP server(s) run the current engine build ({current})"
+                       if live else "no live MCP server", fix=None)
 
 
 def check_mcp_wiring():
@@ -336,7 +547,7 @@ def check_engine_health():
     if not SS_BIN.exists():
         return dict(id="health", label="Retrieval health", status=FAIL,
                     detail="engine venv missing — run ./setup.sh", fix="setup")
-    r = _run([str(SS_BIN), "--health"], env=_engine_env())
+    r = _health_run()
     try:
         rep = json.loads(r.stdout)
     except Exception:
@@ -352,10 +563,11 @@ def check_engine_health():
     # Falling through to the FAIL/fix="reindex" branch below would (a) flip the ordinary
     # post-update run red, and (b) auto-run the exact reindex whose own message says it
     # won't help — which clears the CLI-side symptom, re-embeds every point whose text
-    # moved under the new parser, and leaves the live server just as broken. Keyed on the
-    # additive `engine_build` field, never on matching issue strings.
+    # moved under the new parser, and leaves the live server just as broken. Keyed on
+    # `engine_build.index_written_by`, never on matching issue strings — and never on the
+    # field's mere presence, which now rides on every report.
     drift = rep.get("engine_build") or {}
-    if drift:
+    if _is_engine_drift(rep):
         return dict(id="health", label="Retrieval health", status=WARN,
                     detail=f"index built by engine {drift.get('index_written_by')}, this process "
                            f"runs {drift.get('running')} — a live MCP server is on an older build; "
@@ -835,6 +1047,11 @@ AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
 # ---------- run + report ----------
 
 def run_all():
+    # Invalidate the --health memo FIRST. It exists to stop two checks in one pass from
+    # spawning the engine twice; it must not outlive the pass. `--fix` calls run_all() again
+    # after repairing something, and a memo carried across that boundary would re-report the
+    # very failure the fix just cleared — exiting 1 on a system doctor had already repaired.
+    _reset_health_memo()
     return [c for c in (fn() for fn in CHECKS) if c]
 
 
@@ -900,6 +1117,93 @@ def _selftest():
     drift_rep = {"status": "degraded", "issues": ["engine ... restart"],
                  "engine_build": {"running": "aaaa", "index_written_by": "bbbb"}}
     assert _stale_only(drift_rep) is False
+    # `engine_build` is published on EVERY report now, so its mere presence says nothing.
+    # Drift is `index_written_by` being set; keying on presence would flag every healthy run.
+    assert _is_engine_drift({"engine_build": {"running": "aaaa", "index_written_by": "bbbb"}})
+    assert not _is_engine_drift({"engine_build": {"running": "aaaa", "index_written_by": None}})
+    assert not _is_engine_drift({})
+
+    # --- live-server classification: identity, never timestamps -----------
+    # The bug this replaces: setup.sh re-copies the engine on every run, so file mtime/ctime
+    # advance even when the bytes are identical, and dating a server against them flags every
+    # live process after a routine no-op re-run. Builds are compared, so a no-op re-copy is
+    # invisible here by construction.
+    live = [("100", 1_000.0), ("200", 2_000.0), ("300", 3_000.0)]
+    records = {
+        "100": {"pid": 100, "build": "cur", "started_at": 1_000.0},   # matches -> clean
+        "200": {"pid": 200, "build": "old", "started_at": 2_000.0},   # genuine drift
+        # 300 has no record at all -> unknown
+    }
+    drift, unknown = _classify_servers(live, records, "cur")
+    assert drift == ["200"], drift
+    assert unknown == ["300"], unknown
+    # A no-op re-copy changes no build id, so every server stays clean however new the files.
+    assert _classify_servers([("100", 1_000.0)], records, "cur") == ([], [])
+    # Pid reuse: the number is live again but belongs to a different process. A record whose
+    # start time cannot be THIS process's must not lend it a build it never ran. A leftover
+    # record ALWAYS predates the process that inherits its pid, so this is the negative side.
+    recycled = [("100", 9_999.0)]
+    assert _classify_servers(recycled, records, "cur") == ([], ["100"])
+    # A record for a pid that is no longer live is simply not considered.
+    assert _classify_servers([], records, "cur") == ([], [])
+    # A build id we cannot read is UNKNOWN, never proven drift. "unknown" is the engine's own
+    # fail-open sentinel from _engine_build(); server._engine_drift refuses to accuse on it for
+    # the same reason — an accusation whose remedy is "restart" that the restart cannot clear.
+    # Two copies of that rule exist now, so they are pinned to agree.
+    for bad in ({"pid": 100, "build": "unknown", "started_at": 1_000.0},
+                {"pid": 100, "started_at": 1_000.0}):
+        assert _classify_servers([("100", 1_000.0)], {"100": bad}, "cur") == ([], ["100"])
+    # Startup slack is ONE-SIDED. started_at is stamped after the launcher's prelude, which
+    # includes the ADR-0018 pip resync — the one moment a plugin update makes drift matter
+    # most, and the one most likely to run long. A symmetric window would file that server
+    # under "publishes no build id" for its whole life, with a remedy that never clears it.
+    slow = {"100": {"pid": 100, "build": "old", "started_at": 1_000.0 + 900}}
+    assert _classify_servers([("100", 1_000.0)], slow, "cur") == (["100"], []), "slow startup"
+    # ...but a record stamped BEFORE its process began is impossible for that process.
+    early = {"100": {"pid": 100, "build": "old", "started_at": 1_000.0 - 900}}
+    assert _classify_servers([("100", 1_000.0)], early, "cur") == ([], ["100"]), "pre-dated"
+    # ps parsing: only real SERVER processes count. A `--reindex` can run for minutes and
+    # matches the same binary path, but CLI runs write no build record — counting one would
+    # report a permanent unknown-build server that is really just a busy reindex.
+    ps_out = "\n".join([
+        f"  501    02:00 {SS_BIN}",
+        f"  502    01:00 {SS_BIN} --reindex --force",
+        f"  503    00:30 {SS_BIN} --health",
+        "  504    00:10 /usr/bin/python3 -m http.server",
+        f"  505 garbage {SS_BIN}",
+        f"  506    03:00 {SS_BIN} --some-future-flag",
+    ])
+    parsed = _parse_server_lines(ps_out, now=10_000.0)
+    # 506 counts: an unrecognized flag falls through to the server branch upstream and DOES
+    # write a record, so excluding it would hide a real server behind a green check.
+    assert [p for p, _ in parsed] == ["501", "506"], parsed
+    assert parsed[0][1] == 10_000.0 - 120                   # etime resolved to a start epoch
+    # Pruning is keyed on "does this pid still exist", NOT on "did I see it in ps". The
+    # records dir is shared by every install on the machine, but `ps` here only matches THIS
+    # venv's binary — so pruning by the ps result would delete another install's LIVE record
+    # and make its doctor report an unknown build. That is the very false alarm being fixed.
+    # The --health memo must NOT survive a run_all() boundary. `doctor --fix` re-runs every
+    # check AFTER repairing something; reusing the pre-fix report there makes the re-check
+    # reprint the failure it just fixed and exit 1 on a system that is now healthy.
+    # An unexpanded ${HOME} would silently point the reader at a directory no server writes
+    # to, making every live server "unproven" forever — the failure this seam exists to avoid.
+    assert "$" not in str(SERVER_RECORDS), f"unexpanded variable in {SERVER_RECORDS}"
+    assert SERVER_RECORDS.is_absolute(), SERVER_RECORDS
+    global _HEALTH_RUN
+    _HEALTH_RUN = "sentinel-from-a-previous-run"
+    _reset_health_memo()
+    assert _HEALTH_RUN is None, "run_all() must invalidate the --health memo"
+    assert _pid_alive(str(os.getpid())) is True
+    assert _pid_alive("2147483646") is False                # far above any live pid
+    assert _pid_alive("not-a-pid") is False
+    with tempfile.TemporaryDirectory() as d:
+        recs = Path(d)
+        mine, dead = recs / f"{os.getpid()}.json", recs / "2147483646.json"
+        for p in (mine, dead):
+            p.write_text(json.dumps({"pid": int(p.stem), "build": "x", "started_at": 0}))
+        _prune_server_records(recs)
+        assert mine.exists(), "pruned a record whose process is still alive"
+        assert not dead.exists(), "kept a record for a dead pid"
     print("selftest ok")
     return 0
 
