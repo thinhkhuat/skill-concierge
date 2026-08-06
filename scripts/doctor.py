@@ -26,6 +26,7 @@ SKILL_EMBED_BACKEND, SKILL_EMBED_MODEL, SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERG
 SKILL_TRIGGERS, SKILL_SERVER_RECORDS.
 """
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -115,11 +116,18 @@ def _health_run():
     return _HEALTH_RUN
 
 
-def _reset_health_memo():
-    """Drop the cached --health result so the next pass re-measures. The scope of the memo
-    is ONE pass; `--fix` runs a second pass whose entire purpose is to observe what changed."""
-    global _HEALTH_RUN
+def _reset_pass_caches():
+    """Drop every per-pass cache so the next pass re-measures.
+
+    The scope of these memos is ONE pass; `--fix` runs a second pass whose entire purpose is
+    to observe what the fix changed. Any cache that outlives a pass makes the re-check
+    re-report the failure it just repaired and exit 1 on a system that is now healthy.
+    ONE reset point on purpose — a per-cache reset invites the next cache to be added to
+    only half the boundary, and the bug is silent when that happens.
+    """
+    global _HEALTH_RUN, _RUNNING_STATE
     _HEALTH_RUN = None
+    _RUNNING_STATE = _UNSET
 
 
 def _health_json():
@@ -139,6 +147,43 @@ def _is_engine_drift(rep):
     on presence, as the first version did, would flag every healthy run as drift.
     """
     return bool((rep.get("engine_build") or {}).get("index_written_by"))
+
+
+def _drift_remedy(index_build, running_build, state):
+    """(detail, fix) for an index whose manifest was written by a different engine build.
+
+    Two causes with OPPOSITE remedies hide behind one symptom:
+      • the manifest is left over from a previous release, no old server survives
+        → a reindex re-stamps it and clears. EVERY engine upgrade lands here first,
+          because changing the engine necessarily changes the build id.
+      • a server is still live on the old build
+        → only a restart helps; a reindex writes OUR build and that server hands the
+          mismatch straight back, which is what "reindex will not fix it" was about.
+
+    The engine cannot tell these apart — it sees its own build and no other process — so it
+    offers both. doctor computed the live-server picture in this same pass, so it decides.
+
+    `state` is (drift_pids, unknown_pids) from `_running_engine_state`, or None when that
+    evidence is unavailable. fix="reindex" is returned ONLY for a proven-clean fleet:
+    auto-reindexing while an old server is live is the 0.20.6 defect, re-armed.
+    """
+    head = (f"index was built by engine {index_build}, this process runs {running_build}, "
+            f"so disk-vs-index comparison is unavailable")
+    if state is None:
+        return (f"{head} — if every live MCP server is now on {running_build}, a reindex "
+                f"clears this; if any is still on {index_build}, restart Claude Code "
+                f"instead (live-server evidence unavailable, so this is not decided)"), None
+    drift_pids, unknown_pids = state
+    if drift_pids:
+        runs = "run" if len(drift_pids) > 1 else "runs"
+        return (f"{head} — pid {', '.join(drift_pids)} still {runs} an older build, so a "
+                f"reindex would hand the mismatch back. Restart Claude Code"), None
+    if unknown_pids:
+        pub = "publish" if len(unknown_pids) > 1 else "publishes"
+        return (f"{head} — pid {', '.join(unknown_pids)} {pub} no build id, so a clean "
+                f"fleet is unproven. Restart Claude Code; if it persists, reindex"), None
+    return (f"{head} — no live MCP server is on an older build, so the manifest is simply "
+            f"left over from a previous release; a reindex re-stamps it"), "reindex"
 
 
 def _engine_env():
@@ -416,6 +461,50 @@ def _classify_servers(live, records, current):
     return drift, unknown
 
 
+_UNSET = object()           # "not computed yet", distinct from a computed None
+_RUNNING_STATE = _UNSET
+
+# Named, not a bare tuple: two checks consume this, and positional indexing is how a reader
+# silently gets the wrong element when the shape grows — `live` was added after the first
+# version and the consumers had to be renumbered by hand. Fields cannot be mis-numbered.
+RunningState = collections.namedtuple("RunningState", "current live drift unknown")
+
+
+def _running_engine_state():
+    """A RunningState, or None if it cannot be determined.
+
+    Memoized for one check pass: two checks need this same picture — `check_running_engine`
+    reports it, `check_engine_health` decides a remedy from it — and re-deriving it would
+    re-scan `ps` for an answer that cannot change mid-pass. Cleared by `_reset_pass_caches`.
+
+    `live_pids` rides along rather than being re-fetched by the caller: a second `ps` scan
+    could observe a server that started or died since the first, and then the row would
+    report a population its own drift/unknown split never classified.
+    """
+    global _RUNNING_STATE
+    if _RUNNING_STATE is _UNSET:
+        _RUNNING_STATE = _compute_running_engine_state()
+    return _RUNNING_STATE
+
+
+def _compute_running_engine_state():
+    if not SS_BIN.exists() or not shutil.which("ps"):
+        return None
+    rep = _health_json()
+    if rep is None or "engine_build" not in rep:
+        return None                             # engine predates the published id
+    current = (rep.get("engine_build") or {}).get("running")
+    if not current or current == "unknown":
+        return None                             # no id to measure against
+    live = _live_servers()
+    if live is None:
+        return None
+    records = _read_server_records()
+    _prune_server_records()
+    drift, unknown = _classify_servers(live, records, current)
+    return RunningState(current, [pid for pid, _ in live], drift, unknown)
+
+
 def check_running_engine():
     """Is a LIVE MCP server executing an engine build other than the one on disk now?
 
@@ -438,20 +527,11 @@ def check_running_engine():
     including against an engine too old to publish one, where every server would look
     unknown. This is a diagnostic, never a gate.
     """
-    if not SS_BIN.exists() or not shutil.which("ps"):
+    state = _running_engine_state()
+    if state is None:
         return None
-    rep = _health_json()
-    if rep is None or "engine_build" not in rep:
-        return None                             # engine predates the published id
-    current = (rep.get("engine_build") or {}).get("running")
-    if not current or current == "unknown":
-        return None                             # no id to measure against
-    live = _live_servers()
-    if live is None:
-        return None
-    records = _read_server_records()
-    _prune_server_records()
-    drift, unknown = _classify_servers(live, records, current)
+    current, live = state.current, state.live
+    drift, unknown = state.drift, state.unknown
     if drift:
         return dict(id="engine_running", label="Running engine", status=WARN,
                     detail=f"{len(drift)} live MCP server(s) run a DIFFERENT engine build than "
@@ -558,20 +638,33 @@ def check_engine_health():
     if rep.get("status") == "ok" and not issues:
         return dict(id="health", label="Retrieval health", status=OK,
                     detail=f"{idx} skills indexed; embedder + qdrant reachable{_fresh(rep)}", fix=None)
-    # Engine-build drift is NOT a stale index. The live server and this CLI parse skills
-    # with different builds, so nothing a reindex does can reconcile them — only a restart.
-    # Falling through to the FAIL/fix="reindex" branch below would (a) flip the ordinary
-    # post-update run red, and (b) auto-run the exact reindex whose own message says it
-    # won't help — which clears the CLI-side symptom, re-embeds every point whose text
-    # moved under the new parser, and leaves the live server just as broken. Keyed on
-    # `engine_build.index_written_by`, never on matching issue strings — and never on the
-    # field's mere presence, which now rides on every report.
-    drift = rep.get("engine_build") or {}
+    # Engine-build drift is NOT a stale index, so it never falls through to the FAIL branch
+    # below: that would flip the ordinary post-update run red over a manifest that is merely
+    # left over from the previous release. Keyed on `engine_build.index_written_by`, never on
+    # matching issue strings — and never on the field's mere presence, which rides on every
+    # report since v0.20.7.
+    #
+    # Whether a reindex helps is DECIDED here rather than assumed. The engine offers both
+    # remedies because it cannot see other processes; doctor computed the live-server picture
+    # in this same pass, so `_drift_remedy` resolves it — and returns fix="reindex" only for a
+    # fleet proven to be entirely on the current build. Auto-reindexing while an older server
+    # is live is the v0.20.6 defect: it clears the CLI-side symptom, re-embeds every point
+    # whose text moved under the new parser, and leaves that server just as broken.
+    eb = rep.get("engine_build") or {}
     if _is_engine_drift(rep):
+        state = _running_engine_state()
+        evidence = None if state is None else (state.drift, state.unknown)
+        detail, fix = _drift_remedy(eb.get("index_written_by"), eb.get("running"), evidence)
+        # Drift is reported alone, but it is no longer only reported — it can now trigger a
+        # reindex. Anything ELSE wrong in the same report (qdrant unreachable, an embedder
+        # dim mismatch) would make that reindex fail, so surface those and drop the auto-fix
+        # rather than firing a repair into a broken store.
+        others = [str(i) for i in issues if "engine" not in str(i)]
+        if others:
+            detail = f"{detail}. Also: {'; '.join(others)[:160]}"
+            fix = None
         return dict(id="health", label="Retrieval health", status=WARN,
-                    detail=f"index built by engine {drift.get('index_written_by')}, this process "
-                           f"runs {drift.get('running')} — a live MCP server is on an older build; "
-                           f"restart Claude Code (reindex will not fix it)", fix=None)
+                    detail=detail, fix=fix)
     # Stale-but-serving is degraded, not broken: WARN (auto-fixable via reindex) so the
     # exit code distinguishes "index needs a refresh" from "retrieval is down".
     if _stale_only(rep):
@@ -1051,7 +1144,7 @@ def run_all():
     # spawning the engine twice; it must not outlive the pass. `--fix` calls run_all() again
     # after repairing something, and a memo carried across that boundary would re-report the
     # very failure the fix just cleared — exiting 1 on a system doctor had already repaired.
-    _reset_health_memo()
+    _reset_pass_caches()
     return [c for c in (fn() for fn in CHECKS) if c]
 
 
@@ -1189,10 +1282,75 @@ def _selftest():
     # to, making every live server "unproven" forever — the failure this seam exists to avoid.
     assert "$" not in str(SERVER_RECORDS), f"unexpanded variable in {SERVER_RECORDS}"
     assert SERVER_RECORDS.is_absolute(), SERVER_RECORDS
-    global _HEALTH_RUN
-    _HEALTH_RUN = "sentinel-from-a-previous-run"
-    _reset_health_memo()
-    assert _HEALTH_RUN is None, "run_all() must invalidate the --health memo"
+    # Assert the WIRING, not the helper. Calling _reset_pass_caches() here and checking the
+    # globals would pass while run_all() called a renamed/absent function — which is exactly
+    # what happened once: the helper was verified in isolation, run_all() still named the old
+    # one, and doctor died with a NameError that the green selftest had no way to see. So
+    # drive the real run_all() and have a probe check what a check actually observes.
+    global _HEALTH_RUN, _RUNNING_STATE
+    seen = {}
+
+    def _probe():
+        seen["health"], seen["running"] = _HEALTH_RUN, _RUNNING_STATE
+        return None
+
+    _saved_checks = list(CHECKS)        # mutate in place: `global CHECKS` would have to be
+    _HEALTH_RUN = "sentinel-from-a-previous-run"    # declared above its earlier reads here
+    _RUNNING_STATE = "sentinel-from-a-previous-run"
+    try:
+        CHECKS[:] = [_probe]
+        run_all()
+    finally:
+        CHECKS[:] = _saved_checks
+    # BOTH per-pass caches reset from ONE place, so a future third cache cannot be added to
+    # only half of the boundary. Any of them outliving a pass makes `--fix` re-report the
+    # failure it just repaired and exit 1 on a system that is now healthy.
+    assert seen.get("health") is None, "run_all() must invalidate the --health memo"
+    assert seen.get("running") is _UNSET, "run_all() must invalidate the live-server memo"
+
+    # --- drift remedy: doctor DECIDES what the engine can only offer as alternatives ---
+    # The engine sees its own build and nothing else, so its message names both remedies.
+    # doctor holds the live-server evidence in the same pass, so it resolves which applies.
+    d, r = _drift_remedy("bbbb", "aaaa", ([], []))
+    assert r == "reindex", "proven-clean must be auto-fixable — a reindex re-stamps it"
+    assert "reindex" in d.lower() and "restart" not in d.lower(), d
+    # A live server on an older build: a reindex writes OUR build and that server hands the
+    # mismatch straight back. Auto-fixing here is the 0.20.6 defect, so fix must stay None.
+    d, r = _drift_remedy("bbbb", "aaaa", (["77"], []))
+    assert r is None and "restart" in d.lower() and "77" in d, d
+    # Unproven is not proven-clean. Never auto-reindex on an unverified fleet.
+    d, r = _drift_remedy("bbbb", "aaaa", ([], ["77"]))
+    assert r is None and "restart" in d.lower(), d
+    # No evidence at all (ps missing, engine too old to publish an id) -> stay conditional.
+    d, r = _drift_remedy("bbbb", "aaaa", None)
+    assert r is None and "reindex" in d.lower() and "restart" in d.lower(), d
+    # The SEAM, not just the pure function. `_drift_remedy` can be perfect while
+    # `check_engine_health` hands it the wrong fields — a mis-wire that names live pids as
+    # "still on an older build" on a proven-CLEAN fleet, which is the exact failure this
+    # release retires, and a selftest that only exercised `_drift_remedy` stayed green
+    # through it. Everything here is patched, so nothing spawns, reads ps, or touches the
+    # records dir: an earlier version called the real `_running_engine_state()` and deleted
+    # files from ~/.cache/skill-search/servers as a side effect of running --selftest.
+    _g = globals()
+    _saved = {k: _g[k] for k in ("SS_BIN", "_health_run", "_running_engine_state")}
+    try:
+        _g["SS_BIN"] = Path(__file__)                       # merely has to exist
+        _g["_health_run"] = lambda: subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({
+                "status": "degraded", "issues": ["engine drift"],
+                "engine_build": {"running": "aaaa", "index_written_by": "bbbb"},
+                "qdrant": {"reachable": True, "indexed": 418}}), stderr="")
+        # Clean fleet, but two live pids present: the row must NOT name them as drifting.
+        _g["_running_engine_state"] = lambda: RunningState("aaaa", ["11", "22"], [], [])
+        row = check_engine_health()
+        assert row["fix"] == "reindex", row
+        assert "11" not in row["detail"] and "22" not in row["detail"], row
+        # Same report, but one pid genuinely on another build -> never auto-fix.
+        _g["_running_engine_state"] = lambda: RunningState("aaaa", ["11", "22"], ["11"], [])
+        row = check_engine_health()
+        assert row["fix"] is None and "11" in row["detail"], row
+    finally:
+        _g.update(_saved)
     assert _pid_alive(str(os.getpid())) is True
     assert _pid_alive("2147483646") is False                # far above any live pid
     assert _pid_alive("not-a-pid") is False
