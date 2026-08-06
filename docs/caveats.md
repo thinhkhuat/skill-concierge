@@ -407,3 +407,57 @@ one check pass, because two checks need it and spawning the engine is its slowes
 memo is cleared at the top of `run_all()` and must stay cleared there. `doctor --fix` runs a
 second pass whose whole purpose is to observe what the fix changed; a memo carried across that
 boundary makes the re-check reprint the failure it just repaired and exit 1 on a healthy system.
+
+---
+
+## §18 — One drift symptom, two causes, opposite remedies — and the engine can see neither
+
+**Symptom:** after any engine release, `health()` (or a `search_skills` reply) says the index was
+built by a different engine build. The v0.20.7 text went on to assert *"a live MCP server is on a
+different build … reindexing will not fix it"*. Both halves are usually false at that moment.
+
+**Cause:** manifest drift means only that `manifest["engine"] != _ENGINE_BUILD`. Two very different
+states produce it:
+
+| State | Remedy | Why |
+|---|---|---|
+| A server is still live on the old build | **restart** | a reindex writes *our* build; that server keeps computing its own signature and hands the mismatch back — flip-flop |
+| The manifest is left over from the previous release, no old server survives | **reindex** | it re-stamps the manifest with the running build and clears |
+
+**Every engine upgrade lands in the second state first**, because `_ENGINE_BUILD` hashes
+`server.py` + `skills_discovery.py` — so changing the engine at all changes the build id, and the
+manifest written by the previous release is instantly "drift". Asserting state A is therefore wrong
+on the commonest path.
+
+**The structural point: an engine process cannot tell them apart.** It knows its own build and
+nothing about other processes. So the engine states the observation and offers both remedies as
+alternatives — it must not pick one. **doctor** picks, because it holds the live-server evidence
+(§17's `<pid>.json` records) in the same check pass: `_drift_remedy()` resolves the state, names the
+pids, and prints only the remedy that applies.
+
+**`fix="reindex"` is returned for exactly ONE state — a fleet proven entirely on the current
+build.** Drift pids, unknown pids, and absent evidence all stay `fix=None`. Auto-reindexing while an
+older server is live is the v0.20.6 defect re-armed: it clears the CLI-side symptom, re-embeds every
+point whose text moved under the new parser, and leaves that server exactly as broken.
+
+**The engine must name NO remedy — not even as an option.** `_staleness_warning` rides in every
+`search_skills` reply and `_health` surfaces through the `health()` tool, so both are read by the
+MODEL. `reindex()` is an MCP tool that runs **inside the process whose build is in question**, and
+build ids are unordered md5 hashes: a server cannot tell whether its own build is the newer or the
+older one. If it is the older one, reindexing from there re-embeds with the stale parser and
+re-stamps the manifest BACKWARD, fighting the session-start rebuild. So "reindexing will not fix
+it" was wrong, and the obvious correction — "run `reindex()` if every server is on this build" —
+is worse, because the model cannot evaluate the condition and will just call the tool. Both
+emitters state the observation and route to doctor. Nothing else is safe from inside the engine.
+
+**Do not "simplify" this back into one unconditional message.** The two rows must agree; a doctor
+run that says *"3 servers publish no build id"* directly above *"a live server is on an older build,
+reindex will not fix it"* is two diagnostics of one fact contradicting each other, which is the
+failure this and §17 both exist to end.
+
+**Testing lesson banked here, worth more than the fix:** the guard that was supposed to prevent a
+regression in this area passed while the code was broken, because it exercised the reset *helper*
+instead of the *wiring* — `run_all()` referenced a renamed function and doctor died with a
+`NameError` on the first real run, selftest still green. Assertions about a pass boundary must drive
+the real entry point (`run_all()`), with a probe check observing the state a check actually sees.
+Verify any such guard with a negative control: break the wiring on purpose and watch it fail.
