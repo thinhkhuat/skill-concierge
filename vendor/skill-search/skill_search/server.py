@@ -145,6 +145,40 @@ def _disk_signature() -> dict:
     return {"count": len(by_name), "hash": h.hexdigest()}
 
 
+def _engine_build() -> str:
+    """Fingerprint of the engine code THIS process actually loaded.
+
+    Computed at import ON PURPOSE. The venv's engine files can be replaced under a
+    long-lived MCP server (a setup.sh re-copy, or a repo build overwriting the deployed
+    one), and the server keeps executing the bytes it imported at start. From then on the
+    server and every fresh CLI process parse the same SKILL.md files with different
+    parsers, so they derive different `_disk_signature()` values from an unchanged disk.
+    Whichever one writes the manifest last makes the other report a false 'disk changed
+    since last index' — permanently, for the life of that server process. Recording the
+    build alongside the signature lets a reader tell "the disk moved" (reindex) apart from
+    "we are different builds" (restart), instead of blaming the disk for both.
+
+    Only these two modules are hashed because only they can move the parsed text:
+    `_disk_signature` depends on `discover_skills()` (skills_discovery) and on
+    `_skill_text`/`_content_hash` (this module). If skill parsing ever moves to a third
+    module, add it here or the id silently stops discriminating and this bug returns
+    with no test failure.
+    """
+    h = hashlib.md5()
+    for mod in (__file__, sd.__file__):
+        try:
+            h.update(Path(mod).read_bytes())
+        except Exception:
+            # Broad on purpose: this runs at import on the server's critical path
+            # (`sd.__file__` can be None under exotic loaders, which raises TypeError,
+            # not OSError). Losing a diagnostic is acceptable; failing to import is not.
+            return "unknown"                    # fail open: no id rather than a wrong one
+    return h.hexdigest()[:12]
+
+
+_ENGINE_BUILD = _engine_build()
+
+
 def _write_manifest(indexed: int) -> None:
     """Record what the index reflects, so later runs can detect drift."""
     sig = _disk_signature()
@@ -156,6 +190,7 @@ def _write_manifest(indexed: int) -> None:
         "model": EMBED_MODEL,
         "dim": vector_size(),
         "signature": sig,
+        "engine": _ENGINE_BUILD,
     }, indent=2))
 
 
@@ -166,6 +201,23 @@ def _read_manifest() -> dict | None:
         return None
 
 
+def _engine_drift(manifest: dict) -> str | None:
+    """The manifest writer's engine build, when it differs from ours — else None.
+
+    A manifest written by a DIFFERENT build carries a signature computed by a different
+    parser, so comparing it against ours says nothing about the disk. Pre-`engine`
+    manifests (no key) are treated as ours: we cannot tell, and guessing drift would
+    reintroduce the false alarm this exists to remove.
+    """
+    other = manifest.get("engine")
+    if not other or other == "unknown" or _ENGINE_BUILD == "unknown":
+        return None                 # a sentinel on EITHER side identifies no build, and
+                                    # accusing it of drift would demand a restart that
+                                    # fixes nothing — the same permanent false alarm this
+                                    # exists to remove, relocated one field over.
+    return other if other != _ENGINE_BUILD else None
+
+
 def _staleness_warning() -> str | None:
     """One-line warning if disk has drifted from the last index, else None.
     Fails open: any error returns None rather than breaking search."""
@@ -173,6 +225,10 @@ def _staleness_warning() -> str | None:
         manifest = _read_manifest()
         if manifest is None:
             return "index manifest missing — run reindex() (results may be empty/stale)"
+        if _engine_drift(manifest):
+            return ("this server is running a different engine build than the one that "
+                    "built the index — restart Claude Code (rerun setup.sh first if "
+                    "doctor reports the venv stale); reindexing will not fix it")
         if _disk_signature() != manifest.get("signature"):
             return ("skills changed on disk since last index — run reindex() "
                     "or some skills will be missing/stale in results")
@@ -649,9 +705,29 @@ def _health() -> dict:
     manifest = _read_manifest()
     if manifest:
         report["indexed_at"] = manifest.get("indexed_at")
-        report["stale"] = _disk_signature() != manifest.get("signature")
-        if report["stale"]:
-            report["issues"].append("disk changed since last index — run reindex()")
+        drift = _engine_drift(manifest)
+        if drift:
+            # Different builds parse skills differently, so the signature comparison is
+            # meaningless here — reporting it would be the false 'disk changed' alarm.
+            # Say what is actually wrong and what actually fixes it (a restart, not a
+            # reindex): a reindex just rewrites the manifest with THIS build's signature
+            # and hands the false alarm to the next process.
+            # None, not False: across builds the comparison is UNKNOWABLE, not negative.
+            # False would tell every consumer the index matches disk. None reads as falsy
+            # for the callers that only gate on it, and stays honest for the rest.
+            report["stale"] = None
+            report["engine_build"] = {"running": _ENGINE_BUILD, "index_written_by": drift}
+            # "this process", not "this server": _health() is also reached via the CLI
+            # `--health` (that is how doctor calls it), where the stale build belongs to
+            # some OTHER, long-lived server — saying "this server" inverts the roles.
+            report["issues"].append(
+                f"index was built by engine {drift} but this process runs {_ENGINE_BUILD} "
+                f"— a live MCP server is on a different build; restart Claude Code (rerun "
+                f"setup.sh first if doctor reports the venv stale); reindexing will not fix it")
+        else:
+            report["stale"] = _disk_signature() != manifest.get("signature")
+            if report["stale"]:
+                report["issues"].append("disk changed since last index — run reindex()")
     else:
         report["indexed_at"] = None
         report["issues"].append("no index manifest — never indexed; run reindex()")
