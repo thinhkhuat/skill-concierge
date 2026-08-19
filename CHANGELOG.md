@@ -5,6 +5,43 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-08-19
+
+### Added
+- **Next-skill chain hints (ADR-0029) — engine-side skill chaining.** Skills can declare optional
+  `next-skills:` frontmatter (comma/space successor names, catalogue ids exactly). The indexer
+  writes a scope-keyed sidecar `~/.claude/skill-concierge/next-skills.json`
+  (`{scope: {name: [successors]}}` — per-scope MERGE so concurrent sessions cannot
+  last-writer-wins each other, ADR-0028's incident class; atomic `os.replace`; every indexed
+  skill keyed so key presence doubles as catalogue membership), and the enforcer appends one
+  `CHAIN-HINT:` candidate line to EVERY inject-bearing leg (ranked mandate, mandate-only
+  fallbacks, all three AUTHORIZED-SKIP lines) when this session used a skill (auto OR
+  slash-manual) within 15 min — a bounded 64KB ledger tail-read, zero new network, zero new
+  state files. The hint bypasses nothing: successors are filtered through keep-off (ADR-0011
+  outranks any resurfacing path) and catalogue/scope membership, and never enter the candidate
+  set. ≤3-word turns stay hint-free (the ADR-0010 pre-gate injects nothing — documented limit).
+  `ENFORCER_CHAIN_HINT=0` reverts byte-identically; `ENFORCER_CHAIN_TTL_S` (900) tunes the
+  window. Doctrine gains a Red-Flags row (a hint is a preview, not a mandate). Vendored patch
+  recorded in VENDORED.md — re-copy the venv engine + reindex to deploy (done: sidecar live
+  with 413 keys). Pinned by `tests/test_chain_hint_e2e.py`, the enforcer selftest §9, and
+  `test_parse_skill_next_skills_list`.
+- **`ledger.py` sub-stamp.** `auto`/`manual` events carry `"sub": true` when the hook input
+  has an `agent_id` (ADR-0020 positive proof), so subagent lanes are excluded from chain
+  state and chain metrics instead of steering the main session's hint.
+- **`analyze.py --chains`.** Cross-turn chain view over existing ledger events: per-session
+  skill sequences (sub rows excluded, consecutive repeats collapsed, built-in slashes filtered
+  via the live catalogue), successor bigrams, length histogram, longest chains — same
+  `--since`/`--until` epoch-windowing as the uptake report. First live run: 130 sessions with
+  skill use, 67 with chains (len ≥ 2); top pairs `verify-as-claimed → session-handoff` (×4),
+  `skill-concierge:doctor → skill-concierge:flywheel` (×3), longest 15-deep.
+
+### Cut
+- **Multi-intent clause-split decomposition (drafted as ADR-0030) — cut on dual review,
+  owner-ratified.** Per-intent retrieval already exists (`extra_queries` MAX-pool fusion;
+  doctrine rule 2 now says so explicitly); the drafted enforcer-side mechanism failed its
+  budget math beyond the embed leg (3 retrieves + up to 6 intent-gate POSTs under serial
+  100ms caps) and would have been a fourth default-off limb.
+
 ## [0.20.8] — 2026-08-07
 
 ### Fixed

@@ -133,6 +133,26 @@ actually carries a task tail.
 > are pinned in source comments, and `python3 enforcer.py --selftest` asserts they stay inert by
 > default. **Run `--selftest` after any edit.**
 
+## Chain hints — engine-side skill sequencing (ADR-0029)
+
+Skills can declare optional `next-skills:` frontmatter (comma/space successor names, catalogue
+ids exactly). The indexer writes a scope-keyed sidecar
+`~/.claude/skill-concierge/next-skills.json` (`{scope: {name: [successors]}}`, every indexed
+skill keyed, per-scope merge, atomic replace), and the enforcer appends one `CHAIN-HINT:`
+candidate line to **every inject-bearing leg** — ranked mandate, mandate-only fallbacks, and all
+three AUTHORIZED-SKIP lines — when this session used a skill (auto OR slash-manual) within
+`ENFORCER_CHAIN_TTL_S` (900 s). State comes from a bounded 64 KB ledger tail-read (sub-stamped
+rows excluded), so there is zero new hot-path network and zero new state files.
+
+The hint **bypasses nothing**: successor names are dropped unless present as a sidecar key in a
+scope visible from the reading session and not in keep-off (ADR-0011 outranks resurfacing);
+hinted names never enter the candidate set. ≤3-word turns stay hint-free — the ADR-0010 pre-gate
+injects nothing at all (documented limit). `ENFORCER_CHAIN_HINT=0` reverts byte-identically.
+Read-side measurement lives in `analyze.py --chains` (per-session sequences, successor bigrams,
+length histogram). A drafted multi-intent clause-split companion (ADR-0030) was cut on review —
+`extra_queries` MAX-pool fusion already provides per-intent retrieval, and doctrine rule 2 says
+so.
+
 ## The Ledger — *what actually got used*
 
 [`hooks/scripts/ledger.py`](../../hooks/scripts/ledger.py) is registered for two events and writes
