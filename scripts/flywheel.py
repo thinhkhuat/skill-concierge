@@ -45,14 +45,21 @@ PY_BIN = VENV / "bin" / "python3"
 
 def _engine_env():
     """Merge the embedder/store env from .mcp.json (single source of truth) under any
-    process-env overrides — same seams doctor.py uses so a manual reindex matches the MCP."""
+    process-env overrides — same seams doctor.py uses so a manual reindex matches the MCP.
+
+    Forwards the TRIGGER-LAYER keys too, on the same 7-key tuple auto_reindex._mcp_env()
+    uses: this env drives the reindex at the end of generate(), and without SKILL_TRIGGERS
+    (plus SKILL_LLM_TRIGGERS/TRIGGERS_MAX/SKILL_BODY_TRIGGERS) that reindex rebuilds at
+    engine defaults and prunes the utterance layer the run just generated — the exact
+    0.16.1/0.20.5 drift class (ADR-0026)."""
     env = {}
     try:
         env = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
     except Exception:
         pass
     merged = dict(os.environ)
-    for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL"):
+    for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
+              "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS"):
         if k in env and k not in os.environ:
             merged[k] = env[k]
     return merged

@@ -9,6 +9,7 @@
         "SKILL_TOP_K": "10",
         "SKILL_LLM_TRIGGERS": "1",
         "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",
         "SKILL_SERVER_RECORDS": "${HOME}/.cache/skill-search/servers"
       }
     }
