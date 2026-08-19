@@ -5,6 +5,23 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-08-19
+
+### Fixed
+- **SKILL_TRIGGERS pinned to the durable home (`.mcp.json`) + flywheel `_engine_env` forwards
+  all 7 trigger-layer keys.** Audit finding: every automatic reindex built WITHOUT the
+  utterance layer (the engine default path points into the versioned plugin cache, absent
+  for the deployed venv), so the SessionStart auto-reindex pruned ~2-4k utterance points and
+  the next env-corrected run re-embedded nearly everything — a prune/rebuild flip-flop across
+  three call sites (auto_reindex, setup.sh, and flywheel's own post-generate reindex).
+  Incremental core and flywheel scoping were proven sound by identical-env probes
+  (embedded:0 / skipped:all). The path is ABSOLUTE, not ${HOME} — the raw literal survives
+  only Claude Code's MCP launcher, not the json.load readers.
+
+### Added
+- **`skill-concierge:doctor` declares `next-skills: skill-concierge:flywheel`** — first live
+  ADR-0029 authoring (the third-most-frequent observed successor in the ledger chains).
+
 ## [0.21.0] — 2026-08-19
 
 ### Added

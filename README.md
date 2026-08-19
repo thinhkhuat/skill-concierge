@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.21.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.21.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -286,6 +286,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.21.1` — **published, the utterance-layer prune/rebuild flip-flop fixed: SKILL_TRIGGERS pinned to the durable home (~/.claude/skill-concierge/triggers.json) in .mcp.json — absolute path, since the ${HOME} literal survives only Claude Code's MCP launcher, not the json.load readers — and flywheel's post-generate reindex now forwards all 7 trigger-layer keys instead of 3, so it stops stripping the layer it just wrote. Incremental core and flywheel scoping proven sound by identical-env probes (embedded:0 / skipped:all). Also the first live ADR-0029 authoring: doctor declares next-skills: flywheel.**
 
 `0.21.0` — **published, engine-side skill chaining: skills can declare `next-skills:` successors and the enforcer surfaces them one turn later as a filtered `CHAIN-HINT:` candidate line on every inject-bearing leg (ADR-0029). Scope-keyed atomic sidecar written at index time (413 keys live), bounded ledger tail-read for state (auto + slash invocations, subagent rows excluded, 15-min TTL) — zero new network, zero new state files; keep-off and catalogue membership filter every hinted name; `ENFORCER_CHAIN_HINT=0` reverts byte-identically. `analyze.py --chains` measures real sequences (first run: 130 sessions, 67 chained, top pair verify-as-claimed→session-handoff). A drafted multi-intent clause-split (ADR-0030) was cut on dual review — `extra_queries` MAX-pool already provides per-intent retrieval and the doctrine now says so.**
 
