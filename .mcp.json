@@ -6,7 +6,7 @@
         "SKILL_QDRANT_URL": "http://localhost:6333",
         "SKILL_EMBED_BACKEND": "fastembed",
         "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
-        "SKILL_TOP_K": "10",
+        "SKILL_TOP_K": "6",
         "SKILL_LLM_TRIGGERS": "1",
         "TRIGGERS_MAX": "16",
         "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",

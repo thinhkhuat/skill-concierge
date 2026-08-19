@@ -85,7 +85,7 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
         "model": MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": 0.4,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
     }
     if schema is not None and SCHEMA_MODE == "json_schema":
         payload["response_format"] = {

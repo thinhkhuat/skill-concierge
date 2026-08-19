@@ -291,6 +291,9 @@ def main():
     ap.add_argument("--chains", action="store_true",
                     help="print the ADR-0029 chain report (per-session skill sequences, "
                          "successor bigrams, length histogram) instead of the uptake report")
+    ap.add_argument("--latency", action="store_true",
+                    help="print embed/qdrant latency histogram from enforcer offer events "
+                         "(embed_ms/qdrant_ms, since 0.22)")
     ap.add_argument("--selftest", action="store_true",
                     help="run the C1 offer->take join self-check and exit")
     args = ap.parse_args()
@@ -310,6 +313,43 @@ def main():
                   and (since is None or e["t"] >= since)
                   and (until is None or e["t"] < until)]
     events.sort(key=lambda e: e.get("t", 0))
+
+    if args.latency:
+        # Latency histogram from enforcer offer events (embed_ms/qdrant_ms).
+        # Shares the same --since/--until windowing so you can epoch-scope it.
+        offers = [e for e in events if e.get("ev") == "offer"]
+        def _hist(vals):
+            if not vals:
+                return "n/a"
+            vals = sorted(vals)
+            n = len(vals)
+            def pct(p): return vals[int(n * p / 100)] if n else 0
+            avg = sum(vals) / n
+            return f"n={n} avg={avg:.0f}ms p50={pct(50)} p90={pct(90)} p99={pct(99)} max={max(vals)}"
+        embed_vals = [e["embed_ms"] for e in offers if isinstance(e.get("embed_ms"), (int, float))]
+        qdr_vals = [e["qdrant_ms"] for e in offers if isinstance(e.get("qdrant_ms"), (int, float))]
+        fb = sum(1 for e in offers if e.get("fallback"))
+        print(f"ledger        : {path}")
+        if since is not None or until is not None:
+            import datetime as _dt
+            def _fmt(t):
+                return _dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "—"
+            print(f"window        : [{_fmt(since)} .. {_fmt(until)})   {len(events)}/{n_total} events in window")
+        print(f"offers        : {len(offers)} (fallback {fb})   embed_ms: {_hist(embed_vals)}")
+        print(f"                qdrant_ms: {_hist(qdr_vals)}")
+        # band breakdown with latency
+        from collections import Counter as _C
+        bands = _C(e.get("band") for e in offers)
+        print(f"bands         : {dict(bands)}")
+        if embed_vals:
+            buck = _C()
+            for v in embed_vals:
+                k = f"{int(v//50)*50}-{(int(v//50)+1)*50}ms"
+                buck[k] += 1
+            print("embed histogram (50ms buckets):")
+            for k in sorted(buck, key=lambda x: int(x.split('-')[0])):
+                print(f"  {k}: {buck[k]}")
+        return
 
     if args.chains:
         # Chain report shares the windowing/catalogue machinery; the epoch-scoping

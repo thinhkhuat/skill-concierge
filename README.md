@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.21.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.21.2-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -286,6 +286,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.21.2` — **published, enforcer `0.20s->0.35s` + `embed_ms`/`qdrant_ms` on every `offer` (diagnoses the `65%` fallback), `--latency` histogram in `analyze.py`, flywheel `max_tokens` `2048->4096` on the permanent `api.thinhkhuat.com` gateway (fixes `22× length` truncations), menu `10->6`, chain `ak-plan->ak-cook` (sidecar `3` chains), and `-24` stale overrides cleared — `doctor` now green.**
 
 `0.21.1` — **published, the utterance-layer prune/rebuild flip-flop fixed: SKILL_TRIGGERS pinned to the durable home (~/.claude/skill-concierge/triggers.json) in .mcp.json — absolute path, since the ${HOME} literal survives only Claude Code's MCP launcher, not the json.load readers — and flywheel's post-generate reindex now forwards all 7 trigger-layer keys instead of 3, so it stops stripping the layer it just wrote. Incremental core and flywheel scoping proven sound by identical-env probes (embedded:0 / skipped:all). Also the first live ADR-0029 authoring: doctor declares next-skills: flywheel.**
 

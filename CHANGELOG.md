@@ -5,6 +5,20 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.21.2] — 2026-08-20
+
+### Changed
+- **Enforcer timing + latency telemetry (`hooks/scripts/enforcer.py`).** Embed cap `0.20s -> 0.35s` (hook budget is `5s`, so the extra `150ms` is cheap) to cut the `65%` fallback rate where turns fell mute with no candidates. Every `offer` ledger event now carries `embed_ms`/`qdrant_ms` so `scripts/analyze.py --latency` can histogram per-epoch latency without guessing. Probe on this epoch: `embed 64ms p90 ~64ms`, `qdrant 13ms` — shim is healthy, timeout was the culprit. Wire-through covers `fallback`/`getaway`/`intent_skip`/`offer`.
+- **Flywheel `max_tokens` `2048 -> 4096` (`scripts/flywheel_llm.py`).** Private gateway `api.thinhkhuat.com/deepseek-v4-flash` (confirmed permanent) was truncating `22` generations with `finish_reason=length`; the larger window lets the JSON schema close cleanly.
+- **Menu breadth `TOP_K` `10 -> 6` (`.mcp.json`).** Aligns with the code default (`server.py:79`); cuts choice overload behind the `88%` offered-turn dodge (`analyze.py` `574/656`).
+- **Chain hint `ak-plan -> ak-cook` (`~/.claude/skills/ak-plan/SKILL.md` `next-skills:`) + reindex.** Sidecar now `3` non-empty chains (`verify->handoff`, `doctor->flywheel`, `ak-plan->ak-cook`); complements the prior incremental win (`389` indexed, `1` changed -> `688` embedded / `5146` skipped vs full rebuild).
+- **`scripts/analyze.py --latency`.** Histogram + `50ms` bucket view over `embed_ms`/`qdrant_ms`, epoch-windowed via `--since`/`--until`.
+
+### Fixed
+- **Overrides drift `-24` stale `caveman:*` keys** (`config/keep-on.json` vs `~/.claude/settings.json`) cleared via `apply-overrides.py`; `doctor.py` `status: OK` (was `WARN`). `39 on / 350 name-only`, no drift.
+
+
+
 ## [0.21.1] — 2026-08-19
 
 ### Fixed

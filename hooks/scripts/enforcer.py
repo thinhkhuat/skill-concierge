@@ -58,9 +58,9 @@ QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 # single-threaded shim's inference, under real in-turn CPU contention (concurrent
 # UserPromptSubmit hooks + overlapping sessions), exceeded 90ms even though it's
 # ~18ms idle. Fix (owner-approved): threaded shim (embed_server.py) + relax the
-# budget to ≲300ms total → 200ms embed cap. Worst slow-path ≈ 50ms cold-start +
+# budget to ≲300ms total → 200ms embed cap (widened 0.20→0.35 in 0.22 to cut 65% fallback; hook budget is 5s, so the extra 150ms is cheap). Worst slow-path ≈ 50ms cold-start +
 # 200ms cap ≈ 250ms ≲ 300ms; happy path stays ~100ms. Raise/lower via env.
-EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.20"))
+EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.35"))
 QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.1"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "8"))   # offer-menu breadth (was 5; owner-widened 2026-07-05). Wider = more push-noise, against ADR-0009's noise-reduction intent — env-overridable, revert default 5.
 GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.45"))  # top<this → silent. OPERATOR-SET 0.45 (2026-06-29, ADR-0009) raised from 0.40 on perceived behaviour; the ledger/corpus analysis argued AGAINST it (taken offers score LOWER than dodged, so a higher floor cuts the better-converting offers first). Do NOT change without re-opening ADR-0009 (data-backed alternative: 0.40 / env ENFORCER_GETAWAY_FLOOR).
@@ -410,7 +410,7 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None) -> None:
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None) -> None:
     """Append the offer event. Fail-silent: telemetry must never surface."""
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -418,6 +418,10 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
               "band": band, "offered": offered, "fallback": fallback, "q": q[:120]}
         if dropped:
             ev["dropped"] = dropped
+        if embed_ms is not None:
+            ev["embed_ms"] = int(embed_ms)
+        if qdrant_ms is not None:
+            ev["qdrant_ms"] = int(qdrant_ms)
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
     except Exception:
@@ -649,24 +653,33 @@ def main() -> int:
             _authorized_skip_inject("selfref", sid)
             return 0
 
-        # Embed (HARD ~200ms timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
+        # Embed (HARD timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
+        embed_ms = None
+        t0 = time.time()
         try:
             vector = _embed(prompt)
+            embed_ms = (time.time() - t0) * 1000
         except (socket.timeout, TimeoutError):
+            embed_ms = (time.time() - t0) * 1000
             _inject(MANDATE + _chain_hint(sid))
-            _append_offer(sid, "fallback", [], "embed_timeout", prompt)
+            _append_offer(sid, "fallback", [], "embed_timeout", prompt, embed_ms=embed_ms)
             return 0
         except Exception:
+            embed_ms = (time.time() - t0) * 1000
             _inject(MANDATE + _chain_hint(sid))
-            _append_offer(sid, "fallback", [], "embed_down", prompt)
+            _append_offer(sid, "fallback", [], "embed_down", prompt, embed_ms=embed_ms)
             return 0
 
         # Retrieve → mandate-only fallback if Qdrant is unreachable.
+        qdrant_ms = None
+        t1 = time.time()
         try:
             cands = _retrieve(vector)
+            qdrant_ms = (time.time() - t1) * 1000
         except Exception:
+            qdrant_ms = (time.time() - t1) * 1000
             _inject(MANDATE + _chain_hint(sid))
-            _append_offer(sid, "fallback", [], "qdrant_down", prompt)
+            _append_offer(sid, "fallback", [], "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             return 0
 
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
@@ -691,7 +704,7 @@ def main() -> int:
             # coverage/fallback stats stay honest, then authorize the skip (or stay fully
             # silent if the kill-switch is off) instead of leaving the agent to re-derive
             # this verdict via a fresh search_skills call.
-            _append_offer(sid, "getaway", offered, None, prompt, dropped=_dropped or None)
+            _append_offer(sid, "getaway", offered, None, prompt, dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             _authorized_skip_inject("getaway", sid, top=top, floor=floor)
             return 0
 
@@ -700,7 +713,7 @@ def main() -> int:
         # actionable, the offer is noise the agent reliably dodges. Suppress it. Fail toward
         # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
         if not det and not _is_imperative(prompt) and _intent_conversational(vector):
-            _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None)
+            _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             _authorized_skip_inject("intent_skip", sid)
             return 0
 
@@ -709,7 +722,7 @@ def main() -> int:
         _inject(_ranked_mandate(shown) + _chain_hint(sid))
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
-                      dropped=_dropped or None)
+                      dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
     except Exception:
         return 0  # fail-silent, never block
     return 0
