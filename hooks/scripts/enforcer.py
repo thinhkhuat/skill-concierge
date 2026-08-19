@@ -185,6 +185,101 @@ def _drop_keepoff(cands: list, keepoff: frozenset):
     return survivors, dropped
 
 
+# ── ADR-0029: next-skill chain hint ─────────────────────────────────────────
+# Soft chaining: when this session used skill A (auto OR manual — the ledger records
+# both) within the TTL and A declares `next-skills:`, append ONE candidate line to
+# every inject-bearing leg. Zero network: two bounded local reads (ledger tail +
+# sidecar map). The hint BYPASSES NO floor and no gate — hinted names never enter
+# `cands`; the line is context only. Filters are mechanized, not asserted:
+#   • keep-off (ADR-0011 outranks ANY resurfacing path — `_deterministic_hits` precedent)
+#   • catalogue membership via sidecar key presence in a scope VISIBLE from this cwd
+#     (kills dangling authoring AND other projects' dead recommendations, ADR-0028).
+# Known limit (ADR): the ≤3-word pre-gate (MAX_SHORT_WORDS) injects nothing at all,
+# so two-word "go ahead" turns never see a hint — recorded, not carved around.
+# Repetition semantics: repeats on each inject-bearing turn within the TTL (one line,
+# bounded); consume-on-fire is the recorded upgrade if the epoch shows push-noise
+# (it would require re-introducing persistent hint state).
+CHAIN_HINT = os.environ.get("ENFORCER_CHAIN_HINT", "1") != "0"
+CHAIN_TTL_S = float(os.environ.get("ENFORCER_CHAIN_TTL_S", "900"))
+_SIDECAR_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_NEXT_SKILLS",
+    Path.home() / ".claude" / "skill-concierge" / "next-skills.json"))
+
+
+def _visible_sidecar_names() -> dict:
+    """{name: [successors]} unioned across scopes visible from THIS cwd — mirrors
+    skills_discovery scope naming ('personal' | 'plugin' | 'project:<root>'). A name
+    absent from the union is dangling or out-of-scope and cannot be hinted. Fail-open
+    to {} (no hint, never an error)."""
+    try:
+        data = json.loads(_SIDECAR_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict = {}
+    proj = f"project:{Path.cwd() / '.claude' / 'skills'}"
+    for scope in ("personal", "plugin", proj):
+        m = data.get(scope)
+        if isinstance(m, dict):
+            out.update(m)
+    return out
+
+
+def _last_used_skill(sid: str):
+    """Most recent non-subagent `auto`/`manual` ledger event for this sid within the
+    TTL (ADR-0020: sub-stamped rows are a different lane and must not steer the main
+    session). Bounded 64KB tail read; newest-first scan; fail-open to None."""
+    if not sid:
+        return None
+    try:
+        with LEDGER.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 65536))
+            tail = f.read().decode("utf-8", "replace")
+        cutoff = time.time() - CHAIN_TTL_S
+        for line in reversed(tail.splitlines()):
+            line = line.strip()
+            if not line or '"sid"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if e.get("sid") != sid or e.get("ev") not in ("auto", "manual") or e.get("sub"):
+                continue
+            if float(e.get("t", 0)) < cutoff:
+                return None  # newest matching event is already stale; older is staler
+            name = e.get("name")
+            return name if isinstance(name, str) and name else None
+        return None
+    except Exception:
+        return None
+
+
+def _chain_hint(sid: str) -> str:
+    """The CHAIN-HINT line for this turn, or ''. Wording deliberately avoids the
+    audit's locked literals (`SKILL-CHECK:` and the `_AUTHORIZED_SIGNATURES`
+    phrases) so a collision can never miscount dodges as authorized — parity-pinned
+    by selftest (9)."""
+    if not CHAIN_HINT:
+        return ""
+    seed = _last_used_skill(sid)
+    if not seed:
+        return ""
+    names_map = _visible_sidecar_names()
+    succ = names_map.get(seed)
+    if not isinstance(succ, list) or not succ:
+        return ""
+    shown = [n for n in succ
+             if isinstance(n, str) and n and n in names_map and n not in KEEPOFF]
+    if not shown:
+        return ""
+    return ("\nCHAIN-HINT: after " + seed + ", catalogue declares: "
+            + ", ".join(shown) + " — candidates, fit still required.")
+
+
 # ── per-skill calibrated tau (Phase D wiring, default-INERT) ───────────────
 # Wire eval/thresholds.json so an `ok`-calibrated skill gates on ITS OWN tau instead of the
 # single global GETAWAY_FLOOR. DEFAULT OFF (ENFORCER_PER_SKILL_TAU unset) -> _PER_SKILL_TAU is
@@ -363,9 +458,11 @@ SELFREF_SKIP_MSG = (
 )
 
 
-def _authorized_skip_inject(kind: str, **fmt) -> None:
+def _authorized_skip_inject(kind: str, sid: str = "", **fmt) -> None:
     """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip" |
-    "selfref") when the kill-switch is on; no-op when off. Wrapped so a bad format kwarg or a
+    "selfref") when the kill-switch is on; no-op when off. ADR-0029: the CHAIN-HINT line
+    (when one is due) rides these legs too — the vague ≥4-word continuations hints exist
+    for land HERE, not on the ranked mandate. Wrapped so a bad format kwarg or a
     stdout error can never escape — this hook is additive-only and must never block a turn."""
     if not AUTHORIZED_SKIP:
         return
@@ -373,7 +470,7 @@ def _authorized_skip_inject(kind: str, **fmt) -> None:
         msg = {"getaway": GETAWAY_SKIP_MSG,
                "intent_skip": INTENT_SKIP_MSG,
                "selfref": SELFREF_SKIP_MSG}[kind]
-        _inject(msg.format(**fmt))
+        _inject(msg.format(**fmt) + _chain_hint(sid))
     except Exception:
         pass
 
@@ -549,18 +646,18 @@ def main() -> int:
         # by construction (see _is_selfref); any task tail falls through to normal routing below.
         if SELFREF_SKIP and _is_selfref(prompt):
             _append_offer(sid, "selfref_skip", [], "self_referential", prompt)
-            _authorized_skip_inject("selfref")
+            _authorized_skip_inject("selfref", sid)
             return 0
 
         # Embed (HARD ~200ms timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
         try:
             vector = _embed(prompt)
         except (socket.timeout, TimeoutError):
-            _inject(MANDATE)
+            _inject(MANDATE + _chain_hint(sid))
             _append_offer(sid, "fallback", [], "embed_timeout", prompt)
             return 0
         except Exception:
-            _inject(MANDATE)
+            _inject(MANDATE + _chain_hint(sid))
             _append_offer(sid, "fallback", [], "embed_down", prompt)
             return 0
 
@@ -568,7 +665,7 @@ def main() -> int:
         try:
             cands = _retrieve(vector)
         except Exception:
-            _inject(MANDATE)
+            _inject(MANDATE + _chain_hint(sid))
             _append_offer(sid, "fallback", [], "qdrant_down", prompt)
             return 0
 
@@ -595,7 +692,7 @@ def main() -> int:
             # silent if the kill-switch is off) instead of leaving the agent to re-derive
             # this verdict via a fresh search_skills call.
             _append_offer(sid, "getaway", offered, None, prompt, dropped=_dropped or None)
-            _authorized_skip_inject("getaway", top=top, floor=floor)
+            _authorized_skip_inject("getaway", sid, top=top, floor=floor)
             return 0
 
         # Actionability gate (prior-independent class-margin). A relevant skill cleared the
@@ -604,12 +701,12 @@ def main() -> int:
         # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
         if not det and not _is_imperative(prompt) and _intent_conversational(vector):
             _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None)
-            _authorized_skip_inject("intent_skip")
+            _authorized_skip_inject("intent_skip", sid)
             return 0
 
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
         shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
-        _inject(_ranked_mandate(shown))
+        _inject(_ranked_mandate(shown) + _chain_hint(sid))
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None)
@@ -825,6 +922,88 @@ def _selftest() -> int:
             bad.append("selfref FALSE-FIRE (should route normally): " + repr(t))
     if SELFREF_SKIP is not True:
         bad.append("ENFORCER_SELFREF_SKIP must default ON")
+
+    # (9) ADR-0029 chain hint — fires on a fresh same-sid seed (auto AND manual/slash),
+    # survives a NEWER sub-stamped row (ADR-0020 lane), drops keep-off'd and dangling
+    # successors, silent on TTL-expired / other-sid / absent-sidecar / flag-off, and the
+    # line carries neither the audit marker nor the locked signature phrases (parity).
+    import tempfile
+    global CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF
+    _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF)
+    with tempfile.TemporaryDirectory() as _td:
+        _tdp = Path(_td)
+        try:
+            _sidecar = _tdp / "next-skills.json"
+            _sidecar.write_text(json.dumps({
+                "personal": {"seed-a": ["succ-b", "succ-c", "dead-x"],
+                             "succ-b": [], "succ-c": [], "seed-k": ["succ-c"]},
+                "plugin": {"pk:s": ["pk:t"], "pk:t": []},
+                "project:elsewhere": {"ghost": ["spooky"], "spooky": []},
+            }), encoding="utf-8")
+            _led = _tdp / "ledger.log"
+            _SIDECAR_PATH, LEDGER, KEEPOFF = _sidecar, _led, frozenset({"succ-c"})
+            CHAIN_HINT, CHAIN_TTL_S = True, 900.0
+            _now = time.time()
+            _led.write_text("\n".join([
+                json.dumps({"t": _now - 400, "sid": "s1", "ev": "auto", "name": "seed-a"}),
+                json.dumps({"t": _now - 300, "sid": "s2", "ev": "manual", "name": "pk:s"}),
+                json.dumps({"t": _now - 200, "sid": "s1", "ev": "auto", "name": "other", "sub": True}),
+            ]) + "\n", encoding="utf-8")
+            h = _chain_hint("s1")
+            if "CHAIN-HINT: after seed-a" not in h or "succ-b" not in h:
+                bad.append("chain-hint: expected seed-a -> succ-b line, got %r" % h)
+            if "succ-c" in h or "dead-x" in h:
+                bad.append("chain-hint: keep-off'd / dangling successors must be dropped: %r" % h)
+            h2 = _chain_hint("s2")
+            if "pk:s" not in h2 or "pk:t" not in h2:
+                bad.append("chain-hint: manual (slash) seed must work via plugin scope: %r" % h2)
+            # audit parity: the hint line itself must not match the marker or the
+            # locked signature (else a collision miscounts real dodges as authorized).
+            for _lit in ("SKILL-CHECK:", "self-referential recap lane"):
+                if _lit in h:
+                    bad.append("chain-hint: line must not contain locked literal %r" % _lit)
+            # leg wiring: the hint rides an AUTHORIZED-SKIP line too (target population).
+            _saved_inject2 = _inject
+            _cap = []
+            _inject = _cap.append
+            try:
+                _authorized_skip_inject("intent_skip", "s1")
+                if len(_cap) != 1 or "SKILL-CHECK:" not in _cap[0] or "CHAIN-HINT:" not in _cap[0]:
+                    bad.append("chain-hint: authorized-skip leg must carry both lines, got %r" % _cap)
+            finally:
+                _inject = _saved_inject2
+            # TTL expiry
+            _led.write_text(json.dumps(
+                {"t": _now - 2000, "sid": "s1", "ev": "auto", "name": "seed-a"}) + "\n",
+                encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: TTL-expired seed must not hint")
+            # other sid
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s9", "ev": "auto", "name": "seed-a"}) + "\n",
+                encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: another session's seed must not hint this one")
+            # all-successors-keep-off'd
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "seed-k"}) + "\n",
+                encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: all-keep-off successors must yield no line")
+            # absent sidecar -> fail open; flag off -> suppress
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "seed-a"}) + "\n",
+                encoding="utf-8")
+            _SIDECAR_PATH = _tdp / "nope.json"
+            if _chain_hint("s1"):
+                bad.append("chain-hint: absent sidecar must fail open to no hint")
+            _SIDECAR_PATH = _sidecar
+            CHAIN_HINT = False
+            if _chain_hint("s1"):
+                bad.append("chain-hint: flag off must suppress the line")
+            CHAIN_HINT = True
+        finally:
+            CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF = _saved_chain
 
     if bad:
         print("enforcer --selftest FAIL:")

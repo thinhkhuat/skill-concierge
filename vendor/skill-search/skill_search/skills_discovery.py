@@ -295,6 +295,12 @@ def parse_skill(path: Path) -> dict | None:
                        re.MULTILINE | re.DOTALL)
     when_m = re.search(r"^when_to_use:\s*(.+?)" + _FM_NEXT_KEY, frontmatter,
                        re.MULTILINE | re.DOTALL)
+    # next-skills (ADR-0029 chain hints): optional comma/space-separated successor
+    # names, e.g. `next-skills: plan, cook, test`. NOT embedded and NOT a payload
+    # field — it feeds the sidecar map written at index time (server.build_index).
+    # Successors must match catalogue ids exactly (namespaced for plugin skills).
+    next_m = re.search(r"^next-skills:\s*(.+?)" + _FM_NEXT_KEY, frontmatter,
+                       re.MULTILINE | re.DOTALL)
     description = _unwrap_scalar(desc_m.group(1)) if desc_m else ""
     when_to_use = _unwrap_scalar(when_m.group(1)) if when_m else ""
     if when_to_use:
@@ -311,6 +317,10 @@ def parse_skill(path: Path) -> dict | None:
         # multi-vector trigger layer only (server.SKILL_BODY_TRIGGERS); leaves
         # `description`/`body` untouched.
         "body_triggers": _extract_body_triggers(stripped_body, name),
+        # ADR-0029: [] when unauthored. Every skill carries the key so the sidecar
+        # doubles as a catalogue-membership view for the enforcer's hint filter.
+        "next_skills": [t for t in re.split(r"[,\s]+", _unwrap_scalar(next_m.group(1))
+                                            if next_m else "") if t],
         "path": str(path),
     }
 

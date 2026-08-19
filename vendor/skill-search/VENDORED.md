@@ -207,6 +207,26 @@ upstream is re-vendored:
   SessionStart reindex rewrites it while a live server reads it, and a truncating write let that
   reader parse nothing and report "never indexed" on a healthy index.
 
+- **Next-skills chain-hint sidecar (ADR-0029):** `skills_discovery.parse_skill` reads an optional
+  `next-skills:` frontmatter value (comma/space separated successor names — must match catalogue
+  ids exactly, namespaced for plugin skills) into a `next_skills` list on the parsed dict; unauthored
+  skills carry `[]`, never a missing key, because the READER (the plugin's `enforcer.py` hook) uses
+  key presence as catalogue membership. `server.build_index` calls `_write_next_skills_sidecar`
+  unconditionally: it writes `~/.claude/skill-concierge/next-skills.json`
+  (seam `SKILL_CONCIERGE_NEXT_SKILLS`) as `{scope: {name: [successors]}}` with EVERY indexed skill
+  keyed — a per-scope MERGE, not replace (each session writes only `skills_discovery.visible_scopes()`,
+  the same ownership rule `_prunable` enforces for points, so concurrent sessions with different CWDs
+  cannot last-writer-wins each other — ADR-0028's incident class), write-then-`os.replace`, best-effort
+  (a sidecar failure logs and never fails the index). No Qdrant payload carriage and nothing embedded:
+  `_fuse_ranked` renders `{name,command,description,score}` only and `get_skill` already returns the
+  full SKILL.md frontmatter, so the sidecar is the single delivery surface. The consumer flag
+  `ENFORCER_CHAIN_HINT` lives plugin-side and gates only the hook's read — the sidecar content is
+  flag-independent, so there is no producer/consumer drift to forward (contrast the ADR-0026
+  `.mcp.json` gap). Pinned by `tests/test_discovery.py::test_parse_skill_next_skills_list` and the
+  enforcer selftest §9. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy** (the
+  sidecar is written by the index path, so it appears only after the new engine rebuilds).
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

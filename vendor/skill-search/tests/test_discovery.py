@@ -393,3 +393,22 @@ def test_project_glob_is_not_recursive(tmp_path, monkeypatch):
     monkeypatch.setattr(sd, "SKILL_DIRS", [proj])
     monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
     assert sd.discover_skill_paths() == []
+
+
+def test_parse_skill_next_skills_list(tmp_path):
+    """ADR-0029 chain hints: `next-skills:` parses as a comma/space separated
+    successor list, an unauthored skill carries an empty list (never a missing
+    key — the enforcer's hint filter uses key presence as catalogue membership),
+    and the value never leaks into `description` (sidecar-only, never embedded)."""
+    d = tmp_path / "chained"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: chained\ndescription: d\nnext-skills: plan, cook test\n---\nbody")
+    s = sd.parse_skill(d / "SKILL.md")
+    assert s["next_skills"] == ["plan", "cook", "test"]
+    assert s["description"] == "d"
+
+    d2 = tmp_path / "plain"
+    d2.mkdir()
+    (d2 / "SKILL.md").write_text("---\nname: plain\ndescription: d\n---\nbody")
+    assert sd.parse_skill(d2 / "SKILL.md")["next_skills"] == []

@@ -181,6 +181,37 @@ def _segment_windows(events):
     return turns
 
 
+def _chain_report(events, catalogue=None):
+    """ADR-0029 W3: cross-turn skill chains per session.
+
+    Sequences are per-sid ordered `auto`+`manual` names — the same event classes the
+    enforcer's chain hint tail-reads — with sub-stamped rows excluded (they belong to
+    subagent lanes, AGENTS.md contamination guardrail), consecutive repeats collapsed
+    (a skill re-invoked mid-work is one node), and non-catalogue names (built-in
+    slashes that logged as `manual`) dropped when a catalogue is available.
+    Returns (n_sessions, successor_bigrams, length_histogram, longest[:5])."""
+    seqs: dict[str, list] = {}
+    for e in events:
+        if e.get("ev") not in ("auto", "manual") or e.get("sub"):
+            continue
+        name = e.get("name")
+        if not isinstance(name, str) or not name or name == "?":
+            continue
+        if catalogue and name not in catalogue:
+            continue
+        seq = seqs.setdefault(e.get("sid", ""), [])
+        if not seq or seq[-1] != name:
+            seq.append(name)
+    bigrams, lengths, longest = Counter(), Counter(), []
+    for seq in seqs.values():
+        if len(seq) >= 2:
+            bigrams.update(f"{a} -> {b}" for a, b in zip(seq, seq[1:]))
+        lengths[len(seq)] += 1
+        longest.append((len(seq), seq))
+    longest.sort(key=lambda kv: (-kv[0], kv[1]))
+    return len(seqs), bigrams, lengths, [s for _n, s in longest[:5]]
+
+
 def _run_selftest():
     """Pin the C1 join contract on synthetic turn-windows."""
     windows = [
@@ -216,12 +247,35 @@ def _run_selftest():
         bad.append("dup-prefix join: each offer must pair to its own turn in order, got %s"
                    % [w["offered"] for w in jt])
 
+    # ADR-0029 W3 chain report — sequences per sid; sub rows excluded (subagent lane),
+    # consecutive repeats collapsed, manual (slash) events seed chains too, built-in
+    # slashes dropped when a catalogue is supplied.
+    cev = [
+        {"sid": "s1", "ev": "auto", "name": "a", "t": 1},
+        {"sid": "s1", "ev": "auto", "name": "b", "t": 2},
+        {"sid": "s1", "ev": "auto", "name": "b", "t": 3},                    # repeat -> collapsed
+        {"sid": "s1", "ev": "manual", "name": "c", "t": 4},                  # slash seeds chains
+        {"sid": "s1", "ev": "auto", "name": "z", "t": 5, "sub": True},       # subagent lane
+        {"sid": "s2", "ev": "auto", "name": "x", "t": 6},
+        {"sid": "s2", "ev": "auto", "name": "y", "t": 7},
+        {"sid": "s3", "ev": "manual", "name": "builtin-thing", "t": 8},      # not in catalogue
+    ]
+    n_sess, big, lens, longest = _chain_report(cev, catalogue={"a", "b", "c", "x", "y"})
+    if n_sess != 2:
+        bad.append(f"chains: expected 2 skill-bearing sessions, got {n_sess}")
+    if dict(big) != {"a -> b": 1, "b -> c": 1, "x -> y": 1}:
+        bad.append(f"chains: successor bigrams wrong: {dict(big)}")
+    if dict(lens) != {3: 1, 2: 1}:
+        bad.append(f"chains: length histogram wrong: {dict(lens)}")
+    if longest[0] != ["a", "b", "c"]:
+        bad.append(f"chains: longest sequence wrong: {longest}")
+
     if bad:
         print("analyze --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
-    print("analyze --selftest OK: offer->take join (turn conversion + per-skill)")
+    print("analyze --selftest OK: offer->take join (turn conversion + per-skill) + chain report")
     return 0
 
 
@@ -234,6 +288,9 @@ def main():
                     help="keep only events at/after WHEN (epoch or local ISO time)")
     ap.add_argument("--until", metavar="WHEN",
                     help="keep only events BEFORE WHEN (epoch or local ISO time)")
+    ap.add_argument("--chains", action="store_true",
+                    help="print the ADR-0029 chain report (per-session skill sequences, "
+                         "successor bigrams, length histogram) instead of the uptake report")
     ap.add_argument("--selftest", action="store_true",
                     help="run the C1 offer->take join self-check and exit")
     args = ap.parse_args()
@@ -253,6 +310,33 @@ def main():
                   and (since is None or e["t"] >= since)
                   and (until is None or e["t"] < until)]
     events.sort(key=lambda e: e.get("t", 0))
+
+    if args.chains:
+        # Chain report shares the windowing/catalogue machinery; the epoch-scoping
+        # rule applies the same as the uptake numbers — window --since to a config
+        # commit, never pool across epochs (AGENTS.md guardrail).
+        catalogue, cat_src = known_skill_ids()
+        n_sess, bigrams, lengths, longest = _chain_report(events, catalogue or None)
+        print(f"ledger        : {path}")
+        if since is not None or until is not None:
+            def _fmt(t):
+                return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "—"
+            print(f"window        : [{_fmt(since)} .. {_fmt(until)})   "
+                  f"{len(events)}/{n_total} events in window")
+        n_chained = sum(c for l, c in lengths.items() if l >= 2)
+        print(f"sessions      : {n_sess} with skill use; {n_chained} with a chain (len >= 2)"
+              + (f"   [catalogue via {cat_src}]" if catalogue else "   [catalogue unavailable — built-in manuals unfiltered]"))
+        print(f"chain lengths : {dict(sorted(lengths.items()))}")
+        if bigrams:
+            print("top successors :")
+            for pair, n in bigrams.most_common(10):
+                print(f"    {pair:<60} {n}")
+        else:
+            print("top successors : none yet — no session has used two different skills in sequence")
+        for s in longest:
+            if len(s) >= 2:
+                print(f"longest       : {' -> '.join(s[:8])}{' …' if len(s) > 8 else ''}")
+        return
 
     # Segment events into per-session turn windows (offers paired back to their turn).
     turns = _segment_windows(events)

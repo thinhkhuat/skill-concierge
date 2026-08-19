@@ -37,6 +37,8 @@ back-rationalizing the skip — the commitment is the whole point.
    - *Better* "codebase onboarding walkthrough" / "understand unfamiliar codebase architecture" → the onboarding skills rank top.
    `SEARCH:` is a promise to call that tool now, this reply. Narrating a search you did not run
    ("Search returned nothing", "my earlier search showed…") is a disguised skip — FALSE REPORT, forbidden.
+   Multi-intent prompt → issue ONE search with 2–3 intent-specific phrasings in `extra_queries`;
+   the MAX-pool fusion over the query union IS per-intent retrieval.
 
 3. **The take-bar and the skip-bar are the same line.** A loosely-adaptable fit is a `USING:`, not a
    skip. Closest fit, adapted, is the standard; perfect is not the bar. After a search, SKIPPING is
@@ -66,6 +68,7 @@ back-rationalizing the skip — the commitment is the whole point.
    | *"I'm confident none fit."* | Confidence is not a ruling. A ruling needs the search. |
    | *"Closest fit isn't perfect."* | Closest fit, adapted, is the standard (rule 3). |
    | *"This is just me explaining my own prior output — surely no skill."* | Correct that it needs no skill — but that is the enforcer's OVER-fire lane, not your skip to call. A pure recap of your own last message is authorized by the `SKILL-CHECK:` line the enforcer emits; if the turn carries ANY task tail, it is NOT a recap — SEARCH. |
+   | *"A CHAIN-HINT already names the next skill — the engine routed me, no search needed."* | A chain hint is a preview, not a mandate. USING still requires fit; when the hinted skill's fit is unclear, run the search. |
 
 **Not:** "These 5 don't fit, I've got this." → ~~SKIPPING: none~~
 **Yes:** "5 don't fit → SEARCH('postgres schema migration') → `supabase-specialist` (38%) → USING."

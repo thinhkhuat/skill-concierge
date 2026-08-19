@@ -106,6 +106,14 @@ META_PATH       = Path(os.environ.get(
 # live on this machine", a question no single project's manifest can answer.
 SERVER_RECORDS  = Path(os.environ.get(
     "SKILL_SERVER_RECORDS", str(Path.home() / ".cache" / "skill-search" / "servers")))
+# ADR-0029 chain-hint sidecar: {scope: {name: [successors]}} for EVERY indexed skill
+# (empty list when unauthored — the enforcer's hint filter uses key presence as
+# catalogue membership). Lives under ~/.claude/skill-concierge/ next to the ledger the
+# reading hook already owns, not in the engine cache. Written UNCONDITIONALLY at index
+# time: its content is flag-independent; ENFORCER_CHAIN_HINT gates only the reader.
+NEXT_SKILLS_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_NEXT_SKILLS",
+    str(Path.home() / ".claude" / "skill-concierge" / "next-skills.json")))
 
 mcp = FastMCP("skill-search")
 
@@ -242,6 +250,37 @@ def _write_manifest(indexed: int) -> None:
         "engine": _ENGINE_BUILD,
     }, indent=2))
     os.replace(_tmp, META_PATH)          # atomic within the directory: old or new, never torn
+
+
+def _write_next_skills_sidecar(skills: list[dict]) -> None:
+    """ADR-0029: write the chain-hint sidecar {scope: {name: [successors]}}.
+
+    Per-scope MERGE, not replace: this session writes ONLY the scopes it owns
+    (`skills_discovery.visible_scopes()` — the same ownership rule `_prunable`
+    enforces for points) and leaves foreign project scopes intact, so two
+    concurrent sessions with different CWDs cannot last-writer-wins each other
+    (the exact incident ADR-0028 records for the index itself). Write-then-
+    `os.replace` for the same torn-read reason as `_write_manifest`. Unconditional
+    and best-effort: a sidecar failure must never fail an index build.
+    """
+    try:
+        mine: dict[str, dict[str, list]] = {}
+        for s in skills:
+            scope = s.get("scope", "personal")
+            mine.setdefault(scope, {})[s["name"]] = list(s.get("next_skills") or [])
+        try:
+            merged = json.loads(NEXT_SKILLS_PATH.read_text(encoding="utf-8"))
+            if not isinstance(merged, dict):
+                merged = {}
+        except Exception:
+            merged = {}
+        merged.update(mine)
+        NEXT_SKILLS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = NEXT_SKILLS_PATH.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, NEXT_SKILLS_PATH)
+    except Exception as exc:
+        log.warning("next-skills sidecar write failed: %s", exc)
 
 
 def _read_manifest() -> dict | None:
@@ -607,6 +646,7 @@ def build_index(force: bool = False) -> dict:
                        points_selector=models.PointIdsList(points=removed))
 
     n_skills = len({d[2]["name"] for d in desired.values()})
+    _write_next_skills_sidecar(skills)   # ADR-0029: unconditional, per-scope merge
     _write_manifest(n_skills)
     return {"indexed": n_skills, "points": len(desired), "embedded": len(changed),
             "deleted": len(removed), "skipped": len(desired) - len(changed)}

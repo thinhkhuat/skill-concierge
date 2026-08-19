@@ -51,6 +51,11 @@ def main() -> int:
         evt = d.get("hook_event_name", "")
         sid = d.get("session_id", "")
         t = round(time.time(), 3)
+        # ADR-0020 positive proof: hooks firing inside a subagent call carry
+        # `agent_id` (main-session hook input never does). Stamping auto/manual
+        # events lets the enforcer's chain-hint tail-read and analyze.py exclude
+        # subagent lanes instead of mixing them into the main session's chains.
+        sub = bool(d.get("agent_id"))
 
         if evt == "UserPromptSubmit":
             prompt = d.get("prompt") or ""
@@ -60,7 +65,10 @@ def main() -> int:
             if s.startswith("/"):
                 # user-typed slash = manual /skill (or a built-in command)
                 name = s[1:].split()[0] if len(s) > 1 else ""
-                _append({"t": t, "sid": sid, "ev": "manual", "name": name})
+                ev = {"t": t, "sid": sid, "ev": "manual", "name": name}
+                if sub:
+                    ev["sub"] = True
+                _append(ev)
             else:
                 # turn boundary — lets the analyzer segment uptake per prompt.
                 # Log the STRIPPED prompt so analyze.py can join this `turn` to
@@ -80,8 +88,11 @@ def main() -> int:
                         if isinstance(ti.get(k), str):
                             name = ti[k]
                             break
-                _append({"t": t, "sid": sid, "ev": "auto",
-                         "name": name, "input_keys": keys})
+                ev = {"t": t, "sid": sid, "ev": "auto",
+                      "name": name, "input_keys": keys}
+                if sub:
+                    ev["sub"] = True
+                _append(ev)
             elif tool.endswith(SEARCH_TOOL):
                 _append({"t": t, "sid": sid, "ev": "search"})
     except Exception:
