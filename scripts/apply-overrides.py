@@ -178,8 +178,8 @@ def main():
               file=sys.stderr)
         return 1
     keep_on = set(keep_list)
-    if "skill-search" not in keep_on:
-        print("WARN: 'skill-search' (the router) is not in keep_on — the retriever entry "
+    if not any(n == "skill-search" or n.endswith(":skill-search") for n in keep_on):
+        print("WARN: 'skill-concierge:skill-search' (the router) is not in keep_on — the retriever entry "
               "point would go name-only/dark. Add it unless that's intended.", file=sys.stderr)
 
     names = sorted(set(discover_skill_names()))

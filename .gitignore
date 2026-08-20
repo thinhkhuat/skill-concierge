@@ -44,6 +44,9 @@ graphify-out/
 # per-session agent tool state — runtime/token logs, never source. Same class as .ijfw/.
 .gjc/
 
+# CommandCode session state — same class as .gjc/ (per-session agent tool state, never source)
+.commandcode/
+
 # MemSearch session journals — local memory, and they QUOTE task text (same reason
 # logs/skill-rationalizations*.txt is pinned above). Never committed.
 .memsearch/

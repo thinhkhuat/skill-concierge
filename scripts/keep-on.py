@@ -95,8 +95,8 @@ def cmd_remove(args):
     if not gone:
         print(f"not in always-on: {', '.join(args.names)} (no change)")
         return 0
-    if "skill-search" in gone or "skill-concierge:skill-search" in gone:
-        print("  ! WARNING: removing the retriever router (skill-search) makes it name-only — "
+    if any(n == "skill-search" or n.endswith(":skill-search") for n in gone):
+        print("  ! WARNING: removing the retriever router (skill-concierge:skill-search) makes it name-only — "
               "retrieval degrades. Re-add it unless that is truly intended.")
     _save(raw, cur - set(args.names))
     print(f"removed from always-on: {', '.join(sorted(gone))}")
