@@ -5,6 +5,7 @@ description: Bootstrap or repair the skill-concierge engine from scratch. Use th
 license: MIT
 metadata:
   version: 0.1.1
+next-skills: skill-concierge:doctor
 ---
 
 # skill-concierge setup

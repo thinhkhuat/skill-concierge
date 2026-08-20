@@ -5,6 +5,36 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.21.3] — 2026-08-20
+
+### Changed
+- **Operator-owned chain overrides (ADR-0030, `hooks/scripts/enforcer.py`).** Owner-reported
+  critical flaw in ADR-0029's authoring model: `next-skills:` frontmatter lives in the SKILL.md
+  upstream owns — an AgentKit upgrade or `/plugin marketplace update` rewrites the file and the
+  next reindex silently wipes every curated chain ("GONE without anyone noticed"). Fix: chains
+  for third-party skills are curated in `~/.claude/skill-concierge/next-skills-overrides.json`
+  (flat `{name: [successors]}`, same durable-home pattern as keep-on), merged READER-SIDE in
+  `_visible_sidecar_names()` — the sidecar's only consumer — so no engine patch, no reindex
+  coupling, none of the ADR-0026 env-forwarding gap class. Override-wins per name, `[]`
+  suppresses, fail-open; catalogue-membership + keep-off filters still apply to override
+  successors. Absent file = byte-identical behavior; `--selftest` case 9b pins override-wins /
+  dangling-drop / keep-off / suppress / absent-file / malformed-file.
+- **8 ak workflow chains seeded in the overrides file.** brainstorm→plan→cook→test→code-review→
+  ship→journal plus debug→fix→test (from the agent-playbook router study,
+  `plans/reports/study-260820-2250-agent-playbook-router-portability.md`); all loaned frontmatter
+  lines in `~/.claude/skills/ak-*` reverted — upstream files pristine, hints verified firing from
+  overrides alone with a clean sidecar. `enforcer.py` changed → new ledger epoch.
+- **`skills/setup/SKILL.md` declares `next-skills: skill-concierge:doctor`** — activates when
+  the 0.21.3 cache materializes on `/plugin marketplace update` + reindex.
+
+### Fixed
+- **Keep-on router-guard false gap (prior session's fix, now shipped).** The guard warned about
+  a bare `skill-search` entry that no longer exists as a catalogue name; `config/keep-on.json`
+  drops it and `apply-overrides.py`/`keep-on.py` accept the namespaced `*:skill-search` form.
+  Ships with the 08-07 allowlist proposal + journal and the 260820-0027 plan dir.
+- **Dead "ADR-0030" citations retracted** (README / CHANGELOG / openwiki): the drafted
+  clause-split number never issued; the real ADR-0030 is the chain-overrides decision above.
+
 ## [0.21.2] — 2026-08-20
 
 ### Changed
@@ -67,7 +97,7 @@ All notable changes to **skill-concierge**. Format loosely follows
   `skill-concierge:doctor → skill-concierge:flywheel` (×3), longest 15-deep.
 
 ### Cut
-- **Multi-intent clause-split decomposition (drafted as ADR-0030) — cut on dual review,
+- **Multi-intent clause-split decomposition (drafted number never issued; the later ADR-0030 is a different decision) — cut on dual review,
   owner-ratified.** Per-intent retrieval already exists (`extra_queries` MAX-pool fusion;
   doctrine rule 2 now says so explicitly); the drafted enforcer-side mechanism failed its
   budget math beyond the embed leg (3 retrieves + up to 6 intent-gate POSTs under serial

@@ -205,6 +205,35 @@ _SIDECAR_PATH = Path(os.environ.get(
     "SKILL_CONCIERGE_NEXT_SKILLS",
     Path.home() / ".claude" / "skill-concierge" / "next-skills.json"))
 
+# ADR-0030: operator-owned chain overrides. next-skills frontmatter lives in the
+# SKILL.md that UPSTREAM owns — a plugin/marketplace/AgentKit upgrade rewrites the
+# file and the next reindex silently regenerates the sidecar without every curated
+# chain (owner-reported 2026-08-20: "GONE without anyone noticed"). Curation of
+# third-party skills lives in THIS file instead: flat {name: [successors]} merged at
+# READ time, override-wins, [] deliberately suppresses, fail-open. Reader-side on
+# purpose: the enforcer is the sidecar's ONLY consumer, so no engine patch, no
+# reindex coupling, none of the ADR-0026 env-forwarding gap class. File absent →
+# byte-identical behavior.
+_NEXT_SKILLS_OVERRIDES = Path(os.environ.get(
+    "SKILL_CONCIERGE_NEXT_SKILLS_OVERRIDES",
+    Path.home() / ".claude" / "skill-concierge" / "next-skills-overrides.json"))
+
+
+def _apply_chain_overrides(names: dict) -> dict:
+    """Merge the operator-owned override map over the sidecar-derived names.
+    Override-wins per whole name; an empty list suppresses that skill's chain.
+    Fail-open: unreadable/malformed file returns the input unchanged."""
+    try:
+        data = json.loads(_NEXT_SKILLS_OVERRIDES.read_text(encoding="utf-8"))
+    except Exception:
+        return names
+    if not isinstance(data, dict):
+        return names
+    for k, v in data.items():
+        if isinstance(k, str) and isinstance(v, list):
+            names[k] = [s for s in v if isinstance(s, str)]
+    return names
+
 
 def _visible_sidecar_names() -> dict:
     """{name: [successors]} unioned across scopes visible from THIS cwd — mirrors
@@ -223,7 +252,7 @@ def _visible_sidecar_names() -> dict:
         m = data.get(scope)
         if isinstance(m, dict):
             out.update(m)
-    return out
+    return _apply_chain_overrides(out)   # ADR-0030: operator curation wins over upstream's file
 
 
 def _last_used_skill(sid: str):
@@ -941,8 +970,8 @@ def _selftest() -> int:
     # successors, silent on TTL-expired / other-sid / absent-sidecar / flag-off, and the
     # line carries neither the audit marker nor the locked signature phrases (parity).
     import tempfile
-    global CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF
-    _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF)
+    global CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES
+    _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES)
     with tempfile.TemporaryDirectory() as _td:
         _tdp = Path(_td)
         try:
@@ -1015,8 +1044,36 @@ def _selftest() -> int:
             if _chain_hint("s1"):
                 bad.append("chain-hint: flag off must suppress the line")
             CHAIN_HINT = True
+            # (9b) ADR-0030 operator-owned overrides: override-wins over the sidecar
+            # entry, keep-off still drops override successors, [] suppresses, and both
+            # absent-file and malformed-file fail open to the sidecar value.
+            _ovr = _tdp / "next-skills-overrides.json"
+            _NEXT_SKILLS_OVERRIDES = _ovr
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "seed-a"}) + "\n", encoding="utf-8")
+            _ovr.write_text(json.dumps({"seed-a": ["pk:t"]}), encoding="utf-8")
+            h3 = _chain_hint("s1")
+            if "pk:t" not in h3 or "succ-b" in h3:
+                bad.append("chain-hint: override must win over the sidecar entry: %r" % h3)
+            _ovr.write_text(json.dumps({"seed-a": ["not-in-catalogue"]}), encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: override successor absent from the catalogue must drop (dangling)")
+            _ovr.write_text(json.dumps({"seed-a": ["succ-c"]}), encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: keep-off'd override successor must yield no line")
+            _ovr.write_text(json.dumps({"seed-a": []}), encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: empty override list must suppress the chain")
+            _NEXT_SKILLS_OVERRIDES = _tdp / "nope-ovr.json"
+            if "succ-b" not in _chain_hint("s1"):
+                bad.append("chain-hint: absent overrides file must leave the sidecar value")
+            _ovr.write_text("{not json", encoding="utf-8")
+            _NEXT_SKILLS_OVERRIDES = _ovr
+            if "succ-b" not in _chain_hint("s1"):
+                bad.append("chain-hint: malformed overrides file must fail open to the sidecar value")
+            _NEXT_SKILLS_OVERRIDES = _tdp / "nope-ovr.json"
         finally:
-            CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF = _saved_chain
+            CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES = _saved_chain
 
     if bad:
         print("enforcer --selftest FAIL:")
@@ -1026,7 +1083,8 @@ def _selftest() -> int:
     print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share "
           "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse "
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
-          "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off)"
+          "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off) "
+          "+ chain-overrides (override-wins / keep-off / suppress / fail-open)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),
              len(selfref_fire), len(selfref_off)))
     return 0

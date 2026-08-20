@@ -149,9 +149,17 @@ scope visible from the reading session and not in keep-off (ADR-0011 outranks re
 hinted names never enter the candidate set. ≤3-word turns stay hint-free — the ADR-0010 pre-gate
 injects nothing at all (documented limit). `ENFORCER_CHAIN_HINT=0` reverts byte-identically.
 Read-side measurement lives in `analyze.py --chains` (per-session sequences, successor bigrams,
-length histogram). A drafted multi-intent clause-split companion (ADR-0030) was cut on review —
+length histogram). A drafted multi-intent clause-split companion was cut on review (its drafted
+number was never issued; ADR-0030 below is a different, later decision) —
 `extra_queries` MAX-pool fusion already provides per-intent retrieval, and doctrine rule 2 says
 so.
+
+**ADR-0030 — operator-owned chain overrides.** Frontmatter authoring is durable only for skills
+the operator owns; an upstream upgrade rewrites third-party SKILL.md files and the next reindex
+silently drops their chains. Curation for third-party skills therefore lives in
+`~/.claude/skill-concierge/next-skills-overrides.json` (flat `{name: [successors]}`), merged
+reader-side in `_visible_sidecar_names()` — override-wins per name, `[]` suppresses, fail-open,
+no engine patch. Absent file = byte-identical behavior.
 
 ## The Ledger — *what actually got used*
 
