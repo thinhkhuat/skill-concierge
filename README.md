@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.22.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.23.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -250,15 +250,23 @@ python3 scripts/catalogs.py list                      # roots, counts, broken pr
 python3 scripts/catalogs.py promote antigravity:seo   # symlink a keeper into ~/.claude/skills
 ```
 
-Catalog skills index as `<alias>:<name>` under scope `catalog:<alias>` and are
-**search-only citizens**: they surface via `search_skills` marked `[external: <alias>]`, never
-in the per-turn offer preview (their points carry `tier: external`, which the enforcer
-excludes), and cost **zero per-turn context** — the whole point. Consume one by pulling its
-body with `get_skill("<alias>:<name>")` and following it inline; the Skill tool cannot invoke
-it. Name collisions with installed skills are a non-event (alias namespace), a promoted
-symlink's catalog twin is auto-suppressed, and removing a root prunes its points at the next
-reindex. Embeddings + body triggers only — the flywheel utterance layer deliberately skips
-externals (deferred phase).
+Catalog skills index as `<alias>:<name>` under scope `catalog:<alias>` at **zero per-turn
+resident cost** — the whole point. Consume one by pulling its body with
+`get_skill("<alias>:<name>")` and following it inline; the Skill tool cannot invoke it. Name
+collisions with installed skills are a non-event (alias namespace), a promoted symlink's
+catalog twin is auto-suppressed, and removing a root prunes its points at the next reindex.
+Embeddings + body triggers only — the flywheel utterance layer deliberately skips externals
+(deferred phase).
+
+Since `0.23.0` externals are **first-class in the per-turn offer**, not just explicit search
+([ADR-0032](docs/adr/0032-external-catalogs-first-class-annex.md)): the enforcer appends an
+**additive annex** of up to `ENFORCER_EXTERNAL_SLOTS` (2) externals scoring
+≥ `ENFORCER_EXTERNAL_FLOOR` (0.40), marked `[external:<alias>]` with the `get_skill`
+instruction. The installed offer is **byte-identical** whether the annex is on or off (a
+separate query supplies it — externals never take an installed slot). An external used across
+≥ `PROMOTE_MIN_TAKES` (3) distinct sessions **auto-graduates** to a real installed skill
+(`hooks/scripts/auto_promote.py`) — organic curation by demonstrated usage. Kill-switch
+`ENFORCER_EXTERNAL_ANNEX=0` restores search-only.
 
 ## Architecture
 
@@ -310,6 +318,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.23.0` — **published, ADR-0032 external catalogs first-class in the offer: an additive external annex (installed offer byte-identical whether on/off — a separate `must tier=external` query supplies ≤`ENFORCER_EXTERNAL_SLOTS`=2 externals ≥`ENFORCER_EXTERNAL_FLOOR`=0.40, so externals never take an installed slot), marked `[external:<alias>]` with the get_skill read-inline instruction; usage-promotion (`auto_promote.py`) graduates an external used across ≥`PROMOTE_MIN_TAKES`=3 distinct sessions to a real installed skill; ledger `ext` + `analyze.py` external offer→take conversion; kill-switch `ENFORCER_EXTERNAL_ANNEX=0` restores search-only; supersedes ADR-0031's search-only tier.**
 
 `0.22.1` — **published, doctor fix: flywheel coverage + trigger-hygiene no longer count external catalog skills (tier=external) as "missing utterances" — `_indexed_skill_names()` excludes them, matching the generators that skip externals by design; a registered catalog no longer shows a permanent false coverage gap. Surfaced validating the 0.22.0 deploy.**
 

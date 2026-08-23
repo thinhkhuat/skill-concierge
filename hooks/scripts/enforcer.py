@@ -65,6 +65,20 @@ QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.1"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "8"))   # offer-menu breadth (was 5; owner-widened 2026-07-05). Wider = more push-noise, against ADR-0009's noise-reduction intent — env-overridable, revert default 5.
 GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.45"))  # top<this → silent. OPERATOR-SET 0.45 (2026-06-29, ADR-0009) raised from 0.40 on perceived behaviour; the ledger/corpus analysis argued AGAINST it (taken offers score LOWER than dodged, so a higher floor cuts the better-converting offers first). Do NOT change without re-opening ADR-0009 (data-backed alternative: 0.40 / env ENFORCER_GETAWAY_FLOOR).
 ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-candidate cutoff
+
+# ── external catalog annex (ADR-0032) ─────────────────────────────────────────
+# External catalog skills (payload tier=external, ADR-0031) become first-class in the
+# per-turn offer as an ADDITIVE ANNEX: the installed top-k is untouched (zero displacement),
+# and up to EXTERNAL_SLOTS externals scoring ≥ EXTERNAL_FLOOR are appended, marked, consumed
+# via get_skill read-inline (they are not Skill-tool-invocable). This preserves the concierge's
+# zero-resident-cost property (the offer is an on-demand query, not the resident listing) while
+# giving the agent a genuinely large catalog. The external floor is deliberately HIGHER than the
+# installed ITEM_FLOOR (0.18) so externals annex only on strong intent-match — most turns show
+# none; this asymmetry is the injection-surface safeguard. Kill-switch EXTERNAL_ANNEX=0 restores
+# the ADR-0031 search-only tier (must_not tier=external in the query, no annex).
+EXTERNAL_ANNEX = os.environ.get("ENFORCER_EXTERNAL_ANNEX", "1") != "0"
+EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "2"))
+EXTERNAL_FLOOR = float(os.environ.get("ENFORCER_EXTERNAL_FLOOR", "0.40"))
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _DESC_CHARS = 96
 
@@ -439,14 +453,18 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None) -> None:
-    """Append the offer event. Fail-silent: telemetry must never surface."""
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None) -> None:
+    """Append the offer event. Fail-silent: telemetry must never surface.
+    ADR-0032: `ext` records the external annex names offered this turn (external offer→take
+    is measured against the ADR-0031 get_skill takes); absent when no external annexed."""
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ev = {"t": round(time.time(), 3), "sid": sid, "ev": "offer",
               "band": band, "offered": offered, "fallback": fallback, "q": q[:120]}
         if dropped:
             ev["dropped"] = dropped
+        if ext:
+            ev["ext"] = ext
         if embed_ms is not None:
             ev["embed_ms"] = int(embed_ms)
         if qdrant_ms is not None:
@@ -523,14 +541,15 @@ def _embed(text: str) -> list:
 
 
 def _retrieve(vector: list) -> list:
-    """Top-k SKILLS from Qdrant via raw REST (stdlib only), MAX-pooled: group_by name with one
-    best point per skill (group_size=1). Identical to a plain top-k on a single-vector index; on
-    the multi-vector index each skill is scored by its single best phrase point. Returns
-    [(name, desc, score)]."""
-    # ADR-0031 search-only tier: external catalog points (payload tier=external)
-    # never enter the per-turn offer menu — they are not installed, so an offer
-    # here would be a dead `USING:`. They stay reachable via search_skills, where
-    # rows carry provenance + the get_skill consumption note.
+    """Top-k INSTALLED skills from Qdrant via raw REST (stdlib only), MAX-pooled: group_by name
+    with one best point per skill (group_size=1). Returns [(name, desc, score)].
+
+    ADR-0031 search-only tier: external catalog points (tier=external) are excluded from this
+    query so the INSTALLED offer is exactly the top-k installed skills — byte-identical whether
+    or not the ADR-0032 annex is enabled. The annex comes from a SEPARATE `_retrieve_external`
+    call, so externals can NEVER displace an installed offer slot (the design's hard invariant).
+    Two small queries beat one widened query, which would drop installed skills out of the limit
+    window whenever externals ranked high in it."""
     res = _post_json(QUERY_GROUPS_URL,
                      {"query": vector, "group_by": "name", "limit": TOP_K,
                       "group_size": 1, "with_payload": ["name", "description"],
@@ -548,6 +567,34 @@ def _retrieve(vector: list) -> list:
     return out
 
 
+def _retrieve_external(vector: list) -> list:
+    """ADR-0032 external annex: the top-EXTERNAL_SLOTS catalog skills scoring ≥ EXTERNAL_FLOOR,
+    from a SEPARATE query filtered to tier=external. Returns [(name, desc, score, alias)]. A
+    dedicated query (not a partition of a widened installed query) is what guarantees the
+    installed offer is never displaced. Empty when the annex is off; the caller wraps this in a
+    try/except so an external-query failure degrades to no-annex, never breaks the installed offer."""
+    if not EXTERNAL_ANNEX:
+        return []
+    res = _post_json(QUERY_GROUPS_URL,
+                     {"query": vector, "group_by": "name", "limit": EXTERNAL_SLOTS,
+                      "group_size": 1, "with_payload": ["name", "description", "scope"],
+                      "filter": {"must": [
+                          {"key": "tier", "match": {"value": "external"}}]}},
+                     QDRANT_TIMEOUT_S)
+    out = []
+    for g in res.get("result", {}).get("groups", []):
+        hits = g.get("hits", [])
+        if not hits:
+            continue
+        score = float(hits[0].get("score", 0.0))
+        if score < EXTERNAL_FLOOR:
+            continue
+        pl = hits[0].get("payload", {}) or {}
+        alias = str(pl.get("scope") or "").split(":", 1)[1] if ":" in str(pl.get("scope") or "") else "?"
+        out.append((pl.get("name", g.get("id", "?")), pl.get("description", ""), score, alias))
+    return out
+
+
 def _apply_dominance(cands: list) -> list:
     """P6 (default-inert): collapse to the top skill when it is clearly ahead of the runner-up by
     RAW-score gap. Decided HERE (not in _ranked_mandate) so the CALLER logs the post-collapse menu —
@@ -558,25 +605,36 @@ def _apply_dominance(cands: list) -> list:
     return cands
 
 
-def _ranked_mandate(cands: list) -> str:
+def _blurb(desc: str) -> str:
+    b = _clean(desc)
+    return b[:_DESC_CHARS].rsplit(" ", 1)[0] + "…" if len(b) > _DESC_CHARS else b
+
+
+def _ranked_mandate(cands: list, annex: list = None) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
     # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
+    # ADR-0032: `annex` (external catalog skills) renders as a SEPARATE block below the installed
+    # offer — they never share the %-share pool (the installed ranking is untouched) and carry
+    # the get_skill consumption instruction, since they are not Skill-tool-invocable.
     total = sum(s for (_n, _d, s) in cands) or 1.0
     multi = len(cands) > 1
-    lines = []
-    for name, desc, score in cands:
-        blurb = _clean(desc)
-        if len(blurb) > _DESC_CHARS:
-            blurb = blurb[:_DESC_CHARS].rsplit(" ", 1)[0] + "…"
-        pct = f" ({round(score / total * 100)}%)" if multi else ""
-        lines.append(f"  • {name}{pct} — {blurb}")
+    lines = [f"  • {name}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
+             for name, desc, score in cands]
     note = ("\nShares are RELATIVE rank among these few (all above the noise floor), not confidence — "
             "pick the one matching the intent.") if multi else ""
+    annex_block = ""
+    if annex:
+        alines = [f"  • {name} [external:{alias}] — {_blurb(desc)}"
+                  for (name, desc, _s, alias) in annex]
+        annex_block = (
+            "\nExternal catalog matches (NOT installed — consume with get_skill, do not use the "
+            "Skill tool):\n" + "\n".join(alines) +
+            "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
     return (
         "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
         "Preview for this task (NOT the full ~500 shelf):\n"
-        + "\n".join(lines) + note + "\n"
+        + "\n".join(lines) + note + annex_block + "\n"
         "None fit → run search_skills THIS reply before any SKIPPING; show the query. "
         "A loosely-adaptable fit is a USING. [full order: session start]"
     )
@@ -717,6 +775,18 @@ def main() -> int:
             _append_offer(sid, "fallback", [], "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             return 0
 
+        # ADR-0032: the external annex comes from a SEPARATE query so `cands` (installed) and
+        # the whole existing pipeline (keepoff, deterministic, getaway, intent gate, ITEM_FLOOR,
+        # dominance) run byte-identical — externals never touch it and never displace a slot.
+        # Best-effort: an external-query failure degrades to no-annex, never breaks the installed
+        # offer. The annex rides ONLY the main offer path below (an additive block); a getaway/
+        # intent-skip turn injects no annex (no installed offer to add to — deliberate v1 scope,
+        # a strong external on an installed-getaway turn is a recorded fast-follow).
+        try:
+            _external = _retrieve_external(vector)
+        except Exception:
+            _external = []
+
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
@@ -754,10 +824,11 @@ def main() -> int:
 
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
         shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
-        _inject(_ranked_mandate(shown) + _chain_hint(sid))
+        _inject(_ranked_mandate(shown, annex=_external) + _chain_hint(sid))
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
-                      dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
+                      dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
+                      ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None)
     except Exception:
         return 0  # fail-silent, never block
     return 0
@@ -1081,10 +1152,10 @@ def _selftest() -> int:
         finally:
             CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES = _saved_chain
 
-    # (10) ADR-0031 search-only tier: the per-turn retrieval request must carry the
-    # must_not tier=external filter, so catalog points can never enter the offer
-    # menu. Pin the REQUEST SHAPE (monkeypatched transport) and the response parse.
-    global _post_json
+    # (10) ADR-0031 installed query: _retrieve ALWAYS carries must_not tier=external + limit
+    # TOP_K (byte-identical whether or not the ADR-0032 annex is on — externals cannot displace
+    # installed). Pin the REQUEST SHAPE (monkeypatched transport) and the 3-tuple parse.
+    global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     _saved_post = _post_json
     _reqs = []
 
@@ -1099,11 +1170,56 @@ def _selftest() -> int:
         got = _retrieve([0.1, 0.2])
         flt = (_reqs[0] or {}).get("filter", {})
         if {"key": "tier", "match": {"value": "external"}} not in flt.get("must_not", []):
-            bad.append("retrieve: missing must_not tier=external filter (search-only tier): %r" % flt)
+            bad.append("retrieve: missing must_not tier=external filter (installed query): %r" % flt)
+        if _reqs[0].get("limit") != TOP_K:
+            bad.append("retrieve: installed limit must be TOP_K")
         if got != [("inst", "d", 0.5)]:
             bad.append("retrieve: response parse changed: %r" % got)
     finally:
         _post_json = _saved_post
+
+    # (11) ADR-0032 external annex: _retrieve_external issues a SEPARATE must tier=external query
+    # (never touches the installed query), applies EXTERNAL_FLOOR + EXTERNAL_SLOTS, derives the
+    # alias, and _ranked_mandate renders a distinct annex block with the get_skill instruction.
+    # Kill-switch off -> empty (no query issued).
+    _saved = (EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json)
+    _ereqs = []
+
+    def _fake_ext_post(url, payload, timeout):
+        _ereqs.append(payload)
+        return {"result": {"groups": [
+            {"id": "1", "hits": [{"payload": {"name": "cat:hi", "description": "dh",
+                                              "scope": "catalog:cat"}, "score": 0.75}]},
+            {"id": "2", "hits": [{"payload": {"name": "cat:low", "description": "dl",
+                                              "scope": "catalog:cat"}, "score": 0.30}]}]}}
+
+    try:
+        EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR = True, 2, 0.40
+        _post_json = _fake_ext_post
+        ext = _retrieve_external([0.1])
+        req = _ereqs[0]
+        if {"key": "tier", "match": {"value": "external"}} not in req.get("filter", {}).get("must", []):
+            bad.append("annex query: must carry must tier=external filter: %r" % req.get("filter"))
+        if req.get("limit") != EXTERNAL_SLOTS:
+            bad.append("annex query: limit must be EXTERNAL_SLOTS")
+        if [n for n, _d, _s, _a in ext] != ["cat:hi"]:
+            bad.append("annex: only ≥FLOOR externals kept (0.30 dropped): %r" % ext)
+        if ext and ext[0][3] != "cat":
+            bad.append("annex: alias not derived from scope")
+        rendered = _ranked_mandate([("inst-a", "da", 0.9)], annex=ext)
+        if "[external:cat]" not in rendered or "get_skill" not in rendered:
+            bad.append("annex: render missing external marker or get_skill instruction")
+        if "cat:low" in rendered:
+            bad.append("annex: below-floor external must not render")
+        # kill-switch off -> empty, no query issued
+        EXTERNAL_ANNEX = False
+        _ereqs.clear()
+        if _retrieve_external([0.1]) != [] or _ereqs:
+            bad.append("annex: kill-switch off must issue no external query and return []")
+        if "[external:" in _ranked_mandate([("a", "d", 0.3)], annex=[]):
+            bad.append("annex: empty annex must render no external block")
+    finally:
+        EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json = _saved
 
     if bad:
         print("enforcer --selftest FAIL:")
@@ -1115,7 +1231,8 @@ def _selftest() -> int:
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off) "
           "+ chain-overrides (override-wins / keep-off / suppress / fail-open) "
-          "+ external-tier exclusion (ADR-0031)"
+          "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + external annex "
+          "(partition / floor / slots / render / kill-switch)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),
              len(selfref_fire), len(selfref_off)))
     return 0

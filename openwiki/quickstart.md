@@ -10,7 +10,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.22.1` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json)
+- **Version:** `0.23.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -100,10 +100,16 @@ the always-on entry point that calls `search_skills` at the start of any multi-s
 
 Since `0.22.0`, `search_skills` can also surface **external catalog skills** — third-party
 collections registered in `~/.claude/skill-concierge/catalog-roots.json` without being
-installed ([ADR-0031](../docs/adr/0031-external-catalog-roots.md)). They rank in the same list
-marked `external: <alias>`, never appear in the per-turn offer preview, and are consumed by
-pulling their body with `get_skill` (the Skill tool cannot invoke them). Manage roots with
+installed ([ADR-0031](../docs/adr/0031-external-catalog-roots.md)). They rank marked
+`external: <alias>`, cost zero resident context, and are consumed by pulling their body with
+`get_skill` (the Skill tool cannot invoke them). Manage roots with
 [`scripts/catalogs.py`](../scripts/catalogs.py) / the `skill-concierge:catalogs` skill.
+
+Since `0.23.0` externals are **first-class in the per-turn offer** too, not just explicit
+search ([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)): the enforcer
+appends an additive annex of the top externals on strong intent-match (installed offer
+byte-identical — a separate query supplies the annex, zero displacement), and an external
+used across enough distinct sessions auto-graduates to a real installed skill.
 
 ## Where to go next
 

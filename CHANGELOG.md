@@ -5,6 +5,32 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-08-23
+
+### Added
+- **External catalogs first-class in the per-turn offer (ADR-0032).** External catalog skills
+  (ADR-0031) are promoted from the search-only tier to an **additive annex** in the enforcer
+  offer — discovered by intent-match, at near-zero resident cost (the offer is an on-demand
+  query, not the resident skill listing; mass-installing would blow the 3% listing budget).
+  - **Zero displacement (hard invariant):** the installed offer is produced by the UNCHANGED
+    installed query (`must_not tier=external`, limit `TOP_K`) — byte-identical whether the
+    annex is on or off. A SEPARATE `_retrieve_external` query supplies the annex, so an external
+    can never take an installed slot. (Two small queries beat one widened query, which would
+    silently drop installed skills when externals ranked high.)
+  - **Quota + floor:** at most `ENFORCER_EXTERNAL_SLOTS` (2) externals annex, only those
+    ≥ `ENFORCER_EXTERNAL_FLOOR` (0.40, higher than installed's 0.18) — most turns show zero;
+    the annex appears only on strong intent-match (the injection-surface safeguard). Rendered
+    as a distinct `[external:<alias>]` block with the `get_skill` read-inline instruction.
+  - **Usage-promotion (`hooks/scripts/auto_promote.py`, SessionStart):** an external skill used
+    across ≥ `PROMOTE_MIN_TAKES` (3) DISTINCT sessions auto-graduates to a real installed skill
+    via `catalogs.py promote` (symlink). Organic curation — the resident set grows only by
+    demonstrated usage, never mass install. Idempotent, throttled, kill-switch `PROMOTE_ENABLED=0`.
+  - **Telemetry:** the `offer` ledger event gains `ext`; `analyze.py` reports external annex
+    offers + external offer→take session-conversion, distinct from installed, epoch-scoped.
+  - **Kill-switch `ENFORCER_EXTERNAL_ANNEX=0`** restores ADR-0031 search-only exactly.
+  - Enforcer selftest cases 10 (installed query byte-identical) + 11 (annex query/floor/slots/
+    render/kill-switch); `auto_promote.py --selftest`; `analyze.py` external-annex case.
+
 ## [0.22.1] — 2026-08-23
 
 ### Fixed

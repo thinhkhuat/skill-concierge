@@ -181,6 +181,22 @@ def _segment_windows(events):
     return turns
 
 
+def _external_annex_stats(events, aliases):
+    """ADR-0032: (offer_count, annex_rows, converted_sessions, annexed_sessions).
+    An annex offer is an `offer` event carrying `ext`; a conversion is an annexed session
+    that also produced an external `get_skill` (name starts with a catalog alias). Pure —
+    the selftest pins it; main() formats it."""
+    annex_offers = [e for e in events if e.get("ev") == "offer" and e.get("ext")]
+    if not annex_offers:
+        return 0, 0, 0, 0
+    sids_with_take = {e.get("sid") for e in events
+                      if e.get("ev") == "get_skill" and not e.get("sub")
+                      and aliases and str(e.get("name", "")).startswith(aliases)}
+    annex_sids = {e.get("sid") for e in annex_offers}
+    n_rows = sum(len(e.get("ext") or []) for e in annex_offers)
+    return len(annex_offers), n_rows, len(annex_sids & sids_with_take), len(annex_sids)
+
+
 def _chain_report(events, catalogue=None):
     """ADR-0029 W3: cross-turn skill chains per session.
 
@@ -270,12 +286,28 @@ def _run_selftest():
     if longest[0] != ["a", "b", "c"]:
         bad.append(f"chains: longest sequence wrong: {longest}")
 
+    # ADR-0032 external annex offer->take
+    aliases = ("antigravity:",)
+    ev_annex = [
+        {"sid": "s1", "ev": "offer", "ext": [["antigravity:x", 0.7]]},   # annexed
+        {"sid": "s1", "ev": "get_skill", "name": "antigravity:x"},        # -> converted
+        {"sid": "s2", "ev": "offer", "ext": [["antigravity:y", 0.6]]},   # annexed, no take
+        {"sid": "s3", "ev": "offer", "offered": [["inst", 0.5]]},          # no ext -> not annex
+        {"sid": "s4", "ev": "get_skill", "name": "installed-skill"},       # non-external pull
+    ]
+    n_off, n_rows, conv, n_sids = _external_annex_stats(ev_annex, aliases)
+    if (n_off, n_rows, conv, n_sids) != (2, 2, 1, 2):
+        bad.append("external annex stats wrong: %r" % ((n_off, n_rows, conv, n_sids),))
+    if _external_annex_stats([], aliases) != (0, 0, 0, 0):
+        bad.append("external annex stats must be zero on empty ledger")
+
     if bad:
         print("analyze --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
-    print("analyze --selftest OK: offer->take join (turn conversion + per-skill) + chain report")
+    print("analyze --selftest OK: offer->take join (turn conversion + per-skill) + chain report "
+          "+ external annex offer->take (ADR-0032)")
     return 0
 
 
@@ -455,6 +487,12 @@ def main():
         n_ext = sum(ext.values())
         print(f"deep pulls    : {len(pulls)}   external takes: {n_ext}"
               + (f"   top external: {ext.most_common(5)}" if n_ext else ""))
+    # ADR-0032 external annex offer->take (epoch-scoped — window from annex ship).
+    n_off, n_rows, converted, n_sids = _external_annex_stats(events, aliases)
+    if n_off:
+        conv = f"  {round(100 * converted / n_sids)}% session-conv" if n_sids else ""
+        print(f"external annex: {n_off} offers ({n_rows} rows) / "
+              f"{converted} of {n_sids} annexed sessions took an external{conv}")
     print(f"top auto      : {auto_freq.most_common(10)}")
     if skills:
         print(f"top manual (real skill)     : {manual_skill.most_common(10)}")
