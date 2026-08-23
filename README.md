@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.21.3-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.22.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -236,6 +236,30 @@ python3 scripts/keep-on.py add <skill-name>…    # add, then reconcile immediat
 python3 scripts/keep-on.py remove <skill-name>… # remove, then reconcile
 ```
 
+### External catalogs (search without installing)
+
+Third-party skill collections — a cloned awesome-skills repo, a shared team folder — can be
+indexed for retrieval **without installing anything**
+([ADR-0031](docs/adr/0031-external-catalog-roots.md)). Register a local directory whose children
+carry `SKILL.md` files in the operator-owned `~/.claude/skill-concierge/catalog-roots.json`
+(absent file = feature off):
+
+```bash
+python3 scripts/catalogs.py add antigravity ~/env-DEV/antigravity-awesome-skills/skills
+python3 scripts/catalogs.py list                      # roots, counts, broken promotions
+python3 scripts/catalogs.py promote antigravity:seo   # symlink a keeper into ~/.claude/skills
+```
+
+Catalog skills index as `<alias>:<name>` under scope `catalog:<alias>` and are
+**search-only citizens**: they surface via `search_skills` marked `[external: <alias>]`, never
+in the per-turn offer preview (their points carry `tier: external`, which the enforcer
+excludes), and cost **zero per-turn context** — the whole point. Consume one by pulling its
+body with `get_skill("<alias>:<name>")` and following it inline; the Skill tool cannot invoke
+it. Name collisions with installed skills are a non-event (alias namespace), a promoted
+symlink's catalog twin is auto-suppressed, and removing a root prunes its points at the next
+reindex. Embeddings + body triggers only — the flywheel utterance layer deliberately skips
+externals (deferred phase).
+
 ## Architecture
 
 ```
@@ -286,6 +310,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.22.0` — **published, ADR-0031 external catalog roots: third-party skill collections indexed for retrieval without installing — operator-owned `~/.claude/skill-concierge/catalog-roots.json`, skills minted `<alias>:<name>` under scope `catalog:<alias>` with `tier: external` on every point; search-only tier (never the per-turn offer preview; `search_skills` marks hits `external: <alias>` with a `get_skill` consumption note); promotion via symlink with collision refusal; skillOverrides/sidecar/flywheel all exclude catalogs by design; new `scripts/catalogs.py` + `skill-concierge:catalogs` skill + doctor `check_catalogs`; first catalog `antigravity` (1,603 skills) registered and indexed.**
 
 `0.21.3` — **published, ADR-0030 operator-owned chain overrides: third-party `next-skills` curation moves to `~/.claude/skill-concierge/next-skills-overrides.json` (reader-side merge in the enforcer — the sidecar's only consumer — override-wins, `[]` suppresses, fail-open, absent file byte-identical), so an upstream upgrade can no longer silently wipe curated chains; 8 ak workflow chains seeded there (brainstorm→plan→cook→test→code-review→ship→journal + debug→fix→test) with all loaned frontmatter reverted and hints proven firing from overrides alone; keep-on router-guard false gap fixed (bare `skill-search` dropped, namespaced form accepted); `setup→doctor` chain rides the 0.21.3 cache.**
 

@@ -46,7 +46,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Skill|mcp__.*skill-search__search_skills",
+        "matcher": "Skill|mcp__.*skill-search__(search_skills|get_skill)",
         "hooks": [
           {
             "type": "command",

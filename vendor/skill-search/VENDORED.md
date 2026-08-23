@@ -227,6 +227,22 @@ upstream is re-vendored:
   (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy** (the
   sidecar is written by the index path, so it appears only after the new engine rebuilds).
 
+- **External catalog roots (ADR-0031, v0.22.0):** `skills_discovery.py` adds `CATALOG_ROOTS_PATH`
+  (seam `SKILL_CONCIERGE_CATALOG_ROOTS`, default `~/.claude/skill-concierge/catalog-roots.json`),
+  `catalog_roots()` (validated, fail-open `{}` — absence IS the off-switch), `_catalog_skills()`
+  (one-level glob per root, per-root include/exclude dirname globs, name minted `<alias>:<dirname>`,
+  scope `catalog:<alias>`), and folds catalogs into `discover_skills()` LAST (installed name always
+  wins; a catalog SKILL.md whose realpath equals an already-found skill — a promoted symlink — is
+  suppressed) and into `visible_scopes()` (machine-wide config → every session sees the same set, so
+  the existing scope-visibility prune handles root removal). `server.build_index` stamps
+  `tier: "external"` on every catalog point (base + trigger) — the plugin-side enforcer excludes the
+  tier with one `must_not` (search-only tier) — and `_write_next_skills_sidecar` SKIPS catalog scopes
+  (chain hints are preview-layer; externals are search-only). `_fuse_ranked` marks catalog hits with
+  `external: <alias>` + a get_skill consumption note and drops the `/command` field (not installed).
+  `generate_overrides.py` excludes catalog scopes (no dead skillOverrides). Pinned by
+  `tests/test_discovery.py` catalog cases + enforcer selftest case 10. **Requires re-copy into the
+  stable venv + a reindex to deploy.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

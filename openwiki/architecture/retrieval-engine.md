@@ -45,7 +45,14 @@ Discovery is [`vendor/skill-search/skill_search/skills_discovery.py`](../../vend
 - `parse_skill()` requires valid `---` frontmatter, so **only model-invocable `SKILL.md` files
   are indexed** — built-in slash-commands are structurally excluded. This is [ADR-0001](../../docs/adr/0001-index-model-invocable-skills-only.md),
   and the reason the vendored eval scores near-zero here ([caveats §1](../../docs/caveats.md)).
-- Dedup is first-writer-wins with personal → project → plugin precedence.
+- Dedup is first-writer-wins with personal → project → plugin → catalog precedence.
+- Since `0.22.0` ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)), `discover_skills()`
+  additionally folds in **external catalog roots** from the operator-owned
+  `~/.claude/skill-concierge/catalog-roots.json` (absent file = feature off): each configured
+  local directory is globbed one level deep, skills index as `<alias>:<dirname>` under scope
+  `catalog:<alias>` with `tier: external` on every point (the enforcer excludes that tier from
+  per-turn offers — search-only). Installed names always win collisions, and a catalog skill
+  whose realpath matches an already-found skill (a promoted symlink) is suppressed.
 - The embedded text per skill is `name \n description \n body`, with the body capped at 4000 chars.
 
 ### Plugin namespacing (`ck:worktree`, not `worktree`)

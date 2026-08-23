@@ -4,8 +4,8 @@
     "name": "thinhkhuat"
   },
   "metadata": {
-    "description": "Skill-governance layer for Claude Code \u2014 semantic retrieval + use-enforcement + invocation ledger.",
-    "version": "0.21.3"
+    "description": "Skill-governance layer for Claude Code — semantic retrieval + use-enforcement + invocation ledger.",
+    "version": "0.22.0"
   },
   "plugins": [
     {
@@ -19,7 +19,8 @@
         "semantic-search",
         "hooks",
         "telemetry"
-      ]
+      ],
+      "version": "0.22.0"
     }
   ]
 }

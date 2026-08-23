@@ -438,6 +438,23 @@ def main():
                 print(f"    {skill:<30} {tk}/{off}  {(100*tk/off):.0f}%")
     else:
         print(f"hit@k         : pending (no `offer` events yet — enforcer not live / no banked turns)")
+    # ADR-0031 external takes: get_skill deep pulls, split installed vs external by
+    # the operator's catalog aliases (catalog-roots.json). Epoch-scoped like every
+    # metric here — window from the catalog-roots deploy date, never pool across.
+    pulls = [e for e in events if e.get("ev") == "get_skill" and not e.get("sub")]
+    if pulls:
+        try:
+            _roots = json.loads((Path.home() / ".claude" / "skill-concierge"
+                                 / "catalog-roots.json").read_text(encoding="utf-8"))
+            aliases = tuple(f"{a}:" for a in _roots if isinstance(a, str)
+                            and not a.startswith("_"))
+        except Exception:
+            aliases = ()
+        ext = Counter(e.get("name", "") for e in pulls
+                      if aliases and str(e.get("name", "")).startswith(aliases))
+        n_ext = sum(ext.values())
+        print(f"deep pulls    : {len(pulls)}   external takes: {n_ext}"
+              + (f"   top external: {ext.most_common(5)}" if n_ext else ""))
     print(f"top auto      : {auto_freq.most_common(10)}")
     if skills:
         print(f"top manual (real skill)     : {manual_skill.most_common(10)}")

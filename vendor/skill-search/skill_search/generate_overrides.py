@@ -66,7 +66,10 @@ def main():
     settings_path = base / "settings.local.json"
 
     # Same discovery the retriever uses: personal + project + plugin skills.
-    names = sorted({s["name"] for s in discover_skills()})
+    # Catalog scopes (ADR-0031) are excluded: external skills are not registered
+    # with Claude Code, so a skillOverrides entry for them frees nothing.
+    names = sorted({s["name"] for s in discover_skills()
+                    if not str(s.get("scope", "")).startswith("catalog:")})
     overrides = compute_overrides(names, keep_on)
     write_overrides(settings_path, overrides)
 

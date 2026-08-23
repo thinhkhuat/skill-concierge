@@ -57,6 +57,12 @@ back-rationalizing the skip — the commitment is the whole point.
 5. **`USING:` is only ever followed by a real skill name.** There is no `USING: none` — a no-skill
    outcome is `SKIPPING: none`, never a `USING:`. Do not hybridize the two.
 
+   **External catalog skills count.** A search result marked `[external: <alias>]` (name like
+   `<alias>:<skill>`) is a real skill that is NOT installed — the Skill tool cannot invoke it.
+   `USING: <alias>:<skill>` for one means: pull its body with
+   `get_skill("<alias>:<skill>")` and follow that SKILL.md inline as your procedure. Same
+   take-bar as installed skills; the alias marks provenance, not a lower tier of obligation.
+
 6. **Red Flags — refuse these standing rationalizations. Naming an unfit skill to pass the gate is a FALSE REPORT.** The excuse you catch yourself forming IS the key that retrieves its own refutation — match the symptom, read the counter, act on it (rows 1-3 are the rule-4 turns that "feel exempt"; rows 4-6 the confidence dodges; row 7 the over-fire mirror):
 
    | Symptom — the rationalization you catch yourself forming | Refutation — what it actually is |

@@ -78,7 +78,12 @@ def split_phrases(description: str) -> list[str]:
 
 
 def scroll_all_points():
-    """Yield (name, description) for every live-index point (paged scroll)."""
+    """Yield (name, description) for every live-index point (paged scroll).
+
+    External catalog points (payload tier=external, ADR-0031) are skipped:
+    flywheel/trigger generation is for installed skills only — the utterance
+    layer for search-only externals is an explicitly deferred phase, and running
+    the LLM over 1.5k+ catalog skills would burn the gateway for nothing."""
     nxt = None
     while True:
         body = {"limit": 256, "with_payload": True, "with_vector": False}
@@ -87,6 +92,8 @@ def scroll_all_points():
         res = _post(f"{QDRANT}/collections/{COLLECTION}/points/scroll", body)["result"]
         for pt in res.get("points", []):
             pl = pt.get("payload", {})
+            if pl.get("tier") == "external":
+                continue
             yield pl.get("name", ""), pl.get("description", "")
         nxt = res.get("next_page_offset")
         if nxt is None:

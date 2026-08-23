@@ -50,8 +50,14 @@ def _mcp_env():
     # DETACHED reindex builds the SAME index the query server serves. Without the trigger
     # keys, an auto-reindex silently rebuilds at engine defaults (SKILL_LLM_TRIGGERS off,
     # TRIGGERS_MAX 12) and prunes the utterance points — ADR-0026. real env still wins.
+    # SKILL_CONCIERGE_CATALOG_ROOTS (ADR-0031) forwarded too: if the catalog config
+    # path is ever pinned in .mcp.json (rather than the shared durable-home default),
+    # the detached reindex must see the SAME roots the query server does, or it would
+    # rebuild without the catalog scopes and prune every external point — the exact
+    # ADR-0026 env-forwarding gap class this list exists to close.
     for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
-              "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS"):
+              "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS",
+              "SKILL_CONCIERGE_CATALOG_ROOTS"):
         if k in env and k not in os.environ:
             merged[k] = env[k]
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")

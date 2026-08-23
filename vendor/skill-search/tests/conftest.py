@@ -20,3 +20,10 @@ os.environ.setdefault("SKILL_QDRANT_PATH", os.path.join(_TMP, "qdrant"))
 os.environ.setdefault("SKILL_META_PATH", os.path.join(_TMP, "meta.json"))
 os.environ.setdefault("SKILL_EMBED_BACKEND", "fastembed")
 os.environ.setdefault("SKILL_VECTOR_SIZE", "384")  # avoids an embed probe in unit tests
+# Pin the external-catalog config to a NONEXISTENT path (ADR-0031). Without this,
+# every test calling discover_skills()/_disk_signature() reads the operator's LIVE
+# ~/.claude/skill-concierge/catalog-roots.json and pulls in real external skills —
+# non-hermetic, and it breaks the count-exact discovery/indexing tests on any machine
+# that has a catalog registered. The 6 catalog tests monkeypatch CATALOG_ROOTS_PATH
+# themselves, so this only neutralizes the ambient config for everyone else.
+os.environ.setdefault("SKILL_CONCIERGE_CATALOG_ROOTS", os.path.join(_TMP, "no-catalogs.json"))

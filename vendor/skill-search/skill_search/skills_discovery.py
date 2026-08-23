@@ -19,6 +19,7 @@ import os
 import re
 import json
 import glob
+import fnmatch
 import hashlib
 import logging
 import textwrap
@@ -59,6 +60,79 @@ CLAUDE_SETTINGS_JSON = Path(os.environ.get(
     Path.home() / ".claude" / "settings.json"))
 # Escape hatch: `=0` restores the pre-filter behaviour (index the whole cache).
 SKILL_PLUGIN_FILTER = os.environ.get("SKILL_PLUGIN_FILTER", "1") != "0"
+
+# ── external catalog roots (ADR-0031) ────────────────────────────────────────
+# Operator-owned config of EXTRA skill collections indexed for retrieval WITHOUT
+# being installed into any Claude Code root — search-only citizens, consumed by
+# reading their SKILL.md (get_skill), never by the Skill tool. Shape:
+#   {"<alias>": {"path": "/abs/dir", "include": ["glob"...], "exclude": ["glob"...]}}
+# (a bare string value is shorthand for {"path": ...}; keys starting with "_" are
+# comments). Every catalog skill indexes as `<alias>:<dirname>` under scope
+# `catalog:<alias>` and its points carry `tier: "external"` so the per-turn
+# enforcer can exclude them (search-only tier). Absent/malformed file -> {} ->
+# byte-identical behavior: absence IS the off-switch (ADR-0030 idiom).
+CATALOG_ROOTS_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_CATALOG_ROOTS",
+    Path.home() / ".claude" / "skill-concierge" / "catalog-roots.json"))
+_ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def catalog_roots() -> dict:
+    """{alias: {"path": Path, "include": [...], "exclude": [...]}} — validated,
+    fail-open to {}. A malformed entry is skipped with a warning, never fatal:
+    catalog config must not dark the installed catalogue."""
+    cfg = _read_json(CATALOG_ROOTS_PATH)
+    if not isinstance(cfg, dict):
+        return {}
+    out: dict = {}
+    for alias, spec in cfg.items():
+        if not isinstance(alias, str) or alias.startswith("_"):
+            continue
+        if not _ALIAS_RE.match(alias):
+            log.warning("catalog-roots: alias %r invalid (want [a-z0-9][a-z0-9_-]*) — skipped", alias)
+            continue
+        if isinstance(spec, str):
+            spec = {"path": spec}
+        if not isinstance(spec, dict) or not spec.get("path"):
+            log.warning("catalog-roots: entry %r has no path — skipped", alias)
+            continue
+        p = Path(os.path.expanduser(str(spec["path"])))
+        if not p.is_dir():
+            log.warning("catalog-roots: %r path %s is not a directory — skipped", alias, p)
+            continue
+        out[alias] = {
+            "path": p,
+            "include": [g for g in (spec.get("include") or []) if isinstance(g, str)],
+            "exclude": [g for g in (spec.get("exclude") or []) if isinstance(g, str)],
+        }
+    return out
+
+
+def _catalog_dir_admitted(dirname: str, spec: dict) -> bool:
+    """Per-root include/exclude glob gate on the skill's directory name.
+    include empty = admit all; exclude always wins."""
+    if spec["include"] and not any(fnmatch.fnmatch(dirname, g) for g in spec["include"]):
+        return False
+    return not any(fnmatch.fnmatch(dirname, g) for g in spec["exclude"])
+
+
+def _catalog_skills() -> list[dict]:
+    """Parsed skills from every configured catalog root: name `<alias>:<dirname>`,
+    scope `catalog:<alias>`. One level deep like every other root (the `*` glob),
+    never recursive."""
+    out: list[dict] = []
+    for alias, spec in sorted(catalog_roots().items()):
+        for raw in sorted(glob.glob(str(spec["path"] / "*" / "SKILL.md"))):
+            p = Path(raw)
+            if not _catalog_dir_admitted(p.parent.name, spec):
+                continue
+            skill = parse_skill(p)
+            if not skill or not skill["name"]:
+                continue
+            skill["name"] = f"{alias}:{skill['name']}"
+            skill["scope"] = f"catalog:{alias}"
+            out.append(skill)
+    return out
 
 
 def _read_json(path: Path):
@@ -375,8 +449,14 @@ def _scope_for(path: Path) -> str:
 
 
 def visible_scopes() -> set[str]:
-    """Scopes THIS process is authoritative for — may prune and may search."""
-    return {"personal", "plugin", f"project:{PROJECT_ROOT}"}
+    """Scopes THIS process is authoritative for — may prune and may search.
+    Catalog scopes (ADR-0031) are machine-wide like `personal`: the config lives
+    in the machine-global durable home, so every session sees the same set and no
+    cross-session prune war is possible. Removing a root from the config removes
+    its scope here, and the next reindex prunes its points via the existing
+    scope-visibility mechanism — teardown needs nothing new."""
+    return ({"personal", "plugin", f"project:{PROJECT_ROOT}"}
+            | {f"catalog:{a}" for a in catalog_roots()})
 
 
 def manifest_key() -> str:
@@ -392,11 +472,29 @@ def manifest_key() -> str:
 
 
 def discover_skills() -> list[dict]:
-    """Parsed skill dicts (deduped by name, precedence = personal -> project)."""
+    """Parsed skill dicts (deduped by name, precedence = personal -> project ->
+    plugin -> catalog). Catalog skills (ADR-0031) come LAST so anything installed
+    always wins a name collision, and a catalog skill whose SKILL.md resolves to
+    the same file as an already-found skill (a promoted symlink in
+    ~/.claude/skills pointing back into the catalog clone) is suppressed — the
+    promoted personal copy is the invokable truth, the catalog twin is noise."""
     found: dict[str, dict] = {}
     for p in discover_skill_paths():
         skill = parse_skill(p)
         if skill and skill["name"]:
             skill["scope"] = _scope_for(p)
             found.setdefault(skill["name"], skill)   # first writer wins
+    seen_real = set()
+    for s in found.values():
+        try:
+            seen_real.add(os.path.realpath(s["path"]))
+        except OSError:
+            pass
+    for skill in _catalog_skills():
+        try:
+            if os.path.realpath(skill["path"]) in seen_real:
+                continue                             # promoted twin — personal copy wins
+        except OSError:
+            pass
+        found.setdefault(skill["name"], skill)       # installed name always wins
     return list(found.values())

@@ -267,6 +267,13 @@ def _write_next_skills_sidecar(skills: list[dict]) -> None:
         mine: dict[str, dict[str, list]] = {}
         for s in skills:
             scope = s.get("scope", "personal")
+            # ADR-0031: catalog skills stay OUT of the sidecar. Sidecar key presence
+            # is the enforcer's catalogue-membership signal for chain hints — a
+            # preview-layer mechanism — and catalog skills are search-only by
+            # decision; admitting 1.5k+ external names would let chains hint skills
+            # the Skill tool cannot invoke.
+            if scope.startswith("catalog:"):
+                continue
             mine.setdefault(scope, {})[s["name"]] = list(s.get("next_skills") or [])
         try:
             merged = json.loads(NEXT_SKILLS_PATH.read_text(encoding="utf-8"))
@@ -614,15 +621,20 @@ def build_index(force: bool = False) -> dict:
         text = _skill_text(s)
         h = _content_hash(text)
         scope = s.get("scope", "personal")
+        # ADR-0031: catalog points carry tier=external so the per-turn enforcer can
+        # exclude them with ONE must_not condition (search-only tier) without
+        # enumerating aliases. On every point (base + trigger) — the enforcer's
+        # group_by query scores whichever point ranks best.
+        tier = {"tier": "external"} if scope.startswith("catalog:") else {}
         desired[_point_id(s["name"])] = (text, h, {
             "name": s["name"], "description": s["description"],
-            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope})
+            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope, **tier})
         if MULTIVECTOR:
             for i, ph in enumerate(_trigger_phrases(s)):
                 ph_h = _content_hash(ph)
                 desired[_point_id(f"{s['name']}::trig::{i}")] = (ph, ph_h, {
                     "name": s["name"], "description": s["description"],
-                    "content_hash": ph_h, "kind": "trigger", "scope": scope})
+                    "content_hash": ph_h, "kind": "trigger", "scope": scope, **tier})
 
     # Embed only what's new or whose text/scope changed. Delete what's gone (incl.
     # orphaned trigger slots when a description shortens, and ALL triggers if
@@ -678,8 +690,13 @@ def _fuse_ranked(group_lists: list, top_k: int) -> list:
     """MAX-pool skills across one or more query result sets: each skill keeps its
     single BEST score across all queries, then return the fused top-k by score.
     One query angle can bury the precise skill below the cut; fusing several
-    angles lifts it. With a single query this is identical to the old top-k."""
-    best: dict = {}  # name -> (score, description)
+    angles lifts it. With a single query this is identical to the old top-k.
+
+    ADR-0031: a hit from a `catalog:<alias>` scope is an EXTERNAL skill — merged
+    into the same ranking (no artificial tier inside the list) but marked with
+    provenance and the read-inline consumption note, because the Skill tool
+    cannot invoke it; `get_skill(name)` returns its full body."""
+    best: dict = {}  # name -> (score, description, scope)
     for groups in group_lists:
         for g in groups:
             if not g.hits:
@@ -688,10 +705,18 @@ def _fuse_ranked(group_lists: list, top_k: int) -> list:
             pl = h.payload or {}
             name = pl.get("name", g.id)
             if name not in best or h.score > best[name][0]:
-                best[name] = (h.score, pl.get("description", ""))
+                best[name] = (h.score, pl.get("description", ""), pl.get("scope") or "")
     ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
-    return [{"name": n, "command": f"/{n}", "description": d, "score": round(s, 4)}
-            for n, (s, d) in ranked]
+    out = []
+    for n, (s, d, scope) in ranked:
+        row = {"name": n, "command": f"/{n}", "description": d, "score": round(s, 4)}
+        if scope.startswith("catalog:"):
+            row.pop("command")           # not a slash command — it is not installed
+            row["external"] = scope.split(":", 1)[1]
+            row["note"] = ("external catalog skill — NOT installed; consume by "
+                           f"get_skill(\"{n}\") and follow its SKILL.md inline")
+        out.append(row)
+    return out
 
 
 @mcp.tool()

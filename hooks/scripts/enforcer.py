@@ -527,9 +527,15 @@ def _retrieve(vector: list) -> list:
     best point per skill (group_size=1). Identical to a plain top-k on a single-vector index; on
     the multi-vector index each skill is scored by its single best phrase point. Returns
     [(name, desc, score)]."""
+    # ADR-0031 search-only tier: external catalog points (payload tier=external)
+    # never enter the per-turn offer menu — they are not installed, so an offer
+    # here would be a dead `USING:`. They stay reachable via search_skills, where
+    # rows carry provenance + the get_skill consumption note.
     res = _post_json(QUERY_GROUPS_URL,
                      {"query": vector, "group_by": "name", "limit": TOP_K,
-                      "group_size": 1, "with_payload": ["name", "description"]},
+                      "group_size": 1, "with_payload": ["name", "description"],
+                      "filter": {"must_not": [
+                          {"key": "tier", "match": {"value": "external"}}]}},
                      QDRANT_TIMEOUT_S)
     out = []
     for g in res.get("result", {}).get("groups", []):
@@ -1075,6 +1081,30 @@ def _selftest() -> int:
         finally:
             CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES = _saved_chain
 
+    # (10) ADR-0031 search-only tier: the per-turn retrieval request must carry the
+    # must_not tier=external filter, so catalog points can never enter the offer
+    # menu. Pin the REQUEST SHAPE (monkeypatched transport) and the response parse.
+    global _post_json
+    _saved_post = _post_json
+    _reqs = []
+
+    def _fake_post(url, payload, timeout):
+        _reqs.append(payload)
+        return {"result": {"groups": [
+            {"id": "x", "hits": [{"payload": {"name": "inst", "description": "d"},
+                                  "score": 0.5}]}]}}
+
+    _post_json = _fake_post
+    try:
+        got = _retrieve([0.1, 0.2])
+        flt = (_reqs[0] or {}).get("filter", {})
+        if {"key": "tier", "match": {"value": "external"}} not in flt.get("must_not", []):
+            bad.append("retrieve: missing must_not tier=external filter (search-only tier): %r" % flt)
+        if got != [("inst", "d", 0.5)]:
+            bad.append("retrieve: response parse changed: %r" % got)
+    finally:
+        _post_json = _saved_post
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
@@ -1084,7 +1114,8 @@ def _selftest() -> int:
           "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse "
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off) "
-          "+ chain-overrides (override-wins / keep-off / suppress / fail-open)"
+          "+ chain-overrides (override-wins / keep-off / suppress / fail-open) "
+          "+ external-tier exclusion (ADR-0031)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),
              len(selfref_fire), len(selfref_off)))
     return 0

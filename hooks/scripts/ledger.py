@@ -30,6 +30,7 @@ LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 SEARCH_TOOL = "skill-search__search_skills"  # suffix match; tolerates the mcp__[plugin_...]__ namespace prefix (drift-proof — the bare name broke when the tool got plugin-namespaced)
+GET_TOOL = "skill-search__get_skill"  # ADR-0031: deep pulls; analyze.py classifies external takes by catalog alias prefix
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
 
 
@@ -95,10 +96,67 @@ def main() -> int:
                 _append(ev)
             elif tool.endswith(SEARCH_TOOL):
                 _append({"t": t, "sid": sid, "ev": "search"})
+            elif tool.endswith(GET_TOOL):
+                # ADR-0031 external-take leg: a get_skill deep pull is how an
+                # external catalog skill is consumed (read-inline). Log EVERY pull
+                # with its name; whether the name is external (catalog alias
+                # prefix) is classified downstream in analyze.py, so this row
+                # stays useful for installed deep pulls too. Epoch-scoped like
+                # all ledger metrics.
+                ti = d.get("tool_input", {})
+                name = ti.get("name", "") if isinstance(ti, dict) else ""
+                ev = {"t": t, "sid": sid, "ev": "get_skill",
+                      "name": name if isinstance(name, str) else ""}
+                if sub:
+                    ev["sub"] = True
+                _append(ev)
     except Exception:
         return 0
     return 0
 
 
+def _selftest() -> int:
+    """Pin the event classification: a get_skill PostToolUse yields an `ev:get_skill`
+    row with the pulled name (ADR-0031 external-take telemetry), a Skill call yields
+    `auto`, a search yields `search`, and a slash prompt yields `manual`."""
+    import io
+    import tempfile
+    global LEDGER, LOG_DIR
+    saved = (LEDGER, LOG_DIR)
+    ok, rows = True, []
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            LOG_DIR = Path(td)
+            LEDGER = LOG_DIR / "ledger.log"
+
+            def feed(payload):
+                sys.stdin = io.StringIO(json.dumps(payload))
+                main()
+
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "mcp__x__skill-search__get_skill",
+                  "tool_input": {"name": "antigravity:seo"}})
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "Skill", "tool_input": {"skill": "doctor"}})
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "mcp__x__skill-search__search_skills"})
+            feed({"hook_event_name": "UserPromptSubmit", "session_id": "t",
+                  "prompt": "/keep-on list"})
+            rows = [json.loads(l) for l in LEDGER.read_text().splitlines()]
+    finally:
+        sys.stdin = sys.__stdin__
+        LEDGER, LOG_DIR = saved
+    evs = [(r["ev"], r.get("name")) for r in rows]
+    want = [("get_skill", "antigravity:seo"), ("auto", "doctor"),
+            ("search", None), ("manual", "keep-on")]
+    if evs != want:
+        print("ledger --selftest FAIL: %r != %r" % (evs, want))
+        return 1
+    print("ledger --selftest OK: get_skill/auto/search/manual classification")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
     sys.exit(main())

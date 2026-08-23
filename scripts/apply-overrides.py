@@ -50,8 +50,10 @@ def discover_skill_names():
         return [ln.strip() for ln in Path(f).read_text(encoding="utf-8").splitlines() if ln.strip()]
     sys.path.insert(0, str(VENDOR))
     from skill_search.skills_discovery import discover_skills  # vendored engine
+    # catalog: scopes excluded too (ADR-0031): external skills are not registered
+    # with Claude Code, so a skillOverrides entry for them is dead config bloat.
     return [s["name"] for s in discover_skills()
-            if not str(s.get("scope", "")).startswith("project:")]
+            if not str(s.get("scope", "")).startswith(("project:", "catalog:"))]
 
 
 def _compute_overrides(keep_on, names):

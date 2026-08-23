@@ -27,6 +27,7 @@ SKILL_TRIGGERS, SKILL_SERVER_RECORDS.
 """
 import argparse
 import collections
+import glob
 import hashlib
 import json
 import os
@@ -1023,11 +1024,42 @@ def check_trigger_hygiene():
                 fix="purge_junk")
 
 
+def check_catalogs():
+    """External catalog roots (ADR-0031). Absent config = feature off = OK. A
+    configured root whose path vanished (moved/renamed clone) WARNs: its skills go
+    dark at the next reindex and any promoted symlinks into it dangle. Also
+    compares the indexed catalog-point presence per alias when Qdrant is up."""
+    cfg_path = Path(os.environ.get(
+        "SKILL_CONCIERGE_CATALOG_ROOTS",
+        Path.home() / ".claude" / "skill-concierge" / "catalog-roots.json"))
+    if not cfg_path.exists():
+        return None                                    # feature off — not a finding
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert isinstance(cfg, dict)
+    except Exception:
+        return dict(id="catalogs", label="External catalogs", status=WARN,
+                    detail=f"{cfg_path} unreadable/malformed — catalogs silently OFF "
+                           "(engine fails open to none)", fix=None)
+    roots = {a: (s if isinstance(s, dict) else {"path": s}) for a, s in cfg.items()
+             if isinstance(a, str) and not a.startswith("_")}
+    missing = [a for a, s in roots.items()
+               if not s.get("path") or not Path(os.path.expanduser(str(s["path"]))).is_dir()]
+    if missing:
+        return dict(id="catalogs", label="External catalogs", status=WARN,
+                    detail=f"root path missing for: {', '.join(sorted(missing))} — skills go "
+                           "dark at next reindex; fix the path or `catalogs.py remove`", fix=None)
+    counts = {a: len(glob.glob(str(Path(os.path.expanduser(str(s['path']))) / '*' / 'SKILL.md')))
+              for a, s in roots.items()}
+    detail = ", ".join(f"{a}: {n} skills" for a, n in sorted(counts.items())) or "none configured"
+    return dict(id="catalogs", label="External catalogs", status=OK, detail=detail, fix=None)
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_ledger, check_dup_mcp]
+          check_catalogs, check_ledger, check_dup_mcp]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------

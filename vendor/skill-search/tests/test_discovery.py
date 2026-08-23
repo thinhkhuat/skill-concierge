@@ -412,3 +412,99 @@ def test_parse_skill_next_skills_list(tmp_path):
     d2.mkdir()
     (d2 / "SKILL.md").write_text("---\nname: plain\ndescription: d\n---\nbody")
     assert sd.parse_skill(d2 / "SKILL.md")["next_skills"] == []
+
+
+# ── external catalog roots (ADR-0031) ────────────────────────────────────────
+
+def _write_catalog_cfg(tmp_path, cfg):
+    p = tmp_path / "catalog-roots.json"
+    import json
+    p.write_text(json.dumps(cfg))
+    return p
+
+
+def _isolate_installed(tmp_path, monkeypatch, personal=None):
+    """No installed skills unless a personal root is given."""
+    monkeypatch.setattr(sd, "SKILL_DIRS", [personal] if personal else [tmp_path / "no-skills"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+
+
+def test_catalog_roots_validation(tmp_path, monkeypatch):
+    root = tmp_path / "cat"
+    root.mkdir()
+    cfg = _write_catalog_cfg(tmp_path, {
+        "_note": "comment ignored",
+        "good": {"path": str(root)},
+        "short": str(root),                      # bare-string shorthand
+        "Bad Alias!": {"path": str(root)},       # invalid chars -> skipped
+        "nopath": {"include": ["x"]},            # no path -> skipped
+        "gone": {"path": str(tmp_path / "missing")},  # not a dir -> skipped
+    })
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", cfg)
+    roots = sd.catalog_roots()
+    assert set(roots) == {"good", "short"}
+    assert roots["good"]["path"] == root
+
+
+def test_catalog_roots_absent_or_malformed_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", tmp_path / "nope.json")
+    assert sd.catalog_roots() == {}
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", bad)
+    assert sd.catalog_roots() == {}
+
+
+def test_catalog_skills_namespaced_scoped_and_globbed(tmp_path, monkeypatch):
+    root = tmp_path / "cat"
+    make_skill(root, "seo")
+    make_skill(root, "junk-skill")
+    cfg = _write_catalog_cfg(tmp_path, {"anti": {"path": str(root),
+                                                 "exclude": ["junk-*"]}})
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", cfg)
+    _isolate_installed(tmp_path, monkeypatch)
+    skills = {s["name"]: s for s in sd.discover_skills()}
+    assert set(skills) == {"anti:seo"}
+    assert skills["anti:seo"]["scope"] == "catalog:anti"
+
+
+def test_catalog_include_globs(tmp_path, monkeypatch):
+    root = tmp_path / "cat"
+    make_skill(root, "keep-me")
+    make_skill(root, "drop-me")
+    cfg = _write_catalog_cfg(tmp_path, {"a": {"path": str(root), "include": ["keep-*"]}})
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", cfg)
+    _isolate_installed(tmp_path, monkeypatch)
+    assert {s["name"] for s in sd.discover_skills()} == {"a:keep-me"}
+
+
+def test_catalog_installed_name_wins_and_promoted_twin_suppressed(tmp_path, monkeypatch):
+    personal = tmp_path / "personal"
+    root = tmp_path / "cat"
+    # name collision: alias-namespacing makes it a NON-event (different ids)…
+    make_skill(personal, "seo", desc="installed")
+    make_skill(root, "seo", desc="external")
+    # …promoted twin: personal/promoted is a SYMLINK to the catalog dir -> the
+    # catalog copy must be suppressed (realpath dedup), personal copy stays.
+    make_skill(root, "promoted", desc="external")
+    (personal / "promoted").symlink_to(root / "promoted")
+    cfg = _write_catalog_cfg(tmp_path, {"c": {"path": str(root)}})
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", cfg)
+    _isolate_installed(tmp_path, monkeypatch, personal=personal)
+    skills = {s["name"]: s for s in sd.discover_skills()}
+    assert "seo" in skills and skills["seo"]["description"] == "installed"
+    assert "c:seo" in skills and skills["c:seo"]["description"] == "external"
+    # the installed-side copy owns the skill (its scope is NOT a catalog scope)…
+    assert "promoted" in skills
+    assert not skills["promoted"]["scope"].startswith("catalog:")
+    assert "c:promoted" not in skills          # …and the catalog twin is suppressed
+
+
+def test_visible_scopes_include_catalogs(tmp_path, monkeypatch):
+    root = tmp_path / "cat"
+    root.mkdir()
+    cfg = _write_catalog_cfg(tmp_path, {"anti": {"path": str(root)}})
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", cfg)
+    assert "catalog:anti" in sd.visible_scopes()
+    monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", tmp_path / "nope.json")
+    assert not any(s.startswith("catalog:") for s in sd.visible_scopes())

@@ -5,6 +5,39 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-08-23
+
+### Added
+- **External catalog roots — multi-catalog retrieval without import (ADR-0031).** Third-party
+  skill collections (e.g. a cloned awesome-skills repo of 1,600 skills) are now indexable for
+  semantic retrieval **without installing anything** and at **zero per-turn context cost**.
+  Eleven owner decisions from a design interview 2026-08-23; highlights:
+  - Operator-owned config `~/.claude/skill-concierge/catalog-roots.json`
+    (`{alias: {path, include?, exclude?}}`, env seam `SKILL_CONCIERGE_CATALOG_ROOTS`); absent
+    file = byte-identical behavior. Engine discovery folds catalogs in LAST (installed name
+    always wins; a promoted symlink's catalog twin is suppressed by realpath), names minted
+    `<alias>:<dirname>`, scope `catalog:<alias>` wired into `visible_scopes()` (machine-wide;
+    root removal prunes via the existing scope mechanism).
+  - **Search-only tier:** every catalog point carries `tier: external`; the enforcer's per-turn
+    retrieval excludes the tier with one `must_not` (selftest case 10), so externals never
+    enter the offer preview. `search_skills` merges them into the ranking marked
+    `external: <alias>` + a `get_skill` consumption note (no `/command` — nothing installed).
+  - **Consumption both ways:** read-inline via `get_skill` (payload-path fast lookup), or
+    explicit promotion `catalogs.py promote <alias>:<name>` (symlink into `~/.claude/skills`,
+    refuses collisions, broken promotions reported by `list` and doctor).
+  - New management surface: `scripts/catalogs.py` (list/add/remove/promote, `--selftest`) +
+    `skill-concierge:catalogs` skill; doctor gains a `check_catalogs` probe (missing root paths
+    WARN). First registered catalog: `antigravity` (1,603 skills).
+  - **Telemetry:** ledger logs `get_skill` deep pulls (PostToolUse matcher extended);
+    `analyze.py` reports external takes split by catalog alias. Epoch note: window external
+    metrics from this deploy.
+  - **Exclusions by design:** skillOverrides generation skips catalog scopes (no dead budget
+    entries), the next-skills sidecar skips them (chain hints are preview-layer), and the
+    flywheel/trigger generators skip `tier: external` points — the utterance layer for
+    externals is an explicitly deferred phase, not dropped.
+  - SKILL-FIRST doctrine: external hits are `USING:`-eligible via the get_skill read-inline
+    path (same take-bar; alias marks provenance, not a lower obligation).
+
 ## [0.21.3] — 2026-08-20
 
 ### Changed
