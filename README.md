@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.22.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.22.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -310,6 +310,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.22.1` — **published, doctor fix: flywheel coverage + trigger-hygiene no longer count external catalog skills (tier=external) as "missing utterances" — `_indexed_skill_names()` excludes them, matching the generators that skip externals by design; a registered catalog no longer shows a permanent false coverage gap. Surfaced validating the 0.22.0 deploy.**
 
 `0.22.0` — **published, ADR-0031 external catalog roots: third-party skill collections indexed for retrieval without installing — operator-owned `~/.claude/skill-concierge/catalog-roots.json`, skills minted `<alias>:<name>` under scope `catalog:<alias>` with `tier: external` on every point; search-only tier (never the per-turn offer preview; `search_skills` marks hits `external: <alias>` with a `get_skill` consumption note); promotion via symlink with collision refusal; skillOverrides/sidecar/flywheel all exclude catalogs by design; new `scripts/catalogs.py` + `skill-concierge:catalogs` skill + doctor `check_catalogs`; first catalog `antigravity` (1,603 skills) registered and indexed.**
 

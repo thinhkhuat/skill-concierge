@@ -870,12 +870,18 @@ def check_corpus_health():
 
 
 def _indexed_skill_names():
-    """Names of all kind="base" points in the live index (paged scroll, no vectors)."""
+    """Names of all kind="base" points in the live index (paged scroll, no vectors).
+
+    Excludes external catalog points (tier=external, ADR-0031): both callers here —
+    flywheel coverage and trigger hygiene — concern the utterance layer, which skips
+    externals by design (build_triggers.scroll_all_points), so counting them would
+    report every catalog skill as a permanent "missing utterances" false gap."""
     url = QURL.rstrip("/") + f"/collections/{COLLECTION}/points/scroll"
     names, nxt = set(), None
     while True:
         body = {"limit": 256, "with_payload": True, "with_vector": False,
-                "filter": {"must": [{"key": "kind", "match": {"value": "base"}}]}}
+                "filter": {"must": [{"key": "kind", "match": {"value": "base"}}],
+                           "must_not": [{"key": "tier", "match": {"value": "external"}}]}}
         if nxt is not None:
             body["offset"] = nxt
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),

@@ -5,7 +5,16 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
-## [0.22.0] — 2026-08-23
+## [0.22.1] — 2026-08-23
+
+### Fixed
+- **doctor flywheel coverage no longer counts external catalog skills as "missing
+  utterances."** `_indexed_skill_names()` (`scripts/doctor.py`) now excludes
+  `tier: external` points, matching the flywheel/trigger generators that skip externals
+  by design (ADR-0031). Without this, a registered catalog made doctor report every
+  catalog skill as a permanent false coverage gap (e.g. "1604 missing"); it now reports
+  only genuinely-uncovered installed skills. Also cleans the trigger-hygiene scan, which
+  shares the same enumerator. Surfaced by validating the 0.22.0 deploy.
 
 ### Added
 - **External catalog roots — multi-catalog retrieval without import (ADR-0031).** Third-party
