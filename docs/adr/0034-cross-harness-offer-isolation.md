@@ -29,8 +29,13 @@ turning the concierge's own preview into a source of false routing.
 **Keep foreign-harness skills out of the installed offer, then re-surface them as a separate
 marked annex.** This is the ADR-0032 external-annex shape applied one layer up.
 
-- `enforcer._retrieve` over-fetches to `RETRIEVE_LIMIT` (`TOP_K * 3`), drops rows this harness
-  cannot invoke, and trims back to `TOP_K`. Offer width is unchanged.
+- `enforcer._retrieve` over-fetches to `RETRIEVE_LIMIT` (`TOP_K * 4`), drops rows this harness
+  cannot invoke, and trims back to `TOP_K`. The multiplier is **headroom, not a guarantee**: in a
+  domain the sibling harness dominates, more than `RETRIEVE_LIMIT - TOP_K` of the top groups can
+  be foreign and the menu comes back short. Measured at `TOP_K * 3`, two of thirty probes
+  under-filled (5 and 7 rows, needing 30 and 25 groups); at `TOP_K * 4`, 20 of 20 return a full
+  8. A shorter menu of invocable rows beats a full one padded with rows the agent cannot act on,
+  so under-fill is the accepted degradation, not a bug to pad around.
 - `enforcer._retrieve_foreign` issues a **separate** query filtered to the foreign scope set,
   keeping the top `ENFORCER_FOREIGN_SLOTS` (2) rows scoring >= `ENFORCER_FOREIGN_FLOOR` (0.40).
   A dedicated query, never a partition of a widened one, is what makes displacement
@@ -56,9 +61,26 @@ in dedup, and the point carries `scope: codex-plugin` for **24 skills Claude inv
 A pre-filter silently deleted all 24 from the offer and printed them under *"NOT invocable here
 — do not use the Skill tool"*: the exact false routing this ADR exists to prevent, inverted.
 
-The post-filter tests each row with `_invocable_twin()`: a foreign-scoped row whose plugin id
-is enabled in **this session's** merged settings is invocable anyway and stays in the offer.
-`_retrieve_foreign` skips the same rows, so a twin never appears in both blocks.
+The post-filter tests each row with `_invocable_twin()`: a foreign-scoped row whose plugin is
+**installed on this side and not switched off** in this session's merged settings is invocable
+anyway and stays in the offer. `_retrieve_foreign` skips the same rows, so a twin never appears
+in both blocks. Three details are load-bearing and each was a defect before it was a rule:
+
+- **Installation is checked, not just enablement.** A plugin switched on in settings whose cache
+  is absent is not invocable; treating it as a twin would keep a genuinely dead row.
+- **A key absent from `enabledPlugins` means ENABLED**, matching Claude Code and
+  `skills_discovery._installed_plugin_roots`. Collecting only explicit-`true` keys would make an
+  enabled-by-default plugin permanently unrescuable.
+- **Marketplace collisions resolve by union.** Skill names carry only the bare plugin id, so if
+  any `<id>@<marketplace>` copy is installed and on, the id is invocable. Keying on the bare id
+  with last-writer-wins silently lost the enabled copy on JSON key order.
+
+**Unknown must filter nothing.** When `installed_plugins.json` cannot be read, the twin test
+cannot be made, so `_invocable_plugin_ids()` returns `None` and `_retrieve` drops **no** rows.
+The first version of this post-filter got that backwards — `_invocable_twin` returned `False` on
+unknown and the caller dropped on `not _invocable_twin(...)`, so an unreadable or
+`enabledPlugins`-less settings file silently reinstated the exact mislabelling the post-filter
+had just replaced. The drop is now conditioned on positive knowledge, and the selftest pins it.
 
 That resolution belongs in the **hook**, not in discovery. The index is machine-global and
 shared across concurrent sessions; baking a cwd-scoped view into it would make sessions fight
@@ -79,10 +101,14 @@ Not "everything belonging to the other harness". The set is derived per harness:
   `~/.codex/skills` and `~/.claude/skills` are different directories, and then its skills are
   genuinely unreachable from Claude. Where the operator has symlinked them, discovery dedups
   everything into one `personal` scope and the entry matches nothing.
-- **From Codex:** `plugin` always — Claude's plugin cache is not on Codex's load path at all —
-  and `personal` **only** when the two personal roots are distinct. Under the symlink the
-  `personal` scope's files *are* reachable at `~/.codex/skills`, so excluding it would blind a
-  Codex session to the entire personal catalogue (350 skills on the dev machine).
+- **From Codex:** `plugin` only. Claude's plugin cache is not on Codex's load path at all, so
+  that one is unconditional. `personal` is deliberately **not** foreign here, even though the
+  mirror argument looks symmetric. It is not symmetric: `SKILL_DIRS` walks the Claude personal
+  root first regardless of harness, so a skill present in *both* personal roots is tagged
+  `personal` — and Codex can invoke it via `~/.codex/skills`. With the twin rescue unavailable
+  on that side, excluding `personal` would drop exactly those skills and label them
+  uninvocable: the same defect, mirrored. Keeping them costs at most some Claude-only personal
+  rows in a Codex offer — the pre-ADR-0034 noise, which is the direction to fail in.
 - `project:` scopes are cwd-derived and shared by construction. Never foreign.
 
 ### Harness detection
@@ -120,7 +146,11 @@ catalog alias.
 - **`scope` and `tier` gained keyword payload indexes** (`server._ensure_collection`). Only
   `name` was indexed, so every enforcer query's `tier` condition — and the new annex query's
   `scope` condition — was a linear scan over ~25k points inside a hard 100 ms cap where a
-  timeout costs the whole offer.
+  timeout costs the whole offer. `_ensure_collection` is called only from `build_index()`, so
+  **the indexes appear at the next reindex, not at deploy**; creating them on an existing
+  populated collection is safe and idempotent, and the SessionStart auto-reindex self-heals it.
+  Note the vendored tests cannot prove the indexes are built — they run against local Qdrant,
+  which warns that payload indexes have no effect there — only that the call does not raise.
 - **Ledger epoch note.** This changes what `offered` contains. Any offer-composition metric
   (hit@k, conversion, fallback) pooled across the v0.25.0 boundary describes two different
   configs. Window it: `analyze.py --since <this release's commit>`.
@@ -151,12 +181,25 @@ catalog alias.
   is **not** minted as a phantom skill, and the Codex cache gets identical two-depth treatment.
 - Live discovery: 2541 skills (2506 + exactly the 35 previously-missed `mattpocock-skills`),
   zero duplicate paths, zero phantoms.
-- Live offer probe, six prompts, flag OFF vs ON, counting only rows this harness cannot invoke:
-  **18 of 48 -> 0**, every probe still returning a full 8 rows. Every foreign-scoped row kept in
+- Live offer probe, flag OFF vs ON, counting only rows this harness cannot invoke. Six prompts
+  — *"debug this failing test"*, *"review my code changes"*, *"docker build is broken"*, *"write
+  a plan for a new feature"*, *"audit the security of this endpoint"*, *"help me plan a database
+  migration"* — went **18 of 48 -> 0**. A 20-prompt sweep including Vercel/Next/Cloudflare
+  queries (the domains where the Codex cache is densest) returned **160 rows, 0 non-invocable,
+  8 rows every time**. Every foreign-scoped row kept in
   the offer was an invocable twin (`agent-skills:*`); the annex held only genuinely
   non-invocable skills (`superpowers:*`, `vercel:*`, `omo:*`, `supabase:*`, `cloudflare:*`).
   Warm latency: installed query 14-20 ms, annex query 8-18 ms, against the 100 ms cap.
-- Independent adversarial validation of the first implementation returned FAIL on two blocking
-  defects — the scope-vs-invocability premise and the `Path("")`-resolves-to-cwd inversion.
-  Both are fixed above and both are now pinned by the selftest. Report:
-  `plans/reports/validator-260824-1545-adr0034-cross-harness.md`.
+- Two independent adversarial validation passes, both returning FAIL on the implementation as it
+  stood:
+  - **Pass 1** (`plans/reports/validator-260824-1545-adr0034-cross-harness.md`) — the
+    scope-vs-invocability premise, and `Path("")`-resolves-to-cwd inverting harness detection.
+  - **Pass 2** (`plans/reports/validator-260824-1720-adr0034-pass2.md`) — a regression introduced
+    by the pass-1 fix: `Path.cwd()` at module scope broke the fail-silent contract (a deleted
+    working directory turned every turn into a traceback, where the pre-change code returned a
+    full offer); plus the unknown-twin path failing toward the harm it was built to prevent,
+    offer under-fill at `TOP_K * 3`, and the Codex `personal` mirror.
+  Every finding above is fixed and the two blocking ones are pinned by selftest case (12) — a
+  deleted-cwd import that must not raise, and an unknown manifest that must filter nothing.
+  Both passes are worth reading; each caught a defect whose selftests were already green,
+  because the tests pinned the mechanism while the bug was in the premise.

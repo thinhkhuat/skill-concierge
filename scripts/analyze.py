@@ -215,7 +215,10 @@ def _cross_harness_annex_stats(events):
     converted = {e.get("sid") for e in events
                  if e.get("ev") == "get_skill" and not e.get("sub")
                  and e.get("name") in offered_by_sid.get(e.get("sid"), ())}
-    n_rows = sum(len(e.get("xh") or []) for e in annex_offers)
+    # len() over a non-list `xh` would count characters; the enforcer never writes that shape,
+    # but a hand-edited or truncated ledger line can.
+    n_rows = sum(len(r) for e in annex_offers
+                 if isinstance(r := e.get("xh"), list))
     return len(annex_offers), n_rows, len(converted), len(offered_by_sid)
 
 

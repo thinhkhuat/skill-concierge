@@ -38,6 +38,7 @@ import re
 import socket
 import unicodedata
 import urllib.request
+import tempfile
 from pathlib import Path
 
 # ── endpoints ────────────────────────────────────────────────────────────────
@@ -103,7 +104,13 @@ EXTERNAL_FLOOR = float(os.environ.get("ENFORCER_EXTERNAL_FLOOR", "0.40"))
 # therefore over-fetches and the decision is made per row, where the twin test is available.
 # Bonus: it keeps an unindexed keyword filter off the installed query's hot path.
 CROSS_HARNESS = os.environ.get("ENFORCER_CROSS_HARNESS", "1") != "0"
-RETRIEVE_LIMIT = TOP_K * 3   # over-fetch, post-filter, then trim to TOP_K
+# Over-fetch, post-filter, trim to TOP_K. The multiplier is HEADROOM, not a guarantee: in a
+# domain the other harness dominates, more than RETRIEVE_LIMIT-TOP_K of the top groups can be
+# foreign and the menu comes back short. Measured on the live index, x3 left two of thirty probes
+# under-filled (5 and 7 rows, needing 30 and 25 groups); x4 covers both. A shorter menu of
+# invocable rows beats a full one padded with rows the agent cannot act on, so under-fill is the
+# accepted degradation rather than a bug to pad around.
+RETRIEVE_LIMIT = TOP_K * 4
 
 
 def _running_under_codex() -> bool:
@@ -134,79 +141,101 @@ FOREIGN_HARNESS = "claude" if UNDER_CODEX else "codex"
 def _foreign_scopes() -> tuple:
     """The scopes whose skills the RUNNING harness cannot invoke.
 
-    From Claude: both Codex scopes that can exist as DISTINCT scopes. `codex-personal` is
-    populated only when ~/.codex/skills and ~/.claude/skills are different directories — and
-    then its skills are genuinely unreachable from Claude. Where the operator has symlinked
-    them, discovery dedups everything into one `personal` scope and this entry matches nothing.
+    From Claude: both Codex scopes. `codex-personal` is populated only when a skill exists at
+    `~/.codex/skills/<x>` and NOT at `~/.claude/skills/<x>` — discovery walks the Claude root
+    first, so any name present on both sides is claimed as `personal`. A surviving
+    `codex-personal` row is therefore genuinely unreachable from Claude, always.
 
-    From Codex: `plugin` always (Claude's plugin cache is not on Codex's load path at all), and
-    `personal` ONLY when the two personal roots are distinct. Under the symlink the `personal`
-    scope's files ARE reachable at ~/.codex/skills, so excluding it would blind a Codex session
-    to the entire personal catalogue.
+    From Codex: `plugin` only. Claude's plugin cache is not on Codex's load path at all, so that
+    one is unconditional. `personal` is deliberately NOT foreign here even though the mirror
+    argument looks symmetric: it is not. The same first-writer-wins order means a skill present
+    in BOTH personal roots is tagged `personal`, and Codex CAN invoke it via `~/.codex/skills`.
+    With no twin rescue available on that side (see `_invocable_twin`), excluding `personal`
+    would drop exactly those skills and label them uninvocable — the pass-1 defect, mirrored.
+    Keeping them costs at most some Claude-only personal rows in a Codex offer: the pre-ADR-0034
+    noise, which is the direction to fail in.
 
-    `project:` scopes are cwd-derived and shared by construction — never foreign."""
-    if not UNDER_CODEX:
-        return ("codex-plugin", "codex-personal")
-    try:
-        shared = (Path.home() / ".codex" / "skills").resolve() == \
-                 (Path.home() / ".claude" / "skills").resolve()
-    except Exception:
-        shared = True                      # fail toward KEEPING personal in the offer
-    return ("plugin",) if shared else ("plugin", "personal")
+    `project:` scopes are cwd-derived and shared by construction. Never foreign."""
+    return ("plugin",) if UNDER_CODEX else ("codex-plugin", "codex-personal")
 
 
 FOREIGN_SCOPES = _foreign_scopes()
 FOREIGN_SLOTS = int(os.environ.get("ENFORCER_FOREIGN_SLOTS", "2"))
 FOREIGN_FLOOR = float(os.environ.get("ENFORCER_FOREIGN_FLOOR", "0.40"))
 
-# Claude Code resolves plugin enablement by LAYERING settings files: user, then project, then
-# project-local, last writer wins. skills_discovery reads the USER file only, so a plugin
-# enabled just for this project is dropped from discovery and its Codex twin wins the name —
-# leaving a `codex-plugin` point for a skill Claude invokes fine. This is the twin test the
-# post-filter needs, and it must be resolved HERE (per session, per cwd) rather than at index
-# time: the index is machine-global and shared across sessions, so a cwd-scoped view baked into
-# it would make concurrent sessions fight over each other's points (the ADR-0028 hazard).
-_SETTINGS_LAYERS = (Path.home() / ".claude" / "settings.json",
-                    Path.cwd() / ".claude" / "settings.json",
-                    Path.cwd() / ".claude" / "settings.local.json")
+# Claude Code decides whether a plugin skill is invocable from TWO files, and skills_discovery
+# consults them differently than a per-session view needs:
+#   installed_plugins.json -> plugins[<id>@<marketplace>][].installPath   (is it on disk here)
+#   settings enabledPlugins[<id>@<marketplace>] : bool                    (is it switched on)
+# Enablement LAYERS across user -> project -> project-local, last writer wins, and a key ABSENT
+# from enabledPlugins is ENABLED (skills_discovery.py mirrors that rule). skills_discovery reads
+# the USER file only, so a plugin enabled just for this project is dropped from discovery and its
+# sibling-harness twin wins the name — leaving a `codex-plugin` point for a skill Claude invokes
+# fine. That is the twin test the post-filter needs, and it must be resolved HERE (per session,
+# per cwd) rather than at index time: the index is machine-global and shared across sessions, so
+# a cwd-scoped view baked into it would make concurrent sessions fight over each other's points
+# (the ADR-0028 hazard).
+_INSTALLED_PLUGINS_JSON = Path(os.environ.get(
+    "SKILL_INSTALLED_PLUGINS", Path.home() / ".claude" / "plugins" / "installed_plugins.json"))
 
 
-def _local_plugin_ids():
-    """Plugin ids enabled for THIS session, e.g. {'agent-skills'} from
-    `enabledPlugins: {"agent-skills@addy-agent-skills": true}`.
+def _invocable_plugin_ids():
+    """Plugin ids THIS session can invoke: present in `installed_plugins.json` AND not explicitly
+    switched off in the merged settings layers. Returns e.g. {'agent-skills', 'memsearch'}.
 
-    Returns None when NOTHING could be read. None means "unknown", and an unknown twin test
-    filters nothing — failing toward ADR-0033's union, which is merely noisy and already
-    shipped, never toward telling the agent a skill it CAN invoke is 'NOT invocable here'."""
-    seen, out = False, {}
-    for f in _SETTINGS_LAYERS:
+    Returns None when the installed-plugins manifest cannot be read. None means UNKNOWN, and the
+    caller must then filter NOTHING — failing toward ADR-0033's union, which is merely noisy and
+    already shipped, never toward telling the agent a skill it CAN invoke is 'NOT invocable here'.
+
+    Installation is checked, not just enablement: a plugin switched on in settings whose cache is
+    absent is not invocable, and treating it as a twin would keep a genuinely dead row in the
+    offer. Enablement defaults to ON for an absent key, matching Claude Code and
+    `skills_discovery._installed_plugin_roots`.
+
+    Marketplace collisions resolve by UNION, not last-writer-wins: skill names carry only the bare
+    plugin id, so if ANY `<id>@<marketplace>` copy is installed and on, the id is invocable.
+    Everything touching the filesystem is inside the guard — `Path.cwd()` raises when the working
+    directory has been deleted, and this runs at import, outside main()'s try."""
+    try:
+        installed = json.loads(_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))["plugins"]
+        if not isinstance(installed, dict):
+            return None
+    except Exception:
+        return None
+
+    disabled_by_key = {}
+    try:
+        layers = (Path.home() / ".claude" / "settings.json",
+                  Path.cwd() / ".claude" / "settings.json",
+                  Path.cwd() / ".claude" / "settings.local.json")
+    except Exception:
+        layers = ()
+    for f in layers:
         try:
             data = json.loads(f.read_text(encoding="utf-8")).get("enabledPlugins", {})
         except Exception:
             continue
-        if not isinstance(data, dict):
-            continue
-        seen = True
-        for key, on in data.items():
-            out[str(key).split("@", 1)[0]] = bool(on)
-    if not seen:
-        return None
-    return {pid for pid, on in out.items() if on}
+        if isinstance(data, dict):
+            disabled_by_key.update({str(k): not bool(v) for k, v in data.items()})
+
+    return {str(key).split("@", 1)[0] for key in installed
+            if not disabled_by_key.get(str(key), False)}
 
 
-LOCAL_PLUGIN_IDS = _local_plugin_ids()
+INVOCABLE_PLUGIN_IDS = _invocable_plugin_ids()
 
 
 def _invocable_twin(name: str) -> bool:
     """True when a foreign-scoped row names a skill THIS harness can invoke anyway, because the
-    same plugin is installed and enabled here and its twin merely lost the discovery dedup.
+    same plugin is installed and switched on here and its twin merely lost the discovery dedup.
 
     Only meaningful from Claude. Under Codex the enablement truth lives in config.toml (TOML,
-    unreadable on the stdlib 3.10 floor), and `plugin`-scope skills sit under ~/.claude/**,
-    which is not on Codex's load path at all — so there is no twin to rescue."""
-    if UNDER_CODEX or LOCAL_PLUGIN_IDS is None or ":" not in name:
+    unreadable on the stdlib 3.10 floor), and `plugin`-scope skills sit under `~/.claude/**`,
+    which is not on Codex's load path at all — so there is no twin to rescue. That is also why
+    `_foreign_scopes` keeps `personal` OUT of the Codex foreign set."""
+    if UNDER_CODEX or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
-    return name.split(":", 1)[0] in LOCAL_PLUGIN_IDS
+    return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _DESC_CHARS = 96
 
@@ -710,8 +739,11 @@ def _retrieve(vector: list) -> list:
             continue
         pl = hits[0].get("payload", {}) or {}
         name = pl.get("name", g.get("id", "?"))
-        if (CROSS_HARNESS and pl.get("scope") in FOREIGN_SCOPES
-                and not _invocable_twin(name)):
+        # INVOCABLE_PLUGIN_IDS is None means the manifest was unreadable, i.e. the twin test
+        # cannot be made. Drop ONLY on positive knowledge — an unknown must filter nothing, or
+        # an unreadable settings file silently reinstates the very mislabelling this replaced.
+        if (CROSS_HARNESS and INVOCABLE_PLUGIN_IDS is not None
+                and pl.get("scope") in FOREIGN_SCOPES and not _invocable_twin(name)):
             continue
         out.append((name, pl.get("description", ""), float(hits[0].get("score", 0.0))))
         if len(out) >= TOP_K:
@@ -1379,7 +1411,7 @@ def _selftest() -> int:
     # per-case made a later case silently depend on an earlier one's declaration, so deleting
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
-    global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, LOCAL_PLUGIN_IDS
+    global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
     _saved_post = _post_json
     _reqs = []
 
@@ -1455,7 +1487,7 @@ def _selftest() -> int:
     #     the harness marker + get_skill instruction, never joining the installed %-share pool;
     #   - the kill-switch restores the pre-ADR-0034 request shape and output exactly.
     _saved_xh = (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
-                 LOCAL_PLUGIN_IDS, _post_json)
+                 INVOCABLE_PLUGIN_IDS, _post_json)
     _freqs = []
 
     def _grp(gid, name, score, scope=None):
@@ -1484,6 +1516,21 @@ def _selftest() -> int:
         if (FOREIGN_HARNESS == "codex") != all(x.startswith("codex-") for x in FOREIGN_SCOPES):
             bad.append("cross-harness: harness label disagrees with the foreign scope set: %r/%r"
                        % (FOREIGN_HARNESS, FOREIGN_SCOPES))
+        # Nothing at module scope may touch the filesystem unguarded: `Path.cwd()` raises when
+        # the working directory has been deleted (a worktree removed under a live session), and
+        # an import-time raise turns a fail-silent hook into a traceback on every turn.
+        _cwd = os.getcwd()
+        _tmpd = tempfile.mkdtemp()
+        try:
+            os.chdir(_tmpd)
+            os.rmdir(_tmpd)
+            _invocable_plugin_ids()          # must not raise
+        except Exception as _e:
+            bad.append("cross-harness: import-time settings read must survive a deleted cwd: "
+                       "%s: %s" % (type(_e).__name__, _e))
+        finally:
+            os.chdir(_cwd)
+
         # `Path("").resolve()` is the CWD — a falsy env var must never be probed as a path.
         _cpr = os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
         try:
@@ -1498,7 +1545,7 @@ def _selftest() -> int:
                 os.environ["CLAUDE_PLUGIN_ROOT"] = _cpr
 
         CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR = True, 2, 0.40
-        FOREIGN_SCOPES, LOCAL_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
+        FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
         _post_json = _fake_xh_post
 
         _freqs.clear()
@@ -1518,6 +1565,15 @@ def _selftest() -> int:
             bad.append("cross-harness: an INVOCABLE twin must stay in the installed offer")
         if len(inst) != TOP_K:
             bad.append("cross-harness: offer must refill to TOP_K after the drop: %d" % len(inst))
+
+        # UNKNOWN must filter NOTHING. A None manifest means the twin test cannot be made, and
+        # dropping on that reinstates the exact mislabelling the post-filter replaced.
+        INVOCABLE_PLUGIN_IDS = None
+        _freqs.clear()
+        if "otherpl:hi" not in [n for n, _d, _s in _retrieve([0.1])]:
+            bad.append("cross-harness: unknown plugin manifest must filter NOTHING, "
+                       "never drop every foreign row")
+        INVOCABLE_PLUGIN_IDS = {"twinpl"}
 
         _freqs.clear()
         fgn = _retrieve_foreign([0.1])
@@ -1550,7 +1606,7 @@ def _selftest() -> int:
             bad.append("cross-harness: empty foreign annex must render no block")
     finally:
         (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
-         LOCAL_PLUGIN_IDS, _post_json) = _saved_xh
+         INVOCABLE_PLUGIN_IDS, _post_json) = _saved_xh
 
     if bad:
         print("enforcer --selftest FAIL:")

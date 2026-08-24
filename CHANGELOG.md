@@ -14,8 +14,10 @@ All notable changes to **skill-concierge**. Format loosely follows
   prompts, **18 of 48 offer rows** named skills the Skill tool cannot invoke here — each burning
   a slot and inviting a `USING:` the harness would refuse. After: **0 of 48**, offers still a
   full 8 rows.
-  - `enforcer._retrieve` over-fetches to `TOP_K * 3`, drops rows this harness cannot invoke,
-    and trims back to `TOP_K`.
+  - `enforcer._retrieve` over-fetches to `TOP_K * 4`, drops rows this harness cannot invoke,
+    and trims back to `TOP_K`. The multiplier is headroom, not a guarantee — where the sibling
+    harness dominates a domain the menu can come back short, which beats padding it with rows
+    the agent cannot act on.
   - `enforcer._retrieve_foreign` re-surfaces them from a **separate** query — top
     `ENFORCER_FOREIGN_SLOTS` (2) scoring ≥ `ENFORCER_FOREIGN_FLOOR` (0.40) — rendered as a third
     block marked `[codex]` / `[claude]` with the `get_skill` read-inline instruction. A
@@ -27,13 +29,22 @@ All notable changes to **skill-concierge**. Format loosely follows
     the user file only — so a plugin enabled for one project is dropped, its Codex twin wins the
     name, and 24 `agent-skills:*` skills Claude invokes fine carry `scope: codex-plugin`. A
     query-side filter deleted all 24 from the offer and printed them as "NOT invocable here".
-    `_invocable_twin()` resolves the merged settings per session — in the hook, where a
-    per-project question belongs, never in a machine-global index (the ADR-0028 hazard).
-    Unreadable settings mean "unknown", which filters nothing.
+    `_invocable_twin()` resolves installation (`installed_plugins.json`) **and** the merged
+    settings per session — in the hook, where a per-project question belongs, never in a
+    machine-global index (the ADR-0028 hazard). A key absent from `enabledPlugins` counts as
+    ENABLED, matching Claude Code; marketplace collisions resolve by union, so an enabled copy
+    is never lost to JSON key order; and an unreadable manifest means "unknown", which drops
+    **nothing** — the drop is conditioned on positive knowledge, because failing the other way
+    silently reinstates the mislabelling this replaced.
   - **Foreign scopes are derived, not hardcoded to one.** From Claude: `codex-plugin` +
-    `codex-personal`. From Codex: `plugin`, plus `personal` only when `~/.codex/skills` is not
-    the same directory as `~/.claude/skills` — under that symlink the personal catalogue is
-    mutual and excluding it would blind Codex to all 350 skills.
+    `codex-personal` (a surviving `codex-personal` row is always genuinely unreachable, since
+    discovery walks the Claude root first and claims any shared name as `personal`). From Codex:
+    `plugin` only — `personal` is deliberately not foreign there, because that same walk order
+    means a skill in both personal roots is tagged `personal` while Codex can invoke it via
+    `~/.codex/skills`, and the twin rescue is unavailable on that side.
+  - Nothing at module scope touches the filesystem unguarded: `Path.cwd()` raises when the
+    working directory has been deleted, and an import-time raise turns a fail-silent hook into a
+    traceback on every turn. Pinned by the selftest.
   - Harness detection uses **precedence** (`CLAUDE_PLUGIN_ROOT`, else the hook's own resolved
     `__file__`) and never resolves a falsy candidate: `Path("").resolve()` is the cwd, which
     would invert the filter for any session sitting under `~/.codex/`.
@@ -60,7 +71,8 @@ All notable changes to **skill-concierge**. Format loosely follows
   so the test conftest's existing single monkeypatch keeps discovery hermetic.
 - **`scope` and `tier` had no payload index.** Only `name` did, so every enforcer query's `tier`
   condition was a linear scan over ~25k points inside a hard 100 ms cap where a timeout costs
-  the entire offer. `server._ensure_collection` now indexes all three.
+  the entire offer. `server._ensure_collection` now indexes all three. Note this takes effect at
+  the next reindex, not at deploy — `_ensure_collection` is only called from `build_index()`.
 - **`SKILL_CODEX_ROOTS` was not forwarded to the detached reindex** (`auto_reindex._mcp_env`) —
   the ADR-0026 env-forwarding gap class. Defensive today (`.mcp.json` does not pin it), but
   pinned there it would have made background rebuilds disagree with the live query index in
