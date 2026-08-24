@@ -57,7 +57,8 @@
     "openwiki/quickstart.md",
     "openwiki/.last-update.json",
     ".codex-plugin/plugin.json",
-    ".codex/hooks.json"
+    ".codex/hooks.json",
+    ".codex-plugin/mcp.json"
   ],
   "command_checks": [
     {
@@ -67,6 +68,10 @@
     {
       "name": "skill-list-parity",
       "command": "python3 scripts/check_skill_list_parity.py"
+    },
+    {
+      "name": "mcp-env-parity",
+      "command": "python3 scripts/check_mcp_env_parity.py"
     }
   ]
 }

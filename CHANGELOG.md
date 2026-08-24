@@ -5,6 +5,34 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.25.2] — 2026-08-24
+
+### Fixed
+- **Codex MCP wiring (ADR-0035): the retrieval organ was silently dead in every Codex session.**
+  The first Codex-side validation (248 tools enumerated, zero `skill-search` matches) found the
+  root cause: Codex expands `${CLAUDE_PLUGIN_ROOT}` in plugin **hook** commands but leaves it
+  literal in plugin **MCP** `command`/`args` (openai/codex#35762, Codex CLI 0.149.1) — so the
+  plugin-declared server spawned a path that cannot exist, while hooks, the ledger and the
+  shared index all kept working and the outage was invisible in every metric. ADR-0033's
+  "reads `.mcp.json` the same way" claim is hereby corrected: true for hooks, false for MCP.
+  - New `.codex-plugin/mcp.json` using Codex's native plugin-root mechanism — a relative
+    command (`./bin/skill-search-mcp`) resolved against `"cwd": "."` (openai/codex discussion
+    #28145) — portable across versioned cache dirs; `.codex-plugin/plugin.json` repointed at it.
+    The shared `.mcp.json` stays untouched (Claude wiring proven; `auto_reindex` env source).
+  - `SKILL_SERVER_RECORDS` deliberately omitted from the Codex descriptor: its `${HOME}` literal
+    only Claude Code's launcher expands; the engine's `Path.home()` default is correct there.
+  - **Env parity enforced:** `scripts/check_mcp_env_parity.py`, wired into driftcheck, fails on
+    any shared key drifting between the two descriptors or any key invented only on the Codex
+    side — two descriptors for one engine is otherwise a silent split.
+  - Migration: the go-live's hand-registered user-scope `skill-search` entry in
+    `~/.codex/config.toml` carries the same literal variable and never worked — remove it
+    (`codex mcp remove skill-search`) so it cannot shadow the plugin-provided server.
+  - First Codex-side validation report:
+    `plans/reports/codex-validation-260824-dual-harness-v0251.md` — 8 of 9 checks PASS on real
+    Codex execution (harness detection `UNDER_CODEX=True / FOREIGN_SCOPES=('plugin',)`, offer
+    isolation, `[claude]` annex render, kill-switch revert, live hooks + ledger `xh`,
+    shared-index safety); the one FAIL is this wiring defect.
+
 ## [0.25.1] — 2026-08-24
 
 ### Fixed

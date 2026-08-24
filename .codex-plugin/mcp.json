@@ -1,0 +1,18 @@
+{
+  "_comment": "Codex-side MCP descriptor (ADR-0035). Codex never expands ${CLAUDE_PLUGIN_ROOT} in plugin MCP command/args (openai/codex#35762 — hooks expand it, mcpServers leave it literal), so the shared .mcp.json's command is unresolvable there. Codex's native replacement is a relative cwd: 'cwd: .' resolves to the installed plugin root (openai/codex discussion #28145, plugin_config.rs), making a relative command portable across versioned cache dirs. The launcher self-locates via BASH_SOURCE, so a relative spawn is safe. ENV PARITY IS ENFORCED: the env block below must stay in lockstep with .mcp.json for every shared key — scripts/check_mcp_env_parity.py (wired into driftcheck) fails the build on drift. SKILL_SERVER_RECORDS is deliberately ABSENT here: .mcp.json carries it as a ${HOME} literal only Claude Code's launcher expands; under Codex the engine's own Path.home() default is correct where the literal would mint a garbage path.",
+  "mcpServers": {
+    "skill-search": {
+      "command": "./bin/skill-search-mcp",
+      "cwd": ".",
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "fastembed",
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "SKILL_TOP_K": "6",
+        "SKILL_LLM_TRIGGERS": "1",
+        "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json"
+      }
+    }
+  }
+}
