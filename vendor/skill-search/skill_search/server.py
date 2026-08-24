@@ -297,6 +297,35 @@ def _read_manifest() -> dict | None:
         return None
 
 
+def _newest_foreign_manifest() -> tuple[dict, str] | None:
+    """The freshest OTHER root's manifest, as (manifest, its root-key), else None.
+
+    The manifest is keyed per project root because the disk SIGNATURE is cwd-scoped. But an
+    MCP server whose cwd is not a project — Codex pins it to the plugin cache (ADR-0035) —
+    derives a phantom key nothing ever writes, and reported "never indexed" forever against a
+    demonstrably fresh shared collection, with a "run reindex()" whose obedience would have
+    indexed under the phantom root. For a MACHINE-GLOBAL collection, "has anything on this
+    machine indexed recently" is the honest freshness question when the per-root answer does
+    not exist, and the SessionStart auto-reindex keeps some manifest fresh on every active
+    machine. The borrowed manifest answers FRESHNESS only — its signature belongs to another
+    cwd, so staleness comparison stays unavailable (callers must not compare it)."""
+    try:
+        best = None
+        for f in META_PATH.parent.glob("index_meta-*.json"):
+            if f == META_PATH:
+                continue
+            try:
+                m = json.loads(f.read_text())
+            except Exception:
+                continue
+            if isinstance(m, dict) and isinstance(m.get("indexed_at"), (int, float)):
+                if best is None or m["indexed_at"] > best[0]["indexed_at"]:
+                    best = (m, f.stem.replace("index_meta-", ""))
+        return best
+    except Exception:
+        return None
+
+
 def _engine_drift(manifest: dict) -> str | None:
     """The manifest writer's engine build, when it differs from ours — else None.
 
@@ -320,6 +349,13 @@ def _staleness_warning() -> str | None:
     try:
         manifest = _read_manifest()
         if manifest is None:
+            borrowed = _newest_foreign_manifest()
+            if borrowed is not None:
+                # Another root on this machine indexed the shared collection; freshness is
+                # answered, per-root staleness is simply not knowable from this cwd. Say
+                # nothing rather than crying wolf — the old unconditional warning rode every
+                # Codex search reply and its advice (reindex from here) was the harmful move.
+                return None
             return "index manifest missing — run reindex() (results may be empty/stale)"
         if _engine_drift(manifest):
             # Two causes, opposite remedies, and this process can see neither: it knows its
@@ -876,8 +912,21 @@ def _health() -> dict:
             if report["stale"]:
                 report["issues"].append("disk changed since last index — run reindex()")
     else:
-        report["indexed_at"] = None
-        report["issues"].append("no index manifest — never indexed; run reindex()")
+        borrowed = _newest_foreign_manifest()
+        if borrowed is not None:
+            # Shared collection, foreign-root freshness: report it as data, not as an issue.
+            # `stale` stays None (UNKNOWABLE from this cwd — the borrowed signature belongs
+            # to another root), and status stays healthy: "this cwd never wrote a manifest"
+            # is not degradation when the machine demonstrably keeps the index fresh.
+            m, root_key = borrowed
+            report["indexed_at"] = m.get("indexed_at")
+            report["stale"] = None
+            report["freshness_from"] = root_key
+            report["engine_build"]["index_written_by"] = (
+                m.get("engine") if m.get("engine") and m.get("engine") != _ENGINE_BUILD else None)
+        else:
+            report["indexed_at"] = None
+            report["issues"].append("no index manifest — never indexed; run reindex()")
 
     if report["issues"]:
         report["status"] = "degraded"

@@ -387,3 +387,53 @@ def test_end_to_end_build_search_incremental():
     # pinning it to the earlier count would also break on any skill added mid-test.
     assert again["embedded"] == 0
     assert again["skipped"] >= stats["indexed"]
+
+
+# --- borrowed-manifest freshness (shared-collection health from a non-project cwd) ------
+# An MCP server whose cwd is not a project (Codex pins it to the plugin cache, ADR-0035)
+# derives a manifest key nothing ever writes. Health must borrow the newest OTHER root's
+# manifest for freshness instead of reporting "never indexed" against a fresh shared
+# collection — and the staleness warning must go silent rather than advise a reindex
+# under the phantom root. Staleness itself stays UNKNOWABLE (None): the borrowed
+# signature belongs to another cwd.
+
+def _meta_env(monkeypatch, tmp_path, own_key="phantom0"):
+    meta_dir = tmp_path / "meta"
+    meta_dir.mkdir()
+    own = meta_dir / f"index_meta-{own_key}.json"
+    monkeypatch.setattr(server, "META_PATH", own)
+    return meta_dir, own
+
+
+def test_health_borrows_newest_foreign_manifest(tmp_path, monkeypatch):
+    import json as _json
+    meta_dir, _own = _meta_env(monkeypatch, tmp_path)
+    (meta_dir / "index_meta-aaaa1111.json").write_text(_json.dumps(
+        {"indexed": 5, "indexed_at": 1000.0, "signature": "s1", "engine": server._ENGINE_BUILD}))
+    (meta_dir / "index_meta-bbbb2222.json").write_text(_json.dumps(
+        {"indexed": 7, "indexed_at": 2000.0, "signature": "s2", "engine": server._ENGINE_BUILD}))
+    got = server._newest_foreign_manifest()
+    assert got is not None
+    m, key = got
+    assert key == "bbbb2222" and m["indexed_at"] == 2000.0
+    assert server._staleness_warning() is None          # freshness answered -> no wolf-cry
+
+
+def test_health_no_manifest_anywhere_still_degrades(tmp_path, monkeypatch):
+    _meta_env(monkeypatch, tmp_path)
+    assert server._newest_foreign_manifest() is None
+    w = server._staleness_warning()
+    assert w is not None and "reindex" in w             # genuinely never-indexed machine
+
+
+def test_own_manifest_still_wins_over_foreign(tmp_path, monkeypatch):
+    import json as _json
+    meta_dir, own = _meta_env(monkeypatch, tmp_path)
+    own.write_text(_json.dumps(
+        {"indexed": 3, "indexed_at": 500.0, "signature": "mine", "engine": server._ENGINE_BUILD}))
+    (meta_dir / "index_meta-cccc3333.json").write_text(_json.dumps(
+        {"indexed": 9, "indexed_at": 9000.0, "signature": "other", "engine": server._ENGINE_BUILD}))
+    # _read_manifest (own key) is what health consults first; foreign is only the fallback
+    assert server._read_manifest()["signature"] == "mine"
+    got = server._newest_foreign_manifest()
+    assert got is not None and got[1] == "cccc3333"     # helper skips the own file

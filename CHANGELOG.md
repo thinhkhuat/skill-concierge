@@ -5,6 +5,24 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.26.2] — 2026-08-24
+
+### Fixed
+- **D2 from the Codex revalidation — borrowed-manifest freshness (ADR-0037).** The index
+  manifest is keyed per project root (ADR-0028), and ADR-0035 pins the Codex MCP server's cwd
+  to the plugin cache — a phantom key nothing ever writes. Health therefore reported
+  `degraded — never indexed` forever from Codex, and every search reply carried a false
+  "run reindex()" whose obedience would have indexed under the phantom root. The engine now
+  borrows the newest OTHER root's manifest when its own is absent: freshness answered
+  (`freshness_from` published as data, status healthy), per-root staleness honestly `None`
+  (the borrowed signature belongs to another cwd — unknowable, not false), and the wolf-cry
+  gone. A genuinely manifest-less machine still degrades. Claude-side visible change, accepted:
+  a brand-new project root shows inherited freshness for the one SessionStart it takes the
+  auto-reindex to write its own manifest. Chosen by the operator over pinning a stable key in
+  the Codex descriptor (new env seam + parity-contract loosening), suppressing the warning only
+  from plugin-cache cwds (blind), and leaving it documented (wolf-crying). Three vendored tests
+  + live proof under the exact phantom-key condition.
+
 ## [0.26.1] — 2026-08-24
 
 ### Fixed
