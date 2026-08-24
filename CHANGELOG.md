@@ -24,9 +24,12 @@ All notable changes to **skill-concierge**. Format loosely follows
   - **Env parity enforced:** `scripts/check_mcp_env_parity.py`, wired into driftcheck, fails on
     any shared key drifting between the two descriptors or any key invented only on the Codex
     side — two descriptors for one engine is otherwise a silent split.
-  - Migration: the go-live's hand-registered user-scope `skill-search` entry in
-    `~/.codex/config.toml` carries the same literal variable and never worked — remove it
-    (`codex mcp remove skill-search`) so it cannot shadow the plugin-provided server.
+  - Retest, executed against the deployed 0.25.2 Codex cache: Codex's loader now registers
+    `command: ./bin/skill-search-mcp` with `cwd` resolved to the plugin root, and the server
+    spawned exactly as Codex will spawn it completed initialize → tools/list (all four) →
+    search_skills with ranked results. The broken registration turned out to be the
+    plugin-provided entry itself (not a hand-registered one — `codex mcp remove` finds no
+    user-scope server), so the manifest repoint is the whole migration; no user-side cleanup.
   - First Codex-side validation report:
     `plans/reports/codex-validation-260824-dual-harness-v0251.md` — 8 of 9 checks PASS on real
     Codex execution (harness detection `UNDER_CODEX=True / FOREIGN_SCOPES=('plugin',)`, offer

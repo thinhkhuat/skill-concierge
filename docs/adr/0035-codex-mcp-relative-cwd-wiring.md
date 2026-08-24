@@ -53,11 +53,13 @@ versioned cache dirs a fixed absolute path would break on every release.
   key whose values differ and on any key present only in the Codex file. The Claude file is the
   source of truth; the Codex file may deliberately omit keys, never invent them.
 
-**Migration note.** The go-live session had also hand-registered a user-scope `skill-search`
-entry in `~/.codex/config.toml` carrying the same literal variable. That entry never worked and
-must be removed (`codex mcp remove skill-search`) so it cannot shadow the plugin-provided
-server. Per Codex's model, plugin-bundled servers are launched from the plugin; user config only
-toggles them (`[plugins."skill-concierge@skill-concierge".mcp_servers.skill-search]`).
+**Migration note — corrected by the retest.** The broken registration was the
+**plugin-provided** entry itself, not a hand-registered user-scope one: `codex mcp remove
+skill-search` reports no such server while `codex mcp get` still returns it, which is exactly
+how Codex surfaces manifest-sourced servers. No user-side cleanup exists or is needed — the
+manifest repoint IS the whole migration, applied automatically by the plugin update. Per
+Codex's model, plugin-bundled servers are launched from the plugin; user config only toggles
+them (`[plugins."skill-concierge@skill-concierge".mcp_servers.skill-search]`).
 
 ## Consequences
 
@@ -77,6 +79,11 @@ toggles them (`[plugins."skill-concierge@skill-concierge".mcp_servers.skill-sear
   (launcher self-locates via `BASH_SOURCE`, ADR-0018 self-heal path included).
 - `mcp-env-parity` check green: 7 shared keys in lockstep, `SKILL_SERVER_RECORDS` omission
   flagged as deliberate.
-- End-to-end proof requires a Codex session reload against the updated plugin — recorded as the
-  Codex-side retest (first Codex validation report:
-  `plans/reports/codex-validation-260824-dual-harness-v0251.md`, defect D1).
+- Retest executed same-day against the deployed 0.25.2 Codex cache: `codex mcp get
+  skill-search` shows `command: ./bin/skill-search-mcp` with `cwd` **resolved by Codex's own
+  loader** to the plugin root (`.../0.25.2/.`) — the literal variable is gone; and the server
+  spawned exactly as Codex will spawn it (that resolved cwd, relative command, descriptor env)
+  completed a full stdio session: `initialize` → `skill-search 1.29.0`, `tools/list` → all four
+  tools, `tools/call search_skills` → ranked results. Sole residue: observing an interactive
+  Codex session's own tool surface, which requires the next live Codex session. First Codex
+  validation report: `plans/reports/codex-validation-260824-dual-harness-v0251.md`, defect D1.
