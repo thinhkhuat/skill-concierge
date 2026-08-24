@@ -84,6 +84,9 @@ them (`[plugins."skill-concierge@skill-concierge".mcp_servers.skill-search]`).
   loader** to the plugin root (`.../0.25.2/.`) — the literal variable is gone; and the server
   spawned exactly as Codex will spawn it (that resolved cwd, relative command, descriptor env)
   completed a full stdio session: `initialize` → `skill-search 1.29.0`, `tools/list` → all four
-  tools, `tools/call search_skills` → ranked results. Sole residue: observing an interactive
-  Codex session's own tool surface, which requires the next live Codex session. First Codex
-  validation report: `plans/reports/codex-validation-260824-dual-harness-v0251.md`, defect D1.
+  tools, `tools/call search_skills` → ranked results.
+- Closed same-day by the operator's live Codex session: its MCP list shows `skill-search` with
+  `Tools: get_skill, health, reindex, search_skills` — the in-session tool surface, the one leg
+  a spawn-identical stdio drive cannot observe. The fix is end-to-end proven with no residue.
+  First Codex validation report:
+  `plans/reports/codex-validation-260824-dual-harness-v0251.md`, defect D1.
