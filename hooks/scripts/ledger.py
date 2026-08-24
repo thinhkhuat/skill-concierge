@@ -29,8 +29,14 @@ from pathlib import Path
 LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
-SEARCH_TOOL = "skill-search__search_skills"  # suffix match; tolerates the mcp__[plugin_...]__ namespace prefix (drift-proof — the bare name broke when the tool got plugin-namespaced)
-GET_TOOL = "skill-search__get_skill"  # ADR-0031: deep pulls; analyze.py classifies external takes by catalog alias prefix
+# Suffix matches; tolerate the mcp__[plugin_...]__ namespace prefix (drift-proof — the bare name
+# broke when the tool got plugin-namespaced) AND Codex's underscore normalization of the server
+# name (a Codex session exposes mcp__skill_search__search_skills — hyphen flattened; observed
+# live 2026-08-24). Codex fires no PostToolUse today, so the underscore forms are dormant — but
+# without them, capture would silently miss the day it does (the two-layer D3 from the Codex
+# revalidation).
+SEARCH_TOOLS = ("skill-search__search_skills", "skill_search__search_skills")
+GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill")
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
 
 
@@ -94,9 +100,9 @@ def main() -> int:
                 if sub:
                     ev["sub"] = True
                 _append(ev)
-            elif tool.endswith(SEARCH_TOOL):
+            elif tool.endswith(SEARCH_TOOLS):
                 _append({"t": t, "sid": sid, "ev": "search"})
-            elif tool.endswith(GET_TOOL):
+            elif tool.endswith(GET_TOOLS):
                 # ADR-0031 external-take leg: a get_skill deep pull is how an
                 # external catalog skill is consumed (read-inline). Log EVERY pull
                 # with its name; whether the name is external (catalog alias
@@ -140,6 +146,13 @@ def _selftest() -> int:
                   "tool_name": "Skill", "tool_input": {"skill": "doctor"}})
             feed({"hook_event_name": "PostToolUse", "session_id": "t",
                   "tool_name": "mcp__x__skill-search__search_skills"})
+            # Codex underscore normalization (server name hyphen flattened by the harness,
+            # observed live 2026-08-24): must classify identically to the hyphen forms.
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "mcp__skill_search__search_skills"})
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "mcp__skill_search__get_skill",
+                  "tool_input": {"name": "mattpocock-skills:tdd"}})
             feed({"hook_event_name": "UserPromptSubmit", "session_id": "t",
                   "prompt": "/keep-on list"})
             rows = [json.loads(l) for l in LEDGER.read_text().splitlines()]
@@ -148,7 +161,8 @@ def _selftest() -> int:
         LEDGER, LOG_DIR = saved
     evs = [(r["ev"], r.get("name")) for r in rows]
     want = [("get_skill", "antigravity:seo"), ("auto", "doctor"),
-            ("search", None), ("manual", "keep-on")]
+            ("search", None), ("search", None),
+            ("get_skill", "mattpocock-skills:tdd"), ("manual", "keep-on")]
     if evs != want:
         print("ledger --selftest FAIL: %r != %r" % (evs, want))
         return 1

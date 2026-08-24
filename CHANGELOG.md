@@ -5,6 +5,40 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.26.1] — 2026-08-24
+
+### Fixed
+Findings of the second live Codex revalidation
+(`plans/reports/codex-validation-260824-1823-v0252-live-revalidation.md` — retrieval end-to-end
+PASS under Codex; all four defects were telemetry/test-harness class):
+
+- **D1 — the deployed selftest failed from the Codex cache.** Case (12) pins the Claude-side
+  twin-rescue world in `FOREIGN_SCOPES`/`INVOCABLE_PLUGIN_IDS` but left `UNDER_CODEX` to the
+  module's own path-derived value, so run from a Codex cache the three twin assertions failed —
+  a false alarm on the documented post-deploy verification command. The selftest now pins the
+  harness direction too, and is verified green from a `/.codex/`-marked path with no env var.
+- **Harness detection hardened against env debris.** `~/.claude/settings.json` was found
+  injecting a LITERAL `CLAUDE_PLUGIN_ROOT = "$HOME/.claude"` into every session (JSON env
+  blocks never shell-expand) — masking D1 locally and the likely origin of the transient
+  `'$HOME/...'` ENOENT from the first Codex report. `_running_under_codex()` now skips any
+  non-absolute candidate instead of resolving garbage against the cwd; the debris entry itself
+  was removed from settings (backed up). Both behaviors selftest-pinned.
+- **D3 (latent layer) — ledger capture now accepts Codex's underscore normalization.** A Codex
+  session exposes `mcp__skill_search__search_skills` (server-name hyphen flattened) while the
+  ledger matched only `skill-search__…` and the hooks matcher named a tool that cannot exist
+  under Codex. Both now accept `skill[-_]search__…`. Dormant today — Codex fires no PostToolUse
+  (ADR-0033's assumption re-confirmed on live execution) — but without this, capture would
+  silently miss the day it does.
+- **D4 — doctor's Trigger-hygiene row misled from a fresh cache.** Its env-less default looked
+  at `<cache>/eval/triggers.json` (absent by construction) and reported "utterance layer
+  unused" against a working config. Durable-home-first resolution with legacy fallback — the
+  0.25.1 thresholds pattern, second application.
+
+Open, deliberately not fixed here: **D2** (engine `health` reports permanently degraded from
+Codex because `manifest_key()` derives from the MCP server's cwd, which ADR-0035 pins to the
+plugin cache — a phantom key nothing ever writes). Its fix shape is a product decision on how a
+machine-global index should express per-root freshness; tracked for the next release.
+
 ## [0.26.0] — 2026-08-24
 
 ### Changed

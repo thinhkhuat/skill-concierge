@@ -43,9 +43,16 @@ VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-
 QNAME = os.environ.get("SKILL_QDRANT_CONTAINER", "skill-search-qdrant")
 SETTINGS = Path(os.environ.get("SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude/settings.json"))
 LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-concierge/logs"))
-# Same seam as flywheel.py/llm_triggers.py: the engine reads triggers from SKILL_TRIGGERS, which
-# need not live under ROOT — when doctor runs from the plugin cache, ROOT/eval/ does not exist.
-TRIGGERS = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
+# Same seam as flywheel.py/llm_triggers.py: the engine reads triggers from SKILL_TRIGGERS. The
+# env-less default is durable-home-first with the legacy repo-local path as fallback (the
+# 0.25.1 thresholds pattern): the live .mcp.json pins the durable home, so a doctor run from a
+# fresh plugin cache WITHOUT that env used to look at <cache>/eval/triggers.json — absent by
+# construction — and report "utterance layer unused" against a working config (Codex
+# revalidation defect D4).
+_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
+_trig_env = os.environ.get("SKILL_TRIGGERS")
+TRIGGERS = Path(_trig_env) if _trig_env else (
+    _TRIGGERS_DURABLE if _TRIGGERS_DURABLE.exists() else ROOT / "eval" / "triggers.json")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 MULTIVECTOR = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"   # multi-vector trigger layer (default on)
 

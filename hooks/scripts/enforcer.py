@@ -151,14 +151,17 @@ def _running_under_codex() -> bool:
     ${CLAUDE_PLUGIN_ROOT}, so the discriminator is WHERE the plugin was installed: Codex caches
     under ~/.codex/plugins/cache/**, Claude under ~/.claude/**.
 
-    PRECEDENCE, not a disjunction: the env var decides whenever it is set, and only an unset or
-    empty one falls through to this file's own resolved path (which works when the hook is wired
-    by absolute path). A falsy candidate is SKIPPED, never resolved — `Path("").resolve()` is
-    `os.getcwd()`, which would silently turn this into a CWD probe and invert the filter for any
-    session whose cwd happens to sit under ~/.codex/."""
+    PRECEDENCE, not a disjunction: the env var decides whenever it is set AND absolute, and
+    only an unset/empty/non-absolute one falls through to this file's own resolved path (which
+    works when the hook is wired by absolute path). A falsy candidate is SKIPPED, never resolved
+    — `Path("").resolve()` is `os.getcwd()`, which would silently turn this into a CWD probe and
+    invert the filter for any session whose cwd happens to sit under ~/.codex/. A NON-ABSOLUTE
+    candidate is skipped for the same reason: a settings-level env block can inject a LITERAL
+    like `$HOME/.claude` (observed live — JSON env values never shell-expand), and resolving
+    that garbage against the cwd would let machine config debris decide the harness."""
     marker = f"{os.sep}.codex{os.sep}"
     for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
-        if not cand:
+        if not cand or not os.path.isabs(cand):
             continue
         try:
             return marker in str(Path(cand).resolve())
@@ -1471,7 +1474,7 @@ def _selftest() -> int:
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
-    global ANNEX_DYNAMIC, ANNEX_MARGIN
+    global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX
     _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
     _reqs = []
@@ -1632,6 +1635,13 @@ def _selftest() -> int:
                                           in str(Path(__file__).resolve())):
                 bad.append("cross-harness: empty CLAUDE_PLUGIN_ROOT must fall through to "
                            "__file__, never resolve to the cwd")
+            # A LITERAL like `$HOME/.claude` (a settings-level env block never shell-expands)
+            # must also fall through — machine config debris cannot decide the harness.
+            os.environ["CLAUDE_PLUGIN_ROOT"] = "$HOME/.claude"
+            if _running_under_codex() != (f"{os.sep}.codex{os.sep}"
+                                          in str(Path(__file__).resolve())):
+                bad.append("cross-harness: a non-absolute CLAUDE_PLUGIN_ROOT literal must fall "
+                           "through to __file__, never be resolved against the cwd")
         finally:
             os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
             if _cpr is not None:
@@ -1639,6 +1649,13 @@ def _selftest() -> int:
 
         CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR = True, 2, 0.40
         ANNEX_DYNAMIC = False   # case (12) pins the ADR-0034 shape; (11b) owns the dynamic rule
+        # Pin the HARNESS DIRECTION too, not just the scope world. The assertions below model the
+        # Claude-side twin rescue; run from a Codex cache path (or under garbage env) the module
+        # derives UNDER_CODEX=True, _invocable_twin goes deliberately blind, and exactly the three
+        # twin assertions fail — a false alarm on the documented post-deploy verification command
+        # (found by the first live Codex revalidation, defect D1).
+        _saved_uc = UNDER_CODEX
+        UNDER_CODEX = False
         FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
         _post_json = _fake_xh_post
 
@@ -1702,6 +1719,7 @@ def _selftest() -> int:
         (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
          INVOCABLE_PLUGIN_IDS, _post_json) = _saved_xh
         ANNEX_DYNAMIC = _saved_dyn12
+        UNDER_CODEX = _saved_uc
 
     if bad:
         print("enforcer --selftest FAIL:")
