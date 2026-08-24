@@ -59,6 +59,16 @@ All notable changes to **skill-concierge**. Format loosely follows
   - **Epoch note:** this changes what `offered` contains — window any offer-composition metric
     at this release rather than pooling across it.
 
+### Added
+- **`doctor` gains a `MCP reachable` check.** Every other row answers *is the index healthy*;
+  none answered *can the agent reach it*, and the two come apart. An install disabled for the
+  current project (`/mcp`) leaves the whole engine green while `search_skills` / `get_skill`
+  simply do not exist for that session — observed 2026-08-24, a full session ran with the
+  concierge dark while doctor reported OK on every line. `Duplicate MCP` could not catch it: it
+  counts installs and says nothing about their state. WARN rather than FAIL, because the
+  enforcer's per-turn offer queries Qdrant over REST and keeps working; fail-open to N/A when
+  the `claude` CLI is absent or the call fails.
+
 ### Fixed
 - **Category-grouped plugin skills were invisible to the retriever.** `PLUGIN_GLOB` and
   `CODEX_PLUGIN_GLOB` matched only `skills/<skill>/SKILL.md`, so a plugin that groups its skills

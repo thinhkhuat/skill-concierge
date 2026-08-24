@@ -789,6 +789,69 @@ def _skill_search_servers(mcp_list_text):
     return out
 
 
+def _skill_search_statuses(mcp_list_text):
+    """{name: status-text} for real skill-search installs, from `claude mcp list`.
+
+    Same line shape and same exclusion as _skill_search_servers (an unexpanded
+    ${CLAUDE_PLUGIN_ROOT} is this repo's own .mcp.json template being auto-loaded as a project
+    MCP when CWD is the source repo, not an install). The status is whatever follows the LAST
+    " - " on the row: "✔ Connected", "⊘ Disabled for this project (...)", "⏸ Pending approval
+    (...)", "✘ Failed ...".
+    """
+    out = {}
+    for ln in mcp_list_text.splitlines():
+        name, sep, rest = ln.partition(": ")
+        if not sep:
+            continue
+        name = name.strip()
+        if not (name == "skill-search" or name.endswith(":skill-search")):
+            continue
+        if "${CLAUDE_PLUGIN_ROOT}" in rest:
+            continue
+        out[name] = rest.rsplit(" - ", 1)[-1].strip() if " - " in rest else ""
+    return out
+
+
+def check_mcp_enabled():
+    """Is the skill-search MCP actually REACHABLE from this project?
+
+    Every other check here answers "is the index healthy". None of them answers "can the agent
+    reach it", and the two come apart: an install disabled for the current project (`/mcp`, or a
+    project-scoped `disabledMcpjsonServers`) leaves the whole engine green while the agent has no
+    `search_skills` tool at all. Observed 2026-08-24 — a full session ran with the concierge dark
+    while doctor reported OK on every line. That is precisely the "skills go dark silently" mode
+    this script exists to catch, so it gets its own check rather than riding on `Duplicate MCP`,
+    which counts installs and says nothing about their state.
+
+    The enforcer offer is NOT affected (it queries Qdrant directly over REST), so this is a WARN,
+    not a FAIL: retrieval still works, the pull tool does not. Fail-open to N/A whenever the CLI
+    is missing or the call fails — an unreadable status is not evidence of a problem.
+    """
+    claude = shutil.which("claude")
+    if not claude:
+        return None
+    r = _run([claude, "mcp", "list"])
+    if r.returncode != 0:
+        return None
+    statuses = _skill_search_statuses(r.stdout)
+    if not statuses:
+        return dict(id="mcpenabled", label="MCP reachable", status=WARN,
+                    detail="no skill-search MCP install found in `claude mcp list` — the "
+                           "search_skills / get_skill tools are unavailable in this project "
+                           "(the enforcer's per-turn offer is unaffected; it queries Qdrant "
+                           "directly). Install or re-enable the plugin.", fix=None)
+    live = [n for n, st in statuses.items() if "Connected" in st]
+    if live:
+        return dict(id="mcpenabled", label="MCP reachable", status=OK,
+                    detail=f"{live[0]} connected", fix=None)
+    worst = "; ".join(f"{n}: {st or 'unknown state'}" for n, st in sorted(statuses.items()))
+    return dict(id="mcpenabled", label="MCP reachable", status=WARN,
+                detail=f"skill-search is installed but NOT connected here — {worst}. "
+                       "search_skills / get_skill are unavailable in this project even though "
+                       "the index is healthy; re-enable via /mcp. The enforcer's per-turn offer "
+                       "is unaffected (it queries Qdrant over REST).", fix=None)
+
+
 def check_dup_mcp():
     claude = shutil.which("claude")
     if not claude:
@@ -1065,7 +1128,7 @@ CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_catalogs, check_ledger, check_dup_mcp]
+          check_catalogs, check_ledger, check_dup_mcp, check_mcp_enabled]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -1243,6 +1306,20 @@ def _selftest():
     assert _etime_seconds("2-03:04:05") == 2 * 86400 + 3 * 3600 + 4 * 60 + 5
     assert _etime_seconds("garbage") is None and _etime_seconds("1:2:3:4") is None
     assert any(getattr(fn, "__name__", "") == "check_running_engine" for fn in CHECKS)
+    # A healthy index the agent cannot reach is still a dark catalogue: parse the STATE of each
+    # real skill-search install, not just its presence, and skip the repo's own .mcp.json
+    # projection the same way the duplicate check does.
+    _mcp = (
+        "plugin:smgrep:smgrep: smgrep mcp - \u2714 Connected\n"
+        "plugin:skill-concierge:skill-search: /p/bin/x  - \u2298 Disabled for this project (via /mcp)\n"
+        "skill-search: ${CLAUDE_PLUGIN_ROOT}/bin/skill-search-mcp  - \u23f8 Pending approval\n")
+    _st = _skill_search_statuses(_mcp)
+    assert list(_st) == ["plugin:skill-concierge:skill-search"], _st
+    assert _st["plugin:skill-concierge:skill-search"].endswith("(via /mcp)")
+    assert _skill_search_statuses("") == {}
+    assert "Connected" in _skill_search_statuses(
+        "plugin:a:skill-search: /p - \u2714 Connected\n")["plugin:a:skill-search"]
+    assert any(getattr(fn, "__name__", "") == "check_mcp_enabled" for fn in CHECKS)
     # Engine drift must never be auto-"fixed" by a reindex: the remedy is a restart, and
     # a reindex would clear the CLI-side symptom while the live server stays broken.
     drift_rep = {"status": "degraded", "issues": ["engine ... restart"],

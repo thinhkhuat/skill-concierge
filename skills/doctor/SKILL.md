@@ -43,6 +43,7 @@ the engine's own `skill-search --health`, so the two never drift.
    | Settings overrides | `skillOverrides` applied to `~/.claude/settings.json`; now **detects drift** from the installed catalogue (`apply-overrides.py --check`) → WARN + auto-fix (ADR-0025) |
    | Ledger dir | the telemetry log directory is writable |
    | Duplicate MCP | warns if a leftover user-scope `skill-search` MCP also exists |
+   | MCP reachable | warns when the skill-search MCP is installed but **not connected here** — disabled for the project via `/mcp`, pending approval, or failed. Every other row answers *is the index healthy*; this one answers *can the agent reach it*, and the two come apart: a project-disabled MCP leaves the engine fully green while `search_skills` / `get_skill` do not exist for that session. The enforcer's per-turn offer is unaffected (it queries Qdrant over REST), so WARN not FAIL. Read-only, fail-open, no auto-fix — re-enabling is a user action |
 
 3. **Auto-fix the safe failures:**
 
