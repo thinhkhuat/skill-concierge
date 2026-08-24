@@ -11,6 +11,12 @@ home as `SKILL_TRIGGERS`):
 | `FLYWHEEL_LLM_API_KEY` | unset | sent as `Authorization: Bearer <key>` when set |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` \| `json_object` \| `off` |
 
+> **Where to set them:** in the machine's cross-harness env file `~/.config/harness-env.sh`
+> (sourced from `~/.zshenv` and the bash entry files), so BOTH harnesses' sessions and hooks
+> see them. A `~/.claude/settings.json` `env` entry reaches Claude Code only — measured
+> 2026-08-24: doctor run from a Codex session reported the flywheel "not configured" against
+> a fully configured machine ([caveats §20](../docs/caveats.md)).
+
 No key, no network call happens unless a generator script (`llm_triggers.py`,
 `llm_eval_gen.py`) or `flywheel_llm.ping()` is invoked — `--selftest` stays network-free.
 

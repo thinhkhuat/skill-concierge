@@ -74,8 +74,12 @@ flywheel did, without watching a live process. Status mode (above) prints the la
 
 - **Endpoint unreachable** → `--generate` fails loud. Configure a provider first; the three
   documented setups (LM-Studio, Ollama, OpenAI-compatible gateway) live in
-  `references/flywheel-llm-providers.md`. The four `FLYWHEEL_LLM_*` env vars belong in
-  `~/.claude/settings.json` env (durable). Status mode still works — it just reports NO.
+  `references/flywheel-llm-providers.md`. The four `FLYWHEEL_LLM_*` env vars belong in the
+  machine's cross-harness env file `~/.config/harness-env.sh` (sourced by `~/.zshenv` +
+  the bash entry files), NOT in `~/.claude/settings.json` env — the settings env block
+  reaches Claude sessions only, so a Codex session's doctor reported "not configured"
+  against a fully configured machine and its auto_flywheel silently no-opped
+  ([caveats §20](../../docs/caveats.md)). Status mode still works — it just reports NO.
 - **Engine venv missing** → `--generate` points you at the **`skill-concierge:setup`** skill,
   which builds the venv. After a reindex, retrieval picks up the new points immediately (no
   restart needed).

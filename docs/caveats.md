@@ -478,3 +478,36 @@ capture via PostToolUse) are Claude-only. Codex sessions still log `turn`/`offer
 conversion for Codex must be read from `search_skills` calls, not `Skill` invocations.
 And per the epoch rule: enabling skill-concierge in Codex is a config change — start a new
 `analyze.py --since` epoch; never pool across it.
+
+## §20 — `settings.json` `env` is a CLAUDE-ONLY environment; cross-harness env has one canonical home
+
+The `env` block in `~/.claude/settings.json` injects variables into **Claude Code sessions and
+nothing else**. Codex (and any other harness) never reads it. Three incidents on 2026-08-24, one
+day, all this class:
+
+1. **The flywheel went invisible from Codex.** `FLYWHEEL_LLM_*` lived in the settings env, so
+   doctor run inside a Codex session honestly reported *"not configured"* against a fully
+   configured machine, and `auto_flywheel`'s SessionStart self-heal silently no-opped in every
+   Codex session while Claude sessions kept the shared utterance layer fresh.
+2. **A literal that can never expand.** `CLAUDE_PLUGIN_ROOT: "$HOME/.claude"` — JSON env values
+   do not shell-expand, so every Claude session carried the literal string. It masked a real
+   Codex-side selftest failure (harness detection trusted the env candidate) and is the likely
+   origin of a transient `'$HOME/...'` ENOENT MCP entry. **But it is NOT debris**: it is the
+   deliberate hookify workaround (upstream claude-code#46915) feeding `${CLAUDE_PLUGIN_ROOT}` to
+   the USER-level hooks in `~/.claude/hooks/hooks.json`, whose commands are expanded by the
+   hook's own shell — two-stage expansion that works for shell-form hook commands and poisons
+   anything reading `os.environ` directly. The enforcer defends itself by skipping non-absolute
+   candidates (v0.26.1); the entry stays.
+3. **A shell-rc export of the expanded path.** `~/.bash_profile` exported the EXPANDED absolute
+   `CLAUDE_PLUGIN_ROOT` — redundant for Claude (settings supplies it) and a live inversion
+   hazard for any other harness launched from a bash login shell. Commented out with a dated
+   revert note.
+
+**The rule:** env that more than one harness needs goes in `~/.config/harness-env.sh`
+(mode 0600; sourced from `~/.zshenv` — every zsh: interactive, non-interactive, login, scripts —
+plus `~/.bashrc` and `~/.bash_profile`). Exported values propagate to every child process, so
+coverage is everything descended from a shell; the only residual is launchd/GUI processes with no
+shell ancestor, which need the env in their own plist. Harness-specific env stays in that
+harness's own config **by design** — exporting an absolute Claude path machine-wide is exactly
+incident 3. Verified from clean `env -i` environments across six launch shapes (zsh -c/-lic,
+bash -lc/-ic, bash-under-zsh, python child) on 2026-08-24.

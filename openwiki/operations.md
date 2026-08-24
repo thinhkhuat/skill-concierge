@@ -186,7 +186,7 @@ relies on description + body triggers only — the graceful fallback is unchange
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `FLYWHEEL_LLM_ENDPOINT` | `http://localhost:4310/v1/chat/completions` | the OpenAI-compatible chat endpoint. **This is what "configured" means:** `auto_flywheel.py` treats the presence of `FLYWHEEL_LLM_ENDPOINT` *or* `FLYWHEEL_LLM_MODEL` in the env as the signal to run at all — with neither set it silently no-ops |
+| `FLYWHEEL_LLM_ENDPOINT` | `http://localhost:4310/v1/chat/completions` | **Set all four `FLYWHEEL_LLM_*` vars in `~/.config/harness-env.sh`** (the cross-harness env file, sourced from `~/.zshenv` + bash entry files) — a `settings.json` `env` entry reaches Claude sessions only and left the flywheel invisible from Codex ([caveats §20](../docs/caveats.md)). The OpenAI-compatible chat endpoint. **This is what "configured" means:** `auto_flywheel.py` treats the presence of `FLYWHEEL_LLM_ENDPOINT` *or* `FLYWHEEL_LLM_MODEL` in the env as the signal to run at all — with neither set it silently no-ops |
 | `FLYWHEEL_LLM_API_KEY` | *(unset)* | optional `Authorization: Bearer` → any OpenAI-compatible gateway (LM-Studio, Ollama `/v1`, 3rd-party) |
 | `FLYWHEEL_LLM_MODEL` | `gemma-4-e4b-it-qat-optiq` | the generation model (swapped in v0.20.0 from `gemma-4-12b-it-qat-optiq`; MRR `0.231 → 0.462`) |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` / `json_object` / `off` (for endpoints that don't honor strict schemas) |
