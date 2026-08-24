@@ -81,8 +81,39 @@ ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-ca
 # none; this asymmetry is the injection-surface safeguard. Kill-switch EXTERNAL_ANNEX=0 restores
 # the ADR-0031 search-only tier (must_not tier=external in the query, no annex).
 EXTERNAL_ANNEX = os.environ.get("ENFORCER_EXTERNAL_ANNEX", "1") != "0"
-EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "2"))
 EXTERNAL_FLOOR = float(os.environ.get("ENFORCER_EXTERNAL_FLOOR", "0.40"))
+
+# ── dynamic annex sizing (ADR-0036) ───────────────────────────────────────────
+# The annexes were fixed at 2 rows regardless of intent. Measured on the live index, that is
+# wrong in BOTH directions: the external pool (~1.9k skills) has 8+ rows above the 0.40 floor on
+# essentially every offer-bearing turn (an absolute floor discriminates nothing), while on
+# strong-inventory turns the fixed 2 pads the offer with rows the installed shelf already beats.
+#
+# Competitive-margin rule: an annex row earns a slot by scoring >= max(pool floor,
+# top_installed - ANNEX_MARGIN), capped at the pool's slot cap. The threshold RISES with the
+# installed top, so a well-served intent shrinks the annex to 0-1 (less noise than fixed-2), and
+# FALLS to the pool floor when the inventory is thin, widening the annex to its cap — the annex
+# width itself becomes a read of "what the inventory can offer for this intent". Deterministic
+# hits (score 1.0) push the threshold near 1.0 and naturally silence the annexes: explicit
+# intent wants no alternatives. Margin 0.05 is measured, not guessed: on the compressed mpnet
+# cosine band (real tasks ~0.5-0.9), 0.10+ saturates every annex at its cap while 0.05 cleanly
+# separates strong-inventory intents (annex 1) from external-dominated ones (annex 4).
+# ENFORCER_ANNEX_DYNAMIC=0 reverts byte-identically to the fixed sizing (and the old
+# EXTERNAL_SLOTS default of 2). The installed TOP_K is untouched either way — dynamism governs
+# annex WIDTH only; the ADR-0032/0034 zero-displacement invariant is not negotiable here.
+ANNEX_DYNAMIC = os.environ.get("ENFORCER_ANNEX_DYNAMIC", "1") != "0"
+ANNEX_MARGIN = float(os.environ.get("ENFORCER_ANNEX_MARGIN", "0.05"))
+EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "4" if ANNEX_DYNAMIC else "2"))
+
+
+def _annex_floor(pool_floor: float, top_installed: float) -> float:
+    """The per-turn score threshold an annex row must clear. Fixed mode: the pool floor,
+    unchanged. Dynamic mode: competitive with the best installed row, never below the floor.
+    top_installed <= 0 means no installed candidates — fall back to the pool floor rather than
+    suppressing the annex (an empty inventory is the case externals exist for)."""
+    if not ANNEX_DYNAMIC or top_installed <= 0:
+        return pool_floor
+    return max(pool_floor, top_installed - ANNEX_MARGIN)
 
 # ── cross-harness offer isolation (ADR-0034) ──────────────────────────────────
 # ADR-0033 indexes BOTH harnesses' skill universes into one shared collection, and the
@@ -771,14 +802,17 @@ def _retrieve(vector: list) -> list:
     return out
 
 
-def _retrieve_external(vector: list) -> list:
-    """ADR-0032 external annex: the top-EXTERNAL_SLOTS catalog skills scoring ≥ EXTERNAL_FLOOR,
-    from a SEPARATE query filtered to tier=external. Returns [(name, desc, score, alias)]. A
-    dedicated query (not a partition of a widened installed query) is what guarantees the
-    installed offer is never displaced. Empty when the annex is off; the caller wraps this in a
-    try/except so an external-query failure degrades to no-annex, never breaks the installed offer."""
+def _retrieve_external(vector: list, top_installed: float = 0.0) -> list:
+    """ADR-0032 external annex: up to EXTERNAL_SLOTS catalog skills clearing the per-turn annex
+    floor (`_annex_floor(EXTERNAL_FLOOR, top_installed)` — competitive with the installed top
+    under ADR-0036, the plain pool floor when dynamic sizing is off), from a SEPARATE query
+    filtered to tier=external. Returns [(name, desc, score, alias)]. A dedicated query (not a
+    partition of a widened installed query) is what guarantees the installed offer is never
+    displaced. Empty when the annex is off; the caller wraps this in a try/except so an
+    external-query failure degrades to no-annex, never breaks the installed offer."""
     if not EXTERNAL_ANNEX:
         return []
+    floor = _annex_floor(EXTERNAL_FLOOR, top_installed)
     res = _post_json(QUERY_GROUPS_URL,
                      {"query": vector, "group_by": "name", "limit": EXTERNAL_SLOTS,
                       "group_size": 1, "with_payload": ["name", "description", "scope"],
@@ -791,7 +825,7 @@ def _retrieve_external(vector: list) -> list:
         if not hits:
             continue
         score = float(hits[0].get("score", 0.0))
-        if score < EXTERNAL_FLOOR:
+        if score < floor:
             continue
         pl = hits[0].get("payload", {}) or {}
         alias = str(pl.get("scope") or "").split(":", 1)[1] if ":" in str(pl.get("scope") or "") else "?"
@@ -799,7 +833,7 @@ def _retrieve_external(vector: list) -> list:
     return out
 
 
-def _retrieve_foreign(vector: list) -> list:
+def _retrieve_foreign(vector: list, top_installed: float = 0.0) -> list:
     """ADR-0034 cross-harness annex: the top skills in the OTHER harness's scopes scoring
     >= FOREIGN_FLOOR, from a SEPARATE query. Returns [(name, desc, score)].
 
@@ -811,9 +845,13 @@ def _retrieve_foreign(vector: list) -> list:
     An invocable twin is skipped: it is already IN the installed offer, and repeating it here
     under "NOT invocable" would state the opposite of the truth. Over-fetches for the same
     reason `_retrieve` does, so a skipped twin does not cost a real annex slot. Empty when the
-    mechanism is off; the caller wraps this so a failed query degrades to no-annex."""
+    mechanism is off; the caller wraps this so a failed query degrades to no-annex.
+
+    ADR-0036: the per-turn floor is `_annex_floor(FOREIGN_FLOOR, top_installed)` — same
+    competitive-margin rule as the external annex, one mechanism for both."""
     if not CROSS_HARNESS:
         return []
+    floor = _annex_floor(FOREIGN_FLOOR, top_installed)
     res = _post_json(QUERY_GROUPS_URL,
                      {"query": vector, "group_by": "name", "limit": FOREIGN_SLOTS * 3,
                       "group_size": 1, "with_payload": ["name", "description"],
@@ -826,7 +864,7 @@ def _retrieve_foreign(vector: list) -> list:
         if not hits:
             continue
         score = float(hits[0].get("score", 0.0))
-        if score < FOREIGN_FLOOR:
+        if score < floor:
             continue
         pl = hits[0].get("payload", {}) or {}
         name = pl.get("name", g.get("id", "?"))
@@ -1081,12 +1119,13 @@ def main() -> int:
         # Same rendered output, strictly less work on every suppressed turn.
         # (A strong annex hit on an installed-getaway turn still injects nothing — no installed
         # offer to append to. That remains the deliberate ADR-0032 scope, unchanged here.)
+        _atop = cands[0][2] if cands else 0.0   # post-keepoff/deterministic installed top
         try:
-            _external = _retrieve_external(vector)
+            _external = _retrieve_external(vector, _atop)
         except Exception:
             _external = []
         try:
-            _foreign = _retrieve_foreign(vector)
+            _foreign = _retrieve_foreign(vector, _atop)
         except Exception:
             _foreign = []
 
@@ -1432,6 +1471,8 @@ def _selftest() -> int:
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
+    global ANNEX_DYNAMIC, ANNEX_MARGIN
+    _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
     _reqs = []
 
@@ -1459,7 +1500,8 @@ def _selftest() -> int:
     # (never touches the installed query), applies EXTERNAL_FLOOR + EXTERNAL_SLOTS, derives the
     # alias, and _ranked_mandate renders a distinct annex block with the get_skill instruction.
     # Kill-switch off -> empty (no query issued).
-    _saved = (EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json)
+    _saved = (EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json,
+              ANNEX_DYNAMIC, ANNEX_MARGIN)
     _ereqs = []
 
     def _fake_ext_post(url, payload, timeout):
@@ -1472,6 +1514,7 @@ def _selftest() -> int:
 
     try:
         EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR = True, 2, 0.40
+        ANNEX_DYNAMIC, ANNEX_MARGIN = False, 0.05
         _post_json = _fake_ext_post
         ext = _retrieve_external([0.1])
         req = _ereqs[0]
@@ -1495,8 +1538,30 @@ def _selftest() -> int:
             bad.append("annex: kill-switch off must issue no external query and return []")
         if "[external:" in _ranked_mandate([("a", "d", 0.3)], annex=[]):
             bad.append("annex: empty annex must render no external block")
+
+        # (11b) ADR-0036 dynamic annex floor. The rule in one function, pinned in both modes:
+        # fixed mode ignores the installed top; dynamic mode is competitive with it, never
+        # below the pool floor, and an absent installed top (<=0) falls back to the floor —
+        # an empty inventory is the case the annex exists for, not a reason to suppress it.
+        EXTERNAL_ANNEX = True
+        ANNEX_DYNAMIC = False
+        if _annex_floor(0.40, 0.90) != 0.40:
+            bad.append("annex-floor: fixed mode must ignore the installed top")
+        ANNEX_DYNAMIC = True
+        if abs(_annex_floor(0.40, 0.90) - 0.85) > 1e-9:
+            bad.append("annex-floor: dynamic must be top_installed - margin when above the floor")
+        if _annex_floor(0.40, 0.42) != 0.40:
+            bad.append("annex-floor: dynamic must never drop below the pool floor")
+        if _annex_floor(0.40, 0.0) != 0.40:
+            bad.append("annex-floor: no installed candidates must fall back to the pool floor")
+        # end-to-end: a strong installed top prunes the 0.75 external; a weak one keeps it
+        if [n for n, _d, _s, _a in _retrieve_external([0.1], top_installed=0.90)] != []:
+            bad.append("annex: dynamic floor must prune externals losing to a strong installed top")
+        if [n for n, _d, _s, _a in _retrieve_external([0.1], top_installed=0.55)] != ["cat:hi"]:
+            bad.append("annex: dynamic floor must keep externals competitive with a weak installed top")
     finally:
-        EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json = _saved
+        (EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json,
+         ANNEX_DYNAMIC, ANNEX_MARGIN) = _saved
 
     # (12) ADR-0034 cross-harness. Pins the four things the design rests on:
     #   - a foreign-scope row is dropped from the INSTALLED offer, and the offer still fills to
@@ -1573,6 +1638,7 @@ def _selftest() -> int:
                 os.environ["CLAUDE_PLUGIN_ROOT"] = _cpr
 
         CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR = True, 2, 0.40
+        ANNEX_DYNAMIC = False   # case (12) pins the ADR-0034 shape; (11b) owns the dynamic rule
         FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
         _post_json = _fake_xh_post
 
@@ -1635,6 +1701,7 @@ def _selftest() -> int:
     finally:
         (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
          INVOCABLE_PLUGIN_IDS, _post_json) = _saved_xh
+        ANNEX_DYNAMIC = _saved_dyn12
 
     if bad:
         print("enforcer --selftest FAIL:")
@@ -1646,7 +1713,9 @@ def _selftest() -> int:
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off) "
           "+ chain-overrides (override-wins / keep-off / suppress / fail-open) "
-          "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + cross-harness annex "
+          "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + dynamic annex floor "
+          "(ADR-0036 fixed/competitive/clamped/fallback + end-to-end prune-and-keep) "
+          "+ cross-harness annex "
           "(ADR-0034 filter+annex on / union off) + external annex "
           "(partition / floor / slots / render / kill-switch)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),

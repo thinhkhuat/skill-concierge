@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.25.2` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json)
+- **Version:** `0.26.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -117,6 +117,13 @@ search ([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)): th
 appends an additive annex of the top externals on strong intent-match (installed offer
 byte-identical — a separate query supplies the annex, zero displacement), and an external
 used across enough distinct sessions auto-graduates to a real installed skill.
+
+Since `0.26.0` both annexes are **dynamically sized**
+([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)): a row earns its slot by scoring within
+`ENFORCER_ANNEX_MARGIN` (0.05) of the top installed candidate, capped at 4 external / 2
+cross-harness rows — a well-served intent shrinks the annexes to 0–1, a thin-inventory intent
+widens them to the cap, and the annex width itself becomes a read of what the installed shelf
+can offer for that intent. `ENFORCER_ANNEX_DYNAMIC=0` restores the old fixed 2.
 
 Since `0.25.0` the same annex shape covers the **other harness**
 ([ADR-0034](../docs/adr/0034-cross-harness-offer-isolation.md)): with both harnesses indexed into

@@ -5,6 +5,28 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-08-24
+
+### Changed
+- **Dynamic annex sizing (ADR-0036), amending ADR-0032/0034's fixed 2-row annexes.** An annex
+  row now earns its slot by scoring within `ENFORCER_ANNEX_MARGIN` (0.05, measured) of the top
+  installed row: `max(pool floor, top_installed − margin)`, capped at
+  `ENFORCER_EXTERNAL_SLOTS` (now 4) / `ENFORCER_FOREIGN_SLOTS` (2). The absolute 0.40 floor
+  discriminated nothing — the ~1.9k-skill external pool clears it 8+ deep on essentially every
+  turn — so the fixed 2 was an arbitrary slice: it padded strong-inventory turns with rows the
+  installed shelf already beat, and starved thin-inventory turns where four externals genuinely
+  outbid the installed top. Now the threshold rises with the installed top (well-served intent →
+  annex 0–1, LESS noise than before) and falls to the floor when the inventory is thin (annex
+  widens to cap — the width itself is a read of what the inventory can offer for this intent).
+  Deterministic hits (score 1.0) naturally silence the annexes; an empty installed pool falls
+  back to the floor rather than suppressing them. Live: review-PR 2→1 external, odoo/k8s/TDD
+  2→4, debug-CI foreign 2→0 (every non-twin loses to the installed 0.784 by more than the
+  margin — noise removal, verified against the raw pool). The installed `TOP_K` and the
+  zero-displacement invariant are untouched — dynamism governs annex width only.
+  `ENFORCER_ANNEX_DYNAMIC=0` reverts byte-identically to fixed sizing including the old
+  `EXTERNAL_SLOTS=2` default. **Ledger epoch: annex-width/conversion metrics window from this
+  release.**
+
 ## [0.25.2] — 2026-08-24
 
 ### Fixed
