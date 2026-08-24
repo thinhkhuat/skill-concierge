@@ -283,6 +283,59 @@ def test_discover_includes_and_namespaces_plugin(tmp_path, monkeypatch):
     assert "myplugin:sk" in names
 
 
+def test_discover_includes_category_nested_plugin_skill(tmp_path, monkeypatch):
+    """Some plugins group skills one level deeper: skills/<category>/<skill>/SKILL.md
+    (observed: mattpocock-skills 1.2.3, 35 skills under skills/engineering/). The
+    single-star glob missed every one — installed and invocable, yet unretrievable."""
+    plug = tmp_path / "plugins" / "cache" / "mkt" / "myplugin" / "1.0.0" / "skills"
+    (plug / "engineering" / "tdd").mkdir(parents=True)
+    (plug / "engineering" / "tdd" / "SKILL.md").write_text(
+        "---\nname: tdd\ndescription: nested\n---\nb")
+    (plug / "flat").mkdir(parents=True)
+    (plug / "flat" / "SKILL.md").write_text("---\nname: flat\ndescription: d\n---\nb")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB",
+                        str(tmp_path / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md"))
+    found = sd.discover_skills()
+    names = {s["name"] for s in found}
+    assert names == {"myplugin:tdd", "myplugin:flat"}
+    assert len(found) == 2                      # globbed twice, never duplicated
+    assert {s["scope"] for s in found} == {"plugin"}
+
+
+def test_nested_glob_does_not_mint_a_skills_own_subdirectory(tmp_path, monkeypatch):
+    """A SKILL.md inside a real skill's payload dir (references/, an example skill
+    shipped as docs) must NOT become a phantom skill. The guard is structural: the
+    grandparent already matched the flat glob, so it is a skill, not a category."""
+    plug = tmp_path / "plugins" / "cache" / "mkt" / "myplugin" / "1.0.0" / "skills"
+    (plug / "real" / "references").mkdir(parents=True)
+    (plug / "real" / "SKILL.md").write_text("---\nname: real\ndescription: d\n---\nb")
+    (plug / "real" / "references" / "SKILL.md").write_text(
+        "---\nname: sample\ndescription: example doc\n---\nb")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB",
+                        str(tmp_path / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md"))
+    names = {s["name"] for s in sd.discover_skills()}
+    assert names == {"myplugin:real"}
+
+
+def test_codex_plugin_cache_is_globbed_at_both_depths(tmp_path, monkeypatch):
+    """ADR-0033 parity: the Codex cache gets the same two-depth treatment, so the
+    two discovery paths cannot drift apart as plugins adopt category layouts."""
+    # dir literally named `.codex`: _scope_for keys the codex-plugin scope off that
+    # path segment, not off the (patchable) CODEX_PLUGIN_GLOB constant.
+    cx = tmp_path / ".codex" / "plugins" / "cache" / "mkt" / "cxplugin" / "2.0.0" / "skills"
+    (cx / "group" / "deep").mkdir(parents=True)
+    (cx / "group" / "deep" / "SKILL.md").write_text("---\nname: deep\ndescription: d\n---\nb")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    monkeypatch.setattr(sd, "CODEX_PLUGIN_GLOB",
+                        str(tmp_path / ".codex" / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md"))
+    found = sd.discover_skills()
+    assert {s["name"] for s in found} == {"cxplugin:deep"}
+    assert {s["scope"] for s in found} == {"codex-plugin"}
+
+
 # --- installed + enabled plugin scoping ----------------------------------
 # The cache keeps EVERY historical version of every plugin, installed or not.
 # Globbing it wholesale indexed skills from ancient versions and from plugins the

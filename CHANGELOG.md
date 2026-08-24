@@ -5,6 +5,71 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-08-24
+
+### Changed
+- **Cross-harness offer isolation (ADR-0034), amending ADR-0033.** The per-turn installed offer
+  now contains only skills the *running* harness can actually invoke. ADR-0033 indexed both
+  harnesses into one collection and let the offer span the union; measured live over six
+  prompts, **18 of 48 offer rows** named skills the Skill tool cannot invoke here — each burning
+  a slot and inviting a `USING:` the harness would refuse. After: **0 of 48**, offers still a
+  full 8 rows.
+  - `enforcer._retrieve` over-fetches to `TOP_K * 3`, drops rows this harness cannot invoke,
+    and trims back to `TOP_K`.
+  - `enforcer._retrieve_foreign` re-surfaces them from a **separate** query — top
+    `ENFORCER_FOREIGN_SLOTS` (2) scoring ≥ `ENFORCER_FOREIGN_FLOOR` (0.40) — rendered as a third
+    block marked `[codex]` / `[claude]` with the `get_skill` read-inline instruction. A
+    dedicated query, never a partition of a widened one, is what makes displacement
+    structurally impossible.
+  - **A post-filter, not a Qdrant `must_not scope`.** Scope records where a skill's indexed copy
+    lives, which is not the same question as whether this harness can invoke it. Claude Code
+    layers plugin enablement across user → project → project-local settings, but discovery reads
+    the user file only — so a plugin enabled for one project is dropped, its Codex twin wins the
+    name, and 24 `agent-skills:*` skills Claude invokes fine carry `scope: codex-plugin`. A
+    query-side filter deleted all 24 from the offer and printed them as "NOT invocable here".
+    `_invocable_twin()` resolves the merged settings per session — in the hook, where a
+    per-project question belongs, never in a machine-global index (the ADR-0028 hazard).
+    Unreadable settings mean "unknown", which filters nothing.
+  - **Foreign scopes are derived, not hardcoded to one.** From Claude: `codex-plugin` +
+    `codex-personal`. From Codex: `plugin`, plus `personal` only when `~/.codex/skills` is not
+    the same directory as `~/.claude/skills` — under that symlink the personal catalogue is
+    mutual and excluding it would blind Codex to all 350 skills.
+  - Harness detection uses **precedence** (`CLAUDE_PLUGIN_ROOT`, else the hook's own resolved
+    `__file__`) and never resolves a falsy candidate: `Path("").resolve()` is the cwd, which
+    would invert the filter for any session sitting under `~/.codex/`.
+  - **Both annex queries now run after the getaway and actionability gates**, not before. They
+    were issued ahead of the gates, so a suppressed turn paid two Qdrant round-trips for a
+    result it discarded; the third round-trip this release adds would have doubled that inside a
+    hard per-turn budget. Rendered output is unchanged.
+  - `search_skills` and chain hints are untouched: the ADR-0033 union still governs there.
+  - Ledger `offer` events gain `xh`, consumed by `analyze.py._cross_harness_annex_stats`
+    (conversion keyed on the exact offered name, not a prefix).
+  - Kill-switch `ENFORCER_CROSS_HARNESS=0` restores the pre-change request shape and output.
+  - **Epoch note:** this changes what `offered` contains — window any offer-composition metric
+    at this release rather than pooling across it.
+
+### Fixed
+- **Category-grouped plugin skills were invisible to the retriever.** `PLUGIN_GLOB` and
+  `CODEX_PLUGIN_GLOB` matched only `skills/<skill>/SKILL.md`, so a plugin that groups its skills
+  one level deeper was silently unindexed: **35 installed, invocable `mattpocock-skills`
+  skills** could never be offered or retrieved. `_plugin_paths()` now globs both caches at both
+  depths. Bounded to exactly one extra level, order-preservingly de-duplicated, with a
+  structural phantom guard — a nested hit whose grandparent already matched the flat glob is
+  that skill's own payload (`references/`, an example skill shipped as docs), not a sibling
+  skill. Derived at call time from the base glob rather than added as a second module constant,
+  so the test conftest's existing single monkeypatch keeps discovery hermetic.
+- **`scope` and `tier` had no payload index.** Only `name` did, so every enforcer query's `tier`
+  condition was a linear scan over ~25k points inside a hard 100 ms cap where a timeout costs
+  the entire offer. `server._ensure_collection` now indexes all three.
+- **`SKILL_CODEX_ROOTS` was not forwarded to the detached reindex** (`auto_reindex._mcp_env`) —
+  the ADR-0026 env-forwarding gap class. Defensive today (`.mcp.json` does not pin it), but
+  pinned there it would have made background rebuilds disagree with the live query index in
+  both directions. The forward tuple now carries every engine-side flag readable from
+  `.mcp.json`, and that invariant is stated at the call site.
+- Enforcer module docstring restated the per-turn budget, which had drifted: it still claimed
+  "200ms within a ≲300ms total" while `EMBED_TIMEOUT_S` was live at 350 ms. Now states the
+  actual sum-of-caps worst case against the 5 s hook timeout.
+
 ## [0.24.0] — 2026-08-24
 
 ### Added

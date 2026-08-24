@@ -529,14 +529,18 @@ def _ensure_collection() -> None:
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=vector_size(), distance=Distance.COSINE),
         )
-    # Keyword index on `name` so the MAX-pool group_by retrieval is fast + exact. Idempotent:
-    # a re-create raises, so swallow it. group_by still works unindexed (just slower).
-    try:
-        _qdrant.create_payload_index(
-            collection_name=COLLECTION, field_name="name",
-            field_schema=models.PayloadSchemaType.KEYWORD)
-    except Exception:
-        pass
+    # Keyword indexes on the three fields the hot path filters or groups by. `name` drives the
+    # MAX-pool group_by; `tier` is the ADR-0031 external partition every enforcer query carries;
+    # `scope` is the ADR-0034 annex filter. Unindexed, each is a linear scan over ~25k points
+    # inside the enforcer's hard 100 ms Qdrant cap, where a timeout costs the WHOLE offer.
+    # Idempotent: a re-create raises, so swallow it per field.
+    for _field in ("name", "tier", "scope"):
+        try:
+            _qdrant.create_payload_index(
+                collection_name=COLLECTION, field_name=_field,
+                field_schema=models.PayloadSchemaType.KEYWORD)
+        except Exception:
+            pass
 
 
 def _existing_points() -> dict[str, tuple]:

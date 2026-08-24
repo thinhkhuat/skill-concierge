@@ -197,6 +197,28 @@ def _external_annex_stats(events, aliases):
     return len(annex_offers), n_rows, len(annex_sids & sids_with_take), len(annex_sids)
 
 
+def _cross_harness_annex_stats(events):
+    """ADR-0034: (offer_count, annex_rows, converted_sessions, annexed_sessions).
+
+    An annex offer is an `offer` event carrying `xh`; a conversion is an annexed session that
+    then pulled ONE OF THE NAMES IT WAS ACTUALLY OFFERED. That exact-name test is why this is a
+    separate function rather than a parameter of the external one: cross-harness rows carry a
+    plugin namespace, not a catalog alias, so there is no prefix to key on. Pure — the selftest
+    pins it; main() formats it."""
+    annex_offers = [e for e in events if e.get("ev") == "offer" and e.get("xh")]
+    if not annex_offers:
+        return 0, 0, 0, 0
+    offered_by_sid = {}
+    for e in annex_offers:
+        offered_by_sid.setdefault(e.get("sid"), set()).update(
+            r[0] for r in (e.get("xh") or []) if isinstance(r, list) and r)
+    converted = {e.get("sid") for e in events
+                 if e.get("ev") == "get_skill" and not e.get("sub")
+                 and e.get("name") in offered_by_sid.get(e.get("sid"), ())}
+    n_rows = sum(len(e.get("xh") or []) for e in annex_offers)
+    return len(annex_offers), n_rows, len(converted), len(offered_by_sid)
+
+
 def _chain_report(events, catalogue=None):
     """ADR-0029 W3: cross-turn skill chains per session.
 
@@ -301,13 +323,28 @@ def _run_selftest():
     if _external_annex_stats([], aliases) != (0, 0, 0, 0):
         bad.append("external annex stats must be zero on empty ledger")
 
+    # ADR-0034 cross-harness annex offer->take. Conversion is keyed on the EXACT name that
+    # session was offered — a pull of some other foreign skill must not count.
+    ev_xh = [
+        {"sid": "s1", "ev": "offer", "xh": [["agent-skills:tdd", 0.7]]},      # annexed
+        {"sid": "s1", "ev": "get_skill", "name": "agent-skills:tdd"},          # -> converted
+        {"sid": "s2", "ev": "offer", "xh": [["omo:lsp-setup", 0.6]]},         # annexed, no take
+        {"sid": "s2", "ev": "get_skill", "name": "omo:something-else"},        # wrong name
+        {"sid": "s3", "ev": "offer", "offered": [["inst", 0.5]]},               # no xh
+        {"sid": "s4", "ev": "get_skill", "name": "agent-skills:tdd", "sub": 1}, # subagent row
+    ]
+    if _cross_harness_annex_stats(ev_xh) != (2, 2, 1, 2):
+        bad.append("cross-harness annex stats wrong: %r" % (_cross_harness_annex_stats(ev_xh),))
+    if _cross_harness_annex_stats([]) != (0, 0, 0, 0):
+        bad.append("cross-harness annex stats must be zero on empty ledger")
+
     if bad:
         print("analyze --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     print("analyze --selftest OK: offer->take join (turn conversion + per-skill) + chain report "
-          "+ external annex offer->take (ADR-0032)")
+          "+ external annex offer->take (ADR-0032) + cross-harness annex offer->take (ADR-0034)")
     return 0
 
 
@@ -493,6 +530,12 @@ def main():
         conv = f"  {round(100 * converted / n_sids)}% session-conv" if n_sids else ""
         print(f"external annex: {n_off} offers ({n_rows} rows) / "
               f"{converted} of {n_sids} annexed sessions took an external{conv}")
+    # ADR-0034 cross-harness annex offer->take (epoch-scoped — window from the 0.25.0 ship).
+    x_off, x_rows, x_conv, x_sids = _cross_harness_annex_stats(events)
+    if x_off:
+        xc = f"  {round(100 * x_conv / x_sids)}% session-conv" if x_sids else ""
+        print(f"x-harness annex: {x_off} offers ({x_rows} rows) / "
+              f"{x_conv} of {x_sids} annexed sessions pulled one{xc}")
     print(f"top auto      : {auto_freq.most_common(10)}")
     if skills:
         print(f"top manual (real skill)     : {manual_skill.most_common(10)}")

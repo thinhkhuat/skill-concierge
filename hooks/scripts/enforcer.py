@@ -16,8 +16,11 @@ Design contract (mirrors the sibling ledger hook):
   • STDLIB-ONLY + lazy — no heavy imports; the trivial-getaway path does no I/O.
 
 Resilience / budget (Phase 3). The embed POST has a HARD client-side socket
-timeout (default 200ms within a ≲300ms total per-turn budget — see EMBED_TIMEOUT_S
-for the calibration history). On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
+timeout (see EMBED_TIMEOUT_S for the calibration history; live default 350ms). Every
+network leg is separately capped, so the worst case is the sum of the caps, not an
+unbounded wait: 350ms embed + 100ms installed query + up to 2x100ms actionability gate
++ 100ms external annex + 100ms cross-harness annex ~= 850ms, against a 5s hook timeout.
+The happy path is ~100ms; the annex legs run only on turns that actually carry an offer. On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
 embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
 never crashing — and stays within the per-turn budget regardless of shim health.
 (c) is load-bearing: a reachability check misses an up-but-slow shim that would
@@ -79,6 +82,131 @@ ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-ca
 EXTERNAL_ANNEX = os.environ.get("ENFORCER_EXTERNAL_ANNEX", "1") != "0"
 EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "2"))
 EXTERNAL_FLOOR = float(os.environ.get("ENFORCER_EXTERNAL_FLOOR", "0.40"))
+
+# ── cross-harness offer isolation (ADR-0034) ──────────────────────────────────
+# ADR-0033 indexes BOTH harnesses' skill universes into one shared collection, and the
+# installed query carried no scope filter — so in a Claude session the Codex plugin cache
+# competed for the TOP_K installed slots with skills the Skill tool CANNOT invoke here
+# (measured 2026-08-24: up to 6 of 8 offer rows), and the mirror held in Codex sessions for
+# Claude's `plugin` scope. An offer row the agent cannot act on is worse than no row: it burns
+# a slot AND invites a false `USING:`.
+#
+# Fix = the ADR-0032 shape, one layer up: keep foreign-harness skills out of the INSTALLED
+# offer, then re-surface them as a SEPARATE marked annex consumed via get_skill.
+# Discoverability is kept; invocability is never implied.
+#
+# WHY A POST-FILTER, NOT A QDRANT `must_not scope`. Scope records WHERE the indexed copy of a
+# skill lives, which is NOT the same question as "can this harness invoke it". When the SAME
+# plugin is installed on both sides, discovery dedups to ONE point and the Codex path can win
+# the name — so a `codex-plugin` row may name a skill Claude invokes perfectly well. A pre-filter
+# cannot see that and silently drops it (observed: 24 `agent-skills:*` skills). The query
+# therefore over-fetches and the decision is made per row, where the twin test is available.
+# Bonus: it keeps an unindexed keyword filter off the installed query's hot path.
+CROSS_HARNESS = os.environ.get("ENFORCER_CROSS_HARNESS", "1") != "0"
+RETRIEVE_LIMIT = TOP_K * 3   # over-fetch, post-filter, then trim to TOP_K
+
+
+def _running_under_codex() -> bool:
+    """Which harness is executing this hook. Both run the SAME hooks.json and expand the same
+    ${CLAUDE_PLUGIN_ROOT}, so the discriminator is WHERE the plugin was installed: Codex caches
+    under ~/.codex/plugins/cache/**, Claude under ~/.claude/**.
+
+    PRECEDENCE, not a disjunction: the env var decides whenever it is set, and only an unset or
+    empty one falls through to this file's own resolved path (which works when the hook is wired
+    by absolute path). A falsy candidate is SKIPPED, never resolved — `Path("").resolve()` is
+    `os.getcwd()`, which would silently turn this into a CWD probe and invert the filter for any
+    session whose cwd happens to sit under ~/.codex/."""
+    marker = f"{os.sep}.codex{os.sep}"
+    for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
+        if not cand:
+            continue
+        try:
+            return marker in str(Path(cand).resolve())
+        except Exception:
+            continue
+    return False
+
+
+UNDER_CODEX = _running_under_codex()
+FOREIGN_HARNESS = "claude" if UNDER_CODEX else "codex"
+
+
+def _foreign_scopes() -> tuple:
+    """The scopes whose skills the RUNNING harness cannot invoke.
+
+    From Claude: both Codex scopes that can exist as DISTINCT scopes. `codex-personal` is
+    populated only when ~/.codex/skills and ~/.claude/skills are different directories — and
+    then its skills are genuinely unreachable from Claude. Where the operator has symlinked
+    them, discovery dedups everything into one `personal` scope and this entry matches nothing.
+
+    From Codex: `plugin` always (Claude's plugin cache is not on Codex's load path at all), and
+    `personal` ONLY when the two personal roots are distinct. Under the symlink the `personal`
+    scope's files ARE reachable at ~/.codex/skills, so excluding it would blind a Codex session
+    to the entire personal catalogue.
+
+    `project:` scopes are cwd-derived and shared by construction — never foreign."""
+    if not UNDER_CODEX:
+        return ("codex-plugin", "codex-personal")
+    try:
+        shared = (Path.home() / ".codex" / "skills").resolve() == \
+                 (Path.home() / ".claude" / "skills").resolve()
+    except Exception:
+        shared = True                      # fail toward KEEPING personal in the offer
+    return ("plugin",) if shared else ("plugin", "personal")
+
+
+FOREIGN_SCOPES = _foreign_scopes()
+FOREIGN_SLOTS = int(os.environ.get("ENFORCER_FOREIGN_SLOTS", "2"))
+FOREIGN_FLOOR = float(os.environ.get("ENFORCER_FOREIGN_FLOOR", "0.40"))
+
+# Claude Code resolves plugin enablement by LAYERING settings files: user, then project, then
+# project-local, last writer wins. skills_discovery reads the USER file only, so a plugin
+# enabled just for this project is dropped from discovery and its Codex twin wins the name —
+# leaving a `codex-plugin` point for a skill Claude invokes fine. This is the twin test the
+# post-filter needs, and it must be resolved HERE (per session, per cwd) rather than at index
+# time: the index is machine-global and shared across sessions, so a cwd-scoped view baked into
+# it would make concurrent sessions fight over each other's points (the ADR-0028 hazard).
+_SETTINGS_LAYERS = (Path.home() / ".claude" / "settings.json",
+                    Path.cwd() / ".claude" / "settings.json",
+                    Path.cwd() / ".claude" / "settings.local.json")
+
+
+def _local_plugin_ids():
+    """Plugin ids enabled for THIS session, e.g. {'agent-skills'} from
+    `enabledPlugins: {"agent-skills@addy-agent-skills": true}`.
+
+    Returns None when NOTHING could be read. None means "unknown", and an unknown twin test
+    filters nothing — failing toward ADR-0033's union, which is merely noisy and already
+    shipped, never toward telling the agent a skill it CAN invoke is 'NOT invocable here'."""
+    seen, out = False, {}
+    for f in _SETTINGS_LAYERS:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8")).get("enabledPlugins", {})
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        seen = True
+        for key, on in data.items():
+            out[str(key).split("@", 1)[0]] = bool(on)
+    if not seen:
+        return None
+    return {pid for pid, on in out.items() if on}
+
+
+LOCAL_PLUGIN_IDS = _local_plugin_ids()
+
+
+def _invocable_twin(name: str) -> bool:
+    """True when a foreign-scoped row names a skill THIS harness can invoke anyway, because the
+    same plugin is installed and enabled here and its twin merely lost the discovery dedup.
+
+    Only meaningful from Claude. Under Codex the enablement truth lives in config.toml (TOML,
+    unreadable on the stdlib 3.10 floor), and `plugin`-scope skills sit under ~/.claude/**,
+    which is not on Codex's load path at all — so there is no twin to rescue."""
+    if UNDER_CODEX or LOCAL_PLUGIN_IDS is None or ":" not in name:
+        return False
+    return name.split(":", 1)[0] in LOCAL_PLUGIN_IDS
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _DESC_CHARS = 96
 
@@ -457,10 +585,13 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None) -> None:
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None) -> None:
     """Append the offer event. Fail-silent: telemetry must never surface.
     ADR-0032: `ext` records the external annex names offered this turn (external offer→take
-    is measured against the ADR-0031 get_skill takes); absent when no external annexed."""
+    is measured against the ADR-0031 get_skill takes); absent when no external annexed.
+    ADR-0034: `xh` records the cross-harness annex the same way; absent when none annexed.
+    EPOCH NOTE: ADR-0034 changes what `offered` contains, so any offer-composition rate
+    measured across the v0.25.0 boundary pools two different configs — window it."""
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ev = {"t": round(time.time(), 3), "sid": sid, "ev": "offer",
@@ -469,6 +600,8 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
             ev["dropped"] = dropped
         if ext:
             ev["ext"] = ext
+        if xh:
+            ev["xh"] = xh
         if embed_ms is not None:
             ev["embed_ms"] = int(embed_ms)
         if qdrant_ms is not None:
@@ -553,10 +686,20 @@ def _retrieve(vector: list) -> list:
     or not the ADR-0032 annex is enabled. The annex comes from a SEPARATE `_retrieve_external`
     call, so externals can NEVER displace an installed offer slot (the design's hard invariant).
     Two small queries beat one widened query, which would drop installed skills out of the limit
-    window whenever externals ranked high in it."""
+    window whenever externals ranked high in it.
+
+    ADR-0034 cross-harness: rows the running harness cannot invoke are dropped HERE, per row,
+    after over-fetching to RETRIEVE_LIMIT — never via a Qdrant `must_not scope`. Scope says
+    where the indexed copy LIVES, not whether this harness can invoke it: when the same plugin
+    is installed on both sides, dedup keeps one point and the Codex path can win the name, so a
+    `codex-plugin` row may name a skill Claude invokes fine. `_invocable_twin` is the test a
+    query-side filter cannot make. Trimmed back to TOP_K, so the offer's width is unchanged.
+    ENFORCER_CROSS_HARNESS=0 issues the pre-ADR-0034 request byte-identically."""
+    payload = ["name", "description", "scope"] if CROSS_HARNESS else ["name", "description"]
     res = _post_json(QUERY_GROUPS_URL,
-                     {"query": vector, "group_by": "name", "limit": TOP_K,
-                      "group_size": 1, "with_payload": ["name", "description"],
+                     {"query": vector, "group_by": "name",
+                      "limit": RETRIEVE_LIMIT if CROSS_HARNESS else TOP_K,
+                      "group_size": 1, "with_payload": payload,
                       "filter": {"must_not": [
                           {"key": "tier", "match": {"value": "external"}}]}},
                      QDRANT_TIMEOUT_S)
@@ -566,8 +709,13 @@ def _retrieve(vector: list) -> list:
         if not hits:
             continue
         pl = hits[0].get("payload", {}) or {}
-        out.append((pl.get("name", g.get("id", "?")), pl.get("description", ""),
-                    float(hits[0].get("score", 0.0))))
+        name = pl.get("name", g.get("id", "?"))
+        if (CROSS_HARNESS and pl.get("scope") in FOREIGN_SCOPES
+                and not _invocable_twin(name)):
+            continue
+        out.append((name, pl.get("description", ""), float(hits[0].get("score", 0.0))))
+        if len(out) >= TOP_K:
+            break
     return out
 
 
@@ -599,6 +747,45 @@ def _retrieve_external(vector: list) -> list:
     return out
 
 
+def _retrieve_foreign(vector: list) -> list:
+    """ADR-0034 cross-harness annex: the top skills in the OTHER harness's scopes scoring
+    >= FOREIGN_FLOOR, from a SEPARATE query. Returns [(name, desc, score)].
+
+    Same hard invariant as the ADR-0032 external annex: a dedicated query, never a partition of
+    a widened installed query, so a foreign skill can NEVER displace an installed offer slot.
+    The floor is deliberately the external floor's height (0.40) rather than ITEM_FLOOR (0.18)
+    — a row the agent cannot invoke earns its place only on strong intent-match.
+
+    An invocable twin is skipped: it is already IN the installed offer, and repeating it here
+    under "NOT invocable" would state the opposite of the truth. Over-fetches for the same
+    reason `_retrieve` does, so a skipped twin does not cost a real annex slot. Empty when the
+    mechanism is off; the caller wraps this so a failed query degrades to no-annex."""
+    if not CROSS_HARNESS:
+        return []
+    res = _post_json(QUERY_GROUPS_URL,
+                     {"query": vector, "group_by": "name", "limit": FOREIGN_SLOTS * 3,
+                      "group_size": 1, "with_payload": ["name", "description"],
+                      "filter": {"must": [
+                          {"key": "scope", "match": {"any": list(FOREIGN_SCOPES)}}]}},
+                     QDRANT_TIMEOUT_S)
+    out = []
+    for g in res.get("result", {}).get("groups", []):
+        hits = g.get("hits", [])
+        if not hits:
+            continue
+        score = float(hits[0].get("score", 0.0))
+        if score < FOREIGN_FLOOR:
+            continue
+        pl = hits[0].get("payload", {}) or {}
+        name = pl.get("name", g.get("id", "?"))
+        if _invocable_twin(name):
+            continue
+        out.append((name, pl.get("description", ""), score))
+        if len(out) >= FOREIGN_SLOTS:
+            break
+    return out
+
+
 def _apply_dominance(cands: list) -> list:
     """P6 (default-inert): collapse to the top skill when it is clearly ahead of the runner-up by
     RAW-score gap. Decided HERE (not in _ranked_mandate) so the CALLER logs the post-collapse menu —
@@ -614,13 +801,17 @@ def _blurb(desc: str) -> str:
     return b[:_DESC_CHARS].rsplit(" ", 1)[0] + "…" if len(b) > _DESC_CHARS else b
 
 
-def _ranked_mandate(cands: list, annex: list = None) -> str:
+def _ranked_mandate(cands: list, annex: list = None, foreign: list = None) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
     # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
     # ADR-0032: `annex` (external catalog skills) renders as a SEPARATE block below the installed
     # offer — they never share the %-share pool (the installed ranking is untouched) and carry
     # the get_skill consumption instruction, since they are not Skill-tool-invocable.
+    # ADR-0034: `foreign` (other-harness plugin skills) renders as its own third block for the
+    # same reason and with the same consumption path — installed on the sibling harness, indexed
+    # here, but not invocable here. Kept distinct from the external block so provenance stays
+    # legible: "on disk under the other harness" is not "in a search-only catalog".
     total = sum(s for (_n, _d, s) in cands) or 1.0
     multi = len(cands) > 1
     lines = [f"  • {name}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
@@ -635,10 +826,19 @@ def _ranked_mandate(cands: list, annex: list = None) -> str:
             "\nExternal catalog matches (NOT installed — consume with get_skill, do not use the "
             "Skill tool):\n" + "\n".join(alines) +
             "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
+    foreign_block = ""
+    if foreign:
+        flines = [f"  • {name} [{FOREIGN_HARNESS}] — {_blurb(desc)}"
+                  for (name, desc, _s) in foreign]
+        foreign_block = (
+            f"\nOther-harness matches (installed under {FOREIGN_HARNESS.capitalize()}, NOT "
+            "invocable here — consume with get_skill, do not use the Skill tool):\n"
+            + "\n".join(flines) +
+            "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
     return (
         "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
         "Preview for this task (NOT the full ~500 shelf):\n"
-        + "\n".join(lines) + note + annex_block + "\n"
+        + "\n".join(lines) + note + annex_block + foreign_block + "\n"
         "None fit → run search_skills THIS reply before any SKIPPING; show the query. "
         "A loosely-adaptable fit is a USING. [full order: session start]"
     )
@@ -779,18 +979,6 @@ def main() -> int:
             _append_offer(sid, "fallback", [], "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             return 0
 
-        # ADR-0032: the external annex comes from a SEPARATE query so `cands` (installed) and
-        # the whole existing pipeline (keepoff, deterministic, getaway, intent gate, ITEM_FLOOR,
-        # dominance) run byte-identical — externals never touch it and never displace a slot.
-        # Best-effort: an external-query failure degrades to no-annex, never breaks the installed
-        # offer. The annex rides ONLY the main offer path below (an additive block); a getaway/
-        # intent-skip turn injects no annex (no installed offer to add to — deliberate v1 scope,
-        # a strong external on an installed-getaway turn is a recorded fast-follow).
-        try:
-            _external = _retrieve_external(vector)
-        except Exception:
-            _external = []
-
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
@@ -826,13 +1014,38 @@ def main() -> int:
             _authorized_skip_inject("intent_skip", sid)
             return 0
 
+        # Annex queries, issued ONLY once the turn is known to carry an offer.
+        #
+        # Both are SEPARATE queries so `cands` (installed) and the whole pipeline above
+        # (keepoff, deterministic, getaway, intent gate, ITEM_FLOOR, dominance) run
+        # byte-identical — an annex can never touch the installed ranking or displace a slot.
+        # ADR-0032 supplies the external-catalog annex, ADR-0034 the cross-harness one; each is
+        # best-effort, so a failed annex query degrades to no-annex and never breaks the offer.
+        #
+        # POSITION IS LOAD-BEARING. They sit AFTER the getaway and actionability gates, not
+        # before: an annex rides only this path, so a suppressed turn that issued them paid two
+        # Qdrant round-trips for a result it then discarded. With ADR-0034 adding a third
+        # round-trip that waste doubled, and the enforcer runs inside a hard per-turn budget.
+        # Same rendered output, strictly less work on every suppressed turn.
+        # (A strong annex hit on an installed-getaway turn still injects nothing — no installed
+        # offer to append to. That remains the deliberate ADR-0032 scope, unchanged here.)
+        try:
+            _external = _retrieve_external(vector)
+        except Exception:
+            _external = []
+        try:
+            _foreign = _retrieve_foreign(vector)
+        except Exception:
+            _foreign = []
+
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
         shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
-        _inject(_ranked_mandate(shown, annex=_external) + _chain_hint(sid))
+        _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign) + _chain_hint(sid))
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
-                      ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None)
+                      ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None,
+                      xh=[[n, round(s, 4)] for (n, _d, s) in _foreign] or None)
     except Exception:
         return 0  # fail-silent, never block
     return 0
@@ -1156,10 +1369,17 @@ def _selftest() -> int:
         finally:
             CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES = _saved_chain
 
-    # (10) ADR-0031 installed query: _retrieve ALWAYS carries must_not tier=external + limit
-    # TOP_K (byte-identical whether or not the ADR-0032 annex is on — externals cannot displace
-    # installed). Pin the REQUEST SHAPE (monkeypatched transport) and the 3-tuple parse.
+    # (10) ADR-0031 installed query: _retrieve ALWAYS carries must_not tier=external
+    # (byte-identical whether or not the ADR-0032 annex is on — externals cannot displace
+    # installed). Its limit is RETRIEVE_LIMIT while ADR-0034's post-filter is on (over-fetch,
+    # then trim to TOP_K) and exactly TOP_K when it is off. Pin the REQUEST SHAPE
+    # (monkeypatched transport) and the 3-tuple parse.
+    #
+    # ONE consolidated `global` for every module name cases (10)-(12) rebind. Declaring them
+    # per-case made a later case silently depend on an earlier one's declaration, so deleting
+    # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
+    global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, LOCAL_PLUGIN_IDS
     _saved_post = _post_json
     _reqs = []
 
@@ -1175,8 +1395,9 @@ def _selftest() -> int:
         flt = (_reqs[0] or {}).get("filter", {})
         if {"key": "tier", "match": {"value": "external"}} not in flt.get("must_not", []):
             bad.append("retrieve: missing must_not tier=external filter (installed query): %r" % flt)
-        if _reqs[0].get("limit") != TOP_K:
-            bad.append("retrieve: installed limit must be TOP_K")
+        if _reqs[0].get("limit") != (RETRIEVE_LIMIT if CROSS_HARNESS else TOP_K):
+            bad.append("retrieve: installed limit must over-fetch when ADR-0034 is on, "
+                       "and be exactly TOP_K when off: %r" % _reqs[0].get("limit"))
         if got != [("inst", "d", 0.5)]:
             bad.append("retrieve: response parse changed: %r" % got)
     finally:
@@ -1225,6 +1446,112 @@ def _selftest() -> int:
     finally:
         EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json = _saved
 
+    # (12) ADR-0034 cross-harness. Pins the four things the design rests on:
+    #   - a foreign-scope row is dropped from the INSTALLED offer, and the offer still fills to
+    #     TOP_K from the over-fetch (no shrinkage);
+    #   - an invocable TWIN in a foreign scope is KEPT installed and NOT repeated in the annex
+    #     (the defect that made a pre-filter unusable: scope != invocability);
+    #   - the annex query filters on the foreign scope SET, applies the floor, and renders with
+    #     the harness marker + get_skill instruction, never joining the installed %-share pool;
+    #   - the kill-switch restores the pre-ADR-0034 request shape and output exactly.
+    _saved_xh = (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
+                 LOCAL_PLUGIN_IDS, _post_json)
+    _freqs = []
+
+    def _grp(gid, name, score, scope=None):
+        pl = {"name": name, "description": "d-" + name}
+        if scope:
+            pl["scope"] = scope
+        return {"id": gid, "hits": [{"payload": pl, "score": score}]}
+
+    def _fake_xh_post(url, payload, timeout):
+        _freqs.append(payload)
+        flt = payload.get("filter", {})
+        if flt.get("must"):                                   # the annex query
+            return {"result": {"groups": [
+                _grp("1", "otherpl:hi", 0.72), _grp("2", "twinpl:dup", 0.71),
+                _grp("3", "otherpl:low", 0.31)]}}
+        # the installed query: 2 foreign rows (one a twin), then plenty of installed filler
+        return {"result": {"groups": [
+            _grp("f1", "otherpl:hi", 0.9, "codex-plugin"),
+            _grp("f2", "twinpl:dup", 0.89, "codex-plugin")]
+            + [_grp(f"i{k}", f"inst-{k}", 0.8 - k / 100, "personal") for k in range(TOP_K)]}}
+
+    try:
+        if FOREIGN_HARNESS not in ("codex", "claude") or not FOREIGN_SCOPES:
+            bad.append("cross-harness: harness label / foreign scopes unset: %r/%r"
+                       % (FOREIGN_HARNESS, FOREIGN_SCOPES))
+        if (FOREIGN_HARNESS == "codex") != all(x.startswith("codex-") for x in FOREIGN_SCOPES):
+            bad.append("cross-harness: harness label disagrees with the foreign scope set: %r/%r"
+                       % (FOREIGN_HARNESS, FOREIGN_SCOPES))
+        # `Path("").resolve()` is the CWD — a falsy env var must never be probed as a path.
+        _cpr = os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+        try:
+            os.environ["CLAUDE_PLUGIN_ROOT"] = ""
+            if _running_under_codex() != (f"{os.sep}.codex{os.sep}"
+                                          in str(Path(__file__).resolve())):
+                bad.append("cross-harness: empty CLAUDE_PLUGIN_ROOT must fall through to "
+                           "__file__, never resolve to the cwd")
+        finally:
+            os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+            if _cpr is not None:
+                os.environ["CLAUDE_PLUGIN_ROOT"] = _cpr
+
+        CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR = True, 2, 0.40
+        FOREIGN_SCOPES, LOCAL_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
+        _post_json = _fake_xh_post
+
+        _freqs.clear()
+        inst = _retrieve([0.1])
+        names = [n for n, _d, _s in inst]
+        if _freqs[0].get("limit") != RETRIEVE_LIMIT:
+            bad.append("cross-harness: installed query must over-fetch to RETRIEVE_LIMIT")
+        if "scope" not in (_freqs[0].get("with_payload") or []):
+            bad.append("cross-harness: installed query must request the scope payload")
+        if any(c.get("key") == "scope"
+               for c in _freqs[0].get("filter", {}).get("must_not", [])):
+            bad.append("cross-harness: scope must be post-filtered, never a query condition "
+                       "(scope != invocability): %r" % _freqs[0].get("filter"))
+        if "otherpl:hi" in names:
+            bad.append("cross-harness: a non-invocable foreign row must not reach the offer")
+        if "twinpl:dup" not in names:
+            bad.append("cross-harness: an INVOCABLE twin must stay in the installed offer")
+        if len(inst) != TOP_K:
+            bad.append("cross-harness: offer must refill to TOP_K after the drop: %d" % len(inst))
+
+        _freqs.clear()
+        fgn = _retrieve_foreign([0.1])
+        cond = (_freqs[0].get("filter", {}).get("must") or [{}])[0]
+        if cond.get("key") != "scope" or set(cond.get("match", {}).get("any") or []) != \
+                set(FOREIGN_SCOPES):
+            bad.append("cross-harness: annex query must match the foreign scope SET: %r" % cond)
+        if [n for n, _d, _s in fgn] != ["otherpl:hi"]:
+            bad.append("cross-harness: annex keeps only above-floor non-twins "
+                       "(0.31 below floor, twinpl:dup invocable here): %r" % fgn)
+        rendered = _ranked_mandate([("inst-a", "da", 0.9)], foreign=fgn)
+        if f"[{FOREIGN_HARNESS}]" not in rendered or "get_skill" not in rendered:
+            bad.append("cross-harness: render missing harness marker or get_skill instruction")
+        if "otherpl:low" in rendered or "twinpl:dup" in rendered:
+            bad.append("cross-harness: below-floor or twin row must not render in the annex")
+        if "%" in rendered.split("Other-harness")[0].split("inst-a")[1][:12]:
+            bad.append("cross-harness: foreign must not join the installed %-share pool")
+
+        # kill-switch off -> pre-ADR-0034 request shape and output
+        CROSS_HARNESS = False
+        _freqs.clear()
+        _retrieve([0.1])
+        if _freqs[0].get("limit") != TOP_K or "scope" in (_freqs[0].get("with_payload") or []):
+            bad.append("cross-harness: kill-switch off must issue the pre-ADR-0034 request: %r"
+                       % _freqs[0])
+        _freqs.clear()
+        if _retrieve_foreign([0.1]) != [] or _freqs:
+            bad.append("cross-harness: kill-switch off must issue no annex query and return []")
+        if "Other-harness" in _ranked_mandate([("a", "d", 0.3)], foreign=[]):
+            bad.append("cross-harness: empty foreign annex must render no block")
+    finally:
+        (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
+         LOCAL_PLUGIN_IDS, _post_json) = _saved_xh
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
@@ -1235,7 +1562,8 @@ def _selftest() -> int:
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off) "
           "+ chain-overrides (override-wins / keep-off / suppress / fail-open) "
-          "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + external annex "
+          "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + cross-harness annex "
+          "(ADR-0034 filter+annex on / union off) + external annex "
           "(partition / floor / slots / render / kill-switch)"
           % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),
              len(selfref_fire), len(selfref_off)))

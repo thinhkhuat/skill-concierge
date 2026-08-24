@@ -37,15 +37,26 @@ See [ADR-0003](../../docs/adr/0003-embedder-and-vector-store.md).
 
 Discovery is [`vendor/skill-search/skill_search/skills_discovery.py`](../../vendor/skill-search/skill_search/skills_discovery.py):
 
-- `discover_skill_paths()` globs three roots: personal `~/.claude/skills/*/SKILL.md`, project
-  `$CWD/.claude/skills/*/SKILL.md`, and installed plugin skills at
-  `~/.claude/plugins/cache/**/skills/*/SKILL.md`. It deliberately scopes plugins to `cache/`
-  (installed, invocable copies), **not** `marketplaces/**` (catalog checkouts would pollute the
-  index with un-invokable skills).
+- `discover_skill_paths()` globs personal `~/.claude/skills/*/SKILL.md`, project
+  `$CWD/.claude/skills/*/SKILL.md`, and installed plugin skills under
+  `~/.claude/plugins/cache/**`. It deliberately scopes plugins to `cache/` (installed, invocable
+  copies), **not** `marketplaces/**` (catalog checkouts would pollute the index with
+  un-invokable skills). Since `0.24.0` ([ADR-0033](../../docs/adr/0033-dual-harness-codex-parity.md))
+  the Codex roots `~/.codex/skills` and `~/.codex/plugins/cache/**` are walked too, under
+  distinct `codex-*` scopes; `SKILL_CODEX_ROOTS=0` reverts.
+- Both plugin caches are globbed at **two depths** — `skills/<skill>/SKILL.md` and
+  `skills/<category>/<skill>/SKILL.md`. Before `0.25.0` only the flat form matched, so a plugin
+  that groups its skills by category was silently unindexed (35 installed, invocable
+  `mattpocock-skills` skills). Bounded to exactly one extra level, de-duplicated, and guarded
+  structurally: a nested hit whose grandparent already matched the flat glob is that skill's own
+  payload (`references/`, an example SKILL.md shipped as docs), not a sibling skill.
 - `parse_skill()` requires valid `---` frontmatter, so **only model-invocable `SKILL.md` files
   are indexed** — built-in slash-commands are structurally excluded. This is [ADR-0001](../../docs/adr/0001-index-model-invocable-skills-only.md),
   and the reason the vendored eval scores near-zero here ([caveats §1](../../docs/caveats.md)).
-- Dedup is first-writer-wins with personal → project → plugin → catalog precedence.
+- Dedup is first-writer-wins with personal → project → plugin → catalog precedence, and the
+  Claude roots are visited before their Codex counterparts — so where `~/.codex/skills` is a
+  symlink to `~/.claude/skills`, the pair collapses into one `personal` scope and
+  `codex-personal` stays empty.
 - Since `0.22.0` ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)), `discover_skills()`
   additionally folds in **external catalog roots** from the operator-owned
   `~/.claude/skill-concierge/catalog-roots.json` (absent file = feature off): each configured
@@ -164,11 +175,19 @@ project's reindex silently wiped another project's points (last writer won, fore
 hook throttle). The index also described every cached plugin version, not just the installed one.
 
 **Fix:** every indexed point now carries an owning **`scope`** (`personal` | `plugin` |
-`project:<root>`). `_prunable()` deletes **only** within `visible_scopes()`, and `search_skills` /
+`project:<root>`, plus `codex-personal` | `codex-plugin` | `codex-project:<root>` since
+[ADR-0033](../../docs/adr/0033-dual-harness-codex-parity.md) and `catalog:<alias>` since
+[ADR-0031](../../docs/adr/0031-external-catalog-roots.md)). `_prunable()` deletes **only** within `visible_scopes()`, and `search_skills` /
 `_indexed_names` filter results to them. A reindex from a foreign CWD reports `deleted: 0` and
 leaves all foreign project points intact. Separately, `_installed_plugin_roots()` reads Claude
 Code's own `installed_plugins.json` + `enabledPlugins` so only the installed, enabled plugin version
-is indexed (548 → 427 skills, nothing invocable lost). The per-project manifest is now
+is indexed (548 → 427 skills, nothing invocable lost) — note it reads the **user** settings file
+only, so a plugin enabled just for one project is dropped here and its sibling-harness twin wins
+the name; the enforcer compensates at query time
+([ADR-0034](../../docs/adr/0034-cross-harness-offer-isolation.md)), because a machine-global index
+must not encode a per-project fact. `name`, `tier` and `scope` all carry keyword payload indexes
+so the enforcer's hot-path filters are exact lookups rather than scans over ~25k points. The
+per-project manifest is now
 `index_meta-<md5(PROJECT_ROOT)[:8]>.json` so sessions no longer overwrite each other's staleness
 stamp. Both filters **fail open** (unreadable manifests → unfiltered cache + warning); `SKILL_PLUGIN_FILTER=0`
 reverts the plugin filter. See [ADR-0028](../../docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md).

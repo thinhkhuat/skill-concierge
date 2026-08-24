@@ -67,14 +67,25 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    (`enforcer.py:550`), so a pure "explain your last answer" turn never reaches the embed. Detail in
    [leg C](#the-authorized-skip-tier-three-legs-two-formerly-silent) below.
 4. **Embed.** POST the prompt to the warm shim (`http://127.0.0.1:6363/embed`) under a **hard
-   200 ms** socket timeout (`EMBED_TIMEOUT_S = 0.20`). Timeout → mandate-only, ledger band
+   350 ms** socket timeout (`EMBED_TIMEOUT_S = 0.35`). Timeout → mandate-only, ledger band
    `fallback/embed_timeout`; other error → `fallback/embed_down`. (History: a 90 ms cap caused
    ~60% timeouts under CPU contention on a single-threaded shim → the shim was made threaded and
-   the cap relaxed to 200 ms within a ≲300 ms budget — [ADR-0008](../../docs/adr/0008-warm-embed-shim-timeout-calibration.md).)
+   the cap relaxed to 200 ms — [ADR-0008](../../docs/adr/0008-warm-embed-shim-timeout-calibration.md)
+   — then widened again to 350 ms in `0.21.2` when live dogfooding still showed ~65% fallback.
+   Every network leg is separately capped, so the worst case is the sum of the caps
+   (≈850 ms) against a 5 s hook timeout, not an unbounded wait.)
 5. **Retrieve.** POST the vector to Qdrant `points/query/groups` with `group_by:"name"`,
-   `limit=TOP_K`, `group_size:1` (the same MAX-pool retrieval as the tool). `TOP_K = 8` — widened
-   from 5 by the operator on 2026-07-05 ([ADR-0017](../../docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md)).
-   Qdrant unreachable → mandate-only, `fallback/qdrant_down`.
+   `group_size:1` (the same MAX-pool retrieval as the tool), excluding `tier=external`
+   ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)). `TOP_K = 8` — widened from 5 by
+   the operator on 2026-07-05 ([ADR-0017](../../docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md)).
+   Since `0.25.0` ([ADR-0034](../../docs/adr/0034-cross-harness-offer-isolation.md)) the query
+   asks for `RETRIEVE_LIMIT = TOP_K * 3` and the **running harness's non-invocable rows are
+   dropped client-side**, then the list is trimmed back to `TOP_K` — so offer width is unchanged
+   but every row is something the Skill tool can actually invoke. It is a post-filter rather than
+   a Qdrant `scope` condition because scope records where a skill's indexed copy *lives*, not
+   whether this harness can invoke it: a plugin enabled only for the current project is dropped
+   from discovery, its sibling-harness twin wins the name, and `_invocable_twin()` is the
+   per-session test that rescues it. Qdrant unreachable → mandate-only, `fallback/qdrant_down`.
 6. **Keep-off drop.** Remove chronic never-take skills (`config/keep-off.json`,
    [ADR-0011](../../docs/adr/0011-ledger-derived-offer-suppression.md)) from the menu **before**
    the floors, gate, and ranking. Fail-open to the empty set.

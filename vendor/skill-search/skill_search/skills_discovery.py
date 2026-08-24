@@ -412,6 +412,64 @@ def parse_skill(path: Path) -> dict | None:
     }
 
 
+def _nested_glob(g: str) -> str:
+    """The same plugin glob with ONE extra directory level under `skills/`.
+
+    Some plugins group their skills into categories — `skills/<category>/<skill>/
+    SKILL.md` (observed: `mattpocock-skills` 1.2.3, 35 skills under
+    `skills/engineering/`). The single-star glob missed every one of them, so they
+    were installed and Skill-tool-invocable yet permanently unretrievable.
+
+    Bounded to exactly one extra level on purpose: an unbounded `**` would mint a
+    phantom skill out of any SKILL.md buried anywhere under a real skill's own
+    directory. (One extra level is still exposed to `skills/<skill>/references/
+    SKILL.md`, which _glob_both_depths filters structurally — see there.)
+
+    DERIVED at call time from the base glob rather than defined as a second module
+    constant, so the test conftest's single monkeypatch of PLUGIN_GLOB /
+    CODEX_PLUGIN_GLOB keeps discovery hermetic. A second constant would be a second
+    thing to pin, and an unpinned one leaks the real machine's cache into the
+    fixtures — the exact ADR-0033 hermeticity trap.
+    """
+    tail = f"{os.sep}skills{os.sep}*{os.sep}SKILL.md"
+    return g[: -len(tail)] + f"{os.sep}skills{os.sep}*{os.sep}*{os.sep}SKILL.md" \
+        if g.endswith(tail) else g
+
+
+def _glob_both_depths(g: str) -> list[str]:
+    """Plugin-cache hits at `skills/<skill>/` AND `skills/<category>/<skill>/`.
+
+    When the glob has no `skills/*/SKILL.md` tail to rewrite (test fixtures pin
+    shapes like `<tmp>/none/**/SKILL.md`), _nested_glob returns it unchanged — glob
+    ONCE in that case, or every hit would be listed twice.
+
+    The two patterns are ALMOST disjoint by depth, not entirely: a path ending
+    `skills/skills/<x>/SKILL.md` satisfies both, since the leading `**` can absorb one
+    `skills` component. Nothing on a real cache looks like that, but "almost disjoint"
+    is not an invariant — so the result is order-preservingly de-duplicated rather than
+    argued to be unique.
+
+    PHANTOM GUARD, structural rather than a denylist of directory names: a nested hit
+    is dropped when its grandparent already matched the FLAT glob. A directory holding
+    its own SKILL.md is a skill, so anything below it (`references/`, `assets/`, an
+    example skill shipped as documentation) is that skill's payload, not a sibling
+    skill. A genuine category directory has no SKILL.md of its own and survives.
+    """
+    hits = glob.glob(g, recursive=True)
+    nested_pat = _nested_glob(g)
+    if nested_pat == g:
+        return hits
+    skill_dirs = {os.path.dirname(h) for h in hits}
+    seen = set(hits)
+    out = list(hits)
+    for n in glob.glob(nested_pat, recursive=True):
+        if n in seen or os.path.dirname(os.path.dirname(n)) in skill_dirs:
+            continue
+        seen.add(n)
+        out.append(n)
+    return out
+
+
 def _plugin_paths() -> list[Path]:
     """Cache SKILL.md paths from BOTH harnesses' plugin caches (ADR-0033).
 
@@ -420,9 +478,12 @@ def _plugin_paths() -> list[Path]:
     not stdlib-parseable on the 3.10 floor), and a few stale entries beat a
     blind spot over Codex's entire skill universe — the same trade the
     unreadable-manifest fallback already makes for Claude.
+
+    Both caches are globbed at two depths (see _nested_glob) so category-grouped
+    plugins are not silently invisible.
     """
-    hits = glob.glob(PLUGIN_GLOB, recursive=True)
-    codex_hits = glob.glob(CODEX_PLUGIN_GLOB, recursive=True) if CODEX_ROOTS else []
+    hits = _glob_both_depths(PLUGIN_GLOB)
+    codex_hits = _glob_both_depths(CODEX_PLUGIN_GLOB) if CODEX_ROOTS else []
     if not SKILL_PLUGIN_FILTER:
         return [Path(p) for p in hits + codex_hits]
 

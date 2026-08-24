@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.24.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json)
+- **Version:** `0.25.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -117,6 +117,13 @@ search ([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)): th
 appends an additive annex of the top externals on strong intent-match (installed offer
 byte-identical — a separate query supplies the annex, zero displacement), and an external
 used across enough distinct sessions auto-graduates to a real installed skill.
+
+Since `0.25.0` the same annex shape covers the **other harness**
+([ADR-0034](../docs/adr/0034-cross-harness-offer-isolation.md)): with both harnesses indexed into
+one collection, Codex's plugin skills were competing for Claude's installed offer slots (measured:
+18 of 48 rows over six prompts) while the Skill tool could not invoke them. The installed offer now
+holds only what the running harness can invoke, and the rest appear in a marked
+`[codex]` / `[claude]` block read inline via `get_skill`. `search_skills` still spans the union.
 
 ## Where to go next
 
