@@ -505,9 +505,17 @@ def _chain_hint(sid: str) -> str:
 # On the compressed-cosine band the lever is index CONTENT (multi-vector), not thresholds —
 # calibrate_thresholds.py says the same. Mechanism shipped + tested; arm only after a substrate
 # change lifts separation. Opt in: export ENFORCER_PER_SKILL_TAU=1.  FAIL-OPEN on a bad file.
-_THRESHOLDS_PATH = Path(os.environ.get(
-    "SKILL_THRESHOLDS",
-    Path(__file__).resolve().parents[2] / "eval" / "thresholds.json"))
+# The calibration artifact lives in the DURABLE HOME, not the plugin cache: every
+# `/plugin update` mints a fresh cache dir, so a generated file kept under the plugin root
+# silently dies with each release (observed 2026-08-24 — the 0.25.0 cache shipped without it,
+# muting doctor's Corpus health row and every per-skill tau). Same class, same fix as the
+# flywheel manifest (ADR-0027) and SKILL_TRIGGERS (0.21.1). Legacy cache-local copies are
+# still honored as a read fallback so an un-migrated install keeps working.
+_THRESHOLDS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "thresholds.json"
+_THRESHOLDS_LEGACY = Path(__file__).resolve().parents[2] / "eval" / "thresholds.json"
+_env_thresholds = os.environ.get("SKILL_THRESHOLDS")
+_THRESHOLDS_PATH = Path(_env_thresholds) if _env_thresholds else (
+    _THRESHOLDS_DURABLE if _THRESHOLDS_DURABLE.exists() else _THRESHOLDS_LEGACY)
 
 
 def _load_per_skill_tau() -> dict:

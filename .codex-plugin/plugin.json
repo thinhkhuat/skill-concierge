@@ -1,6 +1,6 @@
 {
   "name": "skill-concierge",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "description": "A skill-governance layer: semantic retrieval (which skill) + use-enforcement (whether an agent uses one) + a compounding invocation ledger. Works with both Claude Code and Codex.",
   "author": {
     "name": "thinhkhuat"

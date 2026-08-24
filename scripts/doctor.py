@@ -910,7 +910,13 @@ def check_corpus_health():
     the lever is index content (e.g. multi-vector) or contrastive negatives. Surfaced here
     so the fix-list is visible in the normal health workflow. Read-only, fail-open: missing
     file -> N/A (calibration is optional); WARN only if calibration is wholly signal-less."""
-    path = ROOT / "eval" / "thresholds.json"
+    # Durable home first (survives /plugin update), then the legacy cache-local copy, honoring
+    # the same SKILL_THRESHOLDS env seam the enforcer and calibrator already use — this check
+    # previously hardcoded the cache path and went silently N/A on every fresh release cache.
+    env = os.environ.get("SKILL_THRESHOLDS")
+    durable = Path.home() / ".claude" / "skill-concierge" / "thresholds.json"
+    legacy = ROOT / "eval" / "thresholds.json"
+    path = Path(env) if env else (durable if durable.exists() else legacy)
     if not path.exists():
         return None  # calibration is optional; its absence is not a deployment fault
     try:

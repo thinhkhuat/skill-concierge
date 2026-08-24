@@ -5,6 +5,22 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.25.1] — 2026-08-24
+
+### Fixed
+- **The calibration artifact now lives in the durable home** —
+  `~/.claude/skill-concierge/thresholds.json` — instead of `eval/` under the plugin root.
+  Every `/plugin update` mints a fresh cache dir, so a generated file kept under the plugin
+  root dies with each release: validating the 0.25.0 deploy showed no installed cache had
+  **ever** carried one — doctor's `Corpus health` row only appeared when run from the source
+  repo, and the per-skill tau floors (`ENFORCER_PER_SKILL_TAU`) would have silently fallen back
+  to the global floor on every fresh install. Same artifact class, same fix as the flywheel
+  manifest (ADR-0027) and `SKILL_TRIGGERS` (0.21.1). All three consumers now resolve durable
+  home → legacy cache-local fallback, honoring the existing `SKILL_THRESHOLDS` env seam —
+  which `doctor`'s corpus-health check previously ignored (it hardcoded the cache path, so the
+  env override worked for the enforcer and calibrator but not for the check that reports on
+  them). `calibrate_thresholds.py` writes to the durable home.
+
 ## [0.25.0] — 2026-08-24
 
 ### Changed

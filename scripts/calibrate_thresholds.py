@@ -44,7 +44,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS_DIR = Path(os.environ.get("SKILL_SCENARIOS_DIR", ROOT / "eval" / "scenarios"))
-OUT = Path(os.environ.get("SKILL_THRESHOLDS", ROOT / "eval" / "thresholds.json"))
+# Written to the DURABLE HOME so the artifact survives `/plugin update` (each release mints a
+# fresh cache dir; a copy under the plugin root dies with it — the ADR-0027 artifact class).
+OUT = Path(os.environ.get(
+    "SKILL_THRESHOLDS",
+    Path.home() / ".claude" / "skill-concierge" / "thresholds.json"))
 
 EMBED_URL = (f"http://{os.environ.get('EMBED_SHIM_HOST','127.0.0.1')}"
              f":{os.environ.get('EMBED_SHIM_PORT','6363')}/embed")
