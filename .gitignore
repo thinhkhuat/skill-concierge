@@ -51,10 +51,13 @@ graphify-out/
 # logs/skill-rationalizations*.txt is pinned above). Never committed.
 .memsearch/
 
+# session/tool scratch — never source, never committed
+.codexclaw/
+tmp/
+
 # local Claude Code project state — shared plugin config lives in .claude-plugin/, not here.
 # EXCEPTION: settings.json is committed on purpose — it wires the openwiki parity guard
 # (PreToolUse gate on `git commit`), which is only a gate if it exists on every clone.
 # Note the trailing-slash form below would make the negation unreachable, hence `.claude/*`.
 .claude/*
 !.claude/settings.json
-
