@@ -251,9 +251,9 @@ def _apply_chain_overrides(names: dict) -> dict:
 
 def _visible_sidecar_names() -> dict:
     """{name: [successors]} unioned across scopes visible from THIS cwd — mirrors
-    skills_discovery scope naming ('personal' | 'plugin' | 'project:<root>'). A name
-    absent from the union is dangling or out-of-scope and cannot be hinted. Fail-open
-    to {} (no hint, never an error)."""
+    skills_discovery scope naming ('personal' | 'plugin' | 'project:<root>' plus the
+    codex-* scopes, ADR-0033). A name absent from the union is dangling or
+    out-of-scope and cannot be hinted. Fail-open to {} (no hint, never an error)."""
     try:
         data = json.loads(_SIDECAR_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -262,7 +262,11 @@ def _visible_sidecar_names() -> dict:
         return {}
     out: dict = {}
     proj = f"project:{Path.cwd() / '.claude' / 'skills'}"
-    for scope in ("personal", "plugin", proj):
+    scopes = ["personal", "plugin", proj]
+    if os.environ.get("SKILL_CODEX_ROOTS", "1") != "0":  # ADR-0033 dual-harness mirror
+        scopes += ["codex-personal", "codex-plugin",
+                   f"codex-project:{Path.cwd() / '.codex' / 'skills'}"]
+    for scope in scopes:
         m = data.get(scope)
         if isinstance(m, dict):
             out.update(m)

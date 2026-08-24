@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.23.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.24.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -273,7 +273,7 @@ separate query supplies it — externals never take an installed slot). An exter
 ```
 skill-concierge/
 ├── .claude-plugin/{plugin,marketplace}.json   # Claude Code manifests (bump ALL THREE versions together)
-├── .codex-plugin/plugin.json                  # Codex manifest (dual-harness, ADR-0029; no hooks field)
+├── .codex-plugin/plugin.json                  # Codex manifest (dual-harness, ADR-0033; no hooks field — hooks auto-discovered)
 ├── .mcp.json                                  # registers the MCP via bin/skill-search-mcp launcher
 ├── bin/skill-search-mcp                       # launcher → stable venv (survives cache wipes; ADR-0004)
 ├── setup.sh                                    # bootstrap: venv + Qdrant + reindex + apply-overrides
@@ -318,6 +318,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.24.0` — **published, ADR-0033 dual-harness Codex parity: the retriever indexes Codex's skill universe alongside Claude Code's (`~/.codex/skills` + `~/.codex/plugins/cache/**`) under distinct `codex-*` scopes so neither harness prunes the other's points; Codex plugin cache indexed unfiltered (config.toml is TOML, not stdlib-parseable on the 3.10 floor); chain-hint sidecar mirror reads the codex scopes; kill-switch `SKILL_CODEX_ROOTS=0` restores Claude-only discovery (a reindex prunes the codex points); test conftest pins the Codex seams so a populated ~/.codex cannot leak into fixtures; revives the abandoned July `feat/codex-dual-harness` attempt with its known test failures fixed.**
 
 `0.23.0` — **published, ADR-0032 external catalogs first-class in the offer: an additive external annex (installed offer byte-identical whether on/off — a separate `must tier=external` query supplies ≤`ENFORCER_EXTERNAL_SLOTS`=2 externals ≥`ENFORCER_EXTERNAL_FLOOR`=0.40, so externals never take an installed slot), marked `[external:<alias>]` with the get_skill read-inline instruction; usage-promotion (`auto_promote.py`) graduates an external used across ≥`PROMOTE_MIN_TAKES`=3 distinct sessions to a real installed skill; ledger `ext` + `analyze.py` external offer→take conversion; kill-switch `ENFORCER_EXTERNAL_ANNEX=0` restores search-only; supersedes ADR-0031's search-only tier.**
 

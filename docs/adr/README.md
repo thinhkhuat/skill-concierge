@@ -44,6 +44,7 @@ future maintainer (or agent) does not have to reverse-engineer intent from code 
 | [0030](0030-operator-owned-chain-overrides.md) | Operator-owned chain overrides — `next-skills-overrides.json` merged reader-side in the enforcer; third-party chain curation survives upstream upgrades (override-wins, fail-open, no engine patch) | Accepted | 2026-08-20 |
 | [0031](0031-external-catalog-roots.md) | External catalog roots — multi-catalog retrieval without import; operator-owned `catalog-roots.json`, alias-namespaced `catalog:<alias>` scope, search-only tier with provenance markers, read-inline via `get_skill` + explicit symlink promotion | Accepted (impl. pending) | 2026-08-23 |
 | [0032](0032-external-catalogs-first-class-annex.md) | External catalogs first-class in the offer — additive external annex (installed offer byte-identical, ≤`ENFORCER_EXTERNAL_SLOTS` externals ≥`ENFORCER_EXTERNAL_FLOOR` via a separate query, get_skill read-inline, kill-switch) + usage-promotion (repeat external-takes auto-graduate to installed); supersedes ADR-0031's search-only tier | Accepted | 2026-08-23 |
+| [0033](0033-dual-harness-codex-parity.md) | Dual-harness parity — Codex skill discovery: index `~/.codex/skills` + `~/.codex/plugins/cache/**` under distinct `codex-*` scopes (one shared collection, no cross-harness pruning); Codex-native plugin manifest (no hooks field — auto-discovered); chain-hint mirror reads codex scopes; kill-switch `SKILL_CODEX_ROOTS`; revives the abandoned July attempt with hermetic test fixtures | Accepted | 2026-08-24 |
 
 ## Status values
 

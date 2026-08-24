@@ -1,0 +1,17 @@
+{
+  "description": "Codex-side parity with .claude/settings.json: gate git commit on openwiki parity (version mirror + link integrity). The plugin's own enforcement hooks need no Codex wiring — Codex auto-discovers hooks/hooks.json from the plugin cache and expands the same ${CLAUDE_PLUGIN_ROOT} variable (ADR-0033).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/scripts/openwiki_parity_guard.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -5,6 +5,27 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-08-24
+
+### Added
+- **Dual-harness Codex parity (ADR-0033).** skill-concierge now installs and governs in Codex
+  as a first-class harness, not just Claude Code.
+  - **Codex skill discovery:** the retriever indexes `~/.codex/skills` and
+    `~/.codex/plugins/cache/**` alongside the Claude roots, under distinct `codex-personal` /
+    `codex-plugin` / `codex-project:{root}` scopes — one shared Qdrant collection, no
+    cross-harness point pruning. Codex cache hits are unfiltered (config.toml is TOML, not
+    stdlib-parseable on the 3.10 floor); kill-switch `SKILL_CODEX_ROOTS=0` restores Claude-only
+    discovery byte-identically (a reindex prunes the codex points).
+  - **Codex plugin manifest:** new `.codex-plugin/plugin.json` (skills + mcpServers + interface;
+    no hooks field — the validator rejects it, hooks are auto-discovered from
+    `hooks/hooks.json`, same format and `${CLAUDE_PLUGIN_ROOT}` expansion). `.codex/hooks.json`
+    mirrors the repo-dev openwiki commit gate for Codex sessions.
+  - **Chain-hint mirror:** `enforcer.py`'s `_visible_sidecar_names` reads the codex scopes, so
+    `next-skills:` chains fire for Codex-scope skills.
+  - **Hermetic fixtures:** vendored-test conftest pins the Codex seams (and imports after the
+    env-pinning block — `skills_discovery` reads seams at import time; the July branch's three
+    failing tests now pass on machines with a populated `~/.codex`).
+
 ## [0.23.0] — 2026-08-23
 
 ### Added

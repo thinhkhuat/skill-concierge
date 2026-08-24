@@ -461,3 +461,20 @@ instead of the *wiring* — `run_all()` referenced a renamed function and doctor
 `NameError` on the first real run, selftest still green. Assertions about a pass boundary must drive
 the real entry point (`run_all()`), with a probe check observing the state a check actually sees.
 Verify any such guard with a negative control: break the wiring on purpose and watch it fail.
+
+## §19 — Dual-harness: the Codex cache is indexed UNFILTERED, and Codex skill-use is invisible to the ledger
+
+ADR-0033 indexes `~/.codex/plugins/cache/**` wholesale. Claude's cache is filtered to
+installed+enabled plugins via `installed_plugins.json` + `settings.json`; Codex tracks
+enablement in `config.toml` (TOML, not stdlib-parseable on the 3.10 floor), so the filter
+cannot be reused without a TOML dependency. Consequence: a disabled Codex plugin or a stale
+version dir CAN appear in retrieval until a later reindex prunes it. Accepted trade — a few
+stale results beat a blind spot over Codex's whole skill universe. `SKILL_CODEX_ROOTS=0` +
+a reindex restores Claude-only discovery if this ever bites.
+
+Second: Codex has no `Skill` tool-call event, so the ledger's `auto` rows (skill-invocation
+capture via PostToolUse) are Claude-only. Codex sessions still log `turn`/`offer` rows
+(the enforcement trail works — doctrine + enforcer + search uptake), but offer→take
+conversion for Codex must be read from `search_skills` calls, not `Skill` invocations.
+And per the epoch rule: enabling skill-concierge in Codex is a config change — start a new
+`analyze.py --since` epoch; never pool across it.

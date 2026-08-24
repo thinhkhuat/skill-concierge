@@ -28,6 +28,7 @@ The full tree is in the README's *Architecture* section. The parts you will touc
 - `hooks/` — the in-generation governance layer: `enforcer.py` (per-turn SKILL-FIRST gate: embed→retrieve→floors/intent→ranked mandate, plus the AUTHORIZED-SKIP tier on its two silent legs — ADR-0015), `ledger.py` (invocation capture), `doctrine.py` (SessionStart standing-order injection), `auto_reindex.py` + `auto_overrides.py` + `auto_flywheel.py` (SessionStart self-heal: index + settings-override drift + utterance generation for new skills, ADR-0027 — fail-open, throttled, detached), `doctrine/skill-first.md` (the library doctrine text — burden of proof on SKIP, escalate to `find-skills`)
 - `vendor/skill-search/` — vendored MCP engine (MIT · sowhan/skill-search) — **do not diverge silently**; the body-derived trigger points (`_extract_body_triggers`/`_trigger_phrases`, ADR-0016) are a direct engine-code patch, logged in [`VENDORED.md`](vendor/skill-search/VENDORED.md) — re-apply it if the engine is ever re-vendored from upstream
 - `.claude-plugin/{plugin,marketplace}.json` — plugin manifests
+- `.codex-plugin/plugin.json` + `.codex/hooks.json` — Codex adapter: manifest (no hooks field — auto-discovered) + repo-dev openwiki commit gate (ADR-0033)
 - `config/keep-on.json` — the shipped SEED for the curated always-on allowlist (runtime copy seeded once into `~/.claude/skill-concierge/keep-on.json`, the canonical durable home; ADR-0025)
 
 ## Setup & verification
@@ -50,7 +51,7 @@ after a version bump or after editing a fact shared between these docs.
 
 - **Python:** 3.10–3.12, `snake_case`. `analyze.py` and `doctor.py` are **stdlib-only** — keep them dependency-free.
 - **Shell:** `setup.sh` and the `bin/` launchers target POSIX `sh`/`bash`; keep them portable and idempotent.
-- **Versioning:** bump **both** `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` together, plus a `CHANGELOG.md` entry. Never bump one alone.
+- **Versioning:** bump `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, AND `.codex-plugin/plugin.json` together, plus a `CHANGELOG.md` entry. Never bump one alone (`driftcheck.json` mirrors all of them).
 - **ADRs are immutable.** Don't edit an accepted ADR — supersede it with a new one.
 - **Vendored engine:** never patch `vendor/skill-search/` to diverge from upstream silently; record any customization in [`vendor/skill-search/VENDORED.md`](vendor/skill-search/VENDORED.md).
 - **Tool state is not source.** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/`, and `graphify-out/` are session/runtime scratch — gitignored, never committed. (`graphify-out/` is the knowledge-graph build: `graph.json`, `graph.html`, `GRAPH_REPORT.md`, and a per-file extraction cache — all rebuildable from source, so it is derived output, not source.)
@@ -58,6 +59,8 @@ after a version bump or after editing a fact shared between these docs.
 ## Runtime flags
 
 Each is a one-var revert to the prior behavior (`ENFORCER_AUTHORIZED_SKIP`, `ENFORCER_CHAIN_HINT`, and `SKILL_BODY_TRIGGERS` default ON; `SKILL_LLM_TRIGGERS` default OFF):
+
+- `SKILL_CODEX_ROOTS` (`vendor/skill-search/skill_search/skills_discovery.py`) — dual-harness discovery: index `~/.codex/skills` + `~/.codex/plugins/cache/**` alongside the Claude roots under distinct `codex-*` scopes (one shared collection; neither harness prunes the other's points). `=0` + a reindex restores Claude-only discovery byte-identically. The enforcer's chain-hint scope mirror honors the same flag. [ADR-0033](docs/adr/0033-dual-harness-codex-parity.md).
 
 - `ENFORCER_CHAIN_HINT` (`hooks/scripts/enforcer.py`) — appends a `CHAIN-HINT:` candidate line to every inject-bearing leg (mandate, mandate-only fallbacks, AUTHORIZED-SKIP lines) when this session used a skill declaring `next-skills:` within `ENFORCER_CHAIN_TTL_S` (900s). State = bounded ledger tail-read (auto + manual, sub-stamped rows excluded); successors = scope-keyed sidecar written at index time (`~/.claude/skill-concierge/next-skills.json`); hinted names pass keep-off + catalogue filters and bypass no floor. `=0` reverts byte-identically. [ADR-0029](docs/adr/0029-next-skill-chain-hints.md). Third-party-skill chains are curated in the operator-owned `~/.claude/skill-concierge/next-skills-overrides.json` (reader-side merge, override-wins — upstream upgrades cannot wipe them; absent file = byte-identical) — [ADR-0030](docs/adr/0030-operator-owned-chain-overrides.md).
 - `ENFORCER_AUTHORIZED_SKIP` (`hooks/scripts/enforcer.py`) — injects a `SKILL-CHECK:` line on the enforcer's two previously-silent verdicts (getaway score-floor miss, conversational-intent skip) so the agent knows the hook already cleared the turn. `=0` restores the old silence. [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md).

@@ -190,6 +190,12 @@ Rule A: never write the install path without an explicit per-step OK.
 - Both skills declare `name:`=dir (proven registration pattern, 158/159 cache skills) with single-line descriptions (engine parses frontmatter by regex, not YAML). Versions bumped 0.1.2 → **0.2.0** (plugin.json + marketplace.json). Rationale → **ADR-0007**.
 - Verified: `py_compile` + `doctor.py --selftest` green; live `doctor.py` ran end-to-end (correctly flagged stale-index + duplicate-MCP). HELD per Rule A — written in workbench source, NOT installed; live slash registration unverified until reinstall.
 
+**2026-08-24 — 0.24.0: dual-harness Codex parity (ADR-0033; revives abandoned `feat/codex-dual-harness` `0f9569e`).**
+- Discovery indexes `~/.codex/skills` + `~/.codex/plugins/cache/**` under `codex-personal`/`codex-plugin`/`codex-project:{root}` scopes (331 Codex skills discovered on this machine, 705 total); Codex cache unfiltered (config.toml is TOML; stdlib-only floor 3.10); kill-switch `SKILL_CODEX_ROOTS=0`.
+- `.codex-plugin/plugin.json` (skills + mcpServers + interface, NO hooks field — validator rejects; hooks auto-discovered from hooks/hooks.json, same `${CLAUDE_PLUGIN_ROOT}` expansion) + `.codex/hooks.json` repo-dev openwiki commit gate.
+- Enforcer chain-hint mirror reads codex scopes (the July branch missed this — chain hints for codex-scope skills would have silently never fired).
+- Fixed the branch's known issue: conftest autouse fixture pins Codex seams (imported AFTER env pinning — `skills_discovery` reads seams at import; early import captured the live catalog-roots config, the `antigravity` leak). 72/73 vendored tests green (1 environmental: e2e needs Qdrant up); enforcer + doctrine selftests green; driftcheck exit 0 with the new `.codex-plugin` version mirror.
+
 ## Risks / open
 
 - Warm service = a new always-on dependency (like Qdrant). Mitigated by the

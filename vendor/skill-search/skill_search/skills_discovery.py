@@ -33,7 +33,20 @@ log = logging.getLogger("skill_search")
 # project tree, sweeping up vendored/cloned repos that ship their own SKILL.md.
 PERSONAL_ROOT = Path.home() / ".claude" / "skills"      # personal (all projects)
 PROJECT_ROOT = Path.cwd() / ".claude" / "skills"        # project-scoped, CWD-relative
-SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT]
+# Codex skill roots (dual-harness parity, ADR-0033): Codex stores personal skills
+# at ~/.codex/skills/ and plugin-bundled skills at ~/.codex/plugins/cache/**.
+# ADDITIVE — both harnesses' skills index into the SAME Qdrant collection under
+# DISTINCT scopes, so a reindex in one harness cannot prune the other's points.
+# Paths that don't exist are silently skipped by discover_skill_paths()'s
+# d.exists() check, so a Codex-less machine is unaffected. One-var revert:
+# SKILL_CODEX_ROOTS=0 drops every Codex path + scope (byte-identical to the
+# pre-dual-harness engine; a reindex prunes the codex-* points).
+CODEX_ROOTS = os.environ.get("SKILL_CODEX_ROOTS", "1") != "0"
+CODEX_PERSONAL_ROOT = Path.home() / ".codex" / "skills"      # Codex personal (all projects)
+CODEX_PROJECT_ROOT = Path.cwd() / ".codex" / "skills"        # Codex project-scoped, CWD-relative
+CODEX_PLUGIN_GLOB = str(Path.home() / ".codex" / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md")
+SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
+    [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else [])
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
 # source checkouts including skills that aren't installed, which would pollute the
@@ -400,25 +413,34 @@ def parse_skill(path: Path) -> dict | None:
 
 
 def _plugin_paths() -> list[Path]:
-    """Cache SKILL.md paths, narrowed to the installed + enabled plugin versions."""
+    """Cache SKILL.md paths from BOTH harnesses' plugin caches (ADR-0033).
+
+    Claude hits are narrowed to installed+enabled via installed_plugins.json.
+    Codex hits are unfiltered: Codex tracks enablement in config.toml (TOML,
+    not stdlib-parseable on the 3.10 floor), and a few stale entries beat a
+    blind spot over Codex's entire skill universe — the same trade the
+    unreadable-manifest fallback already makes for Claude.
+    """
     hits = glob.glob(PLUGIN_GLOB, recursive=True)
+    codex_hits = glob.glob(CODEX_PLUGIN_GLOB, recursive=True) if CODEX_ROOTS else []
     if not SKILL_PLUGIN_FILTER:
-        return [Path(p) for p in hits]
+        return [Path(p) for p in hits + codex_hits]
 
     roots = _installed_plugin_roots()
     if roots is None:
         log.warning("plugin manifests unreadable — indexing the whole cache "
                     "(stale versions and disabled plugins included)")
-        return [Path(p) for p in hits]
+        return [Path(p) for p in hits + codex_hits]
 
     kept = [p for p in hits if any(p.startswith(r + os.sep) for r in roots)]
+    kept += codex_hits
     if not kept:
         log.warning("installed/enabled filter matched no cache skills — "
                     "falling back to the unfiltered cache")
-        return [Path(p) for p in hits]
-    if len(kept) < len(hits):
-        log.info("plugin cache: kept %d of %d SKILL.md (installed+enabled only)",
-                 len(kept), len(hits))
+        return [Path(p) for p in hits + codex_hits]
+    if len(kept) < len(hits) + len(codex_hits):
+        log.info("plugin cache: kept %d of %d SKILL.md (Claude installed+enabled; all Codex)",
+                 len(kept), len(hits) + len(codex_hits))
     return [Path(p) for p in kept]
 
 
@@ -433,18 +455,26 @@ def discover_skill_paths() -> list[Path]:
 
 
 def _scope_for(path: Path) -> str:
-    """The scope that OWNS this skill: 'personal' | 'plugin' | 'project:<root>'.
+    """The scope that OWNS this skill.
 
     Claude Code runs one MCP server per session, each with its own CWD, and they
     all share one Qdrant collection. Points must record who owns them so a
     reindex in session A cannot prune session B's project skills (they simply
-    look "deleted from disk" from A's vantage point).
+    look "deleted from disk" from A's vantage point). Codex paths get DISTINCT
+    scope names (ADR-0033) so the two harnesses' skills stay identifiable while
+    any session on the machine can prune skills genuinely gone from disk.
     """
     p = str(path)
     if p.startswith(str(PERSONAL_ROOT) + os.sep):
         return "personal"
+    if p.startswith(str(CODEX_PERSONAL_ROOT) + os.sep):
+        return "codex-personal"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
+        if f"{os.sep}.codex{os.sep}" in p:
+            return "codex-plugin"
         return "plugin"
+    if p.startswith(str(CODEX_PROJECT_ROOT) + os.sep):
+        return f"codex-project:{CODEX_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -455,8 +485,10 @@ def visible_scopes() -> set[str]:
     cross-session prune war is possible. Removing a root from the config removes
     its scope here, and the next reindex prunes its points via the existing
     scope-visibility mechanism — teardown needs nothing new."""
-    return ({"personal", "plugin", f"project:{PROJECT_ROOT}"}
-            | {f"catalog:{a}" for a in catalog_roots()})
+    scopes = {"personal", "plugin", f"project:{PROJECT_ROOT}"}
+    if CODEX_ROOTS:
+        scopes |= {"codex-personal", "codex-plugin", f"codex-project:{CODEX_PROJECT_ROOT}"}
+    return scopes | {f"catalog:{a}" for a in catalog_roots()}
 
 
 def manifest_key() -> str:

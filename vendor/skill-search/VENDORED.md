@@ -243,6 +243,23 @@ upstream is re-vendored:
   `tests/test_discovery.py` catalog cases + enforcer selftest case 10. **Requires re-copy into the
   stable venv + a reindex to deploy.**
 
+- **Dual-harness Codex discovery (ADR-0033, v0.24.0):** `skills_discovery.py` adds
+  `CODEX_PERSONAL_ROOT` (`~/.codex/skills`), `CODEX_PROJECT_ROOT` (`{cwd}/.codex/skills`), and
+  `CODEX_PLUGIN_GLOB` (`~/.codex/plugins/cache/**/skills/*/SKILL.md`), folded into `SKILL_DIRS`
+  and `_plugin_paths()` — both harnesses' skills index into ONE shared Qdrant collection under
+  DISTINCT scopes (`codex-personal` | `codex-plugin` | `codex-project:{root}`) so neither
+  harness's reindex prunes the other's points (extends ADR-0028's scope system). Codex cache hits
+  are UNFILTERED (Codex tracks enablement in config.toml — TOML, not stdlib-parseable on the
+  3.10 floor). One-var revert: `SKILL_CODEX_ROOTS=0` (default on) drops every Codex path + scope,
+  byte-identical to the pre-dual-harness engine; a reindex prunes the codex points.
+  `tests/conftest.py` gains an autouse fixture pinning the Codex seams to a temp path — imported
+  only AFTER the env-pinning block, because this module reads its env seams at import time (an
+  early import captures the operator's live catalog-roots config). Plugin-side companion:
+  `enforcer.py` chain-hint scope mirror reads the codex scopes under the same flag. Pinned by
+  the existing discovery suite running green on a machine with a populated `~/.codex`.
+  **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

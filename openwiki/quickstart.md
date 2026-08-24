@@ -1,7 +1,8 @@
 # skill-concierge — OpenWiki quickstart
 
-**skill-concierge** is a Claude Code **plugin** that governs how Claude picks and uses
-*skills*. It is a thin **governance layer** over Claude Code's default skill mechanism: where
+**skill-concierge** is a **plugin** for both Claude Code and Codex that governs how the agent
+picks and uses *skills*. It is a thin **governance layer** over both harnesses' default skill
+mechanisms: where
 the default injects **every** installed skill's description into the context window on **every**
 turn and hopes the model notices the right one, skill-concierge replaces *hope* with
 **retrieve-precisely + enforce-use + measure**.
@@ -10,13 +11,13 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.23.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json)
+- **Version:** `0.24.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
 ## What problem it solves
 
-Claude Code's default discovery degrades as a catalogue grows past a few dozen skills: the
+Both harnesses' default discovery degrades as a catalogue grows past a few dozen skills: the
 model skims the injected list, misses the fitting skill, or "wings it" instead of invoking one.
 skill-concierge separates three failure modes the default conflates:
 
@@ -57,7 +58,7 @@ These have bitten before; the ADRs and [`docs/caveats.md`](../docs/caveats.md) e
 
 | Requirement | Notes |
 |-------------|-------|
-| Claude Code | host for the plugin, hooks, and MCP server |
+| Claude Code or Codex | host for the plugin, hooks, and MCP server |
 | Python 3.10–3.12 | `snake_case`; set `SKILL_PYTHON` to pin an interpreter |
 | Docker / OrbStack | runs the Qdrant vector store **and** the warm embed shim (both Docker sidecars) |
 
@@ -82,6 +83,12 @@ Or run the **`skill-concierge:setup`** skill (same bootstrap, self-verifying). I
 `status: OK` is not what you get, run **`skill-concierge:doctor`** (or `python3 scripts/doctor.py`)
 — it diagnoses the venv, Qdrant, MCP wiring, overrides, and retrieval health, and `--fix`
 auto-repairs the common failures. Full setup/ops detail: **[operations.md](operations.md)**.
+
+**In Codex** (v0.24.0+, ADR-0033): add the repo as a plugin marketplace
+(`codex plugin marketplace add https://github.com/thinhkhuat/skill-concierge.git`), install
+with `codex plugin add skill-concierge@skill-concierge`, then verify the MCP with
+`codex mcp list` (should list `skill-search`). The engine sidecars (Qdrant + embed shim),
+index, and ledger are SHARED with the Claude Code install — one concierge, two harnesses.
 
 ## The MCP tools
 
