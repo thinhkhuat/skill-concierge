@@ -79,7 +79,7 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)). `TOP_K = 8` — widened from 5 by
    the operator on 2026-07-05 ([ADR-0017](../../docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md)).
    Since `0.25.0` ([ADR-0034](../../docs/adr/0034-cross-harness-offer-isolation.md)) the query
-   asks for `RETRIEVE_LIMIT = TOP_K * 4` and the **running harness's non-invocable rows are
+   asks for `RETRIEVE_LIMIT = TOP_K * 5` and the **running harness's non-invocable rows are
    dropped client-side**, then the list is trimmed back to `TOP_K` — so every row is something the
    Skill tool can actually invoke. The multiplier is headroom, not a guarantee: where the sibling
    harness dominates a domain the menu can come back short, and a shorter menu of invocable rows

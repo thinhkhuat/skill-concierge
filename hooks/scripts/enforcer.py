@@ -106,11 +106,13 @@ EXTERNAL_FLOOR = float(os.environ.get("ENFORCER_EXTERNAL_FLOOR", "0.40"))
 CROSS_HARNESS = os.environ.get("ENFORCER_CROSS_HARNESS", "1") != "0"
 # Over-fetch, post-filter, trim to TOP_K. The multiplier is HEADROOM, not a guarantee: in a
 # domain the other harness dominates, more than RETRIEVE_LIMIT-TOP_K of the top groups can be
-# foreign and the menu comes back short. Measured on the live index, x3 left two of thirty probes
-# under-filled (5 and 7 rows, needing 30 and 25 groups); x4 covers both. A shorter menu of
-# invocable rows beats a full one padded with rows the agent cannot act on, so under-fill is the
-# accepted degradation rather than a bug to pad around.
-RETRIEVE_LIMIT = TOP_K * 4
+# foreign and the menu comes back short. Measured on the live index: x3 left two of
+# thirty probes under-filled (5 and 7 rows, needing 30 and 25 groups); x4 still missed one of
+# sixty ("vercel edge config feature flags", 7 rows, 35 groups needed); x5 covers every case
+# observed so far, for about a millisecond of extra groups. It stays HEADROOM regardless — a
+# shorter menu of invocable rows beats a full one padded with rows the agent cannot act on, so
+# under-fill is the accepted degradation rather than a bug to pad around.
+RETRIEVE_LIMIT = TOP_K * 5
 
 
 def _running_under_codex() -> bool:
@@ -418,11 +420,21 @@ def _visible_sidecar_names() -> dict:
     if not isinstance(data, dict):
         return {}
     out: dict = {}
-    proj = f"project:{Path.cwd() / '.claude' / 'skills'}"
-    scopes = ["personal", "plugin", proj]
+    # Path.cwd() raises when the working directory has been deleted (a worktree removed under a
+    # live session). This runs on the chain-hint path, evaluated BEFORE _inject, so an unguarded
+    # raise here costs the WHOLE offer — silently, exit 0. Fall back to the machine-wide scopes;
+    # a project-scoped chain simply does not fire for that turn.
+    try:
+        cwd = Path.cwd()
+    except Exception:
+        cwd = None
+    scopes = ["personal", "plugin"]
+    if cwd is not None:
+        scopes.append(f"project:{cwd / '.claude' / 'skills'}")
     if os.environ.get("SKILL_CODEX_ROOTS", "1") != "0":  # ADR-0033 dual-harness mirror
-        scopes += ["codex-personal", "codex-plugin",
-                   f"codex-project:{Path.cwd() / '.codex' / 'skills'}"]
+        scopes += ["codex-personal", "codex-plugin"]
+        if cwd is not None:
+            scopes.append(f"codex-project:{cwd / '.codex' / 'skills'}")
     for scope in scopes:
         m = data.get(scope)
         if isinstance(m, dict):
@@ -1523,13 +1535,21 @@ def _selftest() -> int:
         _tmpd = tempfile.mkdtemp()
         try:
             os.chdir(_tmpd)
-            os.rmdir(_tmpd)
+            os.rmdir(_tmpd)                  # cwd now deleted
             _invocable_plugin_ids()          # must not raise
+            _visible_sidecar_names()         # nor this — it runs before _inject, so a raise
+                                             # here costs the whole offer, silently
         except Exception as _e:
-            bad.append("cross-harness: import-time settings read must survive a deleted cwd: "
-                       "%s: %s" % (type(_e).__name__, _e))
+            bad.append("cross-harness: the import-time settings read and the chain-hint scope "
+                       "mirror must BOTH survive a deleted cwd: %s: %s"
+                       % (type(_e).__name__, _e))
         finally:
             os.chdir(_cwd)
+            # os.rmdir above normally removed it; this only fires if os.chdir raised first.
+            try:
+                os.rmdir(_tmpd)
+            except OSError:
+                pass
 
         # `Path("").resolve()` is the CWD — a falsy env var must never be probed as a path.
         _cpr = os.environ.pop("CLAUDE_PLUGIN_ROOT", None)

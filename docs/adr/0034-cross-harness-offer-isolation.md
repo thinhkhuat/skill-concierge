@@ -29,13 +29,14 @@ turning the concierge's own preview into a source of false routing.
 **Keep foreign-harness skills out of the installed offer, then re-surface them as a separate
 marked annex.** This is the ADR-0032 external-annex shape applied one layer up.
 
-- `enforcer._retrieve` over-fetches to `RETRIEVE_LIMIT` (`TOP_K * 4`), drops rows this harness
+- `enforcer._retrieve` over-fetches to `RETRIEVE_LIMIT` (`TOP_K * 5`), drops rows this harness
   cannot invoke, and trims back to `TOP_K`. The multiplier is **headroom, not a guarantee**: in a
   domain the sibling harness dominates, more than `RETRIEVE_LIMIT - TOP_K` of the top groups can
-  be foreign and the menu comes back short. Measured at `TOP_K * 3`, two of thirty probes
-  under-filled (5 and 7 rows, needing 30 and 25 groups); at `TOP_K * 4`, 20 of 20 return a full
-  8. A shorter menu of invocable rows beats a full one padded with rows the agent cannot act on,
-  so under-fill is the accepted degradation, not a bug to pad around.
+  be foreign and the menu comes back short. Measured: at `TOP_K * 3`, two of thirty probes
+  under-filled (5 and 7 rows, needing 30 and 25 groups); at `TOP_K * 4`, one of sixty still did
+  (*"vercel edge config feature flags"*, 7 rows, 35 groups needed); at `TOP_K * 5`, every case
+  observed so far fills. A shorter menu of invocable rows beats a full one padded with rows the
+  agent cannot act on, so under-fill remains the accepted degradation, not a bug to pad around.
 - `enforcer._retrieve_foreign` issues a **separate** query filtered to the foreign scope set,
   keeping the top `ENFORCER_FOREIGN_SLOTS` (2) rows scoring >= `ENFORCER_FOREIGN_FLOOR` (0.40).
   A dedicated query, never a partition of a widened one, is what makes displacement
@@ -186,7 +187,8 @@ catalog alias.
   a plan for a new feature"*, *"audit the security of this endpoint"*, *"help me plan a database
   migration"* — went **18 of 48 -> 0**. A 20-prompt sweep including Vercel/Next/Cloudflare
   queries (the domains where the Codex cache is densest) returned **160 rows, 0 non-invocable,
-  8 rows every time**. Every foreign-scoped row kept in
+  8 rows every time**; re-run at `TOP_K * 5` including the pass-3 counterexample, 21 of 21 full,
+  168 rows, 0 non-invocable. Every foreign-scoped row kept in
   the offer was an invocable twin (`agent-skills:*`); the annex held only genuinely
   non-invocable skills (`superpowers:*`, `vercel:*`, `omo:*`, `supabase:*`, `cloudflare:*`).
   Warm latency: installed query 14-20 ms, annex query 8-18 ms, against the 100 ms cap.
@@ -201,5 +203,11 @@ catalog alias.
     offer under-fill at `TOP_K * 3`, and the Codex `personal` mirror.
   Every finding above is fixed and the two blocking ones are pinned by selftest case (12) — a
   deleted-cwd import that must not raise, and an unknown manifest that must filter nothing.
-  Both passes are worth reading; each caught a defect whose selftests were already green,
-  because the tests pinned the mechanism while the bug was in the premise.
+  - **Pass 3** (`plans/reports/validator-260824-1745-adr0034-pass3.md`) — PASS, no blockers.
+    Its three advisories (a stale README sentence, residual under-fill at `TOP_K * 4`, and an
+    unguarded `Path.cwd()` in `_visible_sidecar_names` that would silently cost the whole offer
+    on the chain-hint path) are all fixed too; the last one is pre-existing rather than from this
+    work, but having decided the deleted-cwd case is worth guarding, guarding half of it was not
+    defensible.
+  All three passes are worth reading; the first two each caught a defect whose selftests were
+  already green, because the tests pinned the mechanism while the bug was in the premise.

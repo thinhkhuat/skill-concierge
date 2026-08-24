@@ -14,7 +14,7 @@ All notable changes to **skill-concierge**. Format loosely follows
   prompts, **18 of 48 offer rows** named skills the Skill tool cannot invoke here — each burning
   a slot and inviting a `USING:` the harness would refuse. After: **0 of 48**, offers still a
   full 8 rows.
-  - `enforcer._retrieve` over-fetches to `TOP_K * 4`, drops rows this harness cannot invoke,
+  - `enforcer._retrieve` over-fetches to `TOP_K * 5`, drops rows this harness cannot invoke,
     and trims back to `TOP_K`. The multiplier is headroom, not a guarantee — where the sibling
     harness dominates a domain the menu can come back short, which beats padding it with rows
     the agent cannot act on.
@@ -78,6 +78,11 @@ All notable changes to **skill-concierge**. Format loosely follows
   pinned there it would have made background rebuilds disagree with the live query index in
   both directions. The forward tuple now carries every engine-side flag readable from
   `.mcp.json`, and that invariant is stated at the call site.
+- **`_visible_sidecar_names()` called `Path.cwd()` unguarded** (pre-existing). It runs on the
+  chain-hint path, which is evaluated before `_inject`, so a session with a chain seed running
+  from a deleted working directory silently injected nothing at all — exit 0, no offer, no
+  signal. Now falls back to the machine-wide scopes; a project-scoped chain simply does not fire
+  for that turn. Pinned by the selftest alongside the import-time case.
 - Enforcer module docstring restated the per-turn budget, which had drifted: it still claimed
   "200ms within a ≲300ms total" while `EMBED_TIMEOUT_S` was live at 350 ms. Now states the
   actual sum-of-caps worst case against the 5 s hook timeout.
