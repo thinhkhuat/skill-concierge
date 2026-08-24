@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "scripts"))
-import auto_flywheel as af  # noqa: E402
+import auto_flywheel as af
 
 
 @pytest.fixture(autouse=True)

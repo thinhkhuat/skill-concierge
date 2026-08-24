@@ -19,11 +19,11 @@ Queries embedded via the ENGINE path (same space as the index). Run under the en
 
   --selftest   ranking/metric math self-check (no network)
 """
+import argparse
+import glob
+import json
 import os
 import sys
-import json
-import glob
-import argparse
 import urllib.request
 from pathlib import Path
 
@@ -146,9 +146,9 @@ def run():
     print(f"\nOFFER-SET CROWDING (skills clearing floor={FLOOR} per query — the real precision gate):")
     print(f"  LIVE    mean {live['offer_mean']:>6}  median {live['offer_median']:>4}  p95 {live['offer_p95']:>4}  (of 495)")
     print(f"  SHADOW  mean {shadow['offer_mean']:>6}  median {shadow['offer_median']:>4}  p95 {shadow['offer_p95']:>4}  (of 495)")
-    print(f"  -> if SHADOW crowds far above LIVE, the global floor MUST be re-tuned before the")
-    print(f"     enriched index improves OFFERS (rank gains are scale-invariant and stand regardless).")
-    print(f"\nSHADOW confusion (who steals a positive when correct isn't rank-1):")
+    print("  -> if SHADOW crowds far above LIVE, the global floor MUST be re-tuned before the")
+    print("     enriched index improves OFFERS (rank gains are scale-invariant and stand regardless).")
+    print("\nSHADOW confusion (who steals a positive when correct isn't rank-1):")
     for n, c in list(shadow["confusion"].items())[:12]:
         print(f"   {c:>3}x  {n}")
     return 0

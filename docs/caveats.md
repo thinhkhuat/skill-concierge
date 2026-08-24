@@ -511,3 +511,22 @@ shell ancestor, which need the env in their own plist. Harness-specific env stay
 harness's own config **by design** — exporting an absolute Claude path machine-wide is exactly
 incident 3. Verified from clean `env -i` environments across six launch shapes (zsh -c/-lic,
 bash -lc/-ic, bash-under-zsh, python child) on 2026-08-24.
+
+## §21 — Triple-harness: Command Code uses mods for per-turn enforcement, not settings hooks
+
+Command Code (`cmd`) supports four settings hook events (`PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`),
+with tool matchers restricted to built-in commands (`SHELL`, `READ`, `WRITE`, `EDIT`).
+
+Consequences:
+1. **`UserPromptSubmit` does not exist in cmd settings hooks:** Attempting to wire `enforcer.py` or
+   `ledger.py` under `UserPromptSubmit` in `~/.commandcode/settings.json` is a silent dead-end.
+   Enforcement and prompt-turn telemetry MUST run via a Command Code **mod** (`cmd.hooks({ transformInput })`).
+2. **MCP tool calls are not intercepted by settings hooks:** `PostToolUse` matchers in cmd do not fire on
+   MCP tools or `activate_skill`. Tool invocation telemetry MUST run via mod event observers
+   (`cmd.on('skill_loaded')`, `cmd.on('tool_completed')`).
+3. **SessionStart hooks work natively:** `doctrine.py`, `auto_reindex.py`, `auto_overrides.py`,
+   `auto_flywheel.py`, and `auto_promote.py` run from `~/.commandcode/settings.json` `SessionStart` hooks
+   with native tool name adaptation.
+4. **`${CLAUDE_PLUGIN_ROOT}` literal in `.mcp.json` is unresolvable by cmd:** Command Code does not
+   expand plugin root variables in `.mcp.json`. The `adapters/commandcode/install.sh` script writes
+   absolute paths to `~/.commandcode/mcp.json` and local project overrides to avoid this failure class.

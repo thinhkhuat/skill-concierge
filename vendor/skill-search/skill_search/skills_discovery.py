@@ -45,8 +45,18 @@ CODEX_ROOTS = os.environ.get("SKILL_CODEX_ROOTS", "1") != "0"
 CODEX_PERSONAL_ROOT = Path.home() / ".codex" / "skills"      # Codex personal (all projects)
 CODEX_PROJECT_ROOT = Path.cwd() / ".codex" / "skills"        # Codex project-scoped, CWD-relative
 CODEX_PLUGIN_GLOB = str(Path.home() / ".codex" / "plugins" / "cache" / "**" / "skills" / "*" / "SKILL.md")
+
+# Command Code skill roots (triple-harness parity, ADR-0038): Command Code stores
+# personal skills at ~/.commandcode/skills/ and project skills at .commandcode/skills/.
+COMMANDCODE_ROOTS = os.environ.get("SKILL_COMMANDCODE_ROOTS", "1") != "0"
+COMMANDCODE_PERSONAL_ROOT = Path.home() / ".commandcode" / "skills"
+COMMANDCODE_PROJECT_ROOT = Path.cwd() / ".commandcode" / "skills"
+
 SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
-    [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else [])
+    [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else []
+) + (
+    [COMMANDCODE_PERSONAL_ROOT, COMMANDCODE_PROJECT_ROOT] if COMMANDCODE_ROOTS else []
+)
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
 # source checkouts including skills that aren't installed, which would pollute the
@@ -521,21 +531,25 @@ def _scope_for(path: Path) -> str:
     Claude Code runs one MCP server per session, each with its own CWD, and they
     all share one Qdrant collection. Points must record who owns them so a
     reindex in session A cannot prune session B's project skills (they simply
-    look "deleted from disk" from A's vantage point). Codex paths get DISTINCT
-    scope names (ADR-0033) so the two harnesses' skills stay identifiable while
-    any session on the machine can prune skills genuinely gone from disk.
+    look "deleted from disk" from A's vantage point). Codex and Command Code paths
+    get DISTINCT scope names (ADR-0033, ADR-0038) so all harnesses' skills stay
+    identifiable while any session on the machine can prune skills genuinely gone from disk.
     """
     p = str(path)
     if p.startswith(str(PERSONAL_ROOT) + os.sep):
         return "personal"
     if p.startswith(str(CODEX_PERSONAL_ROOT) + os.sep):
         return "codex-personal"
+    if p.startswith(str(COMMANDCODE_PERSONAL_ROOT) + os.sep):
+        return "commandcode-personal"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:
             return "codex-plugin"
         return "plugin"
     if p.startswith(str(CODEX_PROJECT_ROOT) + os.sep):
         return f"codex-project:{CODEX_PROJECT_ROOT}"
+    if p.startswith(str(COMMANDCODE_PROJECT_ROOT) + os.sep):
+        return f"commandcode-project:{COMMANDCODE_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -549,6 +563,8 @@ def visible_scopes() -> set[str]:
     scopes = {"personal", "plugin", f"project:{PROJECT_ROOT}"}
     if CODEX_ROOTS:
         scopes |= {"codex-personal", "codex-plugin", f"codex-project:{CODEX_PROJECT_ROOT}"}
+    if COMMANDCODE_ROOTS:
+        scopes |= {"commandcode-personal", f"commandcode-project:{COMMANDCODE_PROJECT_ROOT}"}
     return scopes | {f"catalog:{a}" for a in catalog_roots()}
 
 

@@ -41,10 +41,12 @@ def _mcp_env():
     """Embedder + store come from .mcp.json (single source of truth); real env wins."""
     env = {}
     try:
-        env = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))[
+        configured_env = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))[
             "mcpServers"]["skill-search"]["env"]
-    except Exception:
-        pass
+    except (OSError, ValueError, KeyError, TypeError):
+        configured_env = {}
+    if isinstance(configured_env, dict):
+        env = configured_env
     merged = dict(os.environ)
     # Forward the embedder/store keys AND the trigger-layer keys from .mcp.json so the
     # DETACHED reindex builds the SAME index the query server serves. Without the trigger
@@ -62,7 +64,7 @@ def _mcp_env():
     # all. INVARIANT: every engine-side flag readable from .mcp.json belongs in this tuple.
     for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
               "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS",
-              "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_CODEX_ROOTS"):
+              "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS"):
         if k in env and k not in os.environ:
             merged[k] = env[k]
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")
@@ -78,11 +80,12 @@ def _recent(path, within):
 def _qdrant_up(url, timeout=0.8):
     for u in (url.rstrip("/") + "/healthz", url):
         try:
-            with urllib.request.urlopen(u, timeout=timeout) as r:
-                if r.status == 200:
-                    return True
-        except Exception:
-            continue
+            with urllib.request.urlopen(u, timeout=timeout) as response:
+                status = response.status
+        except (OSError, ValueError):
+            status = None
+        if status == 200:
+            return True
     return False
 
 
@@ -98,15 +101,15 @@ def main() -> int:
         LOGDIR.mkdir(parents=True, exist_ok=True)
         # Stamp BEFORE spawning so a crash-looping engine can't re-spawn every session.
         STAMP.write_text(str(int(time.time())), encoding="utf-8")
-        logf = open(LOGFILE, "a", encoding="utf-8")
-        logf.write(f"\n=== auto-reindex {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        logf.flush()
-        subprocess.Popen(
-            [str(SS_BIN), "--reindex"], env=env,
-            stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
-            start_new_session=True,                    # fully detached: outlives the hook, never blocks
-        )
-    except Exception:
+        with LOGFILE.open("a", encoding="utf-8") as logf:
+            logf.write(f"\n=== auto-reindex {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            logf.flush()
+            subprocess.Popen(
+                [str(SS_BIN), "--reindex"], env=env,
+                stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
+                start_new_session=True,                # fully detached: outlives the hook, never blocks
+            )
+    except (OSError, ValueError):
         return 0                                       # fail-silent — never block session start
     return 0
 

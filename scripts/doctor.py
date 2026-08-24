@@ -29,12 +29,14 @@ import argparse
 import collections
 import glob
 import hashlib
+import http.client
 import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -58,6 +60,8 @@ MULTIVECTOR = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"   # multi-vector t
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 GLYPH = {OK: "✓", WARN: "!", FAIL: "✗"}           # ✓ ! ✗
+JSON_READ_ERRORS = (OSError, AttributeError, KeyError, TypeError, ValueError)
+NETWORK_READ_ERRORS = (*JSON_READ_ERRORS, http.client.HTTPException)
 
 
 def read_mcp_env():
@@ -65,8 +69,8 @@ def read_mcp_env():
     env = {}
     try:
         env = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
-    except Exception:
-        pass
+    except JSON_READ_ERRORS:
+        env = {}
     return (
         os.environ.get("SKILL_QDRANT_URL", env.get("SKILL_QDRANT_URL", "http://localhost:6333")),
         os.environ.get("SKILL_EMBED_BACKEND", env.get("SKILL_EMBED_BACKEND", "fastembed")),
@@ -94,7 +98,7 @@ def read_server_records_dir():
     try:
         env = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
         pinned = env.get("SKILL_SERVER_RECORDS")
-    except Exception:
+    except JSON_READ_ERRORS:
         pinned = None
     raw = pinned or os.environ.get("SKILL_SERVER_RECORDS") or str(Path.home() / ".cache/skill-search/servers")
     return Path(os.path.expandvars(raw)).expanduser()
@@ -105,7 +109,7 @@ SERVER_RECORDS = read_server_records_dir()
 
 
 def _run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, **kw)
 
 
 _HEALTH_RUN = None
@@ -144,7 +148,7 @@ def _health_json():
         return None
     try:
         return json.loads(_health_run().stdout)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -203,10 +207,11 @@ def _qdrant_reachable(timeout=3):
     for u in (QURL.rstrip("/") + "/healthz", QURL):
         try:
             with urllib.request.urlopen(u, timeout=timeout) as resp:
-                if resp.status == 200:
-                    return True
-        except Exception:
-            continue
+                reachable = resp.status == 200
+        except (OSError, ValueError, http.client.HTTPException):
+            reachable = False
+        if reachable:
+            return True
     return False
 
 
@@ -242,16 +247,16 @@ def check_python():
         return None                                        # venv built — prereq moot
     found = next((c for c in ("python3.12", "python3.11", "python3.10") if shutil.which(c)), None)
     if found:
-        return dict(id="python", label="Python 3.10-3.12", status=OK, detail=found, fix=None)
-    return dict(id="python", label="Python 3.10-3.12", status=FAIL,
-                detail="no python3.10-3.12 on PATH (set SKILL_PYTHON, then ./setup.sh)", fix="setup")
+        return {"id": "python", "label": "Python 3.10-3.12", "status": OK, "detail": found, "fix": None}
+    return {"id": "python", "label": "Python 3.10-3.12", "status": FAIL,
+                "detail": "no python3.10-3.12 on PATH (set SKILL_PYTHON, then ./setup.sh)", "fix": "setup"}
 
 
 def check_venv():
     if SS_BIN.exists() and os.access(SS_BIN, os.X_OK):
-        return dict(id="venv", label="Engine venv", status=OK, detail=str(VENV), fix=None)
-    return dict(id="venv", label="Engine venv", status=FAIL,
-                detail=f"no skill-search bin at {SS_BIN} — run ./setup.sh", fix="setup")
+        return {"id": "venv", "label": "Engine venv", "status": OK, "detail": str(VENV), "fix": None}
+    return {"id": "venv", "label": "Engine venv", "status": FAIL,
+                "detail": f"no skill-search bin at {SS_BIN} — run ./setup.sh", "fix": "setup"}
 
 
 def _tree_digest(root: Path):
@@ -266,7 +271,9 @@ def _tree_digest(root: Path):
             continue
         try:
             data = p.read_bytes()
-        except Exception:
+        except OSError:
+            data = None
+        if data is None:
             continue
         seen = True
         h.update(p.relative_to(root).as_posix().encode())
@@ -307,12 +314,12 @@ def check_engine_freshness():
     if src_dig is None or inst_dig is None:
         return None                                        # can't compare -> don't false-alarm
     if src_dig != inst_dig:
-        return dict(id="engine_fresh", label="Engine freshness", status=WARN,
-                    detail="venv engine code DIFFERS from the deployed plugin source — the MCP is "
+        return {"id": "engine_fresh", "label": "Engine freshness", "status": WARN,
+                    "detail": "venv engine code DIFFERS from the deployed plugin source — the MCP is "
                            "serving STALE engine code after a plugin update; rerun ./setup.sh "
-                           "(skill-concierge:setup), then restart Claude Code", fix="setup")
-    return dict(id="engine_fresh", label="Engine freshness", status=OK,
-                detail="venv engine matches deployed source", fix=None)
+                           "(skill-concierge:setup), then restart Claude Code", "fix": "setup"}
+    return {"id": "engine_fresh", "label": "Engine freshness", "status": OK,
+                "detail": "venv engine matches deployed source", "fix": None}
 
 
 def _etime_seconds(etime: str):
@@ -327,7 +334,7 @@ def _etime_seconds(etime: str):
         else:
             return None
         return secs + (int(days) * 86400 if days else 0)
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -384,8 +391,8 @@ def _read_server_records():
     for p in paths:
         try:
             rec = json.loads(p.read_text())
-        except Exception:
-            continue
+        except JSON_READ_ERRORS:
+            rec = None
         if isinstance(rec, dict):
             out[p.stem] = rec
     return out
@@ -541,28 +548,28 @@ def check_running_engine():
     current, live = state.current, state.live
     drift, unknown = state.drift, state.unknown
     if drift:
-        return dict(id="engine_running", label="Running engine", status=WARN,
-                    detail=f"{len(drift)} live MCP server(s) run a DIFFERENT engine build than "
+        return {"id": "engine_running", "label": "Running engine", "status": WARN,
+                    "detail": f"{len(drift)} live MCP server(s) run a DIFFERENT engine build than "
                            f"the one on disk ({current}) — pid {', '.join(drift)}. They execute "
                            f"the OLD code, which shows up as a false 'disk changed since last "
-                           f"index'. Restart Claude Code; reindexing will not fix it", fix=None)
+                           f"index'. Restart Claude Code; reindexing will not fix it", "fix": None}
     if unknown:
         # State the OBSERVATION, not a cause. Several paths land here and they do not share a
         # remedy: a server predating this engine (a restart clears it), an unwritable records
         # dir, a `SKILL_SERVER_RECORDS` that differs between the server's env and this one, or
         # a record naming no build. Asserting "started before this engine" would send the user
         # to restart on the ones a restart cannot fix.
-        return dict(id="engine_running", label="Running engine", status=WARN,
-                    detail=f"no build record for {len(unknown)} live MCP server(s) (pid "
+        return {"id": "engine_running", "label": "Running engine", "status": WARN,
+                    "detail": f"no build record for {len(unknown)} live MCP server(s) (pid "
                            f"{', '.join(unknown)}), so their engine cannot be compared with the "
                            f"one on disk ({current}). Usual cause: they started before this "
                            f"engine was installed — restart Claude Code and it clears. If it "
                            f"persists after a restart, check {SERVER_RECORDS} is writable and "
                            f"that SKILL_SERVER_RECORDS is not set differently for the server "
-                           f"than for this shell", fix=None)
-    return dict(id="engine_running", label="Running engine", status=OK,
-                detail=f"{len(live)} live MCP server(s) run the current engine build ({current})"
-                       if live else "no live MCP server", fix=None)
+                           f"than for this shell", "fix": None}
+    return {"id": "engine_running", "label": "Running engine", "status": OK,
+                "detail": f"{len(live)} live MCP server(s) run the current engine build ({current})"
+                       if live else "no live MCP server", "fix": None}
 
 
 def check_mcp_wiring():
@@ -574,29 +581,29 @@ def check_mcp_wiring():
     else:
         try:
             json.loads(mcp.read_text(encoding="utf-8"))
-        except Exception:
+        except JSON_READ_ERRORS:
             probs.append(".mcp.json invalid JSON")
     if not launcher.exists():
         probs.append("bin/skill-search-mcp missing")
     elif not os.access(launcher, os.X_OK):
         probs.append("bin/skill-search-mcp not executable (chmod +x)")
     if probs:
-        return dict(id="mcp", label="MCP wiring", status=FAIL, detail="; ".join(probs), fix=None)
-    return dict(id="mcp", label="MCP wiring", status=OK, detail="launcher + .mcp.json present", fix=None)
+        return {"id": "mcp", "label": "MCP wiring", "status": FAIL, "detail": "; ".join(probs), "fix": None}
+    return {"id": "mcp", "label": "MCP wiring", "status": OK, "detail": "launcher + .mcp.json present", "fix": None}
 
 
 def check_qdrant():
     if _qdrant_reachable():
-        return dict(id="qdrant", label="Qdrant", status=OK, detail=QURL, fix=None)
+        return {"id": "qdrant", "label": "Qdrant", "status": OK, "detail": QURL, "fix": None}
     running = _qdrant_container_running()
     if running is False:
-        return dict(id="qdrant", label="Qdrant", status=FAIL,
-                    detail=f"container '{QNAME}' is stopped", fix="docker")
+        return {"id": "qdrant", "label": "Qdrant", "status": FAIL,
+                    "detail": f"container '{QNAME}' is stopped", "fix": "docker"}
     if running is None:
-        return dict(id="qdrant", label="Qdrant", status=FAIL,
-                    detail=f"unreachable at {QURL}; docker not found (server tier needs it)", fix=None)
-    return dict(id="qdrant", label="Qdrant", status=FAIL,
-                detail=f"container up but {QURL} not answering yet", fix=None)
+        return {"id": "qdrant", "label": "Qdrant", "status": FAIL,
+                    "detail": f"unreachable at {QURL}; docker not found (server tier needs it)", "fix": None}
+    return {"id": "qdrant", "label": "Qdrant", "status": FAIL,
+                "detail": f"container up but {QURL} not answering yet", "fix": None}
 
 
 def _stale_only(rep):
@@ -633,19 +640,21 @@ def _fresh(rep):
 def check_engine_health():
     """Delegate the retrieval diagnostic to the engine itself (DRY)."""
     if not SS_BIN.exists():
-        return dict(id="health", label="Retrieval health", status=FAIL,
-                    detail="engine venv missing — run ./setup.sh", fix="setup")
+        return {"id": "health", "label": "Retrieval health", "status": FAIL,
+                    "detail": "engine venv missing — run ./setup.sh", "fix": "setup"}
     r = _health_run()
     try:
         rep = json.loads(r.stdout)
-    except Exception:
-        return dict(id="health", label="Retrieval health", status=FAIL,
-                    detail=(r.stderr.strip() or "could not parse --health output")[:200], fix="reindex")
+    except (TypeError, ValueError):
+        rep = None
+    if not isinstance(rep, dict):
+        return {"id": "health", "label": "Retrieval health", "status": FAIL,
+                    "detail": (r.stderr.strip() or "could not parse --health output")[:200], "fix": "reindex"}
     issues = rep.get("issues") or []
     idx = rep.get("qdrant", {}).get("indexed", "?")
     if rep.get("status") == "ok" and not issues:
-        return dict(id="health", label="Retrieval health", status=OK,
-                    detail=f"{idx} skills indexed; embedder + qdrant reachable{_fresh(rep)}", fix=None)
+        return {"id": "health", "label": "Retrieval health", "status": OK,
+                    "detail": f"{idx} skills indexed; embedder + qdrant reachable{_fresh(rep)}", "fix": None}
     # Engine-build drift is NOT a stale index, so it never falls through to the FAIL branch
     # below: that would flip the ordinary post-update run red over a manifest that is merely
     # left over from the previous release. Keyed on `engine_build.index_written_by`, never on
@@ -671,16 +680,16 @@ def check_engine_health():
         if others:
             detail = f"{detail}. Also: {'; '.join(others)[:160]}"
             fix = None
-        return dict(id="health", label="Retrieval health", status=WARN,
-                    detail=detail, fix=fix)
+        return {"id": "health", "label": "Retrieval health", "status": WARN,
+                    "detail": detail, "fix": fix}
     # Stale-but-serving is degraded, not broken: WARN (auto-fixable via reindex) so the
     # exit code distinguishes "index needs a refresh" from "retrieval is down".
     if _stale_only(rep):
-        return dict(id="health", label="Retrieval health", status=WARN,
-                    detail=f"index stale{_fresh(rep)} — {idx} indexed & serving; run reindex to refresh",
-                    fix="reindex")
-    return dict(id="health", label="Retrieval health", status=FAIL,
-                detail="; ".join(str(i) for i in issues)[:300], fix="reindex")
+        return {"id": "health", "label": "Retrieval health", "status": WARN,
+                    "detail": f"index stale{_fresh(rep)} — {idx} indexed & serving; run reindex to refresh",
+                    "fix": "reindex"}
+    return {"id": "health", "label": "Retrieval health", "status": FAIL,
+                "detail": "; ".join(str(i) for i in issues)[:300], "fix": "reindex"}
 
 
 def _count_enriched(base):
@@ -702,17 +711,17 @@ def check_enrichment():
     try:
         total = json.loads(urllib.request.urlopen(base, timeout=3).read())["result"]["points_count"]
         enr = _count_enriched(base)
-    except Exception:
+    except NETWORK_READ_ERRORS:
         return None
     if enr == 0:
-        return dict(id="enrich", label="Enrichment overlay", status=OK,
-                    detail="not enriched (no overlay in use)", fix=None)
+        return {"id": "enrich", "label": "Enrichment overlay", "status": OK,
+                    "detail": "not enriched (no overlay in use)", "fix": None}
     if enr < total:
-        return dict(id="enrich", label="Enrichment overlay", status=WARN,
-                    detail=f"{total - enr}/{total} points un-enriched (reindex/new) — run --reapply",
-                    fix="reapply")
-    return dict(id="enrich", label="Enrichment overlay", status=OK,
-                detail=f"all {total} points enriched", fix=None)
+        return {"id": "enrich", "label": "Enrichment overlay", "status": WARN,
+                    "detail": f"{total - enr}/{total} points un-enriched (reindex/new) — run --reapply",
+                    "fix": "reapply"}
+    return {"id": "enrich", "label": "Enrichment overlay", "status": OK,
+                "detail": f"all {total} points enriched", "fix": None}
 
 
 def check_prompt_intent():
@@ -726,31 +735,33 @@ def check_prompt_intent():
     base = QURL.rstrip("/") + f"/collections/{coll}"
     try:
         total = json.loads(urllib.request.urlopen(base, timeout=3).read())["result"]["points_count"]
-    except Exception:
-        return dict(id="prompt_intent", label="Actionability gate", status=WARN,
-                    detail=f"'{coll}' collection missing — gate fails-open (no suppression); "
-                           "rebuild from transcripts", fix="prompt_intent")
+    except NETWORK_READ_ERRORS:
+        return {"id": "prompt_intent", "label": "Actionability gate", "status": WARN,
+                    "detail": f"'{coll}' collection missing — gate fails-open (no suppression); "
+                           "rebuild from transcripts", "fix": "prompt_intent"}
     if not total:
-        return dict(id="prompt_intent", label="Actionability gate", status=WARN,
-                    detail=f"'{coll}' empty — gate fails-open; rebuild from transcripts",
-                    fix="prompt_intent")
-    return dict(id="prompt_intent", label="Actionability gate", status=OK,
-                detail=f"{total} labelled prompts in '{coll}'", fix=None)
+        return {"id": "prompt_intent", "label": "Actionability gate", "status": WARN,
+                    "detail": f"'{coll}' empty — gate fails-open; rebuild from transcripts",
+                    "fix": "prompt_intent"}
+    return {"id": "prompt_intent", "label": "Actionability gate", "status": OK,
+                "detail": f"{total} labelled prompts in '{coll}'", "fix": None}
 
 
 def check_overrides():
     if not SETTINGS.exists():
-        return dict(id="overrides", label="Settings overrides", status=WARN,
-                    detail=f"{SETTINGS} not found", fix="overrides")
+        return {"id": "overrides", "label": "Settings overrides", "status": WARN,
+                    "detail": f"{SETTINGS} not found", "fix": "overrides"}
     try:
         s = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except Exception:
-        return dict(id="overrides", label="Settings overrides", status=FAIL,
-                    detail=f"{SETTINGS} invalid JSON", fix=None)
+    except JSON_READ_ERRORS:
+        s = None
+    if not isinstance(s, dict):
+        return {"id": "overrides", "label": "Settings overrides", "status": FAIL,
+                    "detail": f"{SETTINGS} invalid JSON", "fix": None}
     ov = s.get("skillOverrides")
     if not ov:
-        return dict(id="overrides", label="Settings overrides", status=WARN,
-                    detail="no skillOverrides — budget not applied", fix="overrides")
+        return {"id": "overrides", "label": "Settings overrides", "status": WARN,
+                    "detail": "no skillOverrides — budget not applied", "fix": "overrides"}
     on = sum(1 for v in ov.values() if v == "on")
     base = f"{on} on / {len(ov) - on} name-only"
     # Drift check: is the override map still in sync with the installed catalogue? The
@@ -760,20 +771,20 @@ def check_overrides():
     py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
     r = _run([str(py), str(ROOT / "scripts" / "apply-overrides.py"), "--check"])
     if r.returncode == 1 and "drift:" in r.stdout:
-        return dict(id="overrides", label="Settings overrides", status=WARN,
-                    detail=f"{base} — {_last_line(r.stdout)} "
-                           f"(auto-heals on session start; or run apply-overrides)", fix="overrides")
-    return dict(id="overrides", label="Settings overrides", status=OK, detail=base, fix=None)
+        return {"id": "overrides", "label": "Settings overrides", "status": WARN,
+                    "detail": f"{base} — {_last_line(r.stdout)} "
+                           f"(auto-heals on session start; or run apply-overrides)", "fix": "overrides"}
+    return {"id": "overrides", "label": "Settings overrides", "status": OK, "detail": base, "fix": None}
 
 
 def check_ledger():
     try:
         LOGDIR.mkdir(parents=True, exist_ok=True)
         writable = os.access(LOGDIR, os.W_OK)
-    except Exception as exc:
-        return dict(id="ledger", label="Ledger dir", status=WARN, detail=str(exc), fix=None)
-    return dict(id="ledger", label="Ledger dir", status=(OK if writable else WARN),
-                detail=str(LOGDIR), fix=None)
+    except OSError as exc:
+        return {"id": "ledger", "label": "Ledger dir", "status": WARN, "detail": str(exc), "fix": None}
+    return {"id": "ledger", "label": "Ledger dir", "status": (OK if writable else WARN),
+                "detail": str(LOGDIR), "fix": None}
 
 
 def _skill_search_servers(mcp_list_text):
@@ -842,21 +853,21 @@ def check_mcp_enabled():
         return None
     statuses = _skill_search_statuses(r.stdout)
     if not statuses:
-        return dict(id="mcpenabled", label="MCP reachable", status=WARN,
-                    detail="no skill-search MCP install found in `claude mcp list` — the "
+        return {"id": "mcpenabled", "label": "MCP reachable", "status": WARN,
+                    "detail": "no skill-search MCP install found in `claude mcp list` — the "
                            "search_skills / get_skill tools are unavailable in this project "
                            "(the enforcer's per-turn offer is unaffected; it queries Qdrant "
-                           "directly). Install or re-enable the plugin.", fix=None)
+                           "directly). Install or re-enable the plugin.", "fix": None}
     live = [n for n, st in statuses.items() if "Connected" in st]
     if live:
-        return dict(id="mcpenabled", label="MCP reachable", status=OK,
-                    detail=f"{live[0]} connected", fix=None)
+        return {"id": "mcpenabled", "label": "MCP reachable", "status": OK,
+                    "detail": f"{live[0]} connected", "fix": None}
     worst = "; ".join(f"{n}: {st or 'unknown state'}" for n, st in sorted(statuses.items()))
-    return dict(id="mcpenabled", label="MCP reachable", status=WARN,
-                detail=f"skill-search is installed but NOT connected here — {worst}. "
+    return {"id": "mcpenabled", "label": "MCP reachable", "status": WARN,
+                "detail": f"skill-search is installed but NOT connected here — {worst}. "
                        "search_skills / get_skill are unavailable in this project even though "
                        "the index is healthy; re-enable via /mcp. The enforcer's per-turn offer "
-                       "is unaffected (it queries Qdrant over REST).", fix=None)
+                       "is unaffected (it queries Qdrant over REST).", "fix": None}
 
 
 def check_dup_mcp():
@@ -868,11 +879,11 @@ def check_dup_mcp():
         return None
     servers = _skill_search_servers(r.stdout)
     if len(servers) > 1:
-        return dict(id="dupmcp", label="Duplicate MCP", status=WARN,
-                    detail=f"{len(servers)} skill-search installs ({', '.join(servers)}) — "
+        return {"id": "dupmcp", "label": "Duplicate MCP", "status": WARN,
+                    "detail": f"{len(servers)} skill-search installs ({', '.join(servers)}) — "
                            f"remove the extra: claude mcp remove <name> (check its scope first)",
-                    fix=None)
-    return dict(id="dupmcp", label="Duplicate MCP", status=OK, detail="single skill-search MCP", fix=None)
+                    "fix": None}
+    return {"id": "dupmcp", "label": "Duplicate MCP", "status": OK, "detail": "single skill-search MCP", "fix": None}
 
 
 def check_multivector():
@@ -893,21 +904,21 @@ def check_multivector():
     try:
         trig = _count({"must": [{"key": "kind", "match": {"value": "trigger"}}]})
         total = _count(None)
-    except Exception:
+    except NETWORK_READ_ERRORS:
         return None
     if trig == 0:
         if MULTIVECTOR:
             # env expects multi-vector but the index has none -> retrieval silently degraded to
             # single-vector (lower recall, more getaways). This is the "skills go dark silently"
             # mode the doctor exists to catch — WARN, auto-fixable by reindex.
-            return dict(id="multivector", label="Multi-vector layer", status=WARN,
-                        detail="SKILL_MULTIVECTOR on but 0 trigger points — retrieval degraded to "
-                               "single-vector; reindex to build the trigger layer", fix="reindex")
-        return dict(id="multivector", label="Multi-vector layer", status=OK,
-                    detail="off — one bare vector per skill", fix=None)
-    return dict(id="multivector", label="Multi-vector layer", status=OK,
-                detail=f"{trig} trigger points (+ base) of {total} total — MAX-pooled retrieval",
-                fix=None)
+            return {"id": "multivector", "label": "Multi-vector layer", "status": WARN,
+                        "detail": "SKILL_MULTIVECTOR on but 0 trigger points — retrieval degraded to "
+                               "single-vector; reindex to build the trigger layer", "fix": "reindex"}
+        return {"id": "multivector", "label": "Multi-vector layer", "status": OK,
+                    "detail": "off — one bare vector per skill", "fix": None}
+    return {"id": "multivector", "label": "Multi-vector layer", "status": OK,
+                "detail": f"{trig} trigger points (+ base) of {total} total — MAX-pooled retrieval",
+                "fix": None}
 
 
 def check_corpus_health():
@@ -928,9 +939,9 @@ def check_corpus_health():
         return None  # calibration is optional; its absence is not a deployment fault
     try:
         d = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return dict(id="corpus", label="Corpus health", status=WARN,
-                    detail=f"{path.name} invalid JSON — re-run calibrate_thresholds.py", fix=None)
+    except JSON_READ_ERRORS:
+        return {"id": "corpus", "label": "Corpus health", "status": WARN,
+                    "detail": f"{path.name} invalid JSON — re-run calibrate_thresholds.py", "fix": None}
     if not d:
         return None
     counts = {"ok": 0, "weak": 0, "no-signal": 0}
@@ -942,7 +953,7 @@ def check_corpus_health():
     if needs:
         detail += " — weak/no-signal need contrastive negatives or richer index (multi-vector), not a threshold"
     status = WARN if counts.get("ok", 0) == 0 else OK
-    return dict(id="corpus", label="Corpus health", status=status, detail=detail, fix=None)
+    return {"id": "corpus", "label": "Corpus health", "status": status, "detail": detail, "fix": None}
 
 
 def _indexed_skill_names():
@@ -988,7 +999,7 @@ def check_flywheel():
         pass/fail. None when no run has ever completed (fresh install, hook never fired)."""
         try:
             run = flywheel_manifest.last_run()
-        except Exception:
+        except JSON_READ_ERRORS:
             return ""
         if not run:
             return ""
@@ -1006,18 +1017,18 @@ def check_flywheel():
     fix = "run the skill-concierge:flywheel skill"
 
     if not configured:
-        return dict(id="flywheel", label="Retrieval flywheel", status=OK,
-                    detail="not configured — utterance layer runs in fallback "
-                           f"(description+body only){_last_run_suffix()}", fix=fix)
+        return {"id": "flywheel", "label": "Retrieval flywheel", "status": OK,
+                    "detail": "not configured — utterance layer runs in fallback "
+                           f"(description+body only){_last_run_suffix()}", "fix": fix}
 
     endpoint_detail = f"{flywheel_llm.ENDPOINT} ({flywheel_llm.MODEL}" \
                        f"{', keyed' if has_key else ', no key'})"
     ok, ping_detail = flywheel_llm.ping()
     if not ok:
-        return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
-                    detail=f"configured ({endpoint_detail}) but unreachable — "
+        return {"id": "flywheel", "label": "Retrieval flywheel", "status": WARN,
+                    "detail": f"configured ({endpoint_detail}) but unreachable — "
                            f"{ping_detail}{_last_run_suffix()}",
-                    fix=fix)
+                    "fix": fix}
 
     # Coverage: indexed base-skill names vs eval/triggers.json entries with a non-empty
     # llm_triggers.triggers list.
@@ -1025,24 +1036,24 @@ def check_flywheel():
     if not TRIGGERS.exists():
         # Absent triggers file is NOT "nothing covered" — reporting 0/N here reads as a dead
         # flywheel when the real cause is a misresolved path. Say so instead of miscounting.
-        return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
-                    detail=f"configured + reachable ({endpoint_detail}); coverage unknown — "
+        return {"id": "flywheel", "label": "Retrieval flywheel", "status": WARN,
+                    "detail": f"configured + reachable ({endpoint_detail}); coverage unknown — "
                            f"no triggers file at {TRIGGERS} (set SKILL_TRIGGERS)"
-                           f"{_last_run_suffix()}", fix=fix)
+                           f"{_last_run_suffix()}", "fix": fix}
     try:
         triggers = json.loads(TRIGGERS.read_text(encoding="utf-8"))
         covered = {k for k, v in triggers.items()
                    if isinstance(v, dict) and (v.get("llm_triggers", {}) or {}).get("triggers")}
-    except Exception as e:
-        return dict(id="flywheel", label="Retrieval flywheel", status=WARN,
-                    detail=f"configured + reachable ({endpoint_detail}); coverage unknown — "
-                           f"unreadable triggers file {TRIGGERS}: {e}{_last_run_suffix()}", fix=fix)
+    except JSON_READ_ERRORS as exc:
+        return {"id": "flywheel", "label": "Retrieval flywheel", "status": WARN,
+                    "detail": f"configured + reachable ({endpoint_detail}); coverage unknown — "
+                           f"unreadable triggers file {TRIGGERS}: {exc}{_last_run_suffix()}", "fix": fix}
     try:
         indexed = _indexed_skill_names()
-    except Exception:
-        return dict(id="flywheel", label="Retrieval flywheel", status=OK,
-                    detail=f"configured + reachable ({endpoint_detail}); "
-                           "coverage unknown (index unreachable)", fix=fix)
+    except NETWORK_READ_ERRORS:
+        return {"id": "flywheel", "label": "Retrieval flywheel", "status": OK,
+                    "detail": f"configured + reachable ({endpoint_detail}); "
+                           "coverage unknown (index unreachable)", "fix": fix}
 
     have = indexed & covered
     missing = sorted(indexed - covered)
@@ -1052,7 +1063,7 @@ def check_flywheel():
         examples = ", ".join(missing[:5])
         detail += f"; {len(missing)} missing (examples: {examples})"
     detail += _last_run_suffix()
-    return dict(id="flywheel", label="Retrieval flywheel", status=OK, detail=detail, fix=fix)
+    return {"id": "flywheel", "label": "Retrieval flywheel", "status": OK, "detail": detail, "fix": fix}
 
 
 def _junk_triggers():
@@ -1060,7 +1071,9 @@ def _junk_triggers():
     contains phrases `clean_triggers()` would reject. Raises on an unreadable/absent
     triggers file or an unreachable index — callers decide the fail-open policy."""
     sys.path.insert(0, str(ROOT / "scripts"))
-    from llm_triggers import clean_triggers   # single definition of "junk" — do not restate it here
+    from llm_triggers import (
+        clean_triggers,  # single definition of "junk" — do not restate it here
+    )
 
     triggers = json.loads(TRIGGERS.read_text(encoding="utf-8"))
     live = set(_indexed_skill_names())
@@ -1089,21 +1102,21 @@ def check_trigger_hygiene():
     generator then SKIPS it forever (cache-hit + layer present). clean_triggers() gates new
     writes; nothing audited what earlier runs already stored. Read-only, fail-open."""
     if not TRIGGERS.exists():
-        return dict(id="hygiene", label="Trigger hygiene", status=OK,
-                    detail=f"no triggers file at {TRIGGERS} — utterance layer unused")
+        return {"id": "hygiene", "label": "Trigger hygiene", "status": OK,
+                    "detail": f"no triggers file at {TRIGGERS} — utterance layer unused"}
     try:
         bad = _junk_triggers()
-    except Exception as e:
-        return dict(id="hygiene", label="Trigger hygiene", status=OK,
-                    detail=f"not audited ({type(e).__name__}: {e})")
+    except (ImportError, AttributeError, *NETWORK_READ_ERRORS) as exc:
+        return {"id": "hygiene", "label": "Trigger hygiene", "status": OK,
+                    "detail": f"not audited ({type(exc).__name__}: {exc})"}
     if not bad:
-        return dict(id="hygiene", label="Trigger hygiene", status=OK,
-                    detail="no junk phrases stored in the utterance layer")
-    examples = ", ".join(f"{n} ({len(v)})" for n, v in list(sorted(bad.items()))[:4])
-    return dict(id="hygiene", label="Trigger hygiene", status=WARN,
-                detail=f"{len(bad)} skills store junk utterances — a degraded model wrote them "
+        return {"id": "hygiene", "label": "Trigger hygiene", "status": OK,
+                    "detail": "no junk phrases stored in the utterance layer"}
+    examples = ", ".join(f"{n} ({len(v)})" for n, v in sorted(bad.items())[:4])
+    return {"id": "hygiene", "label": "Trigger hygiene", "status": WARN,
+                "detail": f"{len(bad)} skills store junk utterances — a degraded model wrote them "
                        f"and the generator now skips them as 'covered' (examples: {examples})",
-                fix="purge_junk")
+                "fix": "purge_junk"}
 
 
 def check_catalogs():
@@ -1118,23 +1131,24 @@ def check_catalogs():
         return None                                    # feature off — not a finding
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        assert isinstance(cfg, dict)
-    except Exception:
-        return dict(id="catalogs", label="External catalogs", status=WARN,
-                    detail=f"{cfg_path} unreadable/malformed — catalogs silently OFF "
-                           "(engine fails open to none)", fix=None)
+    except JSON_READ_ERRORS:
+        cfg = None
+    if not isinstance(cfg, dict):
+        return {"id": "catalogs", "label": "External catalogs", "status": WARN,
+                    "detail": f"{cfg_path} unreadable/malformed — catalogs silently OFF "
+                           "(engine fails open to none)", "fix": None}
     roots = {a: (s if isinstance(s, dict) else {"path": s}) for a, s in cfg.items()
              if isinstance(a, str) and not a.startswith("_")}
     missing = [a for a, s in roots.items()
                if not s.get("path") or not Path(os.path.expanduser(str(s["path"]))).is_dir()]
     if missing:
-        return dict(id="catalogs", label="External catalogs", status=WARN,
-                    detail=f"root path missing for: {', '.join(sorted(missing))} — skills go "
-                           "dark at next reindex; fix the path or `catalogs.py remove`", fix=None)
+        return {"id": "catalogs", "label": "External catalogs", "status": WARN,
+                    "detail": f"root path missing for: {', '.join(sorted(missing))} — skills go "
+                           "dark at next reindex; fix the path or `catalogs.py remove`", "fix": None}
     counts = {a: len(glob.glob(str(Path(os.path.expanduser(str(s['path']))) / '*' / 'SKILL.md')))
               for a, s in roots.items()}
     detail = ", ".join(f"{a}: {n} skills" for a, n in sorted(counts.items())) or "none configured"
-    return dict(id="catalogs", label="External catalogs", status=OK, detail=detail, fix=None)
+    return {"id": "catalogs", "label": "External catalogs", "status": OK, "detail": detail, "fix": None}
 
 
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
@@ -1213,8 +1227,8 @@ def fix_purge_junk():
 
     try:
         bad = _junk_triggers()
-    except Exception as e:
-        return False, f"could not audit triggers ({type(e).__name__}: {e})"
+    except (ImportError, AttributeError, *NETWORK_READ_ERRORS) as exc:
+        return False, f"could not audit triggers ({type(exc).__name__}: {exc})"
     if not bad:
         return True, "nothing to purge"
 
@@ -1235,8 +1249,8 @@ def fix_purge_junk():
         for name in bad:
             cache.pop(llm_triggers.CACHE_PREFIX + name, None)
         llm_triggers.save_cache(cache)
-    except Exception as e:
-        return False, f"purge failed ({type(e).__name__}: {e}); backup at {backup}"
+    except (OSError, TypeError, ValueError, AttributeError) as exc:
+        return False, f"purge failed ({type(exc).__name__}: {exc}); backup at {backup}"
 
     msg = (f"purged {len(bad)} junk utterance layers (backup: {backup.name}); "
            f"the flywheel will regenerate them")
@@ -1277,7 +1291,7 @@ def report(results):
 
 
 def _selftest():
-    mk = lambda s: dict(id="x", label="x", status=s, detail="", fix=None)
+    mk = lambda s: {"id": "x", "label": "x", "status": s, "detail": "", "fix": None}
     assert overall([mk(OK), mk(OK)]) == OK
     assert overall([mk(OK), mk(WARN)]) == WARN
     assert overall([mk(WARN), mk(FAIL)]) == FAIL
@@ -1420,7 +1434,6 @@ def _selftest():
 
     def _probe():
         seen["health"], seen["running"] = _HEALTH_RUN, _RUNNING_STATE
-        return None
 
     _saved_checks = list(CHECKS)        # mutate in place: `global CHECKS` would have to be
     _HEALTH_RUN = "sentinel-from-a-previous-run"    # declared above its earlier reads here

@@ -34,7 +34,7 @@ def run_hook(prompt: str, sid: str, ledger_lines: list, sidecar: dict) -> str:
         p = subprocess.run(
             [sys.executable, str(ENFORCER)],
             input=json.dumps({"prompt": prompt, "session_id": sid}).encode(),
-            capture_output=True, env=env, timeout=30)
+            capture_output=True, env=env, timeout=30, check=False)
         return p.stdout.decode()
 
 

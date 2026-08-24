@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 graph_staleness_notice.py — PreToolUse(Bash) NOTICE: the knowledge graph is behind the code.
 
@@ -41,8 +40,9 @@ ESCAPE HATCH
     GRAPH_NOTICE=0 -> skip entirely.
 
 FAIL-OPEN, ALWAYS
-    No graph yet (fresh clone), no graphify installed, any internal error -> exit 0, silent.
-    A notice must never wedge the repo, and must never nag a clone that never opted in.
+    No graph yet (fresh clone), no graphify installed, malformed hook/probe input, or
+    expected I/O/subprocess errors -> exit 0, silent. A notice must never wedge the repo,
+    and must never nag a clone that never opted in.
 """
 import json
 import os
@@ -70,7 +70,7 @@ def _is_skill_concierge(root):
     try:
         manifest = root / ".claude-plugin" / "plugin.json"
         return json.loads(manifest.read_text()).get("name") == "skill-concierge"
-    except Exception:
+    except (OSError, ValueError):
         return False
 
 
@@ -83,21 +83,29 @@ def _graphify_python(root):
     pin = root / "graphify-out" / ".graphify_python"
     try:
         exe = pin.read_text(encoding="utf-8").strip()
-        if exe and Path(exe).exists():
-            return exe
-    except Exception:
-        pass
+    except OSError:
+        return None
+    if exe and Path(exe).exists():
+        return exe
     return None
 
 
 def _tracked(root):
     """Files git actually tracks. Anything else is scratch and cannot make the graph stale."""
-    r = subprocess.run(
-        ["git", "ls-files"], cwd=str(root), capture_output=True, text=True, timeout=15,
-    )
-    if r.returncode != 0:
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
-    return {ln.strip() for ln in r.stdout.splitlines() if ln.strip()}
+    if result.returncode != 0:
+        return None
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
 
 
 def _stale(root, python):
@@ -113,13 +121,29 @@ def _stale(root, python):
         "r=detect_incremental(Path.cwd(), kind='ast');"
         "print(json.dumps(r.get('new_files') or {}))"
     )
-    r = subprocess.run(
-        [python, "-c", probe], cwd=str(root),
-        capture_output=True, text=True, timeout=25,
-    )
-    if r.returncode != 0:
+    try:
+        result = subprocess.run(
+            [python, "-c", probe],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
         return None  # graphify unusable -> fail open
-    new_files = json.loads(r.stdout.strip().splitlines()[-1])
+
+    output_lines = result.stdout.strip().splitlines()
+    if not output_lines:
+        return None
+    try:
+        new_files = json.loads(output_lines[-1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(new_files, dict):
+        return None
 
     tracked = _tracked(root)
     if tracked is None:
@@ -127,13 +151,17 @@ def _stale(root, python):
 
     out = {"code": [], "document": []}
     base = str(root) + os.sep
-    for cat, files in new_files.items():
-        for f in files:
-            rel = f[len(base):] if f.startswith(base) else f
-            if rel not in tracked:
+    for category, files in new_files.items():
+        if not isinstance(files, list):
+            continue
+        for file_path in files:
+            if not isinstance(file_path, str):
+                continue
+            relative_path = file_path.removeprefix(base)
+            if relative_path not in tracked:
                 continue  # scratch — not our business
-            bucket = "code" if cat == "code" else "document"
-            out[bucket].append(rel)
+            bucket = "code" if category == "code" else "document"
+            out[bucket].append(relative_path)
     return out
 
 
@@ -145,23 +173,19 @@ def _emit(code, docs):
     lines = []
     if code:
         shown = code[:MAX_LISTED]
+        listed = "".join(f"    - {file_path}\n" for file_path in shown)
+        remaining = len(code) - len(shown)
+        more = f"    - ...and {remaining} more\n" if remaining else ""
         lines.append(
-            "  CODE (%d) — free to refresh, AST only, no LLM:\n%s%s"
-            % (
-                len(code),
-                "".join("    - %s\n" % f for f in shown),
-                "    - ...and %d more\n" % (len(code) - len(shown)) if len(code) > len(shown) else "",
-            )
+            f"  CODE ({len(code)}) — free to refresh, AST only, no LLM:\n{listed}{more}"
         )
     if docs:
         shown = docs[:MAX_LISTED]
+        listed = "".join(f"    - {file_path}\n" for file_path in shown)
+        remaining = len(docs) - len(shown)
+        more = f"    - ...and {remaining} more\n" if remaining else ""
         lines.append(
-            "  DOCS (%d) — refresh costs LLM calls through the gateway:\n%s%s"
-            % (
-                len(docs),
-                "".join("    - %s\n" % f for f in shown),
-                "    - ...and %d more\n" % (len(docs) - len(shown)) if len(docs) > len(shown) else "",
-            )
+            f"  DOCS ({len(docs)}) — refresh costs LLM calls through the gateway:\n{listed}{more}"
         )
 
     body = (
@@ -177,8 +201,10 @@ def _emit(code, docs):
             "hookEventName": "PreToolUse",
             "additionalContext": body,
         },
-        "systemMessage": "graphify: %d code + %d doc file(s) changed since the last graph build (commit not blocked)."
-                         % (len(code), len(docs)),
+        "systemMessage": (
+            f"graphify: {len(code)} code + {len(docs)} doc file(s) changed since the last "
+            "graph build (commit not blocked)."
+        ),
     }))
 
 
@@ -188,14 +214,19 @@ def main():
 
     try:
         payload = json.load(sys.stdin)
-    except Exception:
+    except (OSError, ValueError):
         return 0  # unparseable input: not our business
+    if not isinstance(payload, dict):
+        return 0
 
     if payload.get("tool_name") != "Bash":
         return 0
 
-    command = (payload.get("tool_input") or {}).get("command") or ""
-    if not COMMIT_RE.search(command):
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return 0
+    command = tool_input.get("command") or ""
+    if not isinstance(command, str) or not COMMIT_RE.search(command):
         return 0
 
     root = _repo_root()
@@ -219,12 +250,12 @@ def main():
     if not code and not docs:
         return 0
 
-    _emit(code, docs)
+    try:
+        _emit(code, docs)
+    except OSError:
+        return 0  # closed hook output: fail open
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception:
-        sys.exit(0)  # fail-open: a broken notice must never wedge the repo
+    sys.exit(main())

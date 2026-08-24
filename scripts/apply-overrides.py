@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from _keepon import keepon_path      # sibling module (scripts/ is on sys.path at run)
+from _keepon import keepon_path  # sibling module (scripts/ is on sys.path at run)
 
 ROOT = Path(__file__).resolve().parent.parent          # skill-concierge/
 SETTINGS = Path(os.environ.get(
@@ -131,7 +131,7 @@ def _selftest():
                "SKILL_CONCIERGE_KEEPON": str(d / "keep.json"),
                "SKILL_CONCIERGE_SETTINGS": str(settings)}
         run = lambda *a: subprocess.run([sys.executable, __file__, *a],
-                                        env=env, capture_output=True, text=True)
+                                        env=env, capture_output=True, text=True, check=False)
 
         # settings absent -> everything is drift -> --check exits 1 and writes nothing
         r = run("--check")

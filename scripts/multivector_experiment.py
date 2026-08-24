@@ -39,13 +39,14 @@ Run under the engine venv (same embedding space as the index):
   --eval       run the A/B only (assumes SHADOW already built)
   --selftest   pin the group-by-name-MAX collapse logic (no network)
 """
+import argparse
+import glob
+import json
 import os
 import sys
-import json
-import glob
-import uuid
-import argparse
+import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -172,11 +173,12 @@ def build_shadow():
     dim = collection_dim(LIVE)
     print(f"[build] live: {len(live_pts)} points, dim={dim}")
 
-    # recreate shadow at the same dim + cosine
+    # Recreating a missing shadow collection is equivalent to creating it fresh.
     try:
         _delete(f"{QDRANT}/collections/{SHADOW}")
-    except Exception:
-        pass
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
     _put(f"{QDRANT}/collections/{SHADOW}",
          {"vectors": {"size": dim, "distance": "Cosine"}})
 
@@ -330,7 +332,7 @@ def run_eval():
           f"p95 {live['offer_p95']:>4}")
     print(f"  SHADOW  mean {shadow['offer_mean']:>6}  median {shadow['offer_median']:>4}  "
           f"p95 {shadow['offer_p95']:>4}")
-    print(f"\nSHADOW (held-out) confusion — who steals a positive when correct isn't rank-1:")
+    print("\nSHADOW (held-out) confusion — who steals a positive when correct isn't rank-1:")
     for nm, c in list(shadow["confusion"].items())[:12]:
         print(f"   {c:>3}x  {nm}")
     return {"live": live, "shadow": shadow, "leak": leak,
@@ -373,7 +375,7 @@ def run_sweep():
 
     floors = [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
     print(f"\nFLOOR SWEEP — SHADOW held-out {{base,trigger}}  ({len(pos)} pos / {len(neg)} neg)")
-    print(f"LIVE baseline crowding @0.20 was mean 87.6 / median 34 (target to restore)\n")
+    print("LIVE baseline crowding @0.20 was mean 87.6 / median 34 (target to restore)\n")
     print(f"{'floor':>6}{'pos_clear%':>12}{'neg_falsefire%':>16}{'crowd_mean':>12}{'crowd_med':>11}")
     print("-" * 57)
     for fl in floors:

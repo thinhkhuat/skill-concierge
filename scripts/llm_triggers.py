@@ -24,13 +24,14 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import flywheel_llm  # noqa: E402
-from build_triggers import MAX_TRIGGERS  # noqa: E402 — same per-skill cap build_triggers.py uses
+import flywheel_llm
+from build_triggers import MAX_TRIGGERS  # same per-skill cap build_triggers.py uses
 
 TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
 CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_eval_gen.py
@@ -230,7 +231,16 @@ def run(limit=None, only=None, rate=6.0):
                                           rate_s=rate, schema=SCHEMA)
                 if vn_count(clean_triggers(reply.get("triggers", []))) < 2:
                     print(f"WARN: {name}: still <2 Vietnamese triggers after retry (kept)")
-        except Exception as e:
+        except (
+            AttributeError,
+            IndexError,
+            KeyError,
+            OSError,
+            TypeError,
+            json.JSONDecodeError,
+            flywheel_llm.TruncatedCompletion,
+            urllib.error.URLError,
+        ) as e:
             print(f"WARN: skipping {name}: chat failed ({e})")
             results.append({"name": name, "status": "error", "detail": f"chat failed: {e}"})
             continue

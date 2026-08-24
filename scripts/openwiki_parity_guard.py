@@ -40,11 +40,14 @@ FAIL-OPEN
     safety net, not a tollbooth.
 """
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # `git commit`, tolerating compound commands and intervening flags:
 #   git commit -m x   |   git add . && git commit   |   git -C path commit
@@ -71,10 +74,10 @@ def _repo_root():
 def _is_skill_concierge(root):
     """Guard only this repo. Defensive — project settings shouldn't load elsewhere anyway."""
     try:
-        manifest = root / ".claude-plugin" / "plugin.json"
-        return json.loads(manifest.read_text()).get("name") == "skill-concierge"
-    except Exception:
+        manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text())
+    except (OSError, ValueError):  # missing/unreadable, or invalid/non-UTF-8 JSON
         return False
+    return isinstance(manifest, dict) and manifest.get("name") == "skill-concierge"
 
 
 def _driftcheck(root):
@@ -83,7 +86,7 @@ def _driftcheck(root):
         return None
     r = subprocess.run(
         [sys.executable, "scripts/driftcheck.py", "driftcheck.json"],
-        cwd=str(root), capture_output=True, text=True, timeout=30,
+        cwd=str(root), capture_output=True, text=True, timeout=30, check=False,
     )
     if r.returncode == 0:
         return None
@@ -101,12 +104,12 @@ def _broken_links(root):
     for md in sorted(wiki.rglob("*.md")):
         try:
             text = md.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, ValueError):  # unreadable or non-UTF-8 page: skip it, keep scanning
             continue
         for m in link_re.finditer(text):
             target = m.group(1).split("#")[0].strip()
             if target and not (md.parent / target).resolve().exists():
-                bad.append("  %s -> %s" % (md.relative_to(root), target))
+                bad.append(f"  {md.relative_to(root)} -> {target}")
     return bad
 
 
@@ -116,8 +119,8 @@ def main():
 
     try:
         payload = json.load(sys.stdin)
-    except Exception:
-        return 0  # unparseable input: not our business, allow
+    except (OSError, ValueError):
+        return 0  # unreadable stdin or invalid JSON: not our business, allow
 
     if payload.get("tool_name") != "Bash":
         return 0
@@ -164,4 +167,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
+        logger.exception("openwiki_parity_guard: internal error — failing open")
         sys.exit(0)  # fail-open: a broken guard must never wedge the repo

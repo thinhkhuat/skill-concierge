@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 flywheel_manifest.py — shared run manifest for the retrieval flywheel (ADR-0027 Phase 2).
 Stdlib only.
@@ -27,7 +26,7 @@ def read_manifest():
     """Return the manifest dict, or an empty shell if none exists yet / it's unreadable."""
     try:
         return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError):
         return {"runs": []}
 
 

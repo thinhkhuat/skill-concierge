@@ -1,5 +1,5 @@
 ---
-name: skill-concierge:doctor
+name: doctor
 user-invocable: true
 description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, the MCP seems to run old code after a plugin update, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, engine freshness, Qdrant, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start Qdrant, reindex, re-apply overrides).
 argument-hint: "[--fix]"

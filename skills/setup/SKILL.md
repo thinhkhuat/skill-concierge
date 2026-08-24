@@ -1,5 +1,5 @@
 ---
-name: skill-concierge:setup
+name: setup
 user-invocable: true
 description: Bootstrap or repair the skill-concierge engine from scratch. Use this skill when installing skill-concierge on a new machine, right after a plugin update, or when skill-concierge:doctor reports the engine venv is missing. Runs setup.sh to build the stable engine venv, start the Qdrant container, build the multilingual index, and apply the curated skill-budget overrides, then verifies the result with doctor.
 license: MIT

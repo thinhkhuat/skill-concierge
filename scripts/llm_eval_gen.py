@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import flywheel_llm  # noqa: E402
+import flywheel_llm
 
 DEFAULT_OUT = ROOT / "eval" / "scenarios-shadow"
 CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_triggers.py
@@ -135,7 +135,6 @@ def run(out_dir, limit=None, only=None, rate=6.0):
     for name in names:
         desc = skills.get(name, "")
         h = flywheel_llm.body_hash(desc)
-        out_file = out_dir / f"{flywheel_llm.slug(name)}.json"
         if not _needs_work(name):
             continue  # unchanged + already generated
         try:
@@ -145,9 +144,11 @@ def run(out_dir, limit=None, only=None, rate=6.0):
             if isinstance(reply, dict) and vn_count(reply.get("positive", [])) < 2:
                 reply = flywheel_llm.chat(SYSTEM_PROMPT + VN_RETRY, user_prompt(name, desc),
                                           rate_s=rate, schema=SCHEMA)
-                if vn_count(reply.get("positive", [])) < 2:
+                if (not isinstance(reply, dict)
+                        or vn_count(reply.get("positive", [])) < 2):
                     print(f"WARN: {name}: still <2 Vietnamese positives after retry (kept)")
-        except Exception as e:
+        except (flywheel_llm.TruncatedCompletion, json.JSONDecodeError,
+                KeyError, IndexError, TypeError, UnicodeError, OSError) as e:
             print(f"WARN: skipping {name}: chat failed ({e})")
             results.append({"name": name, "status": "error", "detail": f"chat failed: {e}"})
             continue

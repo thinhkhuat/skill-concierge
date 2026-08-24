@@ -84,11 +84,12 @@ def _extract_source(root, src):
     elif "command" in src:
         env = {**os.environ, **src.get("env", {})}
         text = subprocess.run(src["command"], shell=True, cwd=root, env=env,
-                              capture_output=True, text=True, timeout=src.get("timeout", 120)).stdout
+                              capture_output=True, text=True, timeout=src.get("timeout", 120),
+                              check=False).stdout
         where = f"command `{src['command']}`"
     else:
         raise ValueError("source needs a 'file' or 'command' key")
-    m = re.search(src["regex"], _slice(text, src), re.M)
+    m = re.search(src["regex"], _slice(text, src), re.MULTILINE)
     if not m:
         raise LookupError(f"SSOT regex /{src['regex']}/ matched nothing in {where}")
     return m.group(1).strip(), where
@@ -96,7 +97,7 @@ def _extract_source(root, src):
 
 def _check_mirror(root, fact_name, ssot, where, mir):
     text = _slice(_read(root, mir["file"]), mir)
-    matches = [m.group(1).strip() for m in re.finditer(mir["regex"], text, re.M)]
+    matches = [m.group(1).strip() for m in re.finditer(mir["regex"], text, re.MULTILINE)]
     if not matches:
         drift(f"{fact_name}: mirror {mir['file']} — regex /{mir['regex']}/ matched nothing (expected {ssot!r})")
         return
@@ -113,7 +114,7 @@ def check_facts(root, facts):
         name = fact.get("name", "?")
         try:
             ssot, where = _extract_source(root, fact["source"])
-        except Exception as e:
+        except (LookupError, OSError, UnicodeError, ValueError, re.error, subprocess.SubprocessError) as e:
             drift(f"{name}: cannot derive SSOT — {e}")
             continue
         info(f"{name}: SSOT = {ssot!r} (from {where})")
@@ -136,7 +137,8 @@ def check_commands(root, checks):
     for c in checks:
         name = c.get("name", c["command"])
         rc = subprocess.run(c["command"], shell=True, cwd=root,
-                            env={**os.environ, **c.get("env", {})}, timeout=c.get("timeout", 120)).returncode
+                            env={**os.environ, **c.get("env", {})}, timeout=c.get("timeout", 120),
+                            check=False).returncode
         ok(f"command check passed: {name}") if rc == 0 else drift(f"command check failed (exit {rc}): {name}")
 
 
@@ -147,8 +149,9 @@ def main(argv):
     if not os.path.exists(cfg_path):
         print(f"config not found: {cfg_path}\n(run with --help for the config shape)", file=sys.stderr); return 2
     try:
-        cfg = json.load(open(cfg_path, encoding="utf-8"))
-    except Exception as e:
+        with open(cfg_path, encoding="utf-8") as config_file:
+            cfg = json.load(config_file)
+    except (json.JSONDecodeError, OSError, UnicodeError) as e:
         print(f"bad config JSON ({cfg_path}): {e}", file=sys.stderr); return 2
     root = os.path.dirname(os.path.abspath(cfg_path))
 

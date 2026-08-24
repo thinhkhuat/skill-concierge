@@ -31,10 +31,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import flywheel_llm  # noqa: E402 — shared OpenAI-compatible client (ping/live_skills/config)
-import flywheel_manifest  # noqa: E402 — shared global run-manifest writer/reader
-import llm_eval_gen  # noqa: E402 — scenario (positive/negative) generator
-import llm_triggers  # noqa: E402 — utterance-trigger generator
+import flywheel_llm  # shared OpenAI-compatible client (ping/live_skills/config)
+import flywheel_manifest  # shared global run-manifest writer/reader
+import llm_eval_gen  # scenario (positive/negative) generator
+import llm_triggers  # utterance-trigger generator
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
@@ -55,8 +55,8 @@ def _engine_env():
     env = {}
     try:
         env = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
-    except Exception:
-        pass
+    except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError):
+        env = {}
     merged = dict(os.environ)
     for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
               "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS"):
@@ -99,11 +99,10 @@ def print_status():
         print()
         print("  fix: python3 scripts/flywheel.py --generate  (or run the skill-concierge:flywheel skill)")
 
-    # Last recorded run (manual or the background auto_flywheel hook) from the global manifest.
+    # A malformed manifest is equivalent to no recorded run for status display.
     try:
-        import flywheel_manifest
         lr = flywheel_manifest.last_run()
-    except Exception:
+    except (AttributeError, KeyError, TypeError):
         lr = None
     print()
     print("Last flywheel run (global manifest ~/.claude/skill-concierge/flywheel-manifest.json)")
@@ -120,7 +119,6 @@ def print_status():
 def _write_manifest(skills=None, coverage_dict=None, last_error=None):
     """Append one run record to the global manifest. Called on every --generate exit
     path (success or failure) so `last_error` is always visible to doctor / other agents."""
-    ok, _ = flywheel_llm.ping()
     return flywheel_manifest.write_run(
         endpoint=flywheel_llm.ENDPOINT, model=flywheel_llm.MODEL,
         skills=skills or [], coverage=coverage_dict or {"have": 0, "total": 0},
@@ -166,7 +164,7 @@ def generate(rate=None, limit=None, triggers_only=False):
         print("Generating eval scenarios for new/changed skills (llm_eval_gen.py)...")
         try:
             _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit, rate=rate))
-        except Exception as e:
+        except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
             print(f"FAIL: scenario generator crashed: {e}", file=sys.stderr)
             _print_run_summary(_write_manifest(last_error=f"llm_eval_gen crashed: {e}"))
             return 1
@@ -174,13 +172,13 @@ def generate(rate=None, limit=None, triggers_only=False):
     print("Generating utterance triggers for new/changed skills (llm_triggers.py)...")
     try:
         _note(llm_triggers.run(limit=limit, rate=rate))
-    except Exception as e:
+    except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
         print(f"FAIL: trigger generator crashed: {e}", file=sys.stderr)
         _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
         return 1
 
     print("Reindexing so the new utterance points go live...")
-    rr = subprocess.run([str(SS_BIN), "--reindex"], env=_engine_env())
+    rr = subprocess.run([str(SS_BIN), "--reindex"], env=_engine_env(), check=False)
     if rr.returncode != 0:
         print("FAIL: reindex exited non-zero", file=sys.stderr)
         _print_run_summary(_write_manifest(

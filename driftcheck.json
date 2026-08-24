@@ -58,7 +58,10 @@
     "openwiki/.last-update.json",
     ".codex-plugin/plugin.json",
     ".codex/hooks.json",
-    ".codex-plugin/mcp.json"
+    ".codex-plugin/mcp.json",
+    "adapters/commandcode/skill-concierge.mod.ts",
+    "adapters/commandcode/install.sh",
+    "adapters/commandcode/mcp.json"
   ],
   "command_checks": [
     {

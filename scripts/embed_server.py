@@ -29,8 +29,8 @@ Routes:
 # thread-safe). # ponytail: threaded stdlib server; reach for gunicorn only if this
 # is measured insufficient, not before.
 """
-import os
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Set the deployed embed env BEFORE importing the engine, so it reads mpnet-768
@@ -45,7 +45,7 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SKILL_QDRANT_URL", "http://localhost:6333")
 
-from skill_search.server import embed, EMBED_MODEL  # noqa: E402  (env must precede import)
+from skill_search.server import EMBED_MODEL, embed
 
 HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("EMBED_SHIM_PORT", "6363"))
@@ -69,26 +69,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802 (http.server API)
+    def do_GET(self) -> None:
         if self.path == "/health":
             self._send(200, {"status": "ok", "model": EMBED_MODEL, "dim": _dim()})
         else:
             self._send(404, {"error": "not found"})
 
-    def do_POST(self):  # noqa: N802 (http.server API)
+    def do_POST(self) -> None:
         if self.path != "/embed":
             self._send(404, {"error": "not found"})
             return
         try:
             n = int(self.headers.get("Content-Length", 0) or 0)
             payload = json.loads(self.rfile.read(n) or b"{}")
+            if not isinstance(payload, dict):
+                self._send(400, {"error": "request body must be a JSON object"})
+                return
             text = payload.get("text", "")
             if not isinstance(text, str) or not text:
                 self._send(400, {"error": "missing 'text'"})
                 return
             self._send(200, {"vector": embed(text)})
-        except Exception as e:  # never crash the service on a bad request
-            self._send(500, {"error": str(e)})
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            self._send(500, {"error": str(exc)})
 
     def log_message(self, *_a):
         pass  # quiet: runs as a service, not interactively

@@ -1,5 +1,5 @@
 ---
-name: skill-concierge:flywheel
+name: flywheel
 user-invocable: true
 description: See the retrieval-flywheel status and trigger an incremental utterance-generation run. Use this skill when the user asks about the flywheel, "how many skills have utterances / triggers", "flywheel coverage", "which skills are missing utterances", "is the LLM endpoint configured/reachable", or wants to "generate triggers", "run the flywheel", "refresh utterances", or "index the new skills' utterances". The flywheel is the utterance layer (ADR-0026) that teaches the retriever how users actually ask for a skill (EN+VN), lifting recall. Runs scripts/flywheel.py — status mode (default, read-only) prints endpoint config + reachability and per-skill utterance coverage (N/M covered, and the missing skills by name); --generate runs the incremental generator (only new/changed skills hit the LLM) then reindexes so the new points go live, printing before/after coverage. Generation fails loud if the LLM endpoint is unreachable.
 argument-hint: "[--generate] [--rate <seconds>]"

@@ -30,15 +30,14 @@ Telemetry. Emits an `offer` event to the shared invocation ledger so analyze.py
 can compute hit@k and fallback rate:
   {t, sid, ev:"offer", band, offered:[[name,score]...], fallback, q:<≤120c>}
 """
-import sys
-import os
 import json
-import time
+import os
 import re
-import socket
+import sys
+import tempfile
+import time
 import unicodedata
 import urllib.request
-import tempfile
 from pathlib import Path
 
 # ── endpoints ────────────────────────────────────────────────────────────────
@@ -146,53 +145,69 @@ CROSS_HARNESS = os.environ.get("ENFORCER_CROSS_HARNESS", "1") != "0"
 RETRIEVE_LIMIT = TOP_K * 5
 
 
-def _running_under_codex() -> bool:
-    """Which harness is executing this hook. Both run the SAME hooks.json and expand the same
-    ${CLAUDE_PLUGIN_ROOT}, so the discriminator is WHERE the plugin was installed: Codex caches
-    under ~/.codex/plugins/cache/**, Claude under ~/.claude/**.
+def _running_harness() -> str:
+    """Which harness is executing this hook.
 
-    PRECEDENCE, not a disjunction: the env var decides whenever it is set AND absolute, and
-    only an unset/empty/non-absolute one falls through to this file's own resolved path (which
-    works when the hook is wired by absolute path). A falsy candidate is SKIPPED, never resolved
-    — `Path("").resolve()` is `os.getcwd()`, which would silently turn this into a CWD probe and
-    invert the filter for any session whose cwd happens to sit under ~/.codex/. A NON-ABSOLUTE
-    candidate is skipped for the same reason: a settings-level env block can inject a LITERAL
-    like `$HOME/.claude` (observed live — JSON env values never shell-expand), and resolving
-    that garbage against the cwd would let machine config debris decide the harness."""
-    marker = f"{os.sep}.codex{os.sep}"
+    Returns one of: 'commandcode', 'codex', or 'claude'.
+
+    PRECEDENCE:
+    1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter).
+    2. Where the hook/plugin was installed: `.codex` in path -> 'codex', `.claude` in path -> 'claude'.
+    3. Fallback: 'commandcode' if run from anywhere else.
+    """
+    explicit = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
+    if explicit in ("commandcode", "cmd", "command-code"):
+        return "commandcode"
+    if explicit in ("codex", "claude"):
+        return explicit
+
+    marker_codex = f"{os.sep}.codex{os.sep}"
+    marker_claude = f"{os.sep}.claude{os.sep}"
     for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
         if not cand or not os.path.isabs(cand):
             continue
         try:
-            return marker in str(Path(cand).resolve())
-        except Exception:
-            continue
-    return False
+            resolved = str(Path(cand).resolve())
+        except OSError:
+            resolved = ""
+        if marker_codex in resolved:
+            return "codex"
+        if marker_claude in resolved:
+            return "claude"
+    return "claude"
 
 
-UNDER_CODEX = _running_under_codex()
-FOREIGN_HARNESS = "claude" if UNDER_CODEX else "codex"
+RUNNING_HARNESS = _running_harness()
+UNDER_CODEX = (RUNNING_HARNESS == "codex")
+UNDER_COMMANDCODE = (RUNNING_HARNESS == "commandcode")
+
+
+def _foreign_harness_label() -> str:
+    if RUNNING_HARNESS == "codex":
+        return "claude"
+    if RUNNING_HARNESS == "commandcode":
+        return "claude/codex"
+    return "codex"
+
+
+FOREIGN_HARNESS = _foreign_harness_label()
 
 
 def _foreign_scopes() -> tuple:
     """The scopes whose skills the RUNNING harness cannot invoke.
 
-    From Claude: both Codex scopes. `codex-personal` is populated only when a skill exists at
-    `~/.codex/skills/<x>` and NOT at `~/.claude/skills/<x>` — discovery walks the Claude root
-    first, so any name present on both sides is claimed as `personal`. A surviving
-    `codex-personal` row is therefore genuinely unreachable from Claude, always.
+    From Claude: both Codex scopes + commandcode-personal.
+    From Codex: plugin + commandcode-personal.
+    From Command Code: plugin + codex-plugin + codex-personal + personal (Command Code
+    only loads its own personal/project roots + extra settings locations).
 
-    From Codex: `plugin` only. Claude's plugin cache is not on Codex's load path at all, so that
-    one is unconditional. `personal` is deliberately NOT foreign here even though the mirror
-    argument looks symmetric: it is not. The same first-writer-wins order means a skill present
-    in BOTH personal roots is tagged `personal`, and Codex CAN invoke it via `~/.codex/skills`.
-    With no twin rescue available on that side (see `_invocable_twin`), excluding `personal`
-    would drop exactly those skills and label them uninvocable — the pass-1 defect, mirrored.
-    Keeping them costs at most some Claude-only personal rows in a Codex offer: the pre-ADR-0034
-    noise, which is the direction to fail in.
-
-    `project:` scopes are cwd-derived and shared by construction. Never foreign."""
-    return ("plugin",) if UNDER_CODEX else ("codex-plugin", "codex-personal")
+    `project:` scopes are cwd-derived and shared by construction. Never foreign.
+    """
+    if RUNNING_HARNESS == "commandcode":
+        return ("plugin", "codex-plugin", "codex-personal")
+    if RUNNING_HARNESS == "codex":
+        return ("plugin", "commandcode-personal")
+    return ("codex-plugin", "codex-personal", "commandcode-personal")
 
 
 FOREIGN_SCOPES = _foreign_scopes()
@@ -236,7 +251,7 @@ def _invocable_plugin_ids():
         installed = json.loads(_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))["plugins"]
         if not isinstance(installed, dict):
             return None
-    except Exception:
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
         return None
 
     disabled_by_key = {}
@@ -244,13 +259,13 @@ def _invocable_plugin_ids():
         layers = (Path.home() / ".claude" / "settings.json",
                   Path.cwd() / ".claude" / "settings.json",
                   Path.cwd() / ".claude" / "settings.local.json")
-    except Exception:
+    except OSError:
         layers = ()
     for f in layers:
         try:
             data = json.loads(f.read_text(encoding="utf-8")).get("enabledPlugins", {})
-        except Exception:
-            continue
+        except (OSError, UnicodeError, ValueError, AttributeError):
+            data = {}
         if isinstance(data, dict):
             disabled_by_key.update({str(k): not bool(v) for k, v in data.items()})
 
@@ -265,11 +280,9 @@ def _invocable_twin(name: str) -> bool:
     """True when a foreign-scoped row names a skill THIS harness can invoke anyway, because the
     same plugin is installed and switched on here and its twin merely lost the discovery dedup.
 
-    Only meaningful from Claude. Under Codex the enablement truth lives in config.toml (TOML,
-    unreadable on the stdlib 3.10 floor), and `plugin`-scope skills sit under `~/.claude/**`,
-    which is not on Codex's load path at all — so there is no twin to rescue. That is also why
-    `_foreign_scopes` keeps `personal` OUT of the Codex foreign set."""
-    if UNDER_CODEX or not INVOCABLE_PLUGIN_IDS or ":" not in name:
+    Only meaningful from Claude. Under Codex/Command Code the plugin caches are isolated,
+    so there is no twin to rescue."""
+    if RUNNING_HARNESS != "claude" or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
@@ -302,15 +315,9 @@ INTENT_QUERY_URL = f"{QDRANT_URL}/collections/{PROMPT_INTENT_COLLECTION}/points/
 INTENT_K = int(os.environ.get("ENFORCER_INTENT_K", "10"))                # neighbours per class for the mean-similarity
 INTENT_MARGIN = float(os.environ.get("ENFORCER_INTENT_MARGIN", "0.03"))  # suppress iff (conv_sim - act_sim) > this
 _IMPERATIVE_VERBS = frozenset(
-    "fix build create add write implement refactor update integrate decouple run test debug "
-    "remove delete rename convert migrate deploy generate make set install check verify review "
-    "analyze analyse scan audit do apply enrich wire patch revert merge commit push save extract "
-    "port draft design optimize optimise configure investigate trace diagnose produce render "
-    "compile lint format sort filter parse split trash drop kill start stop restart clean tidy "
-    "bump tag release clone pull fetch mine label embed".split())
+    ["fix", "build", "create", "add", "write", "implement", "refactor", "update", "integrate", "decouple", "run", "test", "debug", "remove", "delete", "rename", "convert", "migrate", "deploy", "generate", "make", "set", "install", "check", "verify", "review", "analyze", "analyse", "scan", "audit", "do", "apply", "enrich", "wire", "patch", "revert", "merge", "commit", "push", "save", "extract", "port", "draft", "design", "optimize", "optimise", "configure", "investigate", "trace", "diagnose", "produce", "render", "compile", "lint", "format", "sort", "filter", "parse", "split", "trash", "drop", "kill", "start", "stop", "restart", "clean", "tidy", "bump", "tag", "release", "clone", "pull", "fetch", "mine", "label", "embed"])
 _FILLER = frozenset(
-    "now ok okay so well then please alright also and but lets let's pls just next first go right "
-    "cool good great yes yeah sure hey actually hãy xin".split())
+    ["now", "ok", "okay", "so", "well", "then", "please", "alright", "also", "and", "but", "lets", "let's", "pls", "just", "next", "first", "go", "right", "cool", "good", "great", "yes", "yeah", "sure", "hey", "actually", "hãy", "xin"])
 
 # ── Vietnamese imperative lexicon (mirrors _IMPERATIVE_VERBS for VN task prompts) ──
 # The English veto was blind to Vietnamese; the tokenizer now keeps diacritics, and these sets give
@@ -319,8 +326,7 @@ _FILLER = frozenset(
 # leading bigram against _VN_VERB_BIGRAMS. High-precision core; the kNN gate catches the long tail.
 # ponytail: core lexicon — widen from real VN prompts if recall proves short.
 _VN_VERBS = frozenset(
-    "sửa viết tạo chạy xóa xoá thêm dịch gỡ vá soạn lưu quét gộp tách mở đóng kéo đẩy tải "
-    "đọc tìm lọc gọi dựng đổi thử dán nén bỏ cài vẽ".split())
+    ["sửa", "viết", "tạo", "chạy", "xóa", "xoá", "thêm", "dịch", "gỡ", "vá", "soạn", "lưu", "quét", "gộp", "tách", "mở", "đóng", "kéo", "đẩy", "tải", "đọc", "tìm", "lọc", "gọi", "dựng", "đổi", "thử", "dán", "nén", "bỏ", "cài", "vẽ"])
 _VN_VERB_BIGRAMS = frozenset([
     ("kiểm", "tra"), ("rà", "soát"), ("cài", "đặt"), ("phân", "tích"), ("tối", "ưu"),
     ("triển", "khai"), ("xử", "lý"), ("cập", "nhật"), ("sửa", "lỗi"), ("chỉnh", "sửa"),
@@ -377,7 +383,7 @@ def _load_keepoff() -> frozenset:
     try:
         data = json.loads(_KEEPOFF_PATH.read_text(encoding="utf-8"))
         return frozenset(n for n in data.get("keep_off", []) if isinstance(n, str))
-    except Exception:
+    except (OSError, UnicodeError, ValueError, AttributeError, TypeError):
         return frozenset()  # fail-open: suppression-config must never break a turn
 
 
@@ -432,7 +438,7 @@ def _apply_chain_overrides(names: dict) -> dict:
     Fail-open: unreadable/malformed file returns the input unchanged."""
     try:
         data = json.loads(_NEXT_SKILLS_OVERRIDES.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, ValueError):
         return names
     if not isinstance(data, dict):
         return names
@@ -449,7 +455,7 @@ def _visible_sidecar_names() -> dict:
     out-of-scope and cannot be hinted. Fail-open to {} (no hint, never an error)."""
     try:
         data = json.loads(_SIDECAR_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, UnicodeError, ValueError):
         return {}
     if not isinstance(data, dict):
         return {}
@@ -460,7 +466,7 @@ def _visible_sidecar_names() -> dict:
     # a project-scoped chain simply does not fire for that turn.
     try:
         cwd = Path.cwd()
-    except Exception:
+    except OSError:
         cwd = None
     scopes = ["personal", "plugin"]
     if cwd is not None:
@@ -495,7 +501,9 @@ def _last_used_skill(sid: str):
                 continue
             try:
                 e = json.loads(line)
-            except Exception:
+            except (ValueError, TypeError):
+                e = None
+            if not isinstance(e, dict):
                 continue
             if e.get("sid") != sid or e.get("ev") not in ("auto", "manual") or e.get("sub"):
                 continue
@@ -504,7 +512,7 @@ def _last_used_skill(sid: str):
             name = e.get("name")
             return name if isinstance(name, str) and name else None
         return None
-    except Exception:
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -559,7 +567,7 @@ def _load_per_skill_tau() -> dict:
         data = json.loads(_THRESHOLDS_PATH.read_text(encoding="utf-8"))
         return {k: float(v["tau"]) for k, v in data.items()
                 if v.get("status") == "ok" and isinstance(v.get("tau"), (int, float))}
-    except Exception:
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
         return {}  # fail-open: a bad thresholds file must never break a turn
 
 
@@ -593,7 +601,7 @@ def _load_routes() -> list:
         return [(r["contains"].lower(), r["skill"]) for r in data.get("routes", [])
                 if isinstance(r.get("contains"), str) and isinstance(r.get("skill"), str)
                 and r["contains"].strip()]
-    except Exception:
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
         return []  # fail-open
 
 
@@ -691,8 +699,8 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
             ev["qdrant_ms"] = int(qdrant_ms)
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
+        return
 
 
 def _inject(text: str) -> None:
@@ -742,8 +750,8 @@ def _authorized_skip_inject(kind: str, sid: str = "", **fmt) -> None:
                "intent_skip": INTENT_SKIP_MSG,
                "selfref": SELFREF_SKIP_MSG}[kind]
         _inject(msg.format(**fmt) + _chain_hint(sid))
-    except Exception:
-        pass
+    except (OSError, UnicodeError, ValueError, KeyError):
+        return
 
 
 def _post_json(url: str, payload: dict, timeout: float) -> dict:
@@ -894,7 +902,7 @@ def _blurb(desc: str) -> str:
     return b[:_DESC_CHARS].rsplit(" ", 1)[0] + "…" if len(b) > _DESC_CHARS else b
 
 
-def _ranked_mandate(cands: list, annex: list = None, foreign: list = None) -> str:
+def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
     # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
@@ -983,9 +991,7 @@ def _is_selfref(prompt: str) -> bool:
         return False
     if any((toks[i], toks[i + 1]) in _VN_VERB_BIGRAMS for i in range(len(toks) - 1)):
         return False
-    if _SELFREF_TAIL_RE.search(low):
-        return False
-    return True
+    return not _SELFREF_TAIL_RE.search(low)
 
 
 def _intent_conversational(vector: list) -> bool:
@@ -1008,7 +1014,7 @@ def _intent_conversational(vector: list) -> bool:
         if conv_sim is None or act_sim is None:
             return False
         return (conv_sim - act_sim) > INTENT_MARGIN
-    except Exception:
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
         return False
 
 
@@ -1049,29 +1055,27 @@ def main() -> int:
         try:
             vector = _embed(prompt)
             embed_ms = (time.time() - t0) * 1000
-        except (socket.timeout, TimeoutError):
+        except TimeoutError:
             embed_ms = (time.time() - t0) * 1000
             _inject(MANDATE + _chain_hint(sid))
             _append_offer(sid, "fallback", [], "embed_timeout", prompt, embed_ms=embed_ms)
             return 0
-        except Exception:
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
             embed_ms = (time.time() - t0) * 1000
             _inject(MANDATE + _chain_hint(sid))
             _append_offer(sid, "fallback", [], "embed_down", prompt, embed_ms=embed_ms)
             return 0
-
         # Retrieve → mandate-only fallback if Qdrant is unreachable.
         qdrant_ms = None
         t1 = time.time()
         try:
             cands = _retrieve(vector)
             qdrant_ms = (time.time() - t1) * 1000
-        except Exception:
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             qdrant_ms = (time.time() - t1) * 1000
             _inject(MANDATE + _chain_hint(sid))
             _append_offer(sid, "fallback", [], "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             return 0
-
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
@@ -1125,11 +1129,11 @@ def main() -> int:
         _atop = cands[0][2] if cands else 0.0   # post-keepoff/deterministic installed top
         try:
             _external = _retrieve_external(vector, _atop)
-        except Exception:
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _external = []
         try:
             _foreign = _retrieve_foreign(vector, _atop)
-        except Exception:
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _foreign = []
 
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
@@ -1140,7 +1144,8 @@ def main() -> int:
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
                       ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None,
                       xh=[[n, round(s, 4)] for (n, _d, s) in _foreign] or None)
-    except Exception:
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError,
+            OverflowError):
         return 0  # fail-silent, never block
     return 0
 
@@ -1214,7 +1219,7 @@ def _selftest() -> int:
     # (4) keep-off hard-drop: listed names removed, order preserved, fail-open on empty set.
     surv, drp = _drop_keepoff([("a", "", 0.3), ("bad", "", 0.2), ("c", "", 0.1)], frozenset({"bad"}))
     if [n for n, _, _ in surv] != ["a", "c"] or drp != ["bad"]:
-        bad.append("keepoff drop wrong: survivors=%s dropped=%s" % ([n for n, _, _ in surv], drp))
+        bad.append(f"keepoff drop wrong: survivors={[n for n, _, _ in surv]} dropped={drp}")
     s2, d2 = _drop_keepoff([("a", "", 0.3)], frozenset())
     if [n for n, _, _ in s2] != ["a"] or d2 != []:
         bad.append("keepoff empty-set must pass everything through")
@@ -1256,7 +1261,7 @@ def _selftest() -> int:
         _ROUTES = [("open a pull request", "ck:git")]
         hit = [n for n, _d, _s in _deterministic_hits("please open a pull request now", [("o", "", 0.3)])]
         if hit != ["ck:git"]:
-            bad.append("deterministic route must fire on a substring match: %s" % hit)
+            bad.append(f"deterministic route must fire on a substring match: {hit}")
         if _deterministic_hits("an unrelated prompt", [("o", "", 0.3)]) != []:
             bad.append("deterministic route must not fire without a match")
         if _deterministic_hits("open a pull request", [("ck:git", "", 0.3)]) != []:
@@ -1295,7 +1300,7 @@ def _selftest() -> int:
         _authorized_skip_inject("intent_skip")
         _authorized_skip_inject("selfref")
         if len(_captured) != 3:
-            bad.append("authorized-skip: expected 3 injects when flag ON, got %d" % len(_captured))
+            bad.append(f"authorized-skip: expected 3 injects when flag ON, got {len(_captured)}")
         else:
             if not all(c.startswith(AUTHORIZED_SKIP_MARKER) for c in _captured):
                 bad.append("authorized-skip: injected text must start with the marker")
@@ -1357,7 +1362,6 @@ def _selftest() -> int:
     # survives a NEWER sub-stamped row (ADR-0020 lane), drops keep-off'd and dangling
     # successors, silent on TTL-expired / other-sid / absent-sidecar / flag-off, and the
     # line carries neither the audit marker nor the locked signature phrases (parity).
-    import tempfile
     global CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES
     _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES)
     with tempfile.TemporaryDirectory() as _td:
@@ -1381,17 +1385,17 @@ def _selftest() -> int:
             ]) + "\n", encoding="utf-8")
             h = _chain_hint("s1")
             if "CHAIN-HINT: after seed-a" not in h or "succ-b" not in h:
-                bad.append("chain-hint: expected seed-a -> succ-b line, got %r" % h)
+                bad.append(f"chain-hint: expected seed-a -> succ-b line, got {h!r}")
             if "succ-c" in h or "dead-x" in h:
-                bad.append("chain-hint: keep-off'd / dangling successors must be dropped: %r" % h)
+                bad.append(f"chain-hint: keep-off'd / dangling successors must be dropped: {h!r}")
             h2 = _chain_hint("s2")
             if "pk:s" not in h2 or "pk:t" not in h2:
-                bad.append("chain-hint: manual (slash) seed must work via plugin scope: %r" % h2)
+                bad.append(f"chain-hint: manual (slash) seed must work via plugin scope: {h2!r}")
             # audit parity: the hint line itself must not match the marker or the
             # locked signature (else a collision miscounts real dodges as authorized).
             for _lit in ("SKILL-CHECK:", "self-referential recap lane"):
                 if _lit in h:
-                    bad.append("chain-hint: line must not contain locked literal %r" % _lit)
+                    bad.append(f"chain-hint: line must not contain locked literal {_lit!r}")
             # leg wiring: the hint rides an AUTHORIZED-SKIP line too (target population).
             _saved_inject2 = _inject
             _cap = []
@@ -1399,7 +1403,7 @@ def _selftest() -> int:
             try:
                 _authorized_skip_inject("intent_skip", "s1")
                 if len(_cap) != 1 or "SKILL-CHECK:" not in _cap[0] or "CHAIN-HINT:" not in _cap[0]:
-                    bad.append("chain-hint: authorized-skip leg must carry both lines, got %r" % _cap)
+                    bad.append(f"chain-hint: authorized-skip leg must carry both lines, got {_cap!r}")
             finally:
                 _inject = _saved_inject2
             # TTL expiry
@@ -1442,7 +1446,7 @@ def _selftest() -> int:
             _ovr.write_text(json.dumps({"seed-a": ["pk:t"]}), encoding="utf-8")
             h3 = _chain_hint("s1")
             if "pk:t" not in h3 or "succ-b" in h3:
-                bad.append("chain-hint: override must win over the sidecar entry: %r" % h3)
+                bad.append(f"chain-hint: override must win over the sidecar entry: {h3!r}")
             _ovr.write_text(json.dumps({"seed-a": ["not-in-catalogue"]}), encoding="utf-8")
             if _chain_hint("s1"):
                 bad.append("chain-hint: override successor absent from the catalogue must drop (dangling)")
@@ -1474,7 +1478,7 @@ def _selftest() -> int:
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
-    global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX
+    global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS, FOREIGN_HARNESS
     _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
     _reqs = []
@@ -1490,12 +1494,12 @@ def _selftest() -> int:
         got = _retrieve([0.1, 0.2])
         flt = (_reqs[0] or {}).get("filter", {})
         if {"key": "tier", "match": {"value": "external"}} not in flt.get("must_not", []):
-            bad.append("retrieve: missing must_not tier=external filter (installed query): %r" % flt)
+            bad.append(f"retrieve: missing must_not tier=external filter (installed query): {flt!r}")
         if _reqs[0].get("limit") != (RETRIEVE_LIMIT if CROSS_HARNESS else TOP_K):
             bad.append("retrieve: installed limit must over-fetch when ADR-0034 is on, "
-                       "and be exactly TOP_K when off: %r" % _reqs[0].get("limit"))
+                       "and be exactly TOP_K when off: {!r}".format(_reqs[0].get("limit")))
         if got != [("inst", "d", 0.5)]:
-            bad.append("retrieve: response parse changed: %r" % got)
+            bad.append(f"retrieve: response parse changed: {got!r}")
     finally:
         _post_json = _saved_post
 
@@ -1522,11 +1526,11 @@ def _selftest() -> int:
         ext = _retrieve_external([0.1])
         req = _ereqs[0]
         if {"key": "tier", "match": {"value": "external"}} not in req.get("filter", {}).get("must", []):
-            bad.append("annex query: must carry must tier=external filter: %r" % req.get("filter"))
+            bad.append("annex query: must carry must tier=external filter: {!r}".format(req.get("filter")))
         if req.get("limit") != EXTERNAL_SLOTS:
             bad.append("annex query: limit must be EXTERNAL_SLOTS")
         if [n for n, _d, _s, _a in ext] != ["cat:hi"]:
-            bad.append("annex: only ≥FLOOR externals kept (0.30 dropped): %r" % ext)
+            bad.append(f"annex: only ≥FLOOR externals kept (0.30 dropped): {ext!r}")
         if ext and ext[0][3] != "cat":
             bad.append("annex: alias not derived from scope")
         rendered = _ranked_mandate([("inst-a", "da", 0.9)], annex=ext)
@@ -1597,13 +1601,14 @@ def _selftest() -> int:
             _grp("f2", "twinpl:dup", 0.89, "codex-plugin")]
             + [_grp(f"i{k}", f"inst-{k}", 0.8 - k / 100, "personal") for k in range(TOP_K)]}}
 
+    _saved_uc = UNDER_CODEX
+    _saved_rh = RUNNING_HARNESS
+    _saved_fh = FOREIGN_HARNESS
     try:
-        if FOREIGN_HARNESS not in ("codex", "claude") or not FOREIGN_SCOPES:
-            bad.append("cross-harness: harness label / foreign scopes unset: %r/%r"
-                       % (FOREIGN_HARNESS, FOREIGN_SCOPES))
-        if (FOREIGN_HARNESS == "codex") != all(x.startswith("codex-") for x in FOREIGN_SCOPES):
-            bad.append("cross-harness: harness label disagrees with the foreign scope set: %r/%r"
-                       % (FOREIGN_HARNESS, FOREIGN_SCOPES))
+        if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex") or not FOREIGN_SCOPES:
+            bad.append(f"cross-harness: harness label / foreign scopes unset: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
+        if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-")) for x in FOREIGN_SCOPES):
+            bad.append(f"cross-harness: claude harness label disagrees with the foreign scope set: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
         # Nothing at module scope may touch the filesystem unguarded: `Path.cwd()` raises when
         # the working directory has been deleted (a worktree removed under a live session), and
         # an import-time raise turns a fail-silent hook into a traceback on every turn.
@@ -1615,10 +1620,9 @@ def _selftest() -> int:
             _invocable_plugin_ids()          # must not raise
             _visible_sidecar_names()         # nor this — it runs before _inject, so a raise
                                              # here costs the whole offer, silently
-        except Exception as _e:
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError) as _e:
             bad.append("cross-harness: the import-time settings read and the chain-hint scope "
-                       "mirror must BOTH survive a deleted cwd: %s: %s"
-                       % (type(_e).__name__, _e))
+                       f"mirror must BOTH survive a deleted cwd: {type(_e).__name__}: {_e}")
         finally:
             os.chdir(_cwd)
             # os.rmdir above normally removed it; this only fires if os.chdir raised first.
@@ -1631,15 +1635,15 @@ def _selftest() -> int:
         _cpr = os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
         try:
             os.environ["CLAUDE_PLUGIN_ROOT"] = ""
-            if _running_under_codex() != (f"{os.sep}.codex{os.sep}"
-                                          in str(Path(__file__).resolve())):
+            if (_running_harness() == "codex") != (f"{os.sep}.codex{os.sep}"
+                                                   in str(Path(__file__).resolve())):
                 bad.append("cross-harness: empty CLAUDE_PLUGIN_ROOT must fall through to "
                            "__file__, never resolve to the cwd")
             # A LITERAL like `$HOME/.claude` (a settings-level env block never shell-expands)
             # must also fall through — machine config debris cannot decide the harness.
             os.environ["CLAUDE_PLUGIN_ROOT"] = "$HOME/.claude"
-            if _running_under_codex() != (f"{os.sep}.codex{os.sep}"
-                                          in str(Path(__file__).resolve())):
+            if (_running_harness() == "codex") != (f"{os.sep}.codex{os.sep}"
+                                                   in str(Path(__file__).resolve())):
                 bad.append("cross-harness: a non-absolute CLAUDE_PLUGIN_ROOT literal must fall "
                            "through to __file__, never be resolved against the cwd")
         finally:
@@ -1654,8 +1658,9 @@ def _selftest() -> int:
         # derives UNDER_CODEX=True, _invocable_twin goes deliberately blind, and exactly the three
         # twin assertions fail — a false alarm on the documented post-deploy verification command
         # (found by the first live Codex revalidation, defect D1).
-        _saved_uc = UNDER_CODEX
         UNDER_CODEX = False
+        RUNNING_HARNESS = "claude"
+        FOREIGN_HARNESS = "codex"
         FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
         _post_json = _fake_xh_post
 
@@ -1669,13 +1674,13 @@ def _selftest() -> int:
         if any(c.get("key") == "scope"
                for c in _freqs[0].get("filter", {}).get("must_not", [])):
             bad.append("cross-harness: scope must be post-filtered, never a query condition "
-                       "(scope != invocability): %r" % _freqs[0].get("filter"))
+                       "(scope != invocability): {!r}".format(_freqs[0].get("filter")))
         if "otherpl:hi" in names:
             bad.append("cross-harness: a non-invocable foreign row must not reach the offer")
         if "twinpl:dup" not in names:
             bad.append("cross-harness: an INVOCABLE twin must stay in the installed offer")
         if len(inst) != TOP_K:
-            bad.append("cross-harness: offer must refill to TOP_K after the drop: %d" % len(inst))
+            bad.append(f"cross-harness: offer must refill to TOP_K after the drop: {len(inst)}")
 
         # UNKNOWN must filter NOTHING. A None manifest means the twin test cannot be made, and
         # dropping on that reinstates the exact mislabelling the post-filter replaced.
@@ -1691,10 +1696,10 @@ def _selftest() -> int:
         cond = (_freqs[0].get("filter", {}).get("must") or [{}])[0]
         if cond.get("key") != "scope" or set(cond.get("match", {}).get("any") or []) != \
                 set(FOREIGN_SCOPES):
-            bad.append("cross-harness: annex query must match the foreign scope SET: %r" % cond)
+            bad.append(f"cross-harness: annex query must match the foreign scope SET: {cond!r}")
         if [n for n, _d, _s in fgn] != ["otherpl:hi"]:
             bad.append("cross-harness: annex keeps only above-floor non-twins "
-                       "(0.31 below floor, twinpl:dup invocable here): %r" % fgn)
+                       f"(0.31 below floor, twinpl:dup invocable here): {fgn!r}")
         rendered = _ranked_mandate([("inst-a", "da", 0.9)], foreign=fgn)
         if f"[{FOREIGN_HARNESS}]" not in rendered or "get_skill" not in rendered:
             bad.append("cross-harness: render missing harness marker or get_skill instruction")
@@ -1708,8 +1713,7 @@ def _selftest() -> int:
         _freqs.clear()
         _retrieve([0.1])
         if _freqs[0].get("limit") != TOP_K or "scope" in (_freqs[0].get("with_payload") or []):
-            bad.append("cross-harness: kill-switch off must issue the pre-ADR-0034 request: %r"
-                       % _freqs[0])
+            bad.append(f"cross-harness: kill-switch off must issue the pre-ADR-0034 request: {_freqs[0]!r}")
         _freqs.clear()
         if _retrieve_foreign([0.1]) != [] or _freqs:
             bad.append("cross-harness: kill-switch off must issue no annex query and return []")
@@ -1720,24 +1724,27 @@ def _selftest() -> int:
          INVOCABLE_PLUGIN_IDS, _post_json) = _saved_xh
         ANNEX_DYNAMIC = _saved_dyn12
         UNDER_CODEX = _saved_uc
+        RUNNING_HARNESS = _saved_rh
+        FOREIGN_HARNESS = _saved_fh
 
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
-    print("enforcer --selftest OK: refusal guard (%d fire / %d silent) + ranked-mandate %%-share "
-          "+ actionability imperative-veto (%d fire / %d off) + keepoff-drop + gap-collapse "
+    print(f"enforcer --selftest OK: refusal guard ({len(must_fire)} fire / "
+          f"{len(must_not_fire)} silent) + ranked-mandate %-share "
+          f"+ actionability imperative-veto ({len(imp_fire)} fire / {len(imp_off)} off) "
+          "+ keepoff-drop + gap-collapse "
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
-          "(3 injects on / silent-off) + selfref over-fire lane (%d fire / %d off) "
+          f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
+          f"{len(selfref_off)} off) "
           "+ chain-overrides (override-wins / keep-off / suppress / fail-open) "
           "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + dynamic annex floor "
           "(ADR-0036 fixed/competitive/clamped/fallback + end-to-end prune-and-keep) "
           "+ cross-harness annex "
           "(ADR-0034 filter+annex on / union off) + external annex "
-          "(partition / floor / slots / render / kill-switch)"
-          % (len(must_fire), len(must_not_fire), len(imp_fire), len(imp_off),
-             len(selfref_fire), len(selfref_off)))
+          "(partition / floor / slots / render / kill-switch)")
     return 0
 
 

@@ -1,7 +1,7 @@
 # skill-concierge — OpenWiki quickstart
 
-**skill-concierge** is a **plugin** for both Claude Code and Codex that governs how the agent
-picks and uses *skills*. It is a thin **governance layer** over both harnesses' default skill
+**skill-concierge** is a **plugin** for Claude Code, Codex, and Command Code that governs how the agent
+picks and uses *skills*. It is a thin **governance layer** over all three harnesses' default skill
 mechanisms: where
 the default injects **every** installed skill's description into the context window on **every**
 turn and hopes the model notices the right one, skill-concierge replaces *hope* with
@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.26.2` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json)
+- **Version:** `0.27.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 

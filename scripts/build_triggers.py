@@ -22,11 +22,11 @@ Pure stdlib. Usage:
   python3 scripts/build_triggers.py --dry-run  # report counts, write nothing
   python3 scripts/build_triggers.py --selftest # phrase-split self-check (no network)
 """
+import argparse
+import json
 import os
 import re
 import sys
-import json
-import argparse
 import urllib.request
 from pathlib import Path
 
@@ -42,7 +42,10 @@ MIN_CHARS = 12
 # Split on sentence/clause boundaries, em/en dashes, semicolons, newlines, and list bullets.
 _SPLIT_RE = re.compile(r"(?:[.;!?]\s+|\s+[—–]\s+|\n+|^\s*[-*•]\s+)", re.MULTILINE)
 # Strip leading meta-labels the engine prose uses ("Triggers:", "Use when", "Examples:").
-_LABEL_RE = re.compile(r"^\s*(triggers?|examples?|use when|also use|use this skill)\b[:\-]?\s*", re.I)
+_LABEL_RE = re.compile(
+    r"^\s*(triggers?|examples?|use when|also use|use this skill)\b[:\-]?\s*",
+    re.IGNORECASE,
+)
 _WS_RE = re.compile(r"\s+")
 
 
@@ -143,7 +146,7 @@ def _selftest():
         bad.append(f"kept a too-short fragment: {ph}")
     if any(p.lower().startswith("triggers") for p in ph):
         bad.append(f"label not stripped: {ph}")
-    if len(set(p.lower() for p in ph)) != len(ph):
+    if len({p.lower() for p in ph}) != len(ph):
         bad.append(f"dupes present: {ph}")
     # empty / tiny input -> no phrases, no crash
     if split_phrases("") != [] or split_phrases("hi") != []:

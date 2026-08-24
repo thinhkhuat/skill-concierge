@@ -34,11 +34,11 @@ Pure stdlib. Usage:
   python3 scripts/calibrate_thresholds.py --dry-run  # report only, write nothing
   python3 scripts/calibrate_thresholds.py --selftest # math self-check (no network)
 """
-import os
-import sys
+import argparse
 import json
 import math
-import argparse
+import os
+import sys
 import urllib.request
 from pathlib import Path
 

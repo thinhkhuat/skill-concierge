@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Audit real skill USAGE from Claude Code's transcript store — the source that
 answers "do agents know + use the RIGHT skill", which the invocation-ledger does NOT.
 
@@ -39,6 +38,7 @@ import glob
 import json
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 
 PROJECTS = os.path.join(os.path.expanduser("~"), ".claude", "projects")
@@ -141,11 +141,11 @@ def build_catalogue():
 
 def ts_epoch(rec):
     t = rec.get("timestamp")
-    if not t:
+    if not isinstance(t, str):
         return None
     try:
         return dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
-    except Exception:
+    except (OSError, OverflowError, ValueError):
         return None
 
 
@@ -158,7 +158,7 @@ def parse_since(s):
         pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
-            return dt.datetime.strptime(s, fmt).timestamp()
+            return dt.datetime.strptime(s, fmt).astimezone().timestamp()
         except ValueError:
             continue
     raise SystemExit(f"--since: cannot parse '{s}' (epoch or 'YYYY-MM-DD HH:MM:SS')")
@@ -226,6 +226,15 @@ def _harvest_corpus(turns, meta_sessions=None, subagent_stop=True):
     return corpus
 
 
+def _read_lines(path):
+    """Yield transcript lines while reporting files that cannot be read completely."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            yield from fh
+    except OSError as exc:
+        print(f"warning: cannot read transcript {path}: {exc}", file=sys.stderr)
+
+
 def audit(since=None, meta_keywords=None, subagent_stop=None):
     if subagent_stop is None:
         subagent_stop = SKILL_SUBAGENT_STOP
@@ -246,10 +255,6 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 "active": active, "skip_text": "", "sid": None}
 
     for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
-        try:
-            fh = open(fp, encoding="utf-8", errors="replace")
-        except Exception:
-            continue
         # H3: subagent (Task sidechain) transcripts sit under a `subagents/` dir but carry the
         # PARENT's sid — flag them per FILE (not sid) so the parent's organic turns survive.
         is_sub = _SUBAGENT_PATH in fp
@@ -260,7 +265,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         # whether a SKIPPING was declared and whether a real search_skills call fired in the
         # SAME turn, judging at the boundary so SEARCH-then-SKIPPING order is handled.
         cur = _new_turn(False)
-        for line in fh:
+        for line in _read_lines(fp):
             if '"timestamp"' not in line:
                 continue
             # H3 dispatch: scan the RAW line (not the 400-char-capped sess_text) so the team
@@ -290,7 +295,8 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 cur["saw_marker"] = True
             try:
                 rec = json.loads(line.strip())
-            except Exception:
+            except json.JSONDecodeError as exc:
+                print(f"warning: invalid JSON record in {fp}: {exc}", file=sys.stderr)
                 continue
             if since is not None:
                 e = ts_epoch(rec)
@@ -362,7 +368,6 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                           "sid": cur["sid"], "sub": is_sub})
         if file_dispatch and file_sid:
             dispatch_sessions.add(file_sid)
-        fh.close()
 
     false_skip, lawful_skip, authorized_skip = _skip_verdicts(turns)
 
@@ -467,8 +472,7 @@ def main():
                      "local-only, gitignored). Do NOT commit or share. See ADR-0021.\n")
             fh.write(f"# window: {'since '+args.since if since else 'LIFETIME'}  "
                      f"distinct: {len(corpus)}  total: {sum(corpus.values())}\n")
-            for clause, c in corpus.most_common():
-                fh.write(f"{c}\t{clause}\n")
+            fh.writelines(f"{c}\t{clause}\n" for clause, c in corpus.most_common())
         print(f"harvested {sum(corpus.values())} false-skip rationalizations "
               f"({len(corpus)} distinct) -> {sink}")
         print("  scrubbed + gitignored; feeds H2 doctrine authoring (ADR-0021). "
@@ -479,23 +483,23 @@ def main():
     tot_counter = sum(st.values()) + sum(sl.values())
     win = f"since {args.since}" if since else "LIFETIME (all transcripts)"
     print(f"=== skill-usage audit — {win} ===")
-    print(f"COUNTER signals (Skill tool + /slash — what ledger/usage-tracker see):")
+    print("COUNTER signals (Skill tool + /slash — what ledger/usage-tracker see):")
     print(f"  Skill-tool: {sum(st.values())}   /slash: {sum(sl.values())}   combined: {tot_counter}")
-    print(f"INLINE signal (the operator's metric — invisible to both counters):")
+    print("INLINE signal (the operator's metric — invisible to both counters):")
     print(f"  USING <skill> declarations: {sum(us.values())}  (distinct {len(us)})")
     print(f"  SEARCH declarations: {r['n_search']}   SKIPPING declarations: {r['n_skip']}")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
 
     fs, ls, az = r["false_skip"], r["lawful_skip"], r["authorized_skip"]
     skip_turns = fs + ls + az
-    print(f"\nFALSE-SKIPPING (doctrine's hardest rule — 'no search, no skip'):")
+    print("\nFALSE-SKIPPING (doctrine's hardest rule — 'no search, no skip'):")
     if skip_turns:
         print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  declared SKIPPING with NO search_skills "
               f"call in the same turn   (lawful, search-backed skips: {ls}; "
               f"hook-authorized skips: {az})")
     else:
-        print(f"  no SKIPPING turns in window")
-    print(f"  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")
+        print("  no SKIPPING turns in window")
+    print("  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")
 
     meta = r["meta_sessions"]
     organic_using = sum(c for sid, cc in r["sess_using"].items() if sid not in meta for c in cc.values())
@@ -506,15 +510,15 @@ def main():
         print(f"\nNOISE-SCOPED (H3: drop self/meta + {n_disp} dispatched sessions "
               f"+ subagent turns; {len(meta)} sessions flagged, {n_sub} subagent skip-turns seen):")
         print(f"  organic Skill-tool: {organic_skill}   organic USING declarations: {organic_using}")
-        print(f"  (excluded = dogfood/verification/teammate/subagent traffic, not organic usage; "
-              f"SKILL_SUBAGENT_STOP=0 to revert)")
+        print("  (excluded = dogfood/verification/teammate/subagent traffic, not organic usage; "
+              "SKILL_SUBAGENT_STOP=0 to revert)")
     else:
         print(f"\nNOISE-SCOPED (drop self/meta sessions: {len(meta)} flagged):")
         print(f"  organic Skill-tool: {organic_skill}   organic USING declarations: {organic_using}")
-        print(f"  (self/meta = work ON the audited project: dogfood/verification, not organic usage)")
+        print("  (self/meta = work ON the audited project: dogfood/verification, not organic usage)")
 
     top = sorted(set(st) | set(us), key=lambda n: -(st.get(n, 0) + us.get(n, 0)))[:15]
-    print(f"\ntop skills (Skill-tool + USING, combined):")
+    print("\ntop skills (Skill-tool + USING, combined):")
     for n in top:
         print(f"  {st.get(n,0)+us.get(n,0):>4}  (tool {st.get(n,0)}, using {us.get(n,0)})  {n}")
     if not since:

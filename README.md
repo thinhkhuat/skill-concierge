@@ -1,11 +1,11 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.24.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.27.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
 
-A **skill-governance layer** over Claude Code and Codex's default skill mechanisms. Where the
+A **skill-governance layer** over Claude Code, Codex, and Command Code default skill mechanisms. Where the
 default dumps every skill description into context every turn and hopes the model picks
 one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + measure**.
 
@@ -318,6 +318,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.27.0` — **published, ADR-0038 Command Code triple-harness parity: Command Code (`cmd`, v1.32.1) added as third first-class citizen alongside Claude Code and Codex. Full governance loop parity: mod adapter (`adapters/commandcode/skill-concierge.mod.ts`) implements `transformInput` for in-generation semantic enforcement on every typed user prompt, and observes `skill_loaded`/`tool_completed` events for automatic ledger capture of skill and search invocations; discovery mirror indexes `~/.commandcode/skills` and `.commandcode/skills` under `commandcode-*` scopes; three-way harness detection isolates foreign scopes into the marked annex without displacing installed slots; native doctrine tool naming adapts MCP tool IDs at SessionStart; idempotent installer `adapters/commandcode/install.sh` wires the mod, settings hooks, and MCP config cleanly.**
 
 `0.26.2` — **published, ADR-0037 borrowed-manifest freshness: an MCP server whose cwd is not a project (Codex pins it to the plugin cache per ADR-0035) derived a phantom manifest key and reported `degraded — never indexed` forever, with a false `run reindex()` riding every Codex search reply. Health and the staleness warning now borrow the newest OTHER root's manifest for FRESHNESS (published as `freshness_from`), keep per-root staleness honestly `None` (borrowed signature = another cwd — unknowable, not false), and still degrade on a genuinely manifest-less machine. Closes the last defect from the second live Codex revalidation.**
 

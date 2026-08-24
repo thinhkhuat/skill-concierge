@@ -1,5 +1,5 @@
 ---
-name: skill-concierge:catalogs
+name: catalogs
 user-invocable: true
 description: Manage external skill-catalog roots — third-party skill collections indexed for retrieval WITHOUT being installed (ADR-0031). Use this skill when the user wants to register, list, or remove an external skills directory ("add my cloned skills repo to search", "index this skill collection without installing it", "which external catalogs are configured"), promote an external skill into ~/.claude/skills, or asks why a search hit is marked "[external]". Runs scripts/catalogs.py (list / add / remove / promote), which edits the operator-owned ~/.claude/skill-concierge/catalog-roots.json; the index follows at the next reindex.
 argument-hint: "[list | add <alias> <path> | remove <alias> | promote <alias>:<skill>]"

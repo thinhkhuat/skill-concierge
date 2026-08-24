@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 skill-concierge — skill-invocation ledger (append-only telemetry).
 
@@ -20,9 +19,9 @@ name is NOT documented, so we DO NOT assume one: we record the input KEYS (to le
 the real field from live data) plus a best-effort name from likely candidates —
 without logging arbitrary input values.
 """
-import sys
-import os
 import json
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -45,7 +44,7 @@ def _append(ev: dict) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 (fail-silent telemetry boundary)
         pass  # fail-silent: a telemetry write must never surface to the turn
 
 
@@ -64,6 +63,8 @@ def main() -> int:
         # subagent lanes instead of mixing them into the main session's chains.
         sub = bool(d.get("agent_id"))
 
+        harness = d.get("harness") or os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower() or None
+
         if evt == "UserPromptSubmit":
             prompt = d.get("prompt") or ""
             s = prompt.strip()
@@ -75,6 +76,8 @@ def main() -> int:
                 ev = {"t": t, "sid": sid, "ev": "manual", "name": name}
                 if sub:
                     ev["sub"] = True
+                if harness:
+                    ev["harness"] = harness
                 _append(ev)
             else:
                 # turn boundary — lets the analyzer segment uptake per prompt.
@@ -82,11 +85,14 @@ def main() -> int:
                 # the enforcer's `offer` event by (sid, q) — the enforcer logs q
                 # stripped, so an unstripped q here would break the join for any
                 # whitespace-bearing prompt and silently undercount hit@k.
-                _append({"t": t, "sid": sid, "ev": "turn", "q": s[:120]})
+                ev = {"t": t, "sid": sid, "ev": "turn", "q": s[:120]}
+                if harness:
+                    ev["harness"] = harness
+                _append(ev)
 
         elif evt == "PostToolUse":
             tool = d.get("tool_name", "")
-            if tool == "Skill":
+            if tool in ("Skill", "activate_skill"):
                 ti = d.get("tool_input", {})
                 name, keys = "", []
                 if isinstance(ti, dict):
@@ -99,9 +105,14 @@ def main() -> int:
                       "name": name, "input_keys": keys}
                 if sub:
                     ev["sub"] = True
+                if harness:
+                    ev["harness"] = harness
                 _append(ev)
             elif tool.endswith(SEARCH_TOOLS):
-                _append({"t": t, "sid": sid, "ev": "search"})
+                ev = {"t": t, "sid": sid, "ev": "search"}
+                if harness:
+                    ev["harness"] = harness
+                _append(ev)
             elif tool.endswith(GET_TOOLS):
                 # ADR-0031 external-take leg: a get_skill deep pull is how an
                 # external catalog skill is consumed (read-inline). Log EVERY pull
@@ -115,8 +126,10 @@ def main() -> int:
                       "name": name if isinstance(name, str) else ""}
                 if sub:
                     ev["sub"] = True
+                if harness:
+                    ev["harness"] = harness
                 _append(ev)
-    except Exception:
+    except Exception:  # noqa: BLE001 (fail-silent hook boundary)
         return 0
     return 0
 
@@ -129,7 +142,7 @@ def _selftest() -> int:
     import tempfile
     global LEDGER, LOG_DIR
     saved = (LEDGER, LOG_DIR)
-    ok, rows = True, []
+    rows = []
     try:
         with tempfile.TemporaryDirectory() as td:
             LOG_DIR = Path(td)
@@ -164,7 +177,7 @@ def _selftest() -> int:
             ("search", None), ("search", None),
             ("get_skill", "mattpocock-skills:tdd"), ("manual", "keep-on")]
     if evs != want:
-        print("ledger --selftest FAIL: %r != %r" % (evs, want))
+        print(f"ledger --selftest FAIL: {evs!r} != {want!r}")
         return 1
     print("ledger --selftest OK: get_skill/auto/search/manual classification")
     return 0

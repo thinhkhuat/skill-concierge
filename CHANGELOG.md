@@ -5,6 +5,33 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-08-25
+
+### Added
+- **Command Code (`cmd`) triple-harness first-class parity (ADR-0038).**
+  - **Mod adapter (`adapters/commandcode/skill-concierge.mod.ts`):** implements `transformInput`
+    hook for in-generation semantic enforcement and turn telemetry on every typed prompt;
+    observes `skill_loaded` and `tool_completed` events for automatic ledger tracking of skill and
+    semantic search invocations.
+  - **Discovery mirror (`skills_discovery.py`):** adds `SKILL_COMMANDCODE_ROOTS` discovering
+    `~/.commandcode/skills/` (`commandcode-personal`) and `.commandcode/skills/` (`commandcode-project`)
+    scopes into the shared index.
+  - **Three-way harness identity (`enforcer.py`):** `_running_harness()` identifies `commandcode`,
+    isolates foreign scopes (`plugin`, `codex-*`, `personal`), and annexes non-invocable skills
+    without displacing installed slots.
+  - **Native doctrine tool naming (`doctrine.py`):** adapts tool identifiers to
+    `mcp__skill-search__search_skills` and `/skill-search` for Command Code at SessionStart,
+    retiring the out-of-repo doctrine monkey-patch.
+  - **Idempotent installer (`adapters/commandcode/install.sh`):** installs the mod to
+    `~/.commandcode/mods/skill-concierge.ts`, configures `SessionStart` hooks in
+    `~/.commandcode/settings.json`, updates user MCP config in `~/.commandcode/mcp.json`, and
+    cleans up stale 0.20.8 paths.
+  - **Parity & drift tests (`check_mcp_env_parity.py` + `driftcheck.json`):** validates
+    `adapters/commandcode/mcp.json` in lockstep with `.mcp.json`.
+- **Repo-wide code cleanse & hardening:**
+  - 53 files cleansed across hooks, scripts, tests, and skills; all first-party code is 100% Ruff clean.
+  - Fixed unexpanded `${HOME}` path variables in `vendor/skill-search/skill_search/server.py` via `os.path.expandvars()`.
+  - Hardened hook boundaries with documented `# noqa: BLE001` annotations preserving fail-silent contracts.
 ## [0.26.2] — 2026-08-24
 
 ### Fixed

@@ -27,13 +27,16 @@ Before/after compare around a fix/ship point T (e.g. a commit time):
   python3 analyze.py --until "T"     # the "before" window
   python3 analyze.py --since "T"     # the "after"  window
 """
-import os
-import json
 import argparse
 import datetime
+import http.client
+import json
+import os
+import sys
 import urllib.request
-from pathlib import Path
 from collections import Counter, defaultdict, deque
+from itertools import pairwise
+from pathlib import Path
 
 LEDGER = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs")
@@ -42,17 +45,22 @@ LEDGER = Path(os.environ.get(
 
 def load(path):
     events = []
+    skipped = 0
     try:
-        for line in Path(path).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except Exception:
-                pass  # tolerate a partial last line / corrupt row
+        text = Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
-        pass
+        return events
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            skipped += 1  # tolerate a partial last line / corrupt row
+    if skipped:
+        # don't swallow silently — a corrupt ledger skews every metric below
+        print(f"analyze: skipped {skipped} unparseable ledger line(s)", file=sys.stderr)
     return events
 
 
@@ -82,7 +90,8 @@ def known_skill_ids():
             if offset is None:
                 break
         return ids, f"{base}/{coll}"
-    except Exception:
+    except (OSError, ValueError, KeyError, AttributeError, http.client.HTTPException):
+        # fail-open: Qdrant down, malformed reply, or unexpected shape -> no catalogue
         return set(), None
 
 
@@ -101,12 +110,18 @@ def parse_when(s):
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
                 "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
-            return datetime.datetime.strptime(iso, fmt).timestamp()
+            return datetime.datetime.strptime(iso, fmt).astimezone().timestamp()
         except ValueError:
             continue
     raise SystemExit(
         f"--since/--until: cannot parse '{s}' "
         f"(use epoch seconds, 'YYYY-MM-DD', or 'YYYY-MM-DD HH:MM:SS' in local time)")
+
+def _fmt_when(t):
+    """Epoch seconds -> 'YYYY-MM-DD HH:MM' in local time ('—' when unset)."""
+    if not t:
+        return "—"
+    return datetime.datetime.fromtimestamp(t).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def _offer_conversion(windows):
@@ -246,7 +261,7 @@ def _chain_report(events, catalogue=None):
     bigrams, lengths, longest = Counter(), Counter(), []
     for seq in seqs.values():
         if len(seq) >= 2:
-            bigrams.update(f"{a} -> {b}" for a, b in zip(seq, seq[1:]))
+            bigrams.update(f"{a} -> {b}" for a, b in pairwise(seq))
         lengths[len(seq)] += 1
         longest.append((len(seq), seq))
     longest.sort(key=lambda kv: (-kv[0], kv[1]))
@@ -285,8 +300,8 @@ def _run_selftest():
     ]
     jt = [w for w in _segment_windows(dup_events) if w["kind"] == "turn"]
     if len(jt) != 2 or jt[0]["offered"] != ["a"] or jt[1]["offered"] != ["b"]:
-        bad.append("dup-prefix join: each offer must pair to its own turn in order, got %s"
-                   % [w["offered"] for w in jt])
+        bad.append(f"dup-prefix join: each offer must pair to its own turn in order, "
+                   f"got {[w['offered'] for w in jt]}")
 
     # ADR-0029 W3 chain report — sequences per sid; sub rows excluded (subagent lane),
     # consecutive repeats collapsed, manual (slash) events seed chains too, built-in
@@ -322,7 +337,7 @@ def _run_selftest():
     ]
     n_off, n_rows, conv, n_sids = _external_annex_stats(ev_annex, aliases)
     if (n_off, n_rows, conv, n_sids) != (2, 2, 1, 2):
-        bad.append("external annex stats wrong: %r" % ((n_off, n_rows, conv, n_sids),))
+        bad.append(f"external annex stats wrong: {(n_off, n_rows, conv, n_sids)!r}")
     if _external_annex_stats([], aliases) != (0, 0, 0, 0):
         bad.append("external annex stats must be zero on empty ledger")
 
@@ -337,7 +352,7 @@ def _run_selftest():
         {"sid": "s4", "ev": "get_skill", "name": "agent-skills:tdd", "sub": 1}, # subagent row
     ]
     if _cross_harness_annex_stats(ev_xh) != (2, 2, 1, 2):
-        bad.append("cross-harness annex stats wrong: %r" % (_cross_harness_annex_stats(ev_xh),))
+        bad.append(f"cross-harness annex stats wrong: {_cross_harness_annex_stats(ev_xh)}")
     if _cross_harness_annex_stats([]) != (0, 0, 0, 0):
         bad.append("cross-harness annex stats must be zero on empty ledger")
 
@@ -403,10 +418,8 @@ def main():
         fb = sum(1 for e in offers if e.get("fallback"))
         print(f"ledger        : {path}")
         if since is not None or until is not None:
-            import datetime as _dt
-            def _fmt(t):
-                return _dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "—"
-            print(f"window        : [{_fmt(since)} .. {_fmt(until)})   {len(events)}/{n_total} events in window")
+            print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
+                  f"{len(events)}/{n_total} events in window")
         print(f"offers        : {len(offers)} (fallback {fb})   embed_ms: {_hist(embed_vals)}")
         print(f"                qdrant_ms: {_hist(qdr_vals)}")
         # band breakdown with latency
@@ -431,9 +444,7 @@ def main():
         n_sess, bigrams, lengths, longest = _chain_report(events, catalogue or None)
         print(f"ledger        : {path}")
         if since is not None or until is not None:
-            def _fmt(t):
-                return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "—"
-            print(f"window        : [{_fmt(since)} .. {_fmt(until)})   "
+            print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
                   f"{len(events)}/{n_total} events in window")
         n_chained = sum(c for l, c in lengths.items() if l >= 2)
         print(f"sessions      : {n_sess} with skill use; {n_chained} with a chain (len >= 2)"
@@ -484,9 +495,7 @@ def main():
 
     print(f"ledger        : {path}")
     if since is not None or until is not None:
-        def _fmt(t):
-            return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "—"
-        print(f"window        : [{_fmt(since)} .. {_fmt(until)})   "
+        print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
               f"{len(events)}/{n_total} events in window")
     print(f"events        : {len(events)}   turn-windows: {n}   manual: {len(manual)}")
     print(f"uptake        : {used}/{n}  {pct(used)}   (turn used a skill)")
@@ -509,19 +518,20 @@ def main():
                 off, tk = offered_by_skill[skill], took_by_skill[skill]
                 print(f"    {skill:<30} {tk}/{off}  {(100*tk/off):.0f}%")
     else:
-        print(f"hit@k         : pending (no `offer` events yet — enforcer not live / no banked turns)")
+        print("hit@k         : pending (no `offer` events yet — enforcer not live / no banked turns)")
     # ADR-0031 external takes: get_skill deep pulls, split installed vs external by
     # the operator's catalog aliases (catalog-roots.json). Epoch-scoped like every
     # metric here — window from the catalog-roots deploy date, never pool across.
     pulls = [e for e in events if e.get("ev") == "get_skill" and not e.get("sub")]
+    aliases: tuple = ()  # stays () when there are no pulls — the annex join below reads it
     if pulls:
         try:
             _roots = json.loads((Path.home() / ".claude" / "skill-concierge"
                                  / "catalog-roots.json").read_text(encoding="utf-8"))
             aliases = tuple(f"{a}:" for a in _roots if isinstance(a, str)
                             and not a.startswith("_"))
-        except Exception:
-            aliases = ()
+        except (OSError, ValueError, TypeError):
+            aliases = ()  # absent / unreadable / malformed roots
         ext = Counter(e.get("name", "") for e in pulls
                       if aliases and str(e.get("name", "")).startswith(aliases))
         n_ext = sum(ext.values())

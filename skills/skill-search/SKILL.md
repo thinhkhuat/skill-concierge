@@ -1,5 +1,5 @@
 ---
-name: skill-concierge:skill-search
+name: skill-search
 user-invocable: true
 description: Find the right skills for a task before acting. Use at the start of any multi-step or unfamiliar request to retrieve relevant skills by meaning, not name. Triggers when the user asks to build, set up, design, deploy, fix, or automate something and the right skill isn't obvious.
 argument-hint: "[task description]"

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Resolve durable skill-concierge state paths — the SINGLE canonical home for anything that
 must survive a /plugin update.
 

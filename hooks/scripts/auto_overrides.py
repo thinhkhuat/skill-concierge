@@ -59,15 +59,15 @@ def main() -> int:
         LOGDIR.mkdir(parents=True, exist_ok=True)
         # Stamp BEFORE spawning so a crash-looping applier can't re-spawn every session.
         STAMP.write_text(str(int(time.time())), encoding="utf-8")
-        logf = open(LOGFILE, "a", encoding="utf-8")
-        logf.write(f"\n=== auto-overrides {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        logf.flush()
-        subprocess.Popen(
-            [str(PY_BIN), str(APPLIER), "--if-changed"],
-            stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
-            start_new_session=True,                    # fully detached: outlives the hook, never blocks
-        )
-    except Exception:
+        with open(LOGFILE, "a", encoding="utf-8") as logf:
+            logf.write(f"\n=== auto-overrides {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            logf.flush()
+            subprocess.Popen(
+                [str(PY_BIN), str(APPLIER), "--if-changed"],
+                stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
+                start_new_session=True,                # fully detached: outlives the hook, never blocks
+            )
+    except OSError:
         return 0                                       # fail-silent — never block session start
     return 0
 

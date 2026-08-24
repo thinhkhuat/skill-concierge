@@ -1,7 +1,7 @@
 {
   "name": "skill-concierge",
-  "version": "0.26.2",
-  "description": "A skill-governance layer: semantic retrieval (which skill) + use-enforcement (whether an agent uses one) + a compounding invocation ledger. Works with both Claude Code and Codex.",
+  "version": "0.27.0",
+  "description": "A skill-governance layer: semantic retrieval (which skill) + use-enforcement (whether an agent uses one) + a compounding invocation ledger. Works with Claude Code, Codex, and Command Code.",
   "author": {
     "name": "thinhkhuat"
   },
@@ -14,7 +14,8 @@
     "semantic-retrieval",
     "telemetry",
     "claude-code",
-    "codex"
+    "codex",
+    "command-code"
   ],
   "skills": "./skills/",
   "mcpServers": "./.codex-plugin/mcp.json",

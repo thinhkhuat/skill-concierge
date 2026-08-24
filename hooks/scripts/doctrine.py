@@ -27,9 +27,9 @@ Design contract (mirrors the sibling enforcer/ledger hooks):
 Per ~/.claude docs (working-with-claude-code/hooks.md): SessionStart stdout is added
 to the context; exit 0. We use the structured hookSpecificOutput form for clarity.
 """
-import sys
-import os
 import json
+import os
+import sys
 from pathlib import Path
 
 # Doctrine lives two levels up from this script: hooks/scripts/doctrine.py →
@@ -70,8 +70,55 @@ def _is_subagent(raw: str) -> bool:
             return False
         aid = data.get("agent_id")
         return isinstance(aid, str) and aid.strip() != ""
-    except Exception:
+    except json.JSONDecodeError:
         return False
+
+
+def _harness_adapt(doctrine: str) -> str:
+    """Adapt tool and slash-command names to the executing harness.
+
+    Under Claude Code (plugin installed):
+      tool: `mcp__plugin_skill-concierge_skill-search__search_skills`
+      slash: `/skill-concierge:skill-search`
+
+    Under Command Code or Codex:
+      tool: `mcp__skill-search__search_skills` (or `mcp__skill_search__search_skills`)
+      slash: `/skill-search`
+    """
+    harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
+    if not harness:
+        marker_codex = f"{os.sep}.codex{os.sep}"
+        marker_claude = f"{os.sep}.claude{os.sep}"
+        for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
+            if not cand or not os.path.isabs(cand):
+                continue
+            try:
+                resolved = str(Path(cand).resolve())
+            except (OSError, RuntimeError):
+                resolved = ""
+            if marker_codex in resolved:
+                harness = "codex"
+                break
+            if marker_claude in resolved:
+                harness = "claude"
+                break
+    if harness in ("commandcode", "cmd", "command-code"):
+        return doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            "mcp__skill-search__search_skills"
+        ).replace(
+            "/skill-concierge:skill-search",
+            "/skill-search"
+        )
+    if harness == "codex":
+        return doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            "mcp__skill_search__search_skills"
+        ).replace(
+            "/skill-concierge:skill-search",
+            "/skill-search"
+        )
+    return doctrine
 
 
 def main() -> int:
@@ -81,7 +128,7 @@ def main() -> int:
     raw = ""
     try:
         raw = sys.stdin.read()
-    except Exception:
+    except (OSError, ValueError):
         raw = ""
     if SUBAGENT_STOP and _is_subagent(raw):
         return 0  # subagent session — scoped worker can't act on the doctrine; skip injection
@@ -91,13 +138,14 @@ def main() -> int:
         doctrine = _body(text)
         if not doctrine:
             return 0
+        doctrine = _harness_adapt(doctrine)
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": doctrine,
             }
         }))
-    except Exception:
+    except (OSError, UnicodeError):
         return 0  # fail-silent on a genuine doctrine-file read error (nothing to inject anyway)
     return 0
 

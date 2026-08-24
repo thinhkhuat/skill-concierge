@@ -11,6 +11,7 @@ Usage:
   python3 scripts/flywheel_llm.py --selftest   # network-free checks
 """
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -59,7 +60,7 @@ def slug(name):
 
 def parse_json_reply(s):
     """Strip a leading/trailing ```json fence (if any) and parse the JSON object."""
-    s = re.sub(r"^```(?:json)?|```$", "", s.strip(), flags=re.M).strip()
+    s = re.sub(r"^```(?:json)?|```$", "", s.strip(), flags=re.MULTILINE).strip()
     return json.loads(s)
 
 
@@ -143,7 +144,10 @@ def ping(timeout=5):
         ids = [m.get("id", "?") for m in data.get("data", [])] if isinstance(data, dict) else []
         detail = f"{url} reachable" + (f" — models: {', '.join(ids[:5])}" if ids else "")
         return True, detail
-    except Exception as e:
+    # Enumerated on purpose (contract: never raises): URLError/HTTPError are OSError
+    # subclasses (DNS/refused/timeout/TLS/HTTP status), HTTPException leaks from
+    # http.client on malformed replies, JSONDecodeError (ValueError) = non-JSON 200.
+    except (OSError, http.client.HTTPException, ValueError) as e:
         return False, f"{url} unreachable: {e}"
 
 
@@ -206,7 +210,9 @@ def _selftest():
         names = live_skill_names()
         assert isinstance(names, list) and len(names) >= 1, "live_skill_names() returned <1 entry"
         print(f"live_skill_names(): {len(names)} skills (live index reachable)")
-    except Exception as e:
+    # Same enumerated set as ping() plus KeyError: scroll_all_points() indexes
+    # ["result"], which a malformed Qdrant reply can omit.
+    except (OSError, http.client.HTTPException, ValueError, KeyError) as e:
         print(f"SKIP live_skill_names(): live index unreachable ({e})")
 
     print("PASS")

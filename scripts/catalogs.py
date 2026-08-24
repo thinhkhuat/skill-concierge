@@ -42,7 +42,7 @@ def _load() -> dict:
     try:
         data = json.loads(CONFIG.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except (OSError, ValueError):  # missing/unreadable file, bad JSON, bad encoding
         return {}
 
 
@@ -82,9 +82,9 @@ def _broken_promotions(cfg: dict) -> list:
         if not d.is_symlink():
             continue
         target = os.path.realpath(d)
-        if any(target.startswith(r + os.sep) for r in roots) and not os.path.isdir(target):
-            out.append(f"{d.name} -> {os.readlink(d)}")
-        elif not os.path.exists(target) and any(str(os.readlink(d)).startswith(r) for r in roots):
+        if (any(target.startswith(r + os.sep) for r in roots) and not os.path.isdir(target)) or (
+            not os.path.exists(target) and any(str(os.readlink(d)).startswith(r) for r in roots)
+        ):
             out.append(f"{d.name} -> {os.readlink(d)}")
     return out
 

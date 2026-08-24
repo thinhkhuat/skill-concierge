@@ -93,27 +93,27 @@ SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
 # quality phrases win the capped slots), ahead of description/body phrases.
 # Default OFF = byte-identical to today; set SKILL_LLM_TRIGGERS=1 + reindex to enable.
 SKILL_LLM_TRIGGERS = os.environ.get("SKILL_LLM_TRIGGERS", "0") != "0"
-_LLM_TRIG_PATH = os.environ.get(
-    "SKILL_TRIGGERS", str(Path(__file__).resolve().parent.parent.parent.parent / "eval" / "triggers.json"))
+_LLM_TRIG_PATH = os.path.expandvars(os.environ.get(
+    "SKILL_TRIGGERS", str(Path(__file__).resolve().parent.parent.parent.parent / "eval" / "triggers.json")))
 # Index manifest: lets us detect drift between disk and the index cheaply. Keyed per
 # project root — the signature it stores is CWD-scoped, so one shared file would make
 # every session with a different project report a false 'disk changed since last index'.
-META_PATH       = Path(os.environ.get(
+META_PATH       = Path(os.path.expandvars(os.environ.get(
     "SKILL_META_PATH",
-    str(Path.home() / ".cache" / "skill-search" / f"index_meta-{sd.manifest_key()}.json")))
+    str(Path.home() / ".cache" / "skill-search" / f"index_meta-{sd.manifest_key()}.json"))))
 # One file per live MCP server, `<pid>.json`, recording the engine build that process
 # actually runs. NOT keyed per project root — a reader (doctor) asks "which builds are
 # live on this machine", a question no single project's manifest can answer.
-SERVER_RECORDS  = Path(os.environ.get(
-    "SKILL_SERVER_RECORDS", str(Path.home() / ".cache" / "skill-search" / "servers")))
+SERVER_RECORDS  = Path(os.path.expandvars(os.environ.get(
+    "SKILL_SERVER_RECORDS", str(Path.home() / ".cache" / "skill-search" / "servers"))))
 # ADR-0029 chain-hint sidecar: {scope: {name: [successors]}} for EVERY indexed skill
 # (empty list when unauthored — the enforcer's hint filter uses key presence as
 # catalogue membership). Lives under ~/.claude/skill-concierge/ next to the ledger the
 # reading hook already owns, not in the engine cache. Written UNCONDITIONALLY at index
 # time: its content is flag-independent; ENFORCER_CHAIN_HINT gates only the reader.
-NEXT_SKILLS_PATH = Path(os.environ.get(
+NEXT_SKILLS_PATH = Path(os.path.expandvars(os.environ.get(
     "SKILL_CONCIERGE_NEXT_SKILLS",
-    str(Path.home() / ".claude" / "skill-concierge" / "next-skills.json")))
+    str(Path.home() / ".claude" / "skill-concierge" / "next-skills.json"))))
 
 mcp = FastMCP("skill-search")
 
@@ -124,7 +124,7 @@ if QDRANT_URL:
     _qdrant = QdrantClient(url=QDRANT_URL)
     _STORE = QDRANT_URL
 else:
-    _path = QDRANT_PATH or str(Path.home() / ".cache" / "skill-search" / "qdrant")
+    _path = os.path.expandvars(QDRANT_PATH) if QDRANT_PATH else str(Path.home() / ".cache" / "skill-search" / "qdrant")
     Path(_path).mkdir(parents=True, exist_ok=True)
     _qdrant = QdrantClient(path=_path)
     _STORE = f"embedded:{_path}"

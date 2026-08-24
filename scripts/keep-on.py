@@ -27,7 +27,7 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
-from _keepon import keepon_path      # sibling module (scripts/ is on sys.path at run)
+from _keepon import keepon_path  # sibling module (scripts/ is on sys.path at run)
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
@@ -56,7 +56,7 @@ def _reconcile():
         print("  (engine venv not found — edited keep-on.json only; run ./setup.sh or "
               "apply-overrides.py to reconcile settings.json)")
         return
-    r = subprocess.run([str(py), str(APPLIER)], capture_output=True, text=True)
+    r = subprocess.run([str(py), str(APPLIER)], capture_output=True, text=True, check=False)
     for ln in (r.stdout or "").splitlines():
         if ln.startswith(("applied", "NOTE", "wrote", "backup")):
             print(f"  {ln}")

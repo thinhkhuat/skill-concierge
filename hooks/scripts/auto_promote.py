@@ -47,9 +47,11 @@ def _aliases() -> tuple:
     """Configured catalog alias prefixes (`antigravity:` …), or () when none/unreadable."""
     try:
         cfg = json.loads(CATALOG_ROOTS.read_text(encoding="utf-8"))
-        return tuple(f"{a}:" for a in cfg if isinstance(a, str) and not a.startswith("_"))
-    except Exception:
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return ()
+    if not isinstance(cfg, dict):
+        return ()
+    return tuple(f"{a}:" for a in cfg if isinstance(a, str) and not a.startswith("_"))
 
 
 def _distinct_session_takes(aliases: tuple) -> dict:
@@ -69,13 +71,15 @@ def _distinct_session_takes(aliases: tuple) -> dict:
     for line in lines:
         try:
             e = json.loads(line)
+            if not isinstance(e, dict):
+                continue
         except ValueError:
             continue
         if e.get("ev") != "get_skill" or e.get("sub"):
             continue
         name = e.get("name") or ""
         sid = e.get("sid") or ""
-        if sid and isinstance(name, str) and name.startswith(aliases):
+        if isinstance(sid, str) and sid and isinstance(name, str) and name.startswith(aliases):
             takes[name].add(sid)
     return takes
 
@@ -85,11 +89,11 @@ def _promote(name: str) -> tuple:
     try:
         r = subprocess.run(
             [sys.executable, str(CATALOGS_PY), "promote", name],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, check=False,
             env={**os.environ, "SKILL_CONCIERGE_CATALOG_ROOTS": str(CATALOG_ROOTS)})
         out = (r.stdout or r.stderr or "").strip()
         return r.returncode == 0, (out.splitlines()[0] if out else "")
-    except Exception as e:
+    except (OSError, UnicodeError, subprocess.SubprocessError) as e:
         return False, str(e)
 
 
@@ -98,8 +102,8 @@ def _log(msg: str) -> None:
         LOGDIR.mkdir(parents=True, exist_ok=True)
         with LOGFILE.open("a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-    except Exception:
-        pass
+    except (OSError, UnicodeError):
+        return
 
 
 def _recent(path: Path, window: int) -> bool:
@@ -140,7 +144,7 @@ def main() -> int:
         n = run_once()
         if n:
             _log(f"pass complete: {n} promoted")
-    except Exception:
+    except OSError:
         return 0                                      # fail-silent — never block session start
     return 0
 

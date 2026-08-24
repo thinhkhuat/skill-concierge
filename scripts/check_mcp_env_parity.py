@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Env parity between the two MCP descriptors (ADR-0035).
 
 `.mcp.json` (Claude) and `.codex-plugin/mcp.json` (Codex) each carry an env block for the SAME
@@ -24,19 +23,29 @@ def env_of(path, server="skill-search"):
 
 def main() -> int:
     claude, codex = env_of(".mcp.json"), env_of(".codex-plugin/mcp.json")
+    cmd_env = env_of("adapters/commandcode/mcp.json") if (ROOT / "adapters/commandcode/mcp.json").exists() else None
     bad = []
     for k, v in codex.items():
         if k not in claude:
             bad.append(f"{k}: only in .codex-plugin/mcp.json ('{v}') — the Claude file is the source of truth")
         elif claude[k] != v:
             bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (.codex-plugin/mcp.json)")
+    if cmd_env is not None:
+        for k, v in cmd_env.items():
+            if k not in claude:
+                bad.append(f"{k}: only in adapters/commandcode/mcp.json ('{v}')")
+            elif k == "SKILL_SERVER_RECORDS":
+                # commandcode expands standard path rather than literal ${HOME}
+                continue
+            elif claude[k] != v:
+                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/commandcode/mcp.json)")
     if bad:
         print("mcp-env-parity FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     omitted = sorted(set(claude) - set(codex))
-    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep"
+    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, and Command Code"
           + (f"; codex omits {omitted} (deliberate — see descriptor comment)" if omitted else ""))
     return 0
 

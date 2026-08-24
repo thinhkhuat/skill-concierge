@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Doc parity: CLAUDE.md (adapter) must name the SAME tool-state/scratch dirs as AGENTS.md (SSOT).
 Stdlib-only. Exit 0 = parity, 1 = drift. Used as a drift-guard command_check."""
-import re, sys
+import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

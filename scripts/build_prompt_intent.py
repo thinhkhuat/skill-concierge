@@ -64,15 +64,13 @@ _BAD_SUB = ("[Request interrupted", "<system-reminder", "<command-name", "<comma
 
 
 def _genuine(s):
-    if not s or s.startswith("/") or s.startswith("<"):
+    if not s or s.startswith(("/", "<")):
         return False
     if len(s.split()) < 3:
         return False
     if any(s.startswith(p) for p in _BAD_PREFIX):
         return False
-    if any(b in s[:60] for b in _BAD_SUB):
-        return False
-    return True
+    return not any(b in s[:60] for b in _BAD_SUB)
 
 
 def _prompt_text(ev):
@@ -98,7 +96,8 @@ def mine():
     for fp in glob.glob(str(PROJECTS / "**" / "*.jsonl"), recursive=True):
         try:
             lines = Path(fp).read_text(encoding="utf-8").splitlines()
-        except Exception:
+        except (OSError, UnicodeError) as exc:
+            print(f"! skipping unreadable transcript {fp}: {exc}", file=sys.stderr)
             continue
         cur = {"p": None, "n": 0, "e": False}
 
@@ -117,7 +116,8 @@ def mine():
                 continue
             try:
                 ev = json.loads(ln)
-            except Exception:
+            except json.JSONDecodeError as exc:
+                print(f"! skipping malformed JSON in {fp}: {exc}", file=sys.stderr)
                 continue
             p = _prompt_text(ev)
             if p is not None:
@@ -160,7 +160,8 @@ def build(items, dump=None):
     for p, l in items:
         try:
             v = embed(p)
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"! skipping prompt that could not be embedded: {exc}", file=sys.stderr)
             continue
         if isinstance(v, list) and v:
             vecs.append(v)
@@ -171,8 +172,8 @@ def build(items, dump=None):
     dim = len(vecs[0])
     try:
         _post(f"{QDRANT_URL}/collections/{COLLECTION}", None, method="DELETE")
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        print(f"! could not delete existing collection; continuing: {exc}", file=sys.stderr)
     _post(f"{QDRANT_URL}/collections/{COLLECTION}",
           {"vectors": {"size": dim, "distance": "Cosine"}}, method="PUT")
     pts = [{"id": i, "vector": vecs[i], "payload": {"label": labs[i]}} for i in range(len(vecs))]

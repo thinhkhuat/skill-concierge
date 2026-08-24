@@ -3,7 +3,10 @@
 SSOT = the skills/*/SKILL.md directories. Mirror = the `skills/{...}/SKILL.md` brace list
 in AGENTS.md. Stdlib-only. Exit 0 = parity, 1 = drift. drift-guard command_check.
 ROOT override via SKILL_CONCIERGE_ROOT (used by the falsifiability test)."""
-import os, re, sys, glob
+import glob
+import os
+import re
+import sys
 from pathlib import Path
 
 ROOT = Path(os.environ.get("SKILL_CONCIERGE_ROOT", Path(__file__).resolve().parent.parent))

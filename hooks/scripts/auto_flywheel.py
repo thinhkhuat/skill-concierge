@@ -22,6 +22,7 @@ Design contract (mirrors auto_reindex.py):
 Disable per-session with SKILL_AUTO_FLYWHEEL=0, or space runs out with AUTO_FLYWHEEL_THROTTLE_S.
 """
 import hashlib
+import importlib
 import json
 import os
 import subprocess
@@ -58,7 +59,7 @@ def _indexed_count():
     """Skills the last completed reindex put in the index, or None if unknown."""
     try:
         return int(json.loads(_meta_path().read_text(encoding="utf-8"))["indexed"])
-    except Exception:
+    except (OSError, KeyError, TypeError, ValueError):
         return None
 
 
@@ -70,12 +71,21 @@ def _disk_count():
     """
     try:
         out = subprocess.run(
-            [str(PY_BIN), "-c",
-             "from skill_search.skills_discovery import discover_skills;"
-             "print(len(discover_skills()))"],
-            capture_output=True, text=True, timeout=30)
+            [
+                str(PY_BIN),
+                "-c",
+                (
+                    "from skill_search.skills_discovery import discover_skills;"
+                    "print(len(discover_skills()))"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
         return int(out.stdout.strip())
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
@@ -97,7 +107,7 @@ def _index_lags_disk() -> bool:
 def _ping_ok() -> bool:
     """Endpoint reachability, isolated so tests can stub it without a network."""
     sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
-    import flywheel_llm                            # noqa: E402 — stdlib-only, cheap import
+    flywheel_llm = importlib.import_module("flywheel_llm")
     ok, _detail = flywheel_llm.ping()
     return ok
 
@@ -106,12 +116,11 @@ def _mcp_env():
     """Embedder + store come from .mcp.json (single source of truth); real env wins.
     Same seam as auto_reindex.py's _mcp_env() — the detached generate+reindex must build/query
     the SAME index the query server serves."""
-    env = {}
     try:
         env = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))[
             "mcpServers"]["skill-search"]["env"]
-    except Exception:
-        pass
+    except (OSError, KeyError, TypeError, ValueError):
+        env = {}
     merged = dict(os.environ)
     for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
               "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS"):
@@ -129,12 +138,14 @@ def _recent(path, within):
 
 def _qdrant_up(url, timeout=0.8):
     for u in (url.rstrip("/") + "/healthz", url):
+        status = None
         try:
-            with urllib.request.urlopen(u, timeout=timeout) as r:
-                if r.status == 200:
-                    return True
-        except Exception:
-            continue
+            with urllib.request.urlopen(u, timeout=timeout) as response:
+                status = response.status
+        except (OSError, ValueError):
+            status = None
+        if status == 200:
+            return True
     return False
 
 
@@ -170,15 +181,15 @@ def main() -> int:
         LOGDIR.mkdir(parents=True, exist_ok=True)
         # Stamp BEFORE spawning so a crash-looping engine can't re-spawn every session.
         STAMP.write_text(str(int(time.time())), encoding="utf-8")
-        logf = open(LOGFILE, "a", encoding="utf-8")
-        logf.write(f"\n=== auto-flywheel {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        logf.flush()
-        subprocess.Popen(
-            [str(PY_BIN), str(FLYWHEEL_PY), "--generate", "--limit", str(MAX_PER_RUN)],
-            env=env, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
-            start_new_session=True,                    # fully detached: outlives the hook, never blocks
-        )
-    except Exception:
+        with LOGFILE.open("a", encoding="utf-8") as logf:
+            logf.write(f"\n=== auto-flywheel {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            logf.flush()
+            subprocess.Popen(
+                [str(PY_BIN), str(FLYWHEEL_PY), "--generate", "--limit", str(MAX_PER_RUN)],
+                env=env, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
+                start_new_session=True,                # fully detached: outlives the hook, never blocks
+            )
+    except (AttributeError, ImportError, OSError, subprocess.SubprocessError, TypeError, ValueError):
         return 0                                       # fail-silent — never block session start
     return 0
 

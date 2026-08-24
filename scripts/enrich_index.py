@@ -30,13 +30,12 @@ Usage:
   ... --revert [--shadow|--live]   restore target vectors from live + clear enriched marker
   ... --selftest            math/centroid self-check (no network)
 """
-import os
-import sys
+import argparse
+import hashlib
 import json
 import math
-import time
-import hashlib
-import argparse
+import os
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -113,8 +112,8 @@ def parity_gate(live):
         by = {s["name"]: s for s in disc.discover_skills()}
         if name in by:
             txt = server._skill_text(by[name])
-    except Exception:
-        pass
+    except (ImportError, OSError) as exc:
+        print(f"[parity] full-text discovery failed ({exc!r}) — falling back to desc-only probe")
     c = cosine(server.embed(txt), S)
     print(f"[parity] engine-embed vs live '{name}': cos={c:.5f}  (gate >= {PARITY_MIN})")
     if c < PARITY_MIN:
@@ -199,7 +198,8 @@ def reapply(target):
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).resolve().parent))
     from build_triggers import split_phrases
-    from skill_search import server, skills_discovery as disc
+    from skill_search import server
+    from skill_search import skills_discovery as disc
     by = {sk["name"]: sk for sk in disc.discover_skills()}
     pts = scroll_live(target)
     todo = {n: (pid, v, pl) for n, (pid, v, pl) in pts.items() if not pl.get("enriched")}
@@ -226,24 +226,21 @@ def reapply(target):
     # Recompute the BARE base from source text (embed(_skill_text)) instead of trusting the stored
     # vector — identical to the stored bare (proven cos=1.0) but CANNOT double-enrich even if a
     # point's vector is already enriched. Per point: centroid of [bare-source] + trigger phrases.
-    flat, spans, trig, skipped = [], {}, {}, []
-    for n, (_pid, _v, _pl) in todo.items():
+    flat, plan, skipped = [], [], []
+    for n, (pid, _v, _pl) in todo.items():
         if n not in by:                            # indexed but gone from disk — no source
             skipped.append(n)
             continue
         ts = split_phrases(by[n]["description"])
-        trig[n] = ts
         span = [server._skill_text(by[n])] + ts    # bare-source FIRST, then triggers
-        spans[n] = (len(flat), len(flat) + len(span))
+        plan.append((n, pid, ts, len(flat), len(flat) + len(span)))
         flat.extend(span)
     print(f"[reapply] embedding {len(flat)} texts (bare-source + triggers) via engine path …")
     vecs = _engine_embed_batch(flat) if flat else []
     updated, hashes = [], {}
-    for n in trig:
-        pid = todo[n][0]
-        a, b = spans[n]
+    for n, pid, ts, a, b in plan:
         updated.append({"id": pid, "vector": mean_vecs(vecs[a:b])})
-        hashes[n] = (pid, hashlib.md5("\n".join(trig[n]).encode()).hexdigest())
+        hashes[n] = (pid, hashlib.md5("\n".join(ts).encode()).hexdigest())
     for i in range(0, len(updated), WRITE_BATCH):
         _put(f"{QDRANT}/collections/{target}/points/vectors", {"points": updated[i:i + WRITE_BATCH]})
     for i in range(0, len(updated), WRITE_BATCH):
@@ -255,7 +252,7 @@ def reapply(target):
               {"payload": {"enrich_source_hash": h}, "points": [pid]})
     # keep triggers.json current for the (re)enriched skills
     tj = json.loads(TRIGGERS.read_text(encoding="utf-8")) if TRIGGERS.exists() else {}
-    for n, ts in trig.items():
+    for n, _pid, ts, _a, _b in plan:
         tj[n] = {"source": "prose-phrase", "triggers": ts, "n": len(ts)}
     TRIGGERS.write_text(json.dumps(tj, indent=2, ensure_ascii=False), encoding="utf-8")
     assert_payloads_intact(target)
