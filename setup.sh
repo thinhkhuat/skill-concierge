@@ -65,7 +65,7 @@ mkdir -p "$(dirname "$VENV")"
 # plain `pip install` sees "already satisfied" and SKIPS re-copying changed code on a re-run —
 # the exact stale-engine trap (ADR-0018). --force-reinstall --no-deps guarantees the current
 # engine code lands without re-resolving the (already-present) heavy deps.
-"$VENV/bin/pip" -q install --force-reinstall --no-deps "$VENDOR"
+"$VENV/bin/pip" -q install --no-cache-dir --force-reinstall --no-deps "$VENDOR"
 # Stamp the deployed plugin version so bin/skill-search-mcp can detect a future /plugin update
 # and AUTO-resync the engine (ADR-0018) instead of silently serving stale code.
 PLUGIN_VER="$("$PYTHON" -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
