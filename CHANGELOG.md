@@ -25,6 +25,9 @@ All notable changes to **skill-concierge**. Format loosely follows
   - **Hermetic fixtures:** vendored-test conftest pins the Codex seams (and imports after the
     env-pinning block — `skills_discovery` reads seams at import time; the July branch's three
     failing tests now pass on machines with a populated `~/.codex`).
+  - **Codex openwiki gate fails open:** the `.codex/hooks.json` parity-hook command carries a
+    file-existence guard — a Codex session with `CLAUDE_PROJECT_DIR` unset no longer
+    exit-2-blocks every Bash call (mirrors the `.claude/settings.json` wiring).
 
 ## [0.23.0] — 2026-08-23
 
