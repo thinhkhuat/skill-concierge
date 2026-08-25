@@ -558,3 +558,12 @@ Landmines verified live 2026-08-25:
 5. **Extension `tool_call` handlers are fail-closed** (a throw blocks the tool) — all telemetry
    observation lives in `tool_result`, fully try/caught. Same doctrine as the repo's hook rules,
    but enforced by OMP's runtime rather than our discipline.
+6. **`omp-plugin` scope is EMPTY when every OMP plugin twins a Claude install — by design, not a
+   wiring failure.** Discovery dedups by NAME (first writer wins; precedence personal → project →
+   plugin → catalog; `skills_discovery.discover_skills()`), and `discover_skill_paths()` yields
+   Claude hits before OMP hits. `skill-concierge:doctor`, memsearch, effort-gate etc. exist in
+   both `~/.claude/plugins/cache` and `~/.omp/plugins/cache`, so ONE `plugin`-scope point survives
+   and the OMP twin collapses into it. Benign: OMP's claude-plugins provider reads the Claude
+   cache, so the collapsed point stays invocable under OMP (verified live — `skill-concierge:doctor`
+   offered to an OMP session, 2026-08-25 smoke probe). `omp-plugin` fills only for OMP-ONLY
+   plugins. Diagnosing "why is omp-plugin empty?" without this note costs a full false-bug hunt.
