@@ -4,6 +4,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.28.1] — 2026-08-25
+
+### Fixed
+- **Enforcer short-prompt pre-gate was CJK-blind (found in post-0.28.0 live smoke).**
+  `MAX_SHORT_WORDS` counted `prompt.split()` — whitespace words — so any
+  Chinese/Japanese/Korean prompt, however long, collapsed to one "word" and hit the
+  ≤3-word trivia pre-gate: no mandate injection, no skill offer, only a bare turn row
+  in the ledger (live repro: a 12-char Chinese prompt logged `ev:turn` and nothing
+  else, twice). ADR-0010's "language-aware" floor fixed Vietnamese (space-segmented)
+  and missed unsegmented scripts. `_word_count()` now counts CJK chars as ~1 word
+  each (`max(len(split()), cjk_chars)`): a ≥4-char CJK prompt passes the gate;
+  English behavior is byte-identical (zero CJK chars → plain word count); the
+  operator-set threshold value is untouched. Selftest pins the contract
+  (CJK task prompt passes, mixed counts, short stays short, English unchanged).
+
 
 ## [0.28.0] — 2026-08-25
 

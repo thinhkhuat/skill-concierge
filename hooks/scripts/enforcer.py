@@ -360,6 +360,18 @@ def _invocable_twin(name: str) -> bool:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+def _word_count(prompt: str) -> int:
+    """MAX_SHORT_WORDS's counting unit, language-aware. ADR-0010 made the floor
+    "language-aware" for space-segmented scripts (Vietnamese) but whitespace
+    .split() counts an entire Chinese/Japanese/Korean sentence as ONE word —
+    every CJK task prompt, however long, hit the ≤3-word trivia pre-gate and
+    bypassed mandate+offer entirely (found live 2026-08-25: a 12-char Chinese
+    prompt logged a turn row and nothing else). CJK chars carry ~1 word each;
+    take the max of the two counts so English behavior is byte-identical
+    (zero CJK chars → plain len(split())) and a ≥4-char CJK prompt passes."""
+    return max(len(prompt.split()), len(_CJK_RE.findall(prompt)))
 _DESC_CHARS = 96
 
 # ── AUTHORIZED-SKIP tier (Phase 1) ────────────────────────────────────────
@@ -1105,7 +1117,7 @@ def main() -> int:
         # chose a route), or an ultra-short acknowledgement. These never embed.
         if not prompt or prompt.startswith("/"):
             return 0
-        if len(prompt.split()) <= MAX_SHORT_WORDS:
+        if _word_count(prompt) <= MAX_SHORT_WORDS:
             return 0
 
         # Explicit skill-refusal -> MANDATE-ONLY (never surface the skill the user
@@ -1251,6 +1263,17 @@ def _selftest() -> int:
     for t in must_not_fire:
         if _REFUSAL_RE.search(t):
             bad.append("FALSE-FIRE (should stay silent): " + repr(t))
+    # (1b) MAX_SHORT_WORDS counting is CJK-aware: a no-space script must not
+    # collapse to one "word" (the 2026-08-25 live miss), English unchanged.
+    if _word_count("帮我分析中医体质数据") <= MAX_SHORT_WORDS:
+        bad.append("word_count: CJK task prompt collapsed to <=3 words (pre-gate swallow)")
+    if _word_count("帮我 analyze 这个 bug today") != 5:
+        bad.append("word_count: mixed CJK+English count wrong")
+    if _word_count("ok 好") > MAX_SHORT_WORDS:
+        bad.append("word_count: genuinely-short mixed prompt must stay <=3")
+    for t in ("fix the typo", "run tests now", "one two three"):
+        if _word_count(t) != len(t.split()):
+            bad.append("word_count: pure-English count changed: " + repr(t))
     # (2) ranked-mandate %-share + disambiguation note
     multi = _ranked_mandate([("alpha", "desc alpha", 0.30), ("beta", "desc beta", 0.10)])
     if "(75%)" not in multi or "(25%)" not in multi:
@@ -1864,12 +1887,8 @@ def _selftest() -> int:
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
           f"{len(selfref_off)} off) "
-          "+ chain-overrides (override-wins / keep-off / suppress / fail-open) "
-          "+ retrieval-shape (ADR-0031 off / ADR-0032 annex on) + dynamic annex floor "
-          "(ADR-0036 fixed/competitive/clamped/fallback + end-to-end prune-and-keep) "
           "+ cross-harness annex "
-          "(ADR-0034 filter+annex on / union off) + external annex "
-          "(partition / floor / slots / render / kill-switch)")
+          "+ CJK word-count (pre-gate no longer swallows no-space scripts)")
     return 0
 
 
