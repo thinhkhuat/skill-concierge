@@ -24,6 +24,7 @@ def env_of(path, server="skill-search"):
 def main() -> int:
     claude, codex = env_of(".mcp.json"), env_of(".codex-plugin/mcp.json")
     cmd_env = env_of("adapters/commandcode/mcp.json") if (ROOT / "adapters/commandcode/mcp.json").exists() else None
+    omp_env = env_of("adapters/omp/mcp.json") if (ROOT / "adapters/omp/mcp.json").exists() else None
     bad = []
     for k, v in codex.items():
         if k not in claude:
@@ -39,13 +40,22 @@ def main() -> int:
                 continue
             elif claude[k] != v:
                 bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/commandcode/mcp.json)")
+    if omp_env is not None:
+        for k, v in omp_env.items():
+            if k not in claude:
+                bad.append(f"{k}: only in adapters/omp/mcp.json ('{v}')")
+            elif k == "SKILL_SERVER_RECORDS":
+                # omp, like commandcode, expands standard path rather than literal ${HOME}
+                continue
+            elif claude[k] != v:
+                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/omp/mcp.json)")
     if bad:
         print("mcp-env-parity FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     omitted = sorted(set(claude) - set(codex))
-    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, and Command Code"
+    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, Command Code, and OMP"
           + (f"; codex omits {omitted} (deliberate — see descriptor comment)" if omitted else ""))
     return 0
 

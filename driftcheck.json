@@ -61,7 +61,11 @@
     ".codex-plugin/mcp.json",
     "adapters/commandcode/skill-concierge.mod.ts",
     "adapters/commandcode/install.sh",
-    "adapters/commandcode/mcp.json"
+    "adapters/commandcode/mcp.json",
+    "adapters/omp/mcp.json",
+    "adapters/omp/skill-concierge.ext.ts",
+    "adapters/omp/install.sh",
+    "package.json"
   ],
   "command_checks": [
     {

@@ -530,3 +530,31 @@ Consequences:
 4. **`${CLAUDE_PLUGIN_ROOT}` literal in `.mcp.json` is unresolvable by cmd:** Command Code does not
    expand plugin root variables in `.mcp.json`. The `adapters/commandcode/install.sh` script writes
    absolute paths to `~/.commandcode/mcp.json` and local project overrides to avoid this failure class.
+
+## §22 — Quadruple-harness: OMP ignores Claude-format hooks.json; enforcement is an extension module (ADR-0039)
+
+Oh My Pi (OMP) accepts the Claude plugin *package* (skills surface, `.mcp.json` with native
+`${CLAUDE_PLUGIN_ROOT}` expansion, marketplace install) but **does not execute Claude-format
+`hooks/hooks.json` command hooks**. Between v0.26.2 and v0.27.0 the OMP-installed plugin therefore
+looked healthy (skills listed, MCP connected) while doctrine, per-turn enforcement, ledger capture,
+and SessionStart self-heal were all silently dead. OMP's hook surface is TS/JS factory modules
+(`pi.on(...)` events) loaded from `package.json` `omp.extensions` manifests — enforcement rides
+`adapters/omp/skill-concierge.ext.ts` (`before_agent_start` is the UserPromptSubmit equivalent).
+
+Landmines verified live 2026-08-25:
+
+1. **`OMPCODE=1` AND `CLAUDECODE=1` are both set under OMP.** `CLAUDECODE=1` alone is NOT proof of
+   Claude Code — harness detection must key on `OMPCODE` (or `SKILL_CONCIERGE_HARNESS=omp`).
+   `_running_harness()` checks OMPCODE before path markers for exactly this reason.
+2. **OMP's codex skill provider reads no plugin cache** (`pi-coding-agent src/discovery/codex.ts`
+   scans only `~/.codex/skills` + `<cwd>/.codex/skills`). `codex-plugin` skills are therefore
+   foreign under omp: `_foreign_scopes()` for omp is `("codex-plugin", "commandcode-personal")`.
+3. **OMP auto-imports every other harness's MCP declarations.** Never declare `skill-search` in
+   `~/.omp/agent/mcp.json` while the marketplace plugin is installed — two same-server entries
+   launch twice. The plugin's own `.mcp.json` is the single declaration; `adapters/omp/mcp.json`
+   is a manual fallback for plugin-less setups only.
+4. **Extensions snapshot at session start.** Config/marketplace changes require a session restart
+   (or `/reload-plugins` for skills/MCP; extension modules need the restart).
+5. **Extension `tool_call` handlers are fail-closed** (a throw blocks the tool) — all telemetry
+   observation lives in `tool_result`, fully try/caught. Same doctrine as the repo's hook rules,
+   but enforced by OMP's runtime rather than our discipline.

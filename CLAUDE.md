@@ -7,7 +7,7 @@ Claude-specific quick reference:
 
 - **Verify before "done":** run the `skill-concierge:doctor` skill (or `python3 scripts/doctor.py`); a green `status: OK` is the bar.
 - **Bootstrap / repair:** the `skill-concierge:setup` skill, or `./setup.sh` (idempotent).
-- **Versioning:** bump `.claude-plugin/plugin.json` **and** `.claude-plugin/marketplace.json` together, plus a `CHANGELOG.md` entry.
+- **Versioning:** bump `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.codex-plugin/plugin.json`, and root `package.json` together, plus a `CHANGELOG.md` entry.
 - **Don't commit tool state:** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/`, and `graphify-out/` are gitignored scratch, not source.
 - **Commits are gated on openwiki parity:** a `PreToolUse(Bash)` hook (`scripts/openwiki_parity_guard.py`, wired in `.claude/settings.json`) denies `git commit` when `openwiki/quickstart.md` names a different version than `.claude-plugin/plugin.json`, or when any relative link under `openwiki/` is broken. Fix with `/openwiki:wiki update`; verify with `python3 scripts/driftcheck.py driftcheck.json` (exit 0). Fails open on internal error; `OPENWIKI_GUARD=0` overrides. Full rule: [`AGENTS.md`](AGENTS.md) → *Guardrails*.
 - **Graph staleness is a NOTICE, not a gate:** a second `PreToolUse(Bash)` hook (`scripts/graph_staleness_notice.py`) warns on `git commit` when git-tracked files have moved ahead of `graphify-out/manifest.json`. It **never blocks** and never emits `permissionDecision` — `graphify-out/` is gitignored, so a stale graph harms only the local session, and doc refreshes cost LLM calls. Code drift self-heals via graphify's post-commit hook; docs need `/graphify . --update`. Override: `GRAPH_NOTICE=0`. Full rule: [`AGENTS.md`](AGENTS.md) → *Guardrails*.

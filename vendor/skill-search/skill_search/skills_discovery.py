@@ -51,11 +51,38 @@ CODEX_PLUGIN_GLOB = str(Path.home() / ".codex" / "plugins" / "cache" / "**" / "s
 COMMANDCODE_ROOTS = os.environ.get("SKILL_COMMANDCODE_ROOTS", "1") != "0"
 COMMANDCODE_PERSONAL_ROOT = Path.home() / ".commandcode" / "skills"
 COMMANDCODE_PROJECT_ROOT = Path.cwd() / ".commandcode" / "skills"
+# OMP (Oh My Pi) skill roots (quad-harness parity, ADR-0038): OMP sets BOTH OMPCODE
+# and CLAUDECODE in its environment, so CLAUDECODE alone is NOT proof the process is
+# Claude Code — OMP's identity marker is OMPCODE=1 and a ".omp/" install path. OMP
+# stores four skill roots, all distinct so a reindex in one harness prunes nothing
+# of another's:
+#   omp-personal : ~/.omp/agent/skills           (user native, all projects)
+#   omp-project  : <cwd>/.omp/skills             (project native, CWD-relative)
+#   omp-managed  : ~/.omp/agent/managed-skills   (auto-learned)
+#   omp-plugin   : ~/.omp/plugins/cache/plugins/**/skills/**  (installed plugins)
+# Same one-var revert as Codex/Command Code: SKILL_OMP_ROOTS=0 drops every OMP path
+# + scope (byte-identical to the pre-OMP engine; a reindex prunes the omp-* points).
+OMP_ROOTS = os.environ.get("SKILL_OMP_ROOTS", "1") != "0"
+OMP_PERSONAL_ROOT = Path.home() / ".omp" / "agent" / "skills"        # OMP personal (all projects)
+OMP_PROJECT_ROOT = Path.cwd() / ".omp" / "skills"                    # OMP project-scoped, CWD-relative
+OMP_MANAGED_ROOT = Path.home() / ".omp" / "agent" / "managed-skills" # OMP auto-learned
+# Installed marketplace plugins live under ~/.omp/plugins/cache/plugins/**
+# (<marketplace>___<plugin>___<version>/skills/...). Glob the CACHE, never
+# ~/.omp/plugins/node_modules — every entry there is a SYMLINK back into this same
+# cache (effort-gate -> cache/plugins/effort-gate___effort-gate___0.1.1), so
+# scanning node_modules would hand every skill back to us through a second path
+# and mint it twice. The realpath dedup in discover_skills() already collapses
+# the symlink twin, but skipping node_modules structurally keeps the glob honest
+# and avoids glob() traversing those links at all.
+OMP_PLUGIN_GLOB = str(Path.home() / ".omp" / "plugins" / "cache" / "plugins"
+                      / "**" / "skills" / "*" / "SKILL.md")
 
 SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else []
 ) + (
     [COMMANDCODE_PERSONAL_ROOT, COMMANDCODE_PROJECT_ROOT] if COMMANDCODE_ROOTS else []
+) + (
+    [OMP_PERSONAL_ROOT, OMP_PROJECT_ROOT, OMP_MANAGED_ROOT] if OMP_ROOTS else []
 )
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
@@ -198,6 +225,16 @@ def _namespaced_name(path: Path, base_name: str) -> str:
 
     Cache layout: .../plugins/cache/<marketplace>/<plugin>/<version>/skills/<skill>/SKILL.md
     Non-plugin skills (personal/project) are returned unchanged.
+
+    OMP (ADR-0038) adds one extra directory level: .../plugins/cache/plugins/
+    <marketplace>___<plugin>___<version>/skills/<skill>/SKILL.md, where the plugin
+    directory is the marketplace/plugin/version fused into ONE dirname. The plugin
+    id OMP itself uses is the `___`-middle component — it matches the node_modules/
+    symlink alias (verified: node_modules/memsearch -> memsearch-plugins___memsearch
+    ___0.4.18), and it is what the agent looks skills up as. Without this branch the
+    generic sub[si-2] heuristic reads the literal "plugins" segment and mines every
+    OMP skill as `plugins:<skill>` — a cross-plugin collision that would silently
+    drop all but the first plugin's same-named skills.
     """
     parts = path.parts
     try:
@@ -209,6 +246,18 @@ def _namespaced_name(path: Path, base_name: str) -> str:
         si = sub.index("skills")
         if si >= 3:                       # cache / <marketplace> / <plugin> / .../ skills
             plugin_id = sub[si - 2]
+            # OMP cache: the extra "plugins" level sits between "cache" and the fused
+            # <mkt>___<plugin>___<ver> dirname, shifting every index down one — so
+            # sub[1] == "plugins" and the real id is the middle `___` component of
+            # sub[2]. Detected by the OMP cache marker in the path, not by index
+            # arithmetic (si is 3 for OMP, 4 for claude/codex).
+            if plugin_id == "plugins" and \
+                    f"{os.sep}.omp{os.sep}plugins{os.sep}cache{os.sep}plugins{os.sep}" in str(path):
+                fused = sub[2]
+                # <mkt>___<plugin>___<version> -> plugin; missing separators leave
+                # the whole dirname as the id rather than inventing a sub-component.
+                mid = (fused + "___").split("___")[1] if "___" in fused else fused
+                plugin_id = mid
             # Defensive: never double-prefix a name that already carries the plugin id.
             # base_name is now the skill's directory name, which in practice never
             # contains a colon — this only fires on an oddly-named directory.
@@ -481,37 +530,42 @@ def _glob_both_depths(g: str) -> list[str]:
 
 
 def _plugin_paths() -> list[Path]:
-    """Cache SKILL.md paths from BOTH harnesses' plugin caches (ADR-0033).
+    """Cache SKILL.md paths from the harness plugin caches (ADR-0033/0038).
 
     Claude hits are narrowed to installed+enabled via installed_plugins.json.
-    Codex hits are unfiltered: Codex tracks enablement in config.toml (TOML,
-    not stdlib-parseable on the 3.10 floor), and a few stale entries beat a
-    blind spot over Codex's entire skill universe — the same trade the
-    unreadable-manifest fallback already makes for Claude.
+    Codex and OMP hits are unfiltered: Codex tracks enablement in config.toml
+    (TOML, not stdlib-parseable on the 3.10 floor), and OMP ships no manifest
+    seam either — a few stale entries beat a blind spot over an entire harness's
+    skill universe, the same trade the unreadable-manifest fallback already
+    makes for Claude. OMP's cache/plugins/ holds only INSTALLED plugins by
+    construction (node_modules/ is a symlink farm back into it), so the stale
+    risk there is limited to retained old versions.
 
-    Both caches are globbed at two depths (see _nested_glob) so category-grouped
-    plugins are not silently invisible.
+    Every cache is globbed at two depths (see _nested_glob) so category-grouped
+    plugins are not silently invisible across harnesses.
     """
     hits = _glob_both_depths(PLUGIN_GLOB)
     codex_hits = _glob_both_depths(CODEX_PLUGIN_GLOB) if CODEX_ROOTS else []
+    omp_hits = _glob_both_depths(OMP_PLUGIN_GLOB) if OMP_ROOTS else []
     if not SKILL_PLUGIN_FILTER:
-        return [Path(p) for p in hits + codex_hits]
+        return [Path(p) for p in hits + codex_hits + omp_hits]
 
     roots = _installed_plugin_roots()
     if roots is None:
         log.warning("plugin manifests unreadable — indexing the whole cache "
                     "(stale versions and disabled plugins included)")
-        return [Path(p) for p in hits + codex_hits]
+        return [Path(p) for p in hits + codex_hits + omp_hits]
 
     kept = [p for p in hits if any(p.startswith(r + os.sep) for r in roots)]
     kept += codex_hits
+    kept += omp_hits
     if not kept:
         log.warning("installed/enabled filter matched no cache skills — "
                     "falling back to the unfiltered cache")
-        return [Path(p) for p in hits + codex_hits]
-    if len(kept) < len(hits) + len(codex_hits):
-        log.info("plugin cache: kept %d of %d SKILL.md (Claude installed+enabled; all Codex)",
-                 len(kept), len(hits) + len(codex_hits))
+        return [Path(p) for p in hits + codex_hits + omp_hits]
+    if len(kept) < len(hits) + len(codex_hits) + len(omp_hits):
+        log.info("plugin cache: kept %d of %d SKILL.md (Claude installed+enabled; all Codex/OMP)",
+                 len(kept), len(hits) + len(codex_hits) + len(omp_hits))
     return [Path(p) for p in kept]
 
 
@@ -531,9 +585,10 @@ def _scope_for(path: Path) -> str:
     Claude Code runs one MCP server per session, each with its own CWD, and they
     all share one Qdrant collection. Points must record who owns them so a
     reindex in session A cannot prune session B's project skills (they simply
-    look "deleted from disk" from A's vantage point). Codex and Command Code paths
-    get DISTINCT scope names (ADR-0033, ADR-0038) so all harnesses' skills stay
-    identifiable while any session on the machine can prune skills genuinely gone from disk.
+    look "deleted from disk" from A's vantage point). Codex, Command Code and
+    OMP paths get DISTINCT scope names (ADR-0033, ADR-0038) so all harnesses'
+    skills stay identifiable while any session on the machine can prune skills
+    genuinely gone from disk.
     """
     p = str(path)
     if p.startswith(str(PERSONAL_ROOT) + os.sep):
@@ -542,14 +597,24 @@ def _scope_for(path: Path) -> str:
         return "codex-personal"
     if p.startswith(str(COMMANDCODE_PERSONAL_ROOT) + os.sep):
         return "commandcode-personal"
+    if p.startswith(str(OMP_PERSONAL_ROOT) + os.sep):
+        return "omp-personal"
+    if p.startswith(str(OMP_MANAGED_ROOT) + os.sep):
+        return "omp-managed"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:
             return "codex-plugin"
+        # OMP's plugin cache lives under ~/.omp/plugins/cache/plugins/**; the
+        # ".omp" path segment distinguishes it from Claude's own cache.
+        if f"{os.sep}.omp{os.sep}" in p:
+            return "omp-plugin"
         return "plugin"
     if p.startswith(str(CODEX_PROJECT_ROOT) + os.sep):
         return f"codex-project:{CODEX_PROJECT_ROOT}"
     if p.startswith(str(COMMANDCODE_PROJECT_ROOT) + os.sep):
         return f"commandcode-project:{COMMANDCODE_PROJECT_ROOT}"
+    if p.startswith(str(OMP_PROJECT_ROOT) + os.sep):
+        return f"omp-project:{OMP_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -565,6 +630,8 @@ def visible_scopes() -> set[str]:
         scopes |= {"codex-personal", "codex-plugin", f"codex-project:{CODEX_PROJECT_ROOT}"}
     if COMMANDCODE_ROOTS:
         scopes |= {"commandcode-personal", f"commandcode-project:{COMMANDCODE_PROJECT_ROOT}"}
+    if OMP_ROOTS:
+        scopes |= {"omp-personal", "omp-managed", "omp-plugin", f"omp-project:{OMP_PROJECT_ROOT}"}
     return scopes | {f"catalog:{a}" for a in catalog_roots()}
 
 

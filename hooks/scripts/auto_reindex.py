@@ -61,10 +61,15 @@ def _mcp_env():
     # so this is defensive: if it ever were pinned to 0, a detached reindex missing it would
     # rebuild at the engine default (ON) and re-add every codex-* point the query server was
     # configured to drop — and pinned to 1 against an engine default of 0, it would prune them
-    # all. INVARIANT: every engine-side flag readable from .mcp.json belongs in this tuple.
+    # all. SKILL_OMP_ROOTS (ADR-0038) is the exact same defensive class: the engine defaults
+    # it ON, so a detached reindex that never forwards a pinned-to-0 value would silently re-add
+    # every omp-* point the query server dropped — the identical prune-war gap this tuple closes
+    # for the other harnesses. INVARIANT: every engine-side flag readable from .mcp.json belongs
+    # in this tuple.
     for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
               "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS",
-              "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS"):
+              "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS",
+              "SKILL_OMP_ROOTS"):
         if k in env and k not in os.environ:
             merged[k] = env[k]
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")

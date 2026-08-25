@@ -38,13 +38,20 @@ from skill_search import skills_discovery
 
 
 @pytest.fixture(autouse=True)
-def _isolate_codex_roots(tmp_path, monkeypatch):
-    # ADR-0033 dual-harness: discovery also walks ~/.codex/**. Tests that patch
-    # SKILL_DIRS/PLUGIN_GLOB but not the Codex globals would otherwise pull the
-    # machine's REAL ~/.codex/plugins/cache/** skills into their fixtures
-    # (312 observed on the dev machine). Pin every Codex seam to a temp path so
-    # each test opts INTO Codex coverage explicitly.
+def _isolate_harness_roots(tmp_path, monkeypatch):
+    # ADR-0033/0038 multi-harness: discovery also walks ~/.codex/** and ~/.omp/**.
+    # Tests that patch SKILL_DIRS/PLUGIN_GLOB but not the Codex/OMP globals would
+    # otherwise pull the machine's REAL ~/.codex/plugins/cache/** and
+    # ~/.omp/agent/managed-skills/ + ~/.omp/plugins/cache/plugins/** skills into
+    # their fixtures (312 codex skills observed on the dev machine, plus the OMP
+    # managed-skills auto-learn corpus). Pin every harness seam to a temp path so
+    # each test opts INTO harness coverage explicitly.
     monkeypatch.setattr(skills_discovery, "CODEX_PERSONAL_ROOT", tmp_path / "codex-personal")
     monkeypatch.setattr(skills_discovery, "CODEX_PROJECT_ROOT", tmp_path / "codex-project")
     monkeypatch.setattr(skills_discovery, "CODEX_PLUGIN_GLOB",
                         str(tmp_path / "codex-cache" / "none" / "**" / "SKILL.md"))
+    monkeypatch.setattr(skills_discovery, "OMP_PERSONAL_ROOT", tmp_path / "omp-personal")
+    monkeypatch.setattr(skills_discovery, "OMP_PROJECT_ROOT", tmp_path / "omp-project")
+    monkeypatch.setattr(skills_discovery, "OMP_MANAGED_ROOT", tmp_path / "omp-managed")
+    monkeypatch.setattr(skills_discovery, "OMP_PLUGIN_GLOB",
+                        str(tmp_path / "omp-cache" / "none" / "**" / "SKILL.md"))

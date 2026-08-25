@@ -336,6 +336,111 @@ def test_codex_plugin_cache_is_globbed_at_both_depths(tmp_path, monkeypatch):
     assert {s["scope"] for s in found} == {"codex-plugin"}
 
 
+# --- OMP (Oh My Pi) harness roots (ADR-0038) -------------------------------
+# OMP sets BOTH OMPCODE and CLAUDECODE in its env, so CLAUDECODE alone is not
+# proof of Claude Code — OMP's marker is OMPCODE + a ".omp/" install path. Its
+# four roots get distinct scopes (omp-personal/omp-project/omp-managed/omp-plugin)
+# so a reindex in any harness prunes only its own points from the shared collection.
+
+def test_omp_all_four_scopes_tagged(tmp_path, monkeypatch):
+    """personal, project, managed and plugin roots each land in their OWN omp scope."""
+    monkeypatch.setattr(sd, "SKILL_DIRS", [
+        tmp_path / "omp-personal",
+        tmp_path / "omp-project",
+        tmp_path / "omp-managed",
+        tmp_path / "empty",
+    ])
+    monkeypatch.setattr(sd, "OMP_PERSONAL_ROOT", tmp_path / "omp-personal")
+    monkeypatch.setattr(sd, "OMP_PROJECT_ROOT", tmp_path / "omp-project")
+    monkeypatch.setattr(sd, "OMP_MANAGED_ROOT", tmp_path / "omp-managed")
+    make_skill(tmp_path / "omp-personal", "p_personal")
+    make_skill(tmp_path / "omp-project", "p_project")
+    make_skill(tmp_path / "omp-managed", "p_managed")
+    # plugin root: dir literally named .omp — _scope_for keys the omp-plugin scope
+    # off that path segment, not off the (patchable) OMP_PLUGIN_GLOB constant.
+    omp_plugin = tmp_path / ".omp" / "plugins" / "cache" / "plugins" / "mkt___plug___1.0.0" / "skills"
+    (omp_plugin / "plugin-skill").mkdir(parents=True)
+    (omp_plugin / "plugin-skill" / "SKILL.md").write_text("---\nname: plugin-skill\ndescription: d\n---\nb")
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    monkeypatch.setattr(sd, "OMP_PLUGIN_GLOB",
+                        str(tmp_path / ".omp" / "plugins" / "cache" / "plugins"
+                            / "**" / "skills" / "*" / "SKILL.md"))
+    found = {s["name"]: s["scope"] for s in sd.discover_skills()}
+    assert found["p_personal"] == "omp-personal"
+    assert found["p_project"] == f"omp-project:{tmp_path / 'omp-project'}"
+    assert found["p_managed"] == "omp-managed"
+    # OMP plugin skills are namespaced with the `___`-middle plugin id (mkt___plug___ver -> plug)
+    assert found["plug:plugin-skill"] == "omp-plugin"
+
+
+def test_omp_plugin_cache_globbed_at_both_depths(tmp_path, monkeypatch):
+    """ADR-0038 parity: the OMP cache gets the same two-depth treatment as the
+    claude/codex caches, so category-grouped OMP plugin skills are not invisible."""
+    omp_plugin = tmp_path / ".omp" / "plugins" / "cache" / "plugins" / "mkt___plug___2.0.0" / "skills"
+    (omp_plugin / "group" / "deep").mkdir(parents=True)
+    (omp_plugin / "group" / "deep" / "SKILL.md").write_text("---\nname: deep\ndescription: d\n---\nb")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    monkeypatch.setattr(sd, "OMP_PLUGIN_GLOB",
+                        str(tmp_path / ".omp" / "plugins" / "cache" / "plugins"
+                            / "**" / "skills" / "*" / "SKILL.md"))
+    found = sd.discover_skills()
+    assert {s["name"] for s in found} == {"plug:deep"}
+    assert {s["scope"] for s in found} == {"omp-plugin"}
+
+
+def test_omp_plugin_node_modules_not_scanned(tmp_path, monkeypatch):
+    """~/.omp/plugins/node_modules/* are SYMLINKS back into the same cache —
+    scanning them would mint every plugin skill a second time through a second path.
+    The OMP glob is scoped to cache/plugins/**, so node_modules is structurally
+    excluded, and a node_modules SKILL.md the glob would otherwise reach is never indexed."""
+    omp_plugin = tmp_path / ".omp" / "plugins" / "cache" / "plugins" / "mkt___plug___1.0.0" / "skills"
+    (omp_plugin / "real").mkdir(parents=True)
+    (omp_plugin / "real" / "SKILL.md").write_text("---\nname: real\ndescription: d\n---\nb")
+    # symlink farm, mirroring OMP's node_modules -> cache layout
+    node_modules = tmp_path / ".omp" / "plugins" / "node_modules"
+    node_modules.mkdir(parents=True)
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    monkeypatch.setattr(sd, "OMP_PLUGIN_GLOB",
+                        str(tmp_path / ".omp" / "plugins" / "cache" / "plugins"
+                            / "**" / "skills" / "*" / "SKILL.md"))
+    assert str(tmp_path / ".omp" / "plugins" / "cache" / "plugins") in sd.OMP_PLUGIN_GLOB
+    assert "/node_modules/" not in sd.OMP_PLUGIN_GLOB
+    found = {s["name"] for s in sd.discover_skills()}
+    assert found == {"plug:real"}                   # exactly once, via the cache path only
+
+
+def test_omp_roots_flag_off_discovers_nothing(tmp_path, monkeypatch):
+    """SKILL_OMP_ROOTS=0 reverts byte-identically: every OMP root + scope drops out.
+    The engine reads the flag at MODULE IMPORT time and rebuilds SKILL_DIRS without
+    the OMP dirs — so the honest simulation is OMP_ROOTS=False plus a SKILL_DIRS
+    that omits them (the same monkeypatch shape the rest of the suite uses for
+    flag-class behaviour). _plugin_paths() also skips the OMP glob when the flag is
+    off, so an on-disk OMP plugin cache yields nothing."""
+    monkeypatch.setattr(sd, "OMP_ROOTS", False)
+    # OMP roots exist on disk with skills, but the flag-off engine never lists them
+    make_skill(tmp_path / "omp-personal", "p_personal")
+    make_skill(tmp_path / "omp-project", "p_project")
+    make_skill(tmp_path / "omp-managed", "p_managed")
+    monkeypatch.setattr(sd, "OMP_PERSONAL_ROOT", tmp_path / "omp-personal")
+    monkeypatch.setattr(sd, "OMP_PROJECT_ROOT", tmp_path / "omp-project")
+    monkeypatch.setattr(sd, "OMP_MANAGED_ROOT", tmp_path / "omp-managed")
+    # SKILL_DIRS as the import-time computation yields when the flag is off:
+    monkeypatch.setattr(sd, "SKILL_DIRS", [tmp_path / "empty"])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    assert sd.discover_skill_paths() == []
+    assert not any(s.startswith("omp-") for s in sd.visible_scopes())
+    # and a real OMP plugin cache is skipped by _plugin_paths() when the flag is off
+    omp_plugin = tmp_path / ".omp" / "plugins" / "cache" / "plugins" / "mkt___plug___1.0.0" / "skills"
+    (omp_plugin / "plugin-skill").mkdir(parents=True)
+    (omp_plugin / "plugin-skill" / "SKILL.md").write_text("---\nname: plugin-skill\ndescription: d\n---\nb")
+    monkeypatch.setattr(sd, "OMP_PLUGIN_GLOB",
+                        str(tmp_path / ".omp" / "plugins" / "cache" / "plugins"
+                            / "**" / "skills" / "*" / "SKILL.md"))
+    assert sd.discover_skill_paths() == []          # OMP_PLUGIN_GLOB skipped when flag off
+
+
 # --- installed + enabled plugin scoping ----------------------------------
 # The cache keeps EVERY historical version of every plugin, installed or not.
 # Globbing it wholesale indexed skills from ancient versions and from plugins the

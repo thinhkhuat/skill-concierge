@@ -45,6 +45,18 @@ VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-
 QNAME = os.environ.get("SKILL_QDRANT_CONTAINER", "skill-search-qdrant")
 SETTINGS = Path(os.environ.get("SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude/settings.json"))
 LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-concierge/logs"))
+# OMP (Oh My Pi) harness surface (ADR-0040) — the 4th first-class harness after
+# Claude Code / Codex / Command Code. OMP installs the plugin through its OWN
+# marketplace system (recorded in installed_plugins.json, catalog cloned under
+# cache/marketplaces/, content pinned under cache/plugins/<name>___<name>___<ver>/),
+# so the plugin's version inside OMP can silently lag the .claude-plugin/plugin.json
+# SSOT — exactly the 0.26.2-cache vs 0.27.0-SSOT gap live today. These are read-only
+# facts about a DIFFERENT product's state; deliberately no env seams (the doctor's
+# seams mirror setup.sh, which has no OMP counterpart).
+OMP_DIR = Path.home() / ".omp"
+OMP_PLUGINS_FILE = OMP_DIR / "plugins" / "installed_plugins.json"
+OMP_MARKETPLACE = OMP_DIR / "plugins" / "cache" / "marketplaces" / "skill-concierge"
+OMP_PLUGIN_CACHE = OMP_DIR / "plugins" / "cache" / "plugins"
 # Same seam as flywheel.py/llm_triggers.py: the engine reads triggers from SKILL_TRIGGERS. The
 # env-less default is durable-home-first with the legacy repo-local path as fallback (the
 # 0.25.1 thresholds pattern): the live .mcp.json pins the durable home, so a doctor run from a
@@ -1151,11 +1163,105 @@ def check_catalogs():
     return {"id": "catalogs", "label": "External catalogs", "status": OK, "detail": detail, "fix": None}
 
 
+def _descriptor_version(path):
+    """The version a plugin descriptor declares, or None when unreadable/absent."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))["version"]
+    except JSON_READ_ERRORS:
+        return None
+
+
+def _omp_installed_version():
+    """(version, enabled) of skill-concierge@skill-concierge in OMP's install record,
+    or (None, None) when OMP has no record for it. The record keys plugins by
+    '<name>@<marketplace>' and stores a LIST (one entry per install scope), so both
+    list and bare-dict shapes are tolerated."""
+    try:
+        rec = json.loads(OMP_PLUGINS_FILE.read_text(encoding="utf-8"))
+        entry = rec["plugins"]["skill-concierge@skill-concierge"]
+    except JSON_READ_ERRORS:
+        return None, None
+    if not entry:
+        return None, None
+    head = entry[0] if isinstance(entry, list) else entry
+    if not isinstance(head, dict):
+        return None, None
+    return head.get("version"), head.get("enabled")
+
+
+def _omp_marketplace_version():
+    """Version the OMP marketplace catalog clone advertises — what the next plugin
+    update would fetch. None when the clone is missing/unreadable (updates blind)."""
+    try:
+        d = json.loads((OMP_MARKETPLACE / ".claude-plugin" / "marketplace.json")
+                       .read_text(encoding="utf-8"))
+        return d["plugins"][0].get("version")
+    except JSON_READ_ERRORS:
+        return None
+
+
+def check_omp():
+    """OMP marketplace install state — the 4th first-class harness (ADR-0040).
+
+    OMP installs skill-concierge through its own marketplace plugin system, entirely
+    outside the Claude/Codex/Command Code surfaces every other check covers: the
+    install record lives in ~/.omp/plugins/installed_plugins.json, the catalog clone
+    under cache/marketplaces/skill-concierge/, and the version-pinned plugin content
+    under cache/plugins/skill-concierge___skill-concierge___<ver>/. None of it is
+    required for the plugin to work in the other three harnesses, so every absence or
+    drift here is WARN — never FAIL — and an OMP-less machine is one 'omp: not
+    installed' warn row, not a failed run (exit status unchanged).
+
+    Three signals, weakest to strongest:
+      1. install record — the version OMP believes it installed vs the plugin.json SSOT
+         (live today: 0.26.2 in the OMP cache vs 0.27.0 SSOT — a silent lag until the
+         next /plugin marketplace update).
+      2. marketplace clone — the version the catalog advertises; stale means the clone
+         was not refreshed since the SSOT bump.
+      3. cache surface — the version-pinned plugin dir plus adapters/omp/skill-concierge.ext.ts,
+         the OMP extension surface added in 0.28.0; a pre-0.28.0 cache cannot have it.
+    """
+    if not OMP_DIR.exists():
+        return {"id": "omp", "label": "OMP integration", "status": WARN,
+                "detail": "omp: not installed (no ~/.omp) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+    ver, enabled = _omp_installed_version()
+    if ver is None:
+        findings.append("skill-concierge has no OMP install record (installed_plugins.json)")
+    else:
+        if enabled is False:
+            findings.append(f"OMP plugin v{ver} installed but DISABLED")
+        if ssot and ver != ssot:
+            findings.append(f"OMP cache v{ver} != SSOT v{ssot} — run /plugin marketplace update")
+    mkt = _omp_marketplace_version()
+    if mkt is None:
+        findings.append("no OMP marketplace catalog clone (updates would be blind)")
+    elif ssot and mkt != ssot:
+        findings.append(f"marketplace catalog stale (v{mkt} vs SSOT v{ssot})")
+    if ver:
+        pinned = OMP_PLUGIN_CACHE / f"skill-concierge___skill-concierge___{ver}"
+        if not pinned.is_dir():
+            findings.append(f"install record points at {pinned} but the cache dir is missing")
+        elif not (pinned / "adapters" / "omp" / "skill-concierge.ext.ts").exists():
+            findings.append(f"OMP cache v{ver} predates the 0.28.0 OMP adapter — no "
+                            "adapters/omp/skill-concierge.ext.ts; update the plugin")
+    if findings:
+        return {"id": "omp", "label": "OMP integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "omp", "label": "OMP integration", "status": OK,
+            "detail": f"OMP plugin v{ver} matches SSOT v{ssot}; marketplace + extension surface in sync",
+            "fix": None}
+
+
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_catalogs, check_ledger, check_dup_mcp, check_mcp_enabled]
+          check_catalogs, check_omp, check_ledger, check_dup_mcp, check_mcp_enabled]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -1503,6 +1609,64 @@ def _selftest():
         _prune_server_records(recs)
         assert mine.exists(), "pruned a record whose process is still alive"
         assert not dead.exists(), "kept a record for a dead pid"
+    # --- OMP harness check (ADR-0040): fixture-driven, never touches the real ~/.omp ---
+    # Four outcomes, all fail-open: absent OMP -> WARN "not installed" (optional harness,
+    # exit unchanged); in-sync -> OK; install-record version lag vs SSOT -> WARN;
+    # pre-0.28.0 cache without the OMP extension surface -> WARN with upgrade hint.
+    _saved_omp = {k: _g[k] for k in ("OMP_DIR", "OMP_PLUGINS_FILE", "OMP_MARKETPLACE",
+                                     "OMP_PLUGIN_CACHE")}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            _g["OMP_DIR"] = base / ".omp"
+            _g["OMP_PLUGINS_FILE"] = _g["OMP_DIR"] / "plugins" / "installed_plugins.json"
+            _g["OMP_MARKETPLACE"] = _g["OMP_DIR"] / "plugins" / "cache" / "marketplaces" / "skill-concierge"
+            _g["OMP_PLUGIN_CACHE"] = _g["OMP_DIR"] / "plugins" / "cache" / "plugins"
+            # OMP absent entirely -> WARN "omp: not installed", never FAIL.
+            row = check_omp()
+            assert row["status"] == WARN and "not installed" in row["detail"], row
+            # Fully in sync (SSOT 0.27.0 == install record == marketplace == cache, ext present) -> OK.
+            ssot = ROOT / ".claude-plugin" / "plugin.json"
+            ssot_ver = json.loads(ssot.read_text(encoding="utf-8"))["version"]
+            _g["OMP_PLUGINS_FILE"].parent.mkdir(parents=True)
+            _g["OMP_PLUGINS_FILE"].write_text(json.dumps({
+                "version": 2, "plugins": {
+                    "skill-concierge@skill-concierge": [
+                        {"scope": "user", "version": ssot_ver, "enabled": True}]}}))
+            mkt_dir = _g["OMP_MARKETPLACE"] / ".claude-plugin"
+            mkt_dir.mkdir(parents=True)
+            (mkt_dir / "marketplace.json").write_text(json.dumps(
+                {"plugins": [{"name": "skill-concierge", "version": ssot_ver}]}))
+            pinned = _g["OMP_PLUGIN_CACHE"] / f"skill-concierge___skill-concierge___{ssot_ver}"
+            (pinned / "adapters" / "omp").mkdir(parents=True)
+            (pinned / "adapters" / "omp" / "skill-concierge.ext.ts").write_text("")
+            row = check_omp()
+            assert row["status"] == OK, row
+            # Version lag: install record says 0.26.2 against SSOT 0.27.0 -> WARN naming both.
+            _g["OMP_PLUGINS_FILE"].write_text(json.dumps({
+                "version": 2, "plugins": {
+                    "skill-concierge@skill-concierge": [
+                        {"scope": "user", "version": "0.26.2", "enabled": True}]}}))
+            row = check_omp()
+            assert row["status"] == WARN and "0.26.2" in row["detail"] and ssot_ver in row["detail"], row
+            # Pre-0.28.0 cache: record matches SSOT but the cache lacks the ext surface -> WARN.
+            _g["OMP_PLUGINS_FILE"].write_text(json.dumps({
+                "version": 2, "plugins": {
+                    "skill-concierge@skill-concierge": [
+                        {"scope": "user", "version": ssot_ver, "enabled": True}]}}))
+            (pinned / "adapters" / "omp" / "skill-concierge.ext.ts").unlink()
+            row = check_omp()
+            assert row["status"] == WARN and "0.28.0" in row["detail"], row
+            # Disabled install is surfaced, not silently green.
+            _g["OMP_PLUGINS_FILE"].write_text(json.dumps({
+                "version": 2, "plugins": {
+                    "skill-concierge@skill-concierge": [
+                        {"scope": "user", "version": ssot_ver, "enabled": False}]}}))
+            row = check_omp()
+            assert row["status"] == WARN and "DISABLED" in row["detail"], row
+    finally:
+        _g.update(_saved_omp)
+    assert any(getattr(fn, "__name__", "") == "check_omp" for fn in CHECKS)
     print("selftest ok")
     return 0
 

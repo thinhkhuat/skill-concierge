@@ -4,8 +4,8 @@
     "name": "thinhkhuat"
   },
   "metadata": {
-    "description": "Skill-governance layer for Claude Code, Codex, and Command Code — semantic retrieval + use-enforcement + invocation ledger.",
-    "version": "0.27.0"
+    "description": "Skill-governance layer for Claude Code, Codex, Command Code, and Oh My Pi — semantic retrieval + use-enforcement + invocation ledger.",
+    "version": "0.28.0"
   },
   "plugins": [
     {
@@ -20,7 +20,7 @@
         "hooks",
         "telemetry"
       ],
-      "version": "0.27.0"
+      "version": "0.28.0"
     }
   ]
 }

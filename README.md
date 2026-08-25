@@ -1,11 +1,11 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.27.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.28.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
 
-A **skill-governance layer** over Claude Code, Codex, and Command Code default skill mechanisms. Where the
+A **skill-governance layer** over Claude Code, Codex, Command Code, and Oh My Pi (OMP) default skill mechanisms. Where the
 default dumps every skill description into context every turn and hopes the model picks
 one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + measure**.
 
@@ -30,7 +30,7 @@ one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + m
 
 ## Why this exists
 
-Claude Code and Codex's default skill discovery injects **every** installed skill's description into
+The default skill discovery in Claude Code, Codex, Command Code, and OMP injects **every** installed skill's description into
 the context window on **every** turn, then trusts the model to notice the right one. As a
 catalogue grows past a few dozen skills, that approach burns context and quietly degrades:
 the model skims, misses the fitting skill, or "wings it" instead of invoking one at all.
@@ -68,7 +68,7 @@ skill-concierge addresses three distinct failure modes the default conflates:
 
 | Requirement | Version / notes |
 |-------------|-----------------|
-| [Claude Code](https://docs.claude.com/en/docs/claude-code) or [Codex](https://codex.openai.com) | host for the plugin, hooks, and MCP server |
+| [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://codex.openai.com), [Command Code](https://github.com/sst/command-code), or [Oh My Pi](https://ohmy.pi) | host for the plugin, hooks, and MCP server |
 | Python | 3.10–3.12 (set `SKILL_PYTHON` to pin a specific interpreter) |
 | Docker / [OrbStack](https://orbstack.dev/) | runs the Qdrant vector store (server tier) |
 
@@ -272,8 +272,11 @@ separate query supplies it — externals never take an installed slot). An exter
 
 ```
 skill-concierge/
-├── .claude-plugin/{plugin,marketplace}.json   # Claude Code manifests (bump ALL THREE versions together)
+├── .claude-plugin/{plugin,marketplace}.json   # Claude Code manifests (bump ALL FOUR versions together)
 ├── .codex-plugin/plugin.json                  # Codex manifest (dual-harness, ADR-0033; no hooks field — hooks auto-discovered)
+├── package.json                               # root manifest: {"omp":{"extensions":["adapters/omp/skill-concierge.ext.ts"]}} — loads the OMP extension module
+├── adapters/commandcode/                      # Command Code adapter: mod adapter + install.sh + mcp.json (ADR-0038)
+├── adapters/omp/                              # Oh My Pi adapter: skill-concierge.ext.ts + install.sh + mcp.json (ADR-0039)
 ├── .mcp.json                                  # registers the MCP via bin/skill-search-mcp launcher
 ├── bin/skill-search-mcp                       # launcher → stable venv (survives cache wipes; ADR-0004)
 ├── setup.sh                                    # bootstrap: venv + Qdrant + reindex + apply-overrides
@@ -301,6 +304,25 @@ The engine source is vendored for portability; its Python deps, the Qdrant servi
 embedding model, the index, and the `settings.json` overrides are **reproduced by `setup.sh`**,
 not embedded.
 
+### Harness matrix
+
+skill-concierge is a first-class citizen in all four harnesses. Enforcement rides whatever
+each harness's extension mechanism supports (settings hooks for Claude Code, a mod adapter for
+Command Code, a TS extension module for OMP — Codex auto-discovers hooks, no `hooks` field);
+discovery always indexes **all** harnesses' roots into one shared Qdrant collection under
+distinct per-harness scopes (fail-open — a harness you don't run is simply absent from disk);
+and the MCP server is wired per-harness from the shared descriptor, never duplicated.
+
+| Harness | Discovery roots (scopes) | Enforcement vehicle | MCP wiring |
+|---------|--------------------------|---------------------|------------|
+| Claude Code | `~/.claude/skills`, `$CWD/.claude/skills`, `~/.claude/plugins/cache/**` (`personal`/`project`/`plugin`) | `UserPromptSubmit` settings hook → `enforcer.py` + SessionStart doctrine | shared `.mcp.json` |
+| Codex | `~/.codex/skills`, `$CWD/.codex/skills`, `~/.codex/plugins/cache/**` (`codex-*`) | auto-discovered settings hooks (no `hooks` field; ADR-0033) | `.codex-plugin/mcp.json` (relative command; ADR-0035) |
+| Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformInput` (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038) | `adapters/commandcode/mcp.json` (absolute paths; ADR-0038) |
+| Oh My Pi (OMP) | `~/.omp/agent/skills`, `$CWD/.omp/skills`, `~/.omp/agent/managed-skills`, `~/.omp/plugins/cache/plugins/**` (`omp-*`) | extension module `before_agent_start` (`adapters/omp/skill-concierge.ext.ts` via `package.json` `omp.extensions`; ADR-0039) | plugin `.mcp.json` imported natively (`${CLAUDE_PLUGIN_ROOT}` expanded by OMP); `adapters/omp/mcp.json` manual fallback only |
+
+`SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` (all default ON) are one-var
+reverts that drop that harness's roots + scopes byte-identically (see AGENTS.md → Runtime flags).
+
 ### How a request flows
 
 1. **SessionStart** — `hooks/scripts/doctrine.py` injects the full SKILL-FIRST standing order once.
@@ -318,6 +340,8 @@ not embedded.
    ledger, which measures gate compliance only.)
 
 ## Status & roadmap
+
+`0.28.0` — **published, ADR-0039 OMP quadruple-harness parity: Oh My Pi (`omp`) added as fourth first-class citizen alongside Claude Code, Codex, and Command Code. OMP ignores Claude-format hooks, so enforcement rides a TS extension module (`adapters/omp/skill-concierge.ext.ts`, loaded via root `package.json` `omp.extensions`) — `before_agent_start` (the UserPromptSubmit equivalent) feeds the prompt to `enforcer.py` and returns an injectable persisted `customType: "skill-concierge"` message; `session_start` dispatches detached `auto_reindex`/`auto_overrides`/`auto_flywheel`/`auto_promote`; `tool_result` forwards `read` + `skill://` activation and skill-search tool calls to `ledger.py`. Fail-open everywhere. Discovery mirror indexes OMP's four roots — `~/.omp/agent/skills` (`omp-personal`), `<cwd>/.omp/skills` (`omp-project:<abspath>`), `~/.omp/agent/managed-skills` (`omp-managed`), `~/.omp/plugins/cache/plugins/**` (`omp-plugin`, node_modules symlink farm excluded) — under distinct `omp-*` scopes; `SKILL_OMP_ROOTS=0` + a reindex reverts byte-identically. Harness identity: `_running_harness()` resolves `omp` via `SKILL_CONCIERGE_HARNESS=omp/oh-my-pi` → `OMPCODE=1` (OMP sets both `OMPCODE` and `CLAUDE-CODE`, so CLAUDECODE alone is never claude proof) → `.omp/` path marker; new `UNDER_OMP` constant. `_invocable_plugin_ids()` under `omp` unions `~/.omp/plugins/installed_plugins.json`; `_invocable_twin()` active under claude OR omp; foreign scopes `codex-plugin` + `commandcode-personal` annexed under the `commandcode` label. `adapters/omp/install.sh` uses the plugin marketplace when installed, the dev path appends to `~/.omp/agent/config.yml` extensions, and never writes `~/.omp/agent/mcp.json` — OMP expands the plugin `.mcp.json`'s `${CLAUDE_PLUGIN_ROOT}` natively (no ADR-0035 duplicate-server hazard). **
 
 `0.27.0` — **published, ADR-0038 Command Code triple-harness parity: Command Code (`cmd`, v1.32.1) added as third first-class citizen alongside Claude Code and Codex. Full governance loop parity: mod adapter (`adapters/commandcode/skill-concierge.mod.ts`) implements `transformInput` for in-generation semantic enforcement on every typed user prompt, and observes `skill_loaded`/`tool_completed` events for automatic ledger capture of skill and search invocations; discovery mirror indexes `~/.commandcode/skills` and `.commandcode/skills` under `commandcode-*` scopes; three-way harness detection isolates foreign scopes into the marked annex without displacing installed slots; native doctrine tool naming adapts MCP tool IDs at SessionStart; idempotent installer `adapters/commandcode/install.sh` wires the mod, settings hooks, and MCP config cleanly.**
 

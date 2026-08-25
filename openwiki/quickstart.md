@@ -1,7 +1,7 @@
 # skill-concierge — OpenWiki quickstart
 
-**skill-concierge** is a **plugin** for Claude Code, Codex, and Command Code that governs how the agent
-picks and uses *skills*. It is a thin **governance layer** over all three harnesses' default skill
+**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, and Oh My Pi (OMP) that governs how the agent
+picks and uses *skills*. It is a thin **governance layer** over all four harnesses' default skill
 mechanisms: where
 the default injects **every** installed skill's description into the context window on **every**
 turn and hopes the model notices the right one, skill-concierge replaces *hope* with
@@ -11,13 +11,13 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.27.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts)
+- **Version:** `0.28.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
 ## What problem it solves
 
-Both harnesses' default discovery degrades as a catalogue grows past a few dozen skills: the
+The harnesses' default discovery degrades as a catalogue grows past a few dozen skills: the
 model skims the injected list, misses the fitting skill, or "wings it" instead of invoking one.
 skill-concierge separates three failure modes the default conflates:
 
@@ -58,7 +58,7 @@ These have bitten before; the ADRs and [`docs/caveats.md`](../docs/caveats.md) e
 
 | Requirement | Notes |
 |-------------|-------|
-| Claude Code or Codex | host for the plugin, hooks, and MCP server |
+| Claude Code, Codex, Command Code, or Oh My Pi (OMP) | host for the plugin, hooks, and MCP server |
 | Python 3.10–3.12 | `snake_case`; set `SKILL_PYTHON` to pin an interpreter |
 | Docker / OrbStack | runs the Qdrant vector store **and** the warm embed shim (both Docker sidecars) |
 
@@ -88,7 +88,17 @@ auto-repairs the common failures. Full setup/ops detail: **[operations.md](opera
 (`codex plugin marketplace add https://github.com/thinhkhuat/skill-concierge.git`), install
 with `codex plugin add skill-concierge@skill-concierge`, then verify the MCP with
 `codex mcp list` (should list `skill-search`). The engine sidecars (Qdrant + embed shim),
-index, and ledger are SHARED with the Claude Code install — one concierge, two harnesses.
+index, and ledger are SHARED with the Claude Code install — one concierge, four harnesses.
+
+**In OMP** (v0.28.0+, ADR-0039): install via the plugin marketplace — `adapters/omp/install.sh`
+detects an installed `skill-concierge@skill-concierge` marketplace plugin and refreshes it with
+`omp plugin marketplace update skill-concierge` + `omp plugin upgrade skill-concierge@skill-concierge --scope user`;
+in a dev checkout with no marketplace plugin it appends the extension path to
+`~/.omp/agent/config.yml`. OMP ignores Claude-format hooks — enforcement runs from the
+`skill-concierge.ext.ts` extension module (`package.json` `omp.extensions`) — and it expands the
+plugin `.mcp.json`'s `${CLAUDE_PLUGIN_ROOT}` natively, so no per-harness MCP descriptor is
+written (a duplicate `skill-search` at user scope is a known hazard). The engine sidecars, index,
+and ledger are SHARED with every other harness install.
 
 ## The MCP tools
 

@@ -84,9 +84,19 @@ def _harness_adapt(doctrine: str) -> str:
     Under Command Code or Codex:
       tool: `mcp__skill-search__search_skills` (or `mcp__skill_search__search_skills`)
       slash: `/skill-search`
+
+    Under OMP:
+      tool: `skill-concierge:skill-search/search_skills` (namespaced plugin:server/tool)
+      slash: none — OMP consumes skills via the read tool on `skill://<name>` URLs, so the
+      slash-command hint and the get_skill consumption hint are both rewritten to that form.
     """
     harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
+    if harness in ("omp", "oh-my-pi"):
+        harness = "omp"
+    if not harness and os.environ.get("OMPCODE", "").strip() == "1":
+        harness = "omp"
     if not harness:
+        marker_omp = f"{os.sep}.omp{os.sep}"
         marker_codex = f"{os.sep}.codex{os.sep}"
         marker_claude = f"{os.sep}.claude{os.sep}"
         for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
@@ -96,12 +106,26 @@ def _harness_adapt(doctrine: str) -> str:
                 resolved = str(Path(cand).resolve())
             except (OSError, RuntimeError):
                 resolved = ""
+            if marker_omp in resolved:
+                harness = "omp"
+                break
             if marker_codex in resolved:
                 harness = "codex"
                 break
             if marker_claude in resolved:
                 harness = "claude"
                 break
+    if harness == "omp":
+        return doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            "skill-concierge:skill-search/search_skills"
+        ).replace(
+            "/skill-concierge:skill-search",
+            "skill-concierge:skill-search/search_skills"
+        ).replace(
+            "get_skill(\"<alias>:<skill>\")",
+            "read(\"skill://<alias>:<skill>\")"
+        )
     if harness in ("commandcode", "cmd", "command-code"):
         return doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
@@ -193,14 +217,38 @@ def _selftest() -> int:
     if _run_capture(top, True) != off_top:
         bad.append("flag-on top-level injection must be byte-identical to flag-off")
 
+    # OMP harness adaptation: the namespaced plugin:server/tool search name replaces both the
+    # claude tool + slash hint, and the external get_skill consumption hint becomes a
+    # read(skill://...) call (OMP has no slash-command form and consumes skills via the read
+    # tool on skill:// URLs — mirrors ledger.py's skill:// activation branch).
+    _sample = "`mcp__plugin_skill-concierge_skill-search__search_skills`" \
+              " or `/skill-concierge:skill-search` then `get_skill(\"<alias>:<skill>\")`"
+    _saved_env = os.environ.get("SKILL_CONCIERGE_HARNESS")
+    os.environ["SKILL_CONCIERGE_HARNESS"] = "omp"
+    try:
+        _adapted = _harness_adapt(_sample)
+    finally:
+        if _saved_env is None:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+        else:
+            os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_env
+    if "skill-concierge:skill-search/search_skills" not in _adapted:
+        bad.append("omp adapt: search tool must be the namespaced skill-concierge:skill-search/search_skills")
+    if "/skill-concierge:skill-search" in _adapted or "/skill-search" in _adapted:
+        bad.append("omp adapt: no slash-command form under omp")
+    if "get_skill(" in _adapted:
+        bad.append("omp adapt: external consumption must be read(skill://...) not get_skill()")
+    if 'read("skill://<alias>:<skill>")' not in _adapted:
+        bad.append("omp adapt: external consumption hint must read skill://<alias>:<skill>")
+
     if bad:
         print("doctrine --selftest FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     print("doctrine --selftest OK: subagent(agent_id) suppressed + top-level/persona(agent_type)/"
-          "malformed/empty all inject (fail toward injection) + flag-off byte-identical")
-    return 0
+          "malformed/empty all inject (fail toward injection) + flag-off byte-identical"
+          " + omp harness adaptation")
 
 
 if __name__ == "__main__":

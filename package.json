@@ -1,0 +1,10 @@
+{
+  "name": "skill-concierge",
+  "private": true,
+  "version": "0.28.0",
+  "omp": {
+    "extensions": [
+      "./adapters/omp/skill-concierge.ext.ts"
+    ]
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "skill-concierge",
-  "version": "0.27.0",
-  "description": "A skill-governance layer: semantic retrieval (which skill) + use-enforcement (whether an agent uses one) + a compounding invocation ledger. Works with Claude Code, Codex, and Command Code.",
+  "version": "0.28.0",
+  "description": "A skill-governance layer: semantic retrieval (which skill) + use-enforcement (whether an agent uses one) + a compounding invocation ledger. Works with Claude Code, Codex, Command Code, and Oh My Pi.",
   "author": {
     "name": "thinhkhuat"
   },
@@ -15,6 +15,8 @@
     "telemetry",
     "claude-code",
     "codex",
-    "command-code"
+    "command-code",
+    "oh-my-pi",
+    "omp"
   ]
 }

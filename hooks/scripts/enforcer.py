@@ -148,19 +148,29 @@ RETRIEVE_LIMIT = TOP_K * 5
 def _running_harness() -> str:
     """Which harness is executing this hook.
 
-    Returns one of: 'commandcode', 'codex', or 'claude'.
+    Returns one of: 'commandcode', 'codex', 'omp', or 'claude'.
 
     PRECEDENCE:
-    1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter).
-    2. Where the hook/plugin was installed: `.codex` in path -> 'codex', `.claude` in path -> 'claude'.
-    3. Fallback: 'commandcode' if run from anywhere else.
+    1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter
+       and the OMP adapter; OMP also maps `oh-my-pi` so the natural name resolves).
+    2. Native harness detection BEFORE path markers: `OMPCODE=1` -> 'omp'. OMP sets BOTH
+       `OMPCODE` and `CLAUDE`'s own markers (`CLAUDE_PLUGIN_ROOT`, `CLAUDE.md` presence, etc.),
+       so `OMPCODE=1` alone is proof of OMP; `CLAUDE`-only markers never are (OMP's provider
+       union reads .claude too, but that is discovery, not the acting harness).
+    3. Where the hook/plugin was installed: `.omp` in path -> 'omp', `.codex` in path -> 'codex',
+       `.claude` in path -> 'claude'.
+    4. Fallback: 'commandcode' if run from anywhere else.
     """
     explicit = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if explicit in ("commandcode", "cmd", "command-code"):
         return "commandcode"
-    if explicit in ("codex", "claude"):
-        return explicit
+    if explicit in ("codex", "claude", "omp", "oh-my-pi"):
+        return "omp" if explicit in ("omp", "oh-my-pi") else explicit
 
+    if os.environ.get("OMPCODE", "").strip() == "1":
+        return "omp"
+
+    marker_omp = f"{os.sep}.omp{os.sep}"
     marker_codex = f"{os.sep}.codex{os.sep}"
     marker_claude = f"{os.sep}.claude{os.sep}"
     for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
@@ -170,6 +180,8 @@ def _running_harness() -> str:
             resolved = str(Path(cand).resolve())
         except OSError:
             resolved = ""
+        if marker_omp in resolved:
+            return "omp"
         if marker_codex in resolved:
             return "codex"
         if marker_claude in resolved:
@@ -180,6 +192,7 @@ def _running_harness() -> str:
 RUNNING_HARNESS = _running_harness()
 UNDER_CODEX = (RUNNING_HARNESS == "codex")
 UNDER_COMMANDCODE = (RUNNING_HARNESS == "commandcode")
+UNDER_OMP = (RUNNING_HARNESS == "omp")
 
 
 def _foreign_harness_label() -> str:
@@ -187,6 +200,12 @@ def _foreign_harness_label() -> str:
         return "claude"
     if RUNNING_HARNESS == "commandcode":
         return "claude/codex"
+    if RUNNING_HARNESS == "omp":
+        # OMP's native provider union (claude + claude-plugins + codex + native) reads the
+        # claude/codex/omp scopes, so the cross-harness annex for an OMP session points at the
+        # one harness it does NOT read: Command Code. The label drives the `[Commandcode]`
+        # marker in the annex render.
+        return "commandcode"
     return "codex"
 
 
@@ -200,6 +219,12 @@ def _foreign_scopes() -> tuple:
     From Codex: plugin + commandcode-personal.
     From Command Code: plugin + codex-plugin + codex-personal + personal (Command Code
     only loads its own personal/project roots + extra settings locations).
+    From OMP: codex-plugin + commandcode-personal. OMP's provider union natively invokes the
+    claude (user+project .claude/skills), claude-plugin (claude-plugins registry roots) and
+    codex personal (.codex/skills) scopes, but NOT the Codex plugin cache — the codex provider
+    scans only `~/.codex/skills` and `<cwd>/.codex/skills` (OMP source discovery/codex.ts:238-240,
+    loadSkills), so `codex-plugin` rows are foreign here. commandcode scopes are foreign too
+    (OMP never loads Command Code's personal/project roots).
 
     `project:` scopes are cwd-derived and shared by construction. Never foreign.
     """
@@ -207,10 +232,13 @@ def _foreign_scopes() -> tuple:
         return ("plugin", "codex-plugin", "codex-personal")
     if RUNNING_HARNESS == "codex":
         return ("plugin", "commandcode-personal")
+    if RUNNING_HARNESS == "omp":
+        return ("codex-plugin", "commandcode-personal")
     return ("codex-plugin", "codex-personal", "commandcode-personal")
 
-
 FOREIGN_SCOPES = _foreign_scopes()
+
+
 FOREIGN_SLOTS = int(os.environ.get("ENFORCER_FOREIGN_SLOTS", "2"))
 FOREIGN_FLOOR = float(os.environ.get("ENFORCER_FOREIGN_FLOOR", "0.40"))
 
@@ -229,29 +257,68 @@ FOREIGN_FLOOR = float(os.environ.get("ENFORCER_FOREIGN_FLOOR", "0.40"))
 _INSTALLED_PLUGINS_JSON = Path(os.environ.get(
     "SKILL_INSTALLED_PLUGINS", Path.home() / ".claude" / "plugins" / "installed_plugins.json"))
 
+# OMP's claude-plugins provider ALSO loads ~/.omp/plugins/installed_plugins.json, treating its
+# entries as authoritative over Claude's for the same plugin ID (OMP source discovery/helpers.ts:
+# 1030-1078). Per-entry gating is the OMP registry's own `enabled` field — `enabled === false`
+# hides the plugin (helpers.ts:1061); an absent field is enabled-by-default, mirroring the
+# Claude-side rule. So an OMP session can invoke a plugin whose id lives in EITHER registry
+# (and is not switched off), and the twin test must consult both when running under OMP.
+_OMP_INSTALLED_PLUGINS_JSON = Path(os.environ.get(
+    "SKILL_OMP_INSTALLED_PLUGINS", Path.home() / ".omp" / "plugins" / "installed_plugins.json"))
+
 
 def _invocable_plugin_ids():
-    """Plugin ids THIS session can invoke: present in `installed_plugins.json` AND not explicitly
-    switched off in the merged settings layers. Returns e.g. {'agent-skills', 'memsearch'}.
+    """Plugin ids THIS session can invoke: present in an installed-plugins registry AND not
+    explicitly switched off. Returns e.g. {'agent-skills', 'memsearch'}.
 
-    Returns None when the installed-plugins manifest cannot be read. None means UNKNOWN, and the
+    Returns None when NO installed-plugins manifest can be read. None means UNKNOWN, and the
     caller must then filter NOTHING — failing toward ADR-0033's union, which is merely noisy and
     already shipped, never toward telling the agent a skill it CAN invoke is 'NOT invocable here'.
 
+    Under Claude the manifest is `~/.claude/plugins/installed_plugins.json` and a plugin is
+    disabled by an explicit `false` in the merged settings `enabledPlugins` layers (absent key =
+    enabled, matching Claude Code and `skills_discovery._installed_plugin_roots`). Under OMP the
+    claude-plugins provider reads the SAME claude registry PLUS the OMP registry
+    (`~/.omp/plugins/installed_plugins.json`) — OMP entries are authoritative for their plugin id
+    (OMP source discovery/helpers.ts:1030-1078) — and the OMP registry's per-entry `enabled`
+    field gates each plugin (`enabled === false` hides it, helpers.ts:1061; absent = enabled).
+    The OMP loop applies NO settings-layer enabledPlugins override, so OMP-side disablement is
+    the per-entry field alone.
+
     Installation is checked, not just enablement: a plugin switched on in settings whose cache is
     absent is not invocable, and treating it as a twin would keep a genuinely dead row in the
-    offer. Enablement defaults to ON for an absent key, matching Claude Code and
-    `skills_discovery._installed_plugin_roots`.
+    offer.
 
     Marketplace collisions resolve by UNION, not last-writer-wins: skill names carry only the bare
     plugin id, so if ANY `<id>@<marketplace>` copy is installed and on, the id is invocable.
     Everything touching the filesystem is inside the guard — `Path.cwd()` raises when the working
     directory has been deleted, and this runs at import, outside main()'s try."""
+    installed = {}
+    saw_registry = False
     try:
-        installed = json.loads(_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))["plugins"]
-        if not isinstance(installed, dict):
-            return None
+        claude_plugins = json.loads(_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))["plugins"]
+        if isinstance(claude_plugins, dict):
+            installed.update(claude_plugins)
+            saw_registry = True
     except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+        pass
+
+    # Under OMP the claude-plugins provider ALSO honors the OMP registry (helpers.ts:1030-1078),
+    # so an id there is invocable here too. Under Claude the OMP registry is not part of
+    # discovery and must not leak ids into the twin test.
+    if UNDER_OMP:
+        try:
+            omp_plugins = json.loads(_OMP_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))["plugins"]
+            if isinstance(omp_plugins, dict):
+                installed.update(omp_plugins)
+                saw_registry = True
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+            pass
+
+    # None only when NO registry could be read — i.e. the twin test is UNKNOWN (filter
+    # nothing, the original claude-only semantics). An empty-but-readable registry is a
+    # YES-I-know answer (no plugins installed -> no twins), returned as an empty set.
+    if not saw_registry:
         return None
 
     disabled_by_key = {}
@@ -268,9 +335,15 @@ def _invocable_plugin_ids():
             data = {}
         if isinstance(data, dict):
             disabled_by_key.update({str(k): not bool(v) for k, v in data.items()})
-
-    return {str(key).split("@", 1)[0] for key in installed
-            if not disabled_by_key.get(str(key), False)}
+    out = set()
+    for key, entries in installed.items():
+        if disabled_by_key.get(str(key), False):
+            continue
+        if isinstance(entries, list) and entries and all(
+                isinstance(e, dict) and e.get("enabled") is False for e in entries):
+            continue  # every entry explicitly off
+        out.add(str(key).split("@", 1)[0])
+    return out
 
 
 INVOCABLE_PLUGIN_IDS = _invocable_plugin_ids()
@@ -280,9 +353,10 @@ def _invocable_twin(name: str) -> bool:
     """True when a foreign-scoped row names a skill THIS harness can invoke anyway, because the
     same plugin is installed and switched on here and its twin merely lost the discovery dedup.
 
-    Only meaningful from Claude. Under Codex/Command Code the plugin caches are isolated,
-    so there is no twin to rescue."""
-    if RUNNING_HARNESS != "claude" or not INVOCABLE_PLUGIN_IDS or ":" not in name:
+    Meaningful from Claude and OMP: both harnesses' claude-plugins provider reads the claude/
+    omp plugin registries, so a `claude-plugin` row may name a skill this session invokes.
+    Under Codex/Command Code the plugin caches are isolated, so there is no twin to rescue."""
+    if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
@@ -1605,7 +1679,7 @@ def _selftest() -> int:
     _saved_rh = RUNNING_HARNESS
     _saved_fh = FOREIGN_HARNESS
     try:
-        if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex") or not FOREIGN_SCOPES:
+        if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex", "commandcode") or not FOREIGN_SCOPES:
             bad.append(f"cross-harness: harness label / foreign scopes unset: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
         if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-")) for x in FOREIGN_SCOPES):
             bad.append(f"cross-harness: claude harness label disagrees with the foreign scope set: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
@@ -1707,6 +1781,57 @@ def _selftest() -> int:
             bad.append("cross-harness: below-floor or twin row must not render in the annex")
         if "%" in rendered.split("Other-harness")[0].split("inst-a")[1][:12]:
             bad.append("cross-harness: foreign must not join the installed %-share pool")
+
+        # OMP direction: harness detection, foreign label/scopes, and the twin test.
+        # Pin the OMP env forms and the natural marker + OMPCODE detection, then the
+        # foreign-scope world and the union rule (plugin ids invocable here).
+        _saved_omp_env = (os.environ.get("SKILL_CONCIERGE_HARNESS"), os.environ.get("OMPCODE"))
+        _saved_rh2, _saved_fh2 = RUNNING_HARNESS, FOREIGN_HARNESS
+        _saved_fs2, _saved_inv2 = FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
+        try:
+            # explicit env forms
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "omp"
+            os.environ["OMPCODE"] = ""
+            if _running_harness() != "omp":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=omp must resolve to omp")
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "oh-my-pi"
+            if _running_harness() != "omp":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=oh-my-pi must resolve to omp")
+            # OMP with CLAUDE markers set must resolve to omp (OMPCODE is the proof), never claude
+            os.environ["SKILL_CONCIERGE_HARNESS"] = ""
+            os.environ["OMPCODE"] = "1"
+            if _running_harness() != "omp":
+                bad.append("cross-harness: OMPCODE=1 must force omp even under claude markers")
+            # claude/codex explicit values unchanged (not hijacked by OMPCODE)
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "claude"
+            if _running_harness() != "claude":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=claude must stay claude")
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "codex"
+            if _running_harness() != "codex":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=codex must stay codex")
+            RUNNING_HARNESS = "omp"
+            if _foreign_harness_label() != "commandcode":
+                bad.append("cross-harness: omp foreign label must be commandcode: "
+                           f"{_foreign_harness_label()!r}")
+            if _foreign_scopes() != ("codex-plugin", "commandcode-personal"):
+                bad.append("cross-harness: omp foreign scopes wrong: "
+                           f"{_foreign_scopes()!r}")
+            # twin test is active under omp (plugin ids invocable via the claude/omp union)
+            INVOCABLE_PLUGIN_IDS = {"twinpl"}
+            if not _invocable_twin("twinpl:dup"):
+                bad.append("cross-harness: omp must rescue an invocable plugin twin")
+            INVOCABLE_PLUGIN_IDS = None
+            if _invocable_twin("twinpl:dup"):
+                bad.append("cross-harness: omp unknown manifest must not rescue a twin")
+        finally:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+            os.environ.pop("OMPCODE", None)
+            if _saved_omp_env[0] is not None:
+                os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_omp_env[0]
+            if _saved_omp_env[1] is not None:
+                os.environ["OMPCODE"] = _saved_omp_env[1]
+            RUNNING_HARNESS, FOREIGN_HARNESS = _saved_rh2, _saved_fh2
+            FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_fs2, _saved_inv2
 
         # kill-switch off -> pre-ADR-0034 request shape and output
         CROSS_HARNESS = False

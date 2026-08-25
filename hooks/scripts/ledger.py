@@ -33,9 +33,13 @@ LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 # name (a Codex session exposes mcp__skill_search__search_skills — hyphen flattened; observed
 # live 2026-08-24). Codex fires no PostToolUse today, so the underscore forms are dormant — but
 # without them, capture would silently miss the day it does (the two-layer D3 from the Codex
-# revalidation).
-SEARCH_TOOLS = ("skill-search__search_skills", "skill_search__search_skills")
-GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill")
+# revalidation). OMP surfaces the tools as `skill-concierge:skill-search/search_skills`
+# (namespaced plugin:server/tool, colon+slash separators) — the colon/slash suffixes below ride
+# the same endswith matching (the mcp__/plugin prefixes are all on the LEFT, never the suffix).
+SEARCH_TOOLS = ("skill-search__search_skills", "skill_search__search_skills",
+                "skill-search/search_skills")
+GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
+             "skill-search/get_skill")
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
 
 
@@ -108,6 +112,23 @@ def main() -> int:
                 if harness:
                     ev["harness"] = harness
                 _append(ev)
+            elif tool == "read":
+                # OMP activation lane: OMP consumes skills via the read tool on
+                # `skill://<name>` URLs (no Skill-tool call fires, and the OMP MCP surface is
+                # only the search/get_skill pair — the body pull is a read). Name = the segment
+                # after `skill://` up to the first `/` (matches the skill:// URL shape OMP uses
+                # for both `skill://<name>` and namespaced `skill://plugin:name` forms). This
+                # lane also benefits any harness where the agent reads skill:// paths directly.
+                ti = d.get("tool_input", {})
+                path = ti.get("path", "") if isinstance(ti, dict) else ""
+                name = path.split("skill://", 1)[1].split("/", 1)[0] \
+                    if isinstance(path, str) and path.startswith("skill://") else ""
+                ev = {"t": t, "sid": sid, "ev": "auto", "name": name}
+                if sub:
+                    ev["sub"] = True
+                if harness:
+                    ev["harness"] = harness
+                _append(ev)
             elif tool.endswith(SEARCH_TOOLS):
                 ev = {"t": t, "sid": sid, "ev": "search"}
                 if harness:
@@ -166,6 +187,20 @@ def _selftest() -> int:
             feed({"hook_event_name": "PostToolUse", "session_id": "t",
                   "tool_name": "mcp__skill_search__get_skill",
                   "tool_input": {"name": "mattpocock-skills:tdd"}})
+            # OMP MCP surface: namespaced plugin:server/tool (colon+slash) must classify
+            # identically to the mcp__ forms.
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "skill-concierge:skill-search/search_skills"})
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "skill-concierge:skill-search/get_skill",
+                  "tool_input": {"name": "claude-hud:theme"}})
+            # OMP activation lane: skills are consumed via the read tool on skill:// URLs.
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "read", "tool_input": {"path": "skill://doctor"}})
+            # A namespaced skill:// URL (plugin:skill form — OMP namespaced skills carry a
+            # colon, and a trailing /sub path must not leak past the first segment).
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "read", "tool_input": {"path": "skill://memsearch/extra"}})
             feed({"hook_event_name": "UserPromptSubmit", "session_id": "t",
                   "prompt": "/keep-on list"})
             rows = [json.loads(l) for l in LEDGER.read_text().splitlines()]
@@ -175,12 +210,15 @@ def _selftest() -> int:
     evs = [(r["ev"], r.get("name")) for r in rows]
     want = [("get_skill", "antigravity:seo"), ("auto", "doctor"),
             ("search", None), ("search", None),
-            ("get_skill", "mattpocock-skills:tdd"), ("manual", "keep-on")]
+            ("get_skill", "mattpocock-skills:tdd"),
+            ("search", None), ("get_skill", "claude-hud:theme"),
+            ("auto", "doctor"), ("auto", "memsearch"),
+            ("manual", "keep-on")]
     if evs != want:
         print(f"ledger --selftest FAIL: {evs!r} != {want!r}")
         return 1
-    print("ledger --selftest OK: get_skill/auto/search/manual classification")
-    return 0
+    print("ledger --selftest OK: get_skill/auto/search/manual classification"
+          " + omp namespaced tools + skill:// read activation")
 
 
 if __name__ == "__main__":

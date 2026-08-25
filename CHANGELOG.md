@@ -5,6 +5,41 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-08-25
+
+### Added
+- **Oh My Pi (`omp`) quadruple-harness first-class parity (ADR-0039).**
+  - **Extension-module enforcement (`adapters/omp/skill-concierge.ext.ts`):** OMP ignores
+    Claude-format hooks, so enforcement rides a TS extension module loaded via root
+    `package.json` `omp.extensions`; `before_agent_start` (the UserPromptSubmit equivalent)
+    feeds the prompt to `enforcer.py` and returns an injectable persisted
+    `{ message: { customType: "skill-concierge", ... } }`; `session_start` dispatches detached
+    `auto_reindex`/`auto_overrides`/`auto_flywheel`/`auto_promote`; `tool_result` forwards
+    `read` + `skill://` activation and skill-search tool calls to `ledger.py`. Fail-open
+    everywhere.
+  - **Discovery mirror (`skills_discovery.py`):** adds `SKILL_OMP_ROOTS` discovering
+    `~/.omp/agent/skills` (`omp-personal`), `<cwd>/.omp/skills` (`omp-project:<abspath>`),
+    `~/.omp/agent/managed-skills` (`omp-managed`), and `~/.omp/plugins/cache/plugins/**`
+    (`omp-plugin`) scopes into the shared index; forwarded by `auto_reindex._mcp_env()`;
+    `SKILL_OMP_ROOTS=0` reverts.
+  - **OMP harness identity (`enforcer.py`):** `_running_harness()` identifies `omp` via
+    `SKILL_CONCIERGE_HARNESS=omp/oh-my-pi` → `OMPCODE=1` env (OMP sets both `OMPCODE` and
+    `CLAUDE-CODE`, so CLAUDECODE alone is not claude proof) → `".omp/"` path marker; new
+    `UNDER_OMP` constant; foreign scopes `codex-plugin` + `commandcode-personal` annexed under
+    the `commandcode` label; `_invocable_twin()` active under claude OR omp (unions
+    `~/.omp/plugins/installed_plugins.json`).
+  - **MCP wiring without a descriptor:** OMP expands `${CLAUDE_PLUGIN_ROOT}` natively, so the
+    plugin `.mcp.json` carries over — `adapters/omp/mcp.json` is a manual fallback only
+    (never written on the marketplace path: duplicate-server hazard).
+  - **Idempotent installer (`adapters/omp/install.sh`):** marketplace path (plugin marketplace
+    update + upgrade) or dev path appending to `~/.omp/agent/config.yml` extensions; never
+    writes `~/.omp/agent/mcp.json`.
+  - **Ops & drift (`scripts/doctor.py` + `check_mcp_env_parity.py` + `driftcheck.json`):**
+    `check_omp()` validates install version vs SSOT, catalog staleness, and extension presence
+    in cache (fail-open); omp MCP env parity in lockstep; `paths_exist` mirrors the omp surface.
+  - **Version quadruple bump:** `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+    `.codex-plugin/plugin.json`, and root `package.json` all at 0.28.0.
+
 ## [0.27.0] — 2026-08-25
 
 ### Added

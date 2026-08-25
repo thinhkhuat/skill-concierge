@@ -1,0 +1,19 @@
+{
+  "_comment": "OMP MCP descriptor (ADR-0039). MANUAL user-scope fallback ONLY for setups without the OMP marketplace plugin — OMP expands ${CLAUDE_PLUGIN_ROOT} natively in the plugin's own .mcp.json (unlike Codex, ADR-0035), so a plugin install needs NO descriptor. Do NOT install alongside the plugin: OMP auto-imports every harness's MCP declarations and a duplicate skill-search entry launches twice (caveats §22.3). Env block is kept in strict lockstep with .mcp.json (scripts/check_mcp_env_parity.py).",
+  "mcpServers": {
+    "skill-search": {
+      "transport": "stdio",
+      "command": "/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/bin/skill-search-mcp",
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "fastembed",
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "SKILL_TOP_K": "6",
+        "SKILL_LLM_TRIGGERS": "1",
+        "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",
+        "SKILL_SERVER_RECORDS": "/Users/thinhkhuat/.cache/skill-search/servers"
+      }
+    }
+  }
+}
