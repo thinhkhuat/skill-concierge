@@ -57,6 +57,21 @@ OMP_DIR = Path.home() / ".omp"
 OMP_PLUGINS_FILE = OMP_DIR / "plugins" / "installed_plugins.json"
 OMP_MARKETPLACE = OMP_DIR / "plugins" / "cache" / "marketplaces" / "skill-concierge"
 OMP_PLUGIN_CACHE = OMP_DIR / "plugins" / "cache" / "plugins"
+# Codex harness surface (ADR-0033) — skill-concierge is installed as a Codex plugin.
+# The plugin clones the marketplace repo into ~/.codex/plugins/cache/<name>/<name>/<ver>/;
+# there is no install-record file (Codex tracks enablement in config.toml, unparseable
+# on stdlib 3.10), so version must be read from the cached .codex-plugin/plugin.json.
+# WARN-only — a Codex-free machine is one 'codex: not installed' row, not a failure.
+CODEX_DIR = Path.home() / ".codex"
+CODEX_PLUGIN_CACHE = CODEX_DIR / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+# Command Code harness surface (ADR-0038) — skill-concierge integrates via a mod,
+# SessionStart hooks in settings.json, and an mcp.json entry. No version record file
+# (the mod and settings reference the dev path directly). WARN-only.
+CCMD_DIR = Path.home() / ".commandcode"
+CCMD_MOD = CCMD_DIR / "mods" / "skill-concierge.ts"
+CCMD_SETTINGS = CCMD_DIR / "settings.json"
+CCMD_MCP = CCMD_DIR / "mcp.json"
+_CCMD_SETTINGS_HOOK_MARKER = "skill-concierge"  # SessionStart commands contain this string
 # Same seam as flywheel.py/llm_triggers.py: the engine reads triggers from SKILL_TRIGGERS. The
 # env-less default is durable-home-first with the legacy repo-local path as fallback (the
 # 0.25.1 thresholds pattern): the live .mcp.json pins the durable home, so a doctor run from a
@@ -1254,14 +1269,132 @@ def check_omp():
             "detail": f"OMP plugin v{ver} matches SSOT v{ssot}; marketplace + extension surface in sync",
             "fix": None}
 
+def _codex_cached_version():
+    """Version of the Codex-cached plugin clone (the last marketplace update), or None
+    when the cache dir is absent/unreadable. Codex stores the clone at:
+    ~/.codex/plugins/cache/<name>/<name>/<ver>/ — the outer dir is the name, the inner
+    dir is also the name (nested from the marketplace clone), and .ver/ is the versioned
+    content tree — but there is no index file; the version dir name is the version."""
+    try:
+        base = CODEX_PLUGIN_CACHE
+        if not base.is_dir():
+            return None
+        # Walk versioned dirs under nest/<name>/; pick the newest by dir name
+        candidates = sorted([d for d in base.iterdir() if d.is_dir()], reverse=True)
+        if not candidates:
+            return None
+        # Each candidate e.g. "0.28.1" — read the plugin.json inside for confirmation
+        for cand in candidates:
+            pf = cand / ".codex-plugin" / "plugin.json"
+            if pf.exists():
+                return _descriptor_version(pf)
+        return None
+    except (OSError, PermissionError):
+        return None
 
+
+def check_codex():
+    """Codex harness install state — version parity and surface presence (ADR-0033).
+
+    Codex installs skill-concierge through its own plugin marketplace system. The
+    cached clone lives under ~/.codex/plugins/cache/skill-concierge/skill-concierge/<ver>/.
+    Unlike OMP, Codex has no user-level install-record file — enablement is in
+    config.toml (TOML, not stdlib-parseable on 3.10). Version is read from the cached
+    .codex-plugin/plugin.json and compared to the SSOT in the source repo. Every check
+    is WARN-only — no Codex install is one 'codex: not installed' row, never a failure.
+
+    Two signals:
+      1. install presence — cached plugin dir with .codex-plugin/plugin.json
+      2. version parity — cached version vs SSOT; a stale cache gets a WARN row
+    """
+    if not CODEX_DIR.exists():
+        return {"id": "codex", "label": "Codex integration", "status": WARN,
+                "detail": "codex: not installed (no ~/.codex) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    ssot = _descriptor_version(ROOT / ".codex-plugin" / "plugin.json")
+    cached_ver = _codex_cached_version()
+    if cached_ver is None:
+        findings.append("no Codex plugin cache found (never installed via marketplace)")
+    else:
+        if ssot and cached_ver != ssot:
+            findings.append(f"Codex cache v{cached_ver} != SSOT v{ssot} — update via Codex marketplace")
+    # Surface: verify skills dir exists in the cached version
+    if cached_ver:
+        skills_dir = CODEX_PLUGIN_CACHE / cached_ver / "skills"
+        if not skills_dir.is_dir():
+            findings.append(f"Codex cache v{cached_ver} missing skills/ dir — incomplete install")
+    if findings:
+        return {"id": "codex", "label": "Codex integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "codex", "label": "Codex integration", "status": OK,
+            "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills present",
+            "fix": None}
+
+def check_commandcode():
+    """Command Code harness install state — mod + settings + MCP surface (ADR-0038).
+
+    Command Code integrates skill-concierge through a TypeScript mod, SessionStart hooks,
+    and an MCP server entry — all installed by adapters/commandcode/install.sh into
+    ~/.commandcode/. There is no version manifest or plugin cache; the installed mod
+    references the dev path (or $SKILL_CONCIERGE_ROOT) directly. Three presence signals:
+      1. mod file at ~/.commandcode/mods/skill-concierge.ts
+      2. SessionStart hooks in ~/.commandcode/settings.json referencing skill-concierge
+      3. MCP skill-search entry in ~/.commandcode/mcp.json
+    WARN-only — absent Command Code is one row, never a failure.
+    """
+    if not CCMD_DIR.exists():
+        return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
+                "detail": "commandcode: not installed (no ~/.commandcode) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    # 1. Mod presence
+    if not CCMD_MOD.exists():
+        findings.append("no skill-concierge mod at ~/.commandcode/mods/skill-concierge.ts")
+    # 2. SessionStart hooks referencing skill-concierge
+    #    Check by looking for our marker string inside SettingsStart hook commands
+    hook_found = False
+    try:
+        settings = json.loads(CCMD_SETTINGS.read_text(encoding="utf-8"))
+        for hooks_list in settings.get("hooks", {}).values():
+            for block in hooks_list:
+                for h in block.get("hooks", []):
+                    cmd = h.get("command", "")
+                    if _CCMD_SETTINGS_HOOK_MARKER in cmd:
+                        hook_found = True
+                        break
+                if hook_found:
+                    break
+    except JSON_READ_ERRORS:
+        findings.append(f"unreadable settings.json at {CCMD_SETTINGS}")
+    if not hook_found:
+        findings.append("no skill-concierge hooks found in Command Code settings.json")
+    # 3. MCP skill-search entry
+    mcp_found = False
+    try:
+        mcp = json.loads(CCMD_MCP.read_text(encoding="utf-8"))
+        for name in mcp.get("mcpServers", {}):
+            if "skill-search" in name or "skill" in name:
+                mcp_found = True
+                break
+    except JSON_READ_ERRORS:
+        findings.append(f"unreadable mcp.json at {CCMD_MCP}")
+    if not mcp_found:
+        findings.append("no skill-search MCP entry in Command Code mcp.json")
+    if findings:
+        return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "commandcode", "label": "Command Code integration", "status": OK,
+            "detail": "Mod + SessionStart hooks + skill-search MCP all present",
+            "fix": None}
 
 
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_catalogs, check_omp, check_ledger, check_dup_mcp, check_mcp_enabled]
+          check_catalogs, check_omp, check_codex, check_commandcode,
+          check_ledger, check_dup_mcp, check_mcp_enabled]
 
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
@@ -1666,6 +1799,70 @@ def _selftest():
             assert row["status"] == WARN and "DISABLED" in row["detail"], row
     finally:
         _g.update(_saved_omp)
+    # --- Codex harness check (ADR-0033): fixture-driven, never touches the real ~/.codex ---
+    # Two outcomes: absent Codex -> WARN "not installed"; cache matches SSOT -> OK.
+    _saved_codex = {k: _g[k] for k in ("CODEX_DIR", "CODEX_PLUGIN_CACHE")}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            _g["CODEX_DIR"] = base / ".codex"
+            _g["CODEX_PLUGIN_CACHE"] = base / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+            # Codex absent entirely -> WARN "codex: not installed", never FAIL.
+            row = check_codex()
+            assert row["status"] == WARN and "not installed" in row["detail"], row
+            # Fully in sync: cached version matches SSOT.
+            codex_ssot = _descriptor_version(ROOT / ".codex-plugin" / "plugin.json")
+            cached_dir = _g["CODEX_PLUGIN_CACHE"] / codex_ssot
+            (cached_dir / ".codex-plugin").mkdir(parents=True)
+            (cached_dir / ".codex-plugin" / "plugin.json").write_text(json.dumps(
+                {"name": "skill-concierge", "version": codex_ssot}))
+            (cached_dir / "skills" / "dummy").mkdir(parents=True)
+            (cached_dir / "skills" / "dummy" / "SKILL.md").write_text("# placeholder")
+            row = check_codex()
+            assert row["status"] == OK, row
+            # Version lag: cache v0.0.1 vs SSOT -> WARN naming both.
+            # Write lower version into the cached plugin.json
+            (cached_dir / ".codex-plugin" / "plugin.json").write_text(json.dumps(
+                {"name": "skill-concierge", "version": "0.0.1"}))
+            row = check_codex()
+            assert row["status"] == WARN and "0.0.1" in row["detail"] and codex_ssot in row["detail"], row
+    finally:
+        _g.update(_saved_codex)
+
+    # --- Command Code harness check (ADR-0038): fixture-driven, never touches the real ~/.commandcode ---
+    # Two outcomes: absent CC -> WARN "not installed"; all surface present -> OK.
+    _saved_ccmd = {k: _g[k] for k in ("CCMD_DIR", "CCMD_MOD", "CCMD_SETTINGS", "CCMD_MCP",
+                                       "_CCMD_SETTINGS_HOOK_MARKER")}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            _g["CCMD_DIR"] = base / ".commandcode"
+            _g["CCMD_MOD"] = _g["CCMD_DIR"] / "mods" / "skill-concierge.ts"
+            _g["CCMD_SETTINGS"] = _g["CCMD_DIR"] / "settings.json"
+            _g["CCMD_MCP"] = _g["CCMD_DIR"] / "mcp.json"
+            # Command Code absent entirely -> WARN "commandcode: not installed", never FAIL.
+            row = check_commandcode()
+            assert row["status"] == WARN and "not installed" in row["detail"], row
+            # Fully present: mod + hooks + MCP all wired.
+            _g["CCMD_DIR"].mkdir(parents=True)
+            (_g["CCMD_DIR"] / "mods").mkdir()
+            _g["CCMD_MOD"].write_text("export default function(cmd) { /* skill-concierge mod */ }")
+            _g["CCMD_SETTINGS"].write_text(json.dumps({
+                "hooks": {
+                    "PreToolUse": [{"hooks": []}],
+                    "SessionStart": [{
+                        "hooks": [{"type": "command", "command": "python3 /path/to/skill-concierge/hooks/scripts/doctrine.py"}]
+                    }]
+                }}))
+            _g["CCMD_MCP"].write_text(json.dumps({
+                "mcpServers": {"skill-search": {"command": "/path/to/bin/skill-search-mcp"}}
+            }))
+            row = check_commandcode()
+            assert row["status"] == OK, row
+    finally:
+        _g.update(_saved_ccmd)
+    assert any(getattr(fn, "__name__", "") == "check_codex" for fn in CHECKS)
+    assert any(getattr(fn, "__name__", "") == "check_commandcode" for fn in CHECKS)
     assert any(getattr(fn, "__name__", "") == "check_omp" for fn in CHECKS)
     print("selftest ok")
     return 0
