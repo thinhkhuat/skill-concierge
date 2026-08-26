@@ -443,6 +443,84 @@ auto-repairs most of the rows below (start Qdrant, reindex, re-apply overrides).
 
 Full landmine list: [`docs/caveats.md`](docs/caveats.md).
 
+## Uninstall
+
+Removing skill-concierge requires cleaning up across four harnesses plus the shared infrastructure. Each section below names what the installer created and the exact reversal steps.
+
+### Shared components
+
+Created by [`setup.sh`](setup.sh):
+
+| Component | What is created | Reversal |
+|-----------|-----------------|----------|
+| Stable venv | `~/.claude/skill-concierge/venv/` — vendored engine + Python deps (`setup.sh:18`, step 1) | `rm -rf ~/.claude/skill-concierge/venv/` |
+| Durable home | `~/.claude/skill-concierge/` — logs, keep-on policy (`keep-on.json`), telemetry ledger, utterance triggers (`triggers.json`), per-skill thresholds (`thresholds.json`), flywheel manifest, chain overrides (`next-skills-overrides.json`) | `rm -rf ~/.claude/skill-concierge/` |
+| Qdrant container | Docker container `skill-search-qdrant` (`setup.sh:19`, step 2), image `qdrant/qdrant:1.18.2`, volume at `~/.cache/skill-search/qdrant-server/` | `docker rm -f skill-search-qdrant && docker rmi qdrant/qdrant:1.18.2 && rm -rf ~/.cache/skill-search/qdrant-server/` |
+| Embed shim | Docker container `skill-concierge-embed-shim` (`setup.sh:21`, step 2b), image `skill-concierge-embed-shim:latest` | `docker rm -f skill-concierge-embed-shim && docker rmi skill-concierge-embed-shim:latest` |
+| Old ledger migration | If the old path `~/.local/share/skill-concierge/` or `~/.claude/skill-telemetry/` exists from a pre-0.13 install, it is orphaned after setup. | `rm -rf ~/.local/share/skill-concierge/ ~/.claude/skill-telemetry/` |
+| MCP launcher records (if enabled) | `~/.cache/skill-search/servers/<pid>.json` — per-launch build-id record | `rm -rf ~/.cache/skill-search/` |
+
+No launchd agents are created — the warm embed shim runs as a Docker sidecar, not a launchd plist (the embed shim was switched to Docker sidecar before the first published release).
+
+### Claude Code
+
+Installed via the plugin marketplace. The plugin bundle (`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) is not written by a local installer — it is placed by the marketplace or by `cp` into `~/.claude/plugins/cache/skill-concierge/skill-concierge/<version>/`. The hooks wiring (`hooks/hooks.json` → `UserPromptSubmit` enforcer + ledger, `SessionStart` doctrine + self-heal, `PostToolUse` ledger) and MCP wiring (`.mcp.json` → shared `skill-search` server) ship with the plugin package.
+
+**To uninstall:**
+1. Disable the plugin: `/plugin disable skill-concierge` in Claude Code. This removes the hooks and MCP server from the running session without deleting data.
+2. Fully remove: `/plugin uninstall skill-concierge` — deletes the versioned cache dir.
+3. After either, clean shared components (venv, Qdrant, durable home) as described above.
+
+### Codex
+
+Wired by the plugin manifest `.codex-plugin/plugin.json` (`.codex-plugin/plugin.json:1-40`) and the matching MCP descriptor `.codex-plugin/mcp.json`. The hooks file `.codex/hooks.json` provides the openwiki-parity commit guard only (`.codex/hooks.json:2-16` — enforcement hooks auto-discover from the plugin cache per ADR-0033). Skill discovery indexes `~/.codex/skills/` and `~/.codex/plugins/cache/`.
+
+**To uninstall:**
+1. Remove the plugin from Codex's config (Codex CLI: remove the plugin entry from `~/.codex/skills/` and `~/.codex/plugins/cache/` or via the Codex UI).
+2. Remove the hook file: `rm -f ~/.codex/hooks.json` (if nothing else relies on Codex hooks).
+3. Remove any skill-concierge skill files from Codex roots: `rm -rf ~/.codex/skills/skill-concierge/` + check `~/.codex/plugins/cache/skill-concierge/`.
+4. Optionally drop the scope env pins: `SKILL_CODEX_ROOTS` (revert from machine env or settings).
+
+### Command Code
+
+Installed by [`adapters/commandcode/install.sh`](adapters/commandcode/install.sh) — creates four things:
+
+| File | Purpose | Installer line |
+|------|---------|----------------|
+| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformInput` | `install.sh:41-51` (step 1) |
+| `~/.commandcode/settings.json` | Hook entries (SessionStart, skill-concierge skills array) | `install.sh:54-118` (step 2, inline python) |
+| `~/.commandcode/mcp.json` | Skill-search MCP server (absolute paths) | `install.sh:121-152` (step 3, inline python) |
+| `~/.commandcode/skills/` | Skill discovery root (indexed by the engine) | set by settings.json ref |
+
+**To uninstall:**
+1. Remove the mod: `rm -f ~/.commandcode/mods/skill-concierge.ts`
+2. Remove the settings entries: edit `~/.commandcode/settings.json` to delete the `hooks` block that references skill-concierge scripts and the `skills` array entry for skill-concierge root. Alternatively restore from a backup or delete the file if empty.
+3. Remove the MCP server: edit `~/.commandcode/mcp.json` to delete the `skill-search` server entry.
+4. Remove skill files: `rm -rf ~/.commandcode/skills/skill-concierge/`
+5. Optionally drop the scope env pin: `SKILL_COMMANDCODE_ROOTS`.
+
+### Oh My Pi (OMP)
+
+Installed by [`adapters/omp/install.sh`](adapters/omp/install.sh) — two possible paths:
+
+**Marketplace-installed** (detected by reading `~/.omp/plugins/installed_plugins.json` for `skill-concierge@skill-concierge`, `install.sh:50-63`):
+- Extension module at the OMP plugin's own path, loaded via the plugin manifest's `omp.extensions`.
+- MCP server imported from the plugin's `.mcp.json` (no separate MCP wiring — `install.sh:143-144` deliberately skips writing `~/.omp/agent/mcp.json` to avoid a duplicate-server hazard).
+
+**Dev-mode** (no marketplace install, `install.sh:64-125`):
+- `~/.omp/agent/config.yml` gets a `# skill-concierge extension entry (ADR-0039)` marker line and the extension module path appended to the `extensions:` list (`install.sh:46-47`, inline python edit).
+
+**Shared for both paths:**
+- Skill discovery roots: `~/.omp/agent/skills/` (`omp-personal` scope), `~/.omp/agent/managed-skills/` (`omp-managed` scope), `~/.omp/plugins/cache/plugins/**` (`omp-plugin` scope).
+
+**To uninstall:**
+1. Marketplace: remove the plugin via the OMP CLI marketplace interface (or `~/.omp/plugins/installed_plugins.json` → delete the `skill-concierge@skill-concierge` entry).
+2. Dev-mode: edit `~/.omp/agent/config.yml` to delete the skill-concierge marker line and its extension path from the `extensions:` list.
+3. Optionally remove skill files from OMP roots: `rm -rf ~/.omp/agent/skills/skill-concierge/ ~/.omp/agent/managed-skills/skill-concierge/` + check `~/.omp/plugins/cache/plugins/skill-concierge/`.
+4. Optionally drop the scope env pins: `SKILL_OMP_ROOTS`.
+
+After removing a harness, run `skill-concierge:doctor --fix` or `python3 scripts/doctor.py --fix` to reindex the shared catalogue (the harness's scope points are pruned at the next reindex).
+
 ## Contributing
 
 This is a pre-1.0, evolving project. Before opening a change:

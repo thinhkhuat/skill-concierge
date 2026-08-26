@@ -24,6 +24,7 @@ call — and `SKILL_SUBAGENT_STOP=1` (default), injection is suppressed: a scope
 can't act on the doctrine isn't nagged, and the usage ledger stays clean. Any parse error or a
 top-level `--agent`/persona session (`agent_type` only, no `agent_id`) still fails **toward**
 injection — suppression needs positive proof, never absence of signal.
+Per-harness subagent doctrine scope — whether a delegated subagent receives the doctrine + per-turn mandate across each of the four harnesses (Claude Code, Codex, Command Code, OMP) — is documented factually in [§12 of the mental model](../../docs/skill-first-enforcement-mental-model.md#12-per-harness-subagent-doctrine-scope-factual-2026-08-26) with file:line citations and UNVERIFIED markers. Summary: Claude Code subagents never fire `UserPromptSubmit` so get no enforcement; OMP's `before_agent_start` fires per-agent so subagents DO get enforcement; Command Code and Codex are UNVERIFIED from the adapter surface.
 
 The standing order it injects — the **SKILL-FIRST doctrine**:
 
