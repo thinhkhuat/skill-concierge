@@ -772,7 +772,8 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ev = {"t": round(time.time(), 3), "sid": sid, "ev": "offer",
-              "band": band, "offered": offered, "fallback": fallback, "q": q[:120]}
+              "band": band, "offered": offered, "fallback": fallback, "q": q[:120],
+              "harness": RUNNING_HARNESS}
         if dropped:
             ev["dropped"] = dropped
         if ext:

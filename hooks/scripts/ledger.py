@@ -33,13 +33,14 @@ LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 # name (a Codex session exposes mcp__skill_search__search_skills — hyphen flattened; observed
 # live 2026-08-24). Codex fires no PostToolUse today, so the underscore forms are dormant — but
 # without them, capture would silently miss the day it does (the two-layer D3 from the Codex
-# revalidation). OMP surfaces the tools as `skill-concierge:skill-search/search_skills`
-# (namespaced plugin:server/tool, colon+slash separators) — the colon/slash suffixes below ride
-# the same endswith matching (the mcp__/plugin prefixes are all on the LEFT, never the suffix).
+# revalidation). OMP flattens the WHOLE mangled name to single underscores — observed live
+# 2026-08-26 as `mcp__skill_concierge_skill_search_search_skills` (colon AND hyphens AND the
+# server/tool separator all become `_`), so neither the slash form nor the double-underscore
+# form matches; the single-underscore suffixes below are the ones that actually catch it.
 SEARCH_TOOLS = ("skill-search__search_skills", "skill_search__search_skills",
-                "skill-search/search_skills")
+                "skill-search/search_skills", "skill_search_search_skills")
 GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
-             "skill-search/get_skill")
+             "skill-search/get_skill", "skill_search_get_skill")
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
 
 

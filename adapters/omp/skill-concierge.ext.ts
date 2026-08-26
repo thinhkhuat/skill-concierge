@@ -249,8 +249,10 @@ export default function (pi: any): void {
             harness: "omp",
           });
         }
-      } else if (toolName.includes("skill-search/search_skills")) {
-        // Retriever usage — ledger classifies by suffix; input is empty.
+      } else if (toolName.endsWith("skill-search/search_skills") || toolName.endsWith("skill_search_search_skills")) {
+        // Retriever usage — ledger classifies by suffix; input is empty. The single-underscore
+        // form is OMP's flattened mangled name (observed live 2026-08-26:
+        // mcp__skill_concierge_skill_search_search_skills — every separator becomes `_`).
         runLedger({
           hook_event_name: "PostToolUse",
           session_id: sessionId,
@@ -258,8 +260,9 @@ export default function (pi: any): void {
           tool_input: {},
           harness: "omp",
         });
-      } else if (toolName.includes("skill-search/get_skill")) {
-        // Deep pull (ADR-0031 external-take leg) — record the pulled name.
+      } else if (toolName.endsWith("skill-search/get_skill") || toolName.endsWith("skill_search_get_skill")) {
+        // Deep pull (ADR-0031 external-take leg) — record the pulled name. Single-underscore
+        // form: OMP's flattened mangled name, same class as the search matcher above.
         runLedger({
           hook_event_name: "PostToolUse",
           session_id: sessionId,
