@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""
-flywheel_llm.py — shared local-LLM client for the retrieval-flywheel generator
+"""flywheel_llm.py — shared LLM client for the retrieval-flywheel generator
 scripts (llm_eval_gen.py, llm_triggers.py). Stdlib only. Any OpenAI-compatible
-endpoint; the production model is gemma-4-e4b-it-qat-optiq (thinking OFF).
+endpoint; production today is the private cloud gateway api.thinhkhuat.com/v1
+(model cmc/deepseek/deepseek-v4-flash, FLYWHEEL_LLM_SCHEMA_MODE=off), configured
+in ~/.config/harness-env.sh — the canonical cross-harness env home (caveats §20).
 
-Endpoint/model/rate are env-configurable so generation coexists with cognee on
-the shared LAN GPU (see plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 0).
+Config resolution order (see _cfg below): real environment wins, then
+harness-env.sh, then the hard-coded default. The file fallback exists because
+processes launched outside a login shell — GUI-launched harness extensions,
+detached auto_* hook spawns, agent bash tools — do NOT inherit the sourced env;
+without it they silently target the dead local LM-Studio default (observed live
+2026-08-26, an OMP bash tool launching flywheel.py --generate with no env).
 
 Usage:
   python3 scripts/flywheel_llm.py --selftest   # network-free checks
@@ -31,13 +36,37 @@ sys.path.insert(0, str(ROOT / "scripts"))
 HOME = Path(os.environ.get("SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "skill-concierge"))
 CACHE_FILE = HOME / ".flywheel-cache.json"
 
-ENDPOINT = os.environ.get("FLYWHEEL_LLM_ENDPOINT", "http://localhost:4310/v1/chat/completions")
-MODEL = os.environ.get("FLYWHEEL_LLM_MODEL", "gemma-4-e4b-it-qat-optiq")
-API_KEY = os.environ.get("FLYWHEEL_LLM_API_KEY", "")
-# json_schema = strict grammar-constrained JSON (LM-Studio); json_object = loose JSON mode
-# (Ollama /v1 + some gateways); off = no response_format, rely on the prompt (generators
-# already validate + retry, so a looser mode degrades safely rather than crashing).
-SCHEMA_MODE = os.environ.get("FLYWHEEL_LLM_SCHEMA_MODE", "json_schema")
+_HARNESS_ENV_SH = Path.home() / ".config" / "harness-env.sh"
+
+
+def _harness_env() -> dict:
+    """Parse `export KEY="VALUE"` lines for FLYWHEEL_LLM_* keys from the canonical
+    env home. Missing file or odd lines: no-op (fail-open to today's resolution)."""
+    out = {}
+    try:
+        for line in _HARNESS_ENV_SH.read_text(encoding="utf-8").splitlines():
+            m = re.match(
+                r'^\s*(?:export\s+)?(FLYWHEEL_LLM_[A-Z_]+)=(["\']?)(.*)\2\s*$', line)
+            if m:
+                out[m.group(1)] = m.group(3)
+    except OSError:
+        pass
+    return out
+
+
+_HENV = _harness_env()
+
+
+def _cfg(key: str, default: str) -> str:
+    """env > harness-env.sh > default. Same seam rule as auto_*._mcp_env: a real
+    exported var always wins over the file."""
+    return os.environ.get(key) or _HENV.get(key) or default
+
+
+ENDPOINT = _cfg("FLYWHEEL_LLM_ENDPOINT", "http://localhost:4310/v1/chat/completions")
+MODEL = _cfg("FLYWHEEL_LLM_MODEL", "gemma-4-e4b-it-qat-optiq")
+API_KEY = _cfg("FLYWHEEL_LLM_API_KEY", "")
+SCHEMA_MODE = _cfg("FLYWHEEL_LLM_SCHEMA_MODE", "json_schema")
 
 
 class TruncatedCompletion(RuntimeError):
@@ -86,7 +115,10 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
         "model": MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": 0.4,
-        "max_tokens": 4096,
+        # 8192 (was 4096): deepseek-v4-flash spends budget on reasoning before content —
+        # observed live 2026-08-26 as deterministic finish_reason='length' with 0-318 chars
+        # of content returned on 7/89 skills; the raise is the documented fix (line ~149).
+        "max_tokens": 8192,
     }
     if schema is not None and SCHEMA_MODE == "json_schema":
         payload["response_format"] = {
