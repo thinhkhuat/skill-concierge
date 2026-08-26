@@ -4,6 +4,41 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.29.0] — 2026-08-26
+
+### Fixed
+- **OMP telemetry capture was dead: every MCP tool name arrives flattened to single
+  underscores** (`mcp__skill_concierge_skill_search_search_skills`). Both the ext.ts
+  telemetry matchers and `ledger.py` `SEARCH_TOOLS`/`GET_TOOLS` only knew the
+  hyphen/double-underscore forms, so search/get events from OMP sessions were never
+  captured. Both matcher sets now accept the flattened forms; verified end-to-end with
+  a live probe row `{"ev":"search","harness":"omp"}`. (Found by the adversarial 5-lens
+  review of 0.28.1.)
+- **Enforcer offer rows now carry `ev["harness"]`** — per-harness analytics become
+  computable; historical unstamped rows are legacy.
+- **Flywheel utterance generation missed in detached/background paths** (agent bash
+  tools, SessionStart hook spawns, GUI-launched extensions saw a dead local default).
+  `flywheel_llm._cfg()` now resolves endpoint/model/key from real env first, then
+  `~/.config/harness-env.sh` — secrets stay out of repo.
+- **Flywheel deterministic truncations:** deepseek-v4-flash spends the token budget on
+  reasoning before content — 7 skills died `finish_reason='length'` at 0–318 chars
+  under `max_tokens` 4096. Raised to 8192. Coverage closed 556/645 → **645/645 (100%)**.
+
+### Added
+- **`doctor.py` covers all four harnesses** — `check_codex()` and `check_commandcode()`
+  join the implicit Claude Code checks and `check_omp`: WARN-only, stdlib-only, probing
+  the Codex plugin-cache version vs SSOT and the Command Code mod + SessionStart hooks +
+  skill-search MCP registration. Live-verified: all rows `[ok]`, exit 0, selftest extended.
+- **README Uninstall section** — all four harnesses plus shared components (durable home,
+  Qdrant, venv), every path grounded in the actual installers.
+- **Per-harness subagent doctrine table** (`docs/skill-first-enforcement-mental-model.md`
+  §12, cross-referenced from openwiki) — CC subagents get no doctrine (UserPromptSubmit
+  never fires for them), OMP subagents do (`before_agent_start` per agent, observed live);
+  Codex/Command Code marked UNVERIFIED.
+- **Adversarial 5-lens review report** (`plans/reports/review-260826-adversarial-5lens-0.28.1.md`)
+  with owner verdicts recorded (Fork-1 rename rejected → deterministic gate direction;
+  keep-on patch retracted; Fork-2 numbers re-derived from raw ledger).
+
 ## [0.28.1] — 2026-08-25
 
 ### Fixed
@@ -1601,6 +1636,7 @@ closes the dominant failure modes and adds the telemetry to keep measuring them.
   `config/keep-on.json` (32-skill keep-on policy). Without it a cache `setup.sh` rerun could
   revert the router to `name-only`.
 
+
 ## [0.1.1] — 2026-06-26
 
 ### Fixed
@@ -1621,7 +1657,8 @@ closes the dominant failure modes and adds the telemetry to keep measuring them.
   `config/keep-on.json`.
 - Build plan + ops docs under `docs/`.
 
-[Unreleased]: https://github.com/thinhkhuat/skill-concierge/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/thinhkhuat/skill-concierge/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/thinhkhuat/skill-concierge/compare/v0.28.1...v0.29.0
 [0.4.2]: https://github.com/thinhkhuat/skill-concierge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/thinhkhuat/skill-concierge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/thinhkhuat/skill-concierge/compare/v0.3.1...v0.4.0
