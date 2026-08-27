@@ -4,6 +4,30 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.30.0] — 2026-08-27
+
+### Fixed
+- **Concurrent flywheel runs could overlap and double the LLM request rate** (auto
+  SessionStart hook vs manual `flywheel --generate` — live overlap observed 2026-08-27:
+  two manifest runs 13 s apart while a capped run needs ~3 min; that night's error
+  spike hit 11 vs the normal 0-4, all `The read operation timed out`). New
+  `scripts/flywheel_lock.py` — one lock file at `~/.claude/skill-concierge/.flywheel.lock`
+  (`FLYWHEEL_LOCK` override), `fcntl.flock` with an `O_CREAT|O_EXCL` fallback + 2 h
+  stale window + PID liveness. `flywheel.py --generate` acquires before any LLM work
+  and exits 4 (`SKIP: flywheel already running (pid …)`) when held; the auto hook
+  checks `is_locked()` after ping and skips **without stamping**, so a run held at
+  session start retries next session; `flywheel.py` (status) prints `Lock: HELD/ free`.
+  Fail-open everywhere: any lock error degrades to today's behavior.
+
+### Added
+- **Per-skill error messages in the flywheel run manifest.** The generators always
+  returned `{"name","status","detail"}` but `flywheel.py:_note` dropped `detail`, so
+  an 11-error run stored `totals.error=11` with no way to tell timeout vs validation
+  vs rate-limit without re-reading logs. `detail` now flows through to
+  `flywheel-manifest.json` `skills[].detail` (optional key — old runs read as `None`,
+  backward-compatible), surfaced in `--generate` summaries, `flywheel.py` status, and
+  `doctor.py`'s flywheel row (`per-skill errors (N): name: cause`).
+
 ## [0.29.0] — 2026-08-26
 
 ### Fixed
