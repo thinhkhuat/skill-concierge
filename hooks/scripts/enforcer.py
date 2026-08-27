@@ -517,6 +517,22 @@ _NEXT_SKILLS_OVERRIDES = Path(os.environ.get(
     "SKILL_CONCIERGE_NEXT_SKILLS_OVERRIDES",
     Path.home() / ".claude" / "skill-concierge" / "next-skills-overrides.json"))
 
+# ADR-0040: behavior-mined chains (plans/260828-0004 Phase 1). The ledger already
+# records ground-truth skill sequences; scripts/build_chains.py mines them offline into
+# this durable-home map (support x lift filtered — closure skills that follow everything
+# die on lift). Merged as the LOWEST layer under ADR-0030 overrides and ADR-0029 declared
+# frontmatter: mined only ever FILLS a name the two human layers left unchained — a name
+# present in either layer (even as an explicit [] suppression) is final, never backfilled.
+# Keys and successors must resolve in the VISIBLE declared union (same scope-visibility
+# rule the declared layer filters by). Default ON: the result rides the existing
+# context-only CHAIN-HINT line — no gate, no floor, no candidate-list entry — so the
+# blast radius is exactly ADR-0029's one line, sourced from observed behaviour instead
+# of 0.4% authoring coverage.
+MINED_CHAINS = os.environ.get("ENFORCER_MINED_CHAINS", "1") != "0"
+_MINED_CHAINS_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_MINED_CHAINS",
+    Path.home() / ".claude" / "skill-concierge" / "mined-chains.json"))
+
 
 def _apply_chain_overrides(names: dict) -> dict:
     """Merge the operator-owned override map over the sidecar-derived names.
@@ -565,7 +581,37 @@ def _visible_sidecar_names() -> dict:
         m = data.get(scope)
         if isinstance(m, dict):
             out.update(m)
-    return _apply_chain_overrides(out)   # ADR-0030: operator curation wins over upstream's file
+    filled = _merge_mined_chains(out)     # ADR-0040: observed behaviour fills the unchained
+    return _apply_chain_overrides(filled)  # ADR-0030: operator curation wins over BOTH layers
+
+
+def _merge_mined_chains(names: dict) -> dict:
+    """ADR-0040 lowest chain layer. Mined successors backfill ONLY names whose declared
+    value is empty — the sidecar writes `[]` for every skill whose author declared no
+    next-skills (the 99.6% default), which is absent authoring, NOT suppression; a
+    NON-empty declared chain is a real authoring decision and wins. Deliberate
+    suppression stays expressible because _apply_chain_overrides runs AFTER this and
+    its `[]` replaces whatever mined filled in. Both the key and each successor must be
+    keys of the pre-merge map, i.e. members of the catalogue VISIBLE from this cwd — a
+    mined name from a foreign project scope must not be hinted here. Fail-open: flag
+    off, absent file, malformed file, or wrong shape all return the input unchanged."""
+    if not MINED_CHAINS:
+        return names
+    try:
+        doc = json.loads(_MINED_CHAINS_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return names
+    chains = doc.get("chains") if isinstance(doc, dict) else None
+    if not isinstance(chains, dict):
+        return names
+    visible = set(names)
+    for k, v in chains.items():
+        if not isinstance(k, str) or k not in visible or names.get(k) or not isinstance(v, list):
+            continue
+        succ = [s for s in v if isinstance(s, str) and s in visible]
+        if succ:
+            names[k] = succ
+    return names
 
 
 def _last_used_skill(sid: str):
@@ -1461,7 +1507,9 @@ def _selftest() -> int:
     # successors, silent on TTL-expired / other-sid / absent-sidecar / flag-off, and the
     # line carries neither the audit marker nor the locked signature phrases (parity).
     global CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES
-    _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES)
+    global MINED_CHAINS, _MINED_CHAINS_PATH
+    _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES,
+                    MINED_CHAINS, _MINED_CHAINS_PATH)
     with tempfile.TemporaryDirectory() as _td:
         _tdp = Path(_td)
         try:
@@ -1562,8 +1610,52 @@ def _selftest() -> int:
             if "succ-b" not in _chain_hint("s1"):
                 bad.append("chain-hint: malformed overrides file must fail open to the sidecar value")
             _NEXT_SKILLS_OVERRIDES = _tdp / "nope-ovr.json"
+            # (9c) ADR-0040 mined chains — lowest layer: fills an EMPTY declared entry
+            # (with catalogue-visible successors only), never overrides a non-empty
+            # declared value, is replaced by an explicit operator [] (applied after),
+            # ignores keys from non-visible scopes, and fails open on flag-off /
+            # absent / malformed file.
+            _mined = _tdp / "mined-chains.json"
+            _MINED_CHAINS_PATH = _mined
+            _mined.write_text(json.dumps({"chains": {
+                "succ-b": ["seed-a", "dead-z"],   # fills an empty declared entry
+                "seed-a": ["pk:t"],               # declared non-empty -> mined ignored
+                "ghost": ["seed-a"],              # key not visible (project:elsewhere)
+            }}), encoding="utf-8")
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "succ-b"}) + "\n", encoding="utf-8")
+            hm = _chain_hint("s1")
+            if "seed-a" not in hm or "dead-z" in hm:
+                bad.append(f"chain-hint: mined must fill empty declared entry, filtered: {hm!r}")
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "seed-a"}) + "\n", encoding="utf-8")
+            hm2 = _chain_hint("s1")
+            if "succ-b" not in hm2 or "pk:t" in hm2:
+                bad.append(f"chain-hint: mined must not override a declared value: {hm2!r}")
+            MINED_CHAINS = False
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "succ-b"}) + "\n", encoding="utf-8")
+            if _chain_hint("s1"):
+                bad.append("chain-hint: flag off must suppress the mined layer")
+            MINED_CHAINS = True
+            _ovr.write_text(json.dumps({"succ-b": []}), encoding="utf-8")
+            _NEXT_SKILLS_OVERRIDES = _ovr
+            if _chain_hint("s1"):
+                bad.append("chain-hint: operator [] must replace a mined fill")
+            _NEXT_SKILLS_OVERRIDES = _tdp / "nope-ovr.json"
+            _led.write_text(json.dumps(
+                {"t": _now - 10, "sid": "s1", "ev": "auto", "name": "seed-a"}) + "\n", encoding="utf-8")
+            _MINED_CHAINS_PATH = _tdp / "nope-mined.json"
+            if "succ-b" not in _chain_hint("s1"):
+                bad.append("chain-hint: absent mined file must fail open to declared")
+            _mined.write_text("{not json", encoding="utf-8")
+            _MINED_CHAINS_PATH = _mined
+            if "succ-b" not in _chain_hint("s1"):
+                bad.append("chain-hint: malformed mined file must fail open to declared")
+            _MINED_CHAINS_PATH = _tdp / "nope-mined.json"
         finally:
-            CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES = _saved_chain
+            CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES, \
+                MINED_CHAINS, _MINED_CHAINS_PATH = _saved_chain
 
     # (10) ADR-0031 installed query: _retrieve ALWAYS carries must_not tier=external
     # (byte-identical whether or not the ADR-0032 annex is on — externals cannot displace
