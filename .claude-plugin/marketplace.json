@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Skill-governance layer for Claude Code, Codex, Command Code, and Oh My Pi — semantic retrieval + use-enforcement + invocation ledger.",
-    "version": "0.32.1"
+    "version": "0.32.2"
   },
   "plugins": [
     {
@@ -20,7 +20,7 @@
         "hooks",
         "telemetry"
       ],
-      "version": "0.32.1"
+      "version": "0.32.2"
     }
   ]
 }

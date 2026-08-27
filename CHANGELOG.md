@@ -4,6 +4,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.32.2] — 2026-08-28
+
+### Fixed
+- **Thin-intent precision rule (second smoke pass on 0.32.1).** A *second* announced
+  intent must bring ≥ 2 candidates (`_qualifying_intents`): a single stray
+  lexically-disjoint row — `ego-browser` on a test-family retrieval, `design-system`
+  on a planning retrieval — is retrieval breadth, not evidence of an intent. The
+  top's own cluster always qualifies. Renderer and telemetry apply the same
+  qualification. Smoke after-fix: "fix the failing test" → 2 intents (genuine
+  test/fix family blend, ego-browser demoted to supporting row); "brainstorm and
+  plan the feature" → classic single-intent render (design-system demoted);
+  "document the endpoints, then deploy" → exactly 2. Known cost, deliberate: a
+  thin TRUE third intent may go unannounced — advisory annotations must not cry
+  wolf; the Phase-4 continuation metric is the arbiter.
+
 ## [0.32.1] — 2026-08-28
 
 ### Fixed
