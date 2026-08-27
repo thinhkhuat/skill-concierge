@@ -808,11 +808,14 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None) -> None:
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None) -> None:
     """Append the offer event. Fail-silent: telemetry must never surface.
     ADR-0032: `ext` records the external annex names offered this turn (external offer→take
     is measured against the ADR-0031 get_skill takes); absent when no external annexed.
     ADR-0034: `xh` records the cross-harness annex the same way; absent when none annexed.
+    ADR-0041: `n_intents` / `route` record the intent-cluster count and projected route
+    rendered this turn (absent when 1 intent / no route) — the seed of the L4
+    continuation-rate metric; additive keys, old analyzers ignore them.
     EPOCH NOTE: ADR-0034 changes what `offered` contains, so any offer-composition rate
     measured across the v0.25.0 boundary pools two different configs — window it."""
     try:
@@ -826,6 +829,10 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
             ev["ext"] = ext
         if xh:
             ev["xh"] = xh
+        if n_intents and n_intents > 1:
+            ev["n_intents"] = n_intents
+        if route:
+            ev["route"] = route
         if embed_ms is not None:
             ev["embed_ms"] = int(embed_ms)
         if qdrant_ms is not None:
@@ -1035,6 +1042,113 @@ def _blurb(desc: str) -> str:
     return b[:_DESC_CHARS].rsplit(" ", 1)[0] + "…" if len(b) > _DESC_CHARS else b
 
 
+# ── ADR-0041: multi-intent offer shaping + route projection ─────────────────
+# Two upgrades to the OFFER itself (ADR-0040 fed the chain data; these use it at
+# turn zero instead of only after a skill fires):
+#   • INTENT CLUSTERING — deterministic, zero-network, post-processing of the already-
+#     fetched candidates. A prompt carrying "research it, build it, ship it" blends one
+#     embedding; the top-8 then mixes three intents and the secondary intents starve.
+#     Greedy lexical clustering (Jaccard on name+description tokens) detects >=2
+#     DISTINCT intent groups; the render leads with each cluster's best candidate.
+#   • ROUTE PROJECTION — when the top candidate has successors in the merged chain map
+#     (ADR-0030 overrides > ADR-0029 declared > ADR-0040 mined), one bounded line shows
+#     the typical continuation route (max 4 nodes, cycle-safe) BEFORE anything is used.
+# Both are context-only: no gate, no floor, no slot displacement — the candidate SET and
+# its scores are untouched; only ordering emphasis and advisory text change. The locked
+# header/footer literals are byte-identical (audit parity), and single-intent turns with
+# no route render byte-identically to pre-0041.
+MULTI_INTENT = os.environ.get("ENFORCER_MULTI_INTENT", "1") != "0"
+CHAIN_PROJECTION = os.environ.get("ENFORCER_CHAIN_PROJECTION", "1") != "0"
+INTENT_MERGE_J = float(os.environ.get("ENFORCER_INTENT_MERGE_J", "0.24"))
+INTENT2_RATIO = float(os.environ.get("ENFORCER_INTENT2_RATIO", "0.75"))
+_ROUTE_MAX = 4
+
+# Domain-generic tokens present in nearly every skill description — dropping them is
+# what makes lexical overlap track INTENT (deploy/diagnose/document…) rather than
+# shared boilerplate (skill/code/task/agent…).
+_INTENT_STOP = frozenset(
+    "the a an and or for to of in on with this that use using when your you it is are be "
+    "by from as at into not but also its their them new create make build work works "
+    "working code task tasks skill skills agent agents claude user users help helps need "
+    "needs best better via per all any can will should must does done like about more "
+    "most other others before after then than so if no yes one two how what which".split())
+
+
+def _intent_tokens(name: str, desc: str) -> frozenset:
+    # Naive singularization (drop a trailing 's' on >=4-char tokens, guard 'ss') so
+    # report/reports and suite/suites count as overlap — without it, plural siblings
+    # of ONE intent split into fake separate intents. Consistent on both sides, so
+    # imperfect stems (analysis) only ever merge with themselves.
+    toks = set()
+    for t in re.findall(r"[a-z0-9]+", f"{name} {desc}".lower()):
+        if len(t) < 2 or t in _INTENT_STOP:
+            continue
+        if len(t) >= 4 and t.endswith("s") and not t.endswith("ss"):
+            t = t[:-1]
+        toks.add(t)
+    return frozenset(toks)
+
+
+def _intent_clusters(cands: list) -> list:
+    """Greedy lexical clustering of the shown candidates, best-score-first.
+
+    Each candidate joins the first cluster whose token union overlaps it by Jaccard
+    >= INTENT_MERGE_J; otherwise it opens a new cluster. Deterministic and pure —
+    same input, same clusters, no network, O(n * k) on <= TOP_K candidates. Cluster
+    leads are simply each cluster's first (highest-scoring) member; intra-cluster
+    score order is preserved.
+    """
+    clusters, unions = [], []
+    for name, desc, _score in cands:
+        toks = _intent_tokens(name, desc)
+        placed = False
+        for i, u in enumerate(unions):
+            inter = len(toks & u)
+            if inter and inter / len(toks | u) >= INTENT_MERGE_J:
+                clusters[i].append((name, desc, _score))
+                unions[i] = u | toks
+                placed = True
+                break
+        if not placed:
+            clusters.append([(name, desc, _score)])
+            unions.append(set(toks))
+    return clusters
+
+
+def _multi_intent_gate(clusters: list) -> bool:
+    """>=2 clusters AND the second intent's lead is not a weak neighbour: its score
+    must be >= INTENT2_RATIO of the first lead's. Without the strength gate, a lexically
+    odd but low-scoring sibling would split a single-intent turn into fake 'intents'."""
+    if len(clusters) < 2:
+        return False
+    top = clusters[0][0][2]
+    return top > 0 and clusters[1][0][2] >= INTENT2_RATIO * top
+
+
+def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_MAX) -> list:
+    """Bounded continuation walk from `seed` through the merged chain map: strongest
+    successor per hop, cycle-safe (visited set), capped at max_nodes, successors must
+    be live map keys (the same catalogue-membership rule _chain_hint filters by).
+    Returns [] when seed has no successors — a route of one node is not a route."""
+    if not CHAIN_PROJECTION or not seed:
+        return []
+    names_map = names_map if names_map is not None else _visible_sidecar_names()
+    route, seen = [seed], {seed}
+    cur = seed
+    while len(route) < max_nodes:
+        succ = names_map.get(cur)
+        if not isinstance(succ, list):
+            break
+        nxt = next((s for s in succ
+                    if isinstance(s, str) and s and s not in seen and s in names_map), None)
+        if not nxt:
+            break
+        route.append(nxt)
+        seen.add(nxt)
+        cur = nxt
+    return route if len(route) >= 2 else []
+
+
 def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
@@ -1048,10 +1162,40 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
     # legible: "on disk under the other harness" is not "in a search-only catalog".
     total = sum(s for (_n, _d, s) in cands) or 1.0
     multi = len(cands) > 1
+    # ADR-0041 multi-intent: cluster the SHOWN set; when >=2 clusters clear the strength
+    # gate, reorder leads-first and say so. Single-intent turns take the same list in the
+    # same order (clusters preserve score order), rendering byte-identically.
+    ordered = list(cands)
+    n_intents = 1
+    if MULTI_INTENT and multi:
+        _clusters = _intent_clusters(cands)
+        if _multi_intent_gate(_clusters):
+            n_intents = len(_clusters)
+            # leads-first: rows 1..N name the N primaries (one per intent), then the
+            # supporting rows grouped behind their lead — the "first N rows" the note
+            # promises. Intra-cluster score order preserved within each group.
+            ordered = ([c[0] for c in _clusters]
+                       + [m for c in _clusters for m in c[1:]])
     lines = [f"  • {name}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
-             for name, desc, score in cands]
-    note = ("\nShares are RELATIVE rank among these few (all above the noise floor), not confidence — "
-            "pick the one matching the intent.") if multi else ""
+             for name, desc, score in ordered]
+    if multi and n_intents > 1:
+        note = (f"\nReads as {n_intents} distinct intents — the first {n_intents} rows are the "
+                "strongest fit per intent; run them in the order the task needs, one USING per "
+                "intent at its moment. Shares are RELATIVE rank among these few (all above the "
+                "noise floor), not confidence.")
+    else:
+        note = ("\nShares are RELATIVE rank among these few (all above the noise floor), not confidence — "
+                "pick the one matching the intent.") if multi else ""
+    # ADR-0041 route projection: the whole-route line at turn zero, from the merged
+    # chain map (ADR-0030 overrides > declared > ADR-0040 mined). Advisory only —
+    # wording stays clear of the audit's locked literals (parity with CHAIN-HINT).
+    route_line = ""
+    if cands:
+        _route = _route_of(cands[0][0])
+        if _route:
+            route_line = ("\nROUTE: if " + _route[0] + " fits, the catalogue's typical "
+                          "continuation is " + " -> ".join(_route)
+                          + " (projection, fit still required).")
     annex_block = ""
     if annex:
         alines = [f"  • {name} [external:{alias}] — {_blurb(desc)}"
@@ -1072,7 +1216,7 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
     return (
         "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
         "Preview for this task (NOT the full ~500 shelf):\n"
-        + "\n".join(lines) + note + annex_block + foreign_block + "\n"
+        + "\n".join(lines) + note + route_line + annex_block + foreign_block + "\n"
         "None fit → run search_skills THIS reply before any SKIPPING; show the query. "
         "A loosely-adaptable fit is a USING. [full order: session start]"
     )
@@ -1272,11 +1416,19 @@ def main() -> int:
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
         shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
         _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign) + _chain_hint(sid))
+        # ADR-0041 telemetry — computed from the same pure helpers the renderer used, so
+        # the ledger row and the injected text can never disagree.
+        _ni = 1
+        if MULTI_INTENT and len(shown) > 1:
+            _cls = _intent_clusters(shown)
+            if _multi_intent_gate(_cls):
+                _ni = len(_cls)
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
                       ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None,
-                      xh=[[n, round(s, 4)] for (n, _d, s) in _foreign] or None)
+                      xh=[[n, round(s, 4)] for (n, _d, s) in _foreign] or None,
+                      n_intents=_ni, route=_route_of(shown[0][0]) if shown else None)
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError,
             OverflowError):
         return 0  # fail-silent, never block
@@ -1967,6 +2119,81 @@ def _selftest() -> int:
         UNDER_CODEX = _saved_uc
         RUNNING_HARNESS = _saved_rh
         FOREIGN_HARNESS = _saved_fh
+
+    # (13) ADR-0041 multi-intent shaping + route projection. Pins: two lexically
+    # disjoint, score-comparable candidate groups split into 2 intents with
+    # leads-first ordering; a weak second cluster does NOT split; siblings of one
+    # intent stay one intent (byte-identical note); _route_of walks successors,
+    # caps at 4 nodes, breaks cycles and dead ends; flags off revert to the
+    # pre-0041 render; and the new lines carry neither the audit marker nor the
+    # locked signature phrases (parity, same rule as the CHAIN-HINT line).
+    # (_SIDECAR_PATH / _NEXT_SKILLS_OVERRIDES / _MINED_CHAINS_PATH were declared
+    # global with case (9); they are only REBOUND here.)
+    global MULTI_INTENT, CHAIN_PROJECTION
+    _saved_41 = (MULTI_INTENT, CHAIN_PROJECTION, _MINED_CHAINS_PATH)
+    try:
+        _plan = ("plan", "scope a feature into a phased implementation roadmap with acceptance criteria", 0.40)
+        _road = ("roadmap", "phased implementation roadmap milestones deliverables sequencing", 0.30)
+        _test = ("test", "run the unit and integration suites, coverage gaps, failing checks", 0.36)
+        _cov = ("coverage", "coverage of the unit and integration suites, gaps in assertions", 0.28)
+        _c41 = [_plan, _test, _road, _cov]
+        _cls = _intent_clusters(_c41)
+        if len(_cls) != 2 or {c[0][0] for c in _cls} != {"plan", "test"}:
+            bad.append(f"0041: expected plan/test clusters, got {[ [m[0] for m in c] for c in _cls ]!r}")
+        if not _multi_intent_gate(_cls):
+            bad.append("0041: comparable second cluster must pass the multi-intent gate")
+        r41 = _ranked_mandate(_c41)
+        if "Reads as 2 distinct intents" not in r41:
+            bad.append("0041: two-intent render must carry the intent note")
+        _first_rows = [l for l in r41.splitlines() if l.startswith("  • ")][:2]
+        if not (_first_rows[0].startswith("  • plan") and _first_rows[1].startswith("  • test")):
+            bad.append(f"0041: leads must render first, got {_first_rows!r}")
+        # weak second cluster: low score -> no split, standard note
+        _weak = [_plan, ("test", "run the unit and integration suites, coverage gaps, failing checks", 0.10)]
+        if "distinct intents" in _ranked_mandate(_weak):
+            bad.append("0041: weak second cluster must not split the turn")
+        # one intent, lexically close siblings -> original note, no split
+        _single = [_plan, _road]
+        r_single = _ranked_mandate(_single)
+        if "distinct intents" in r_single or "pick the one matching the intent" not in r_single:
+            bad.append("0041: single-intent siblings must keep the pre-0041 note")
+        # _route_of: walk, cap, cycle, dead-end
+        _saved_41_paths = (_SIDECAR_PATH, _NEXT_SKILLS_OVERRIDES)
+        with tempfile.TemporaryDirectory() as _td41:
+            _tdp41 = Path(_td41)
+            _sc41 = _tdp41 / "ns.json"
+            _sc41.write_text(json.dumps({"personal": {
+                "a": ["b", "x"], "b": ["c"], "c": ["a"],        # a->b->c->a cycle
+                "d": [],                                          # dead end
+            }}), encoding="utf-8")
+            _SIDECAR_PATH = _sc41
+            _NEXT_SKILLS_OVERRIDES = _tdp41 / "nope.json"
+            _MINED_CHAINS_PATH = _tdp41 / "nope2.json"
+            _m41 = _visible_sidecar_names()
+            if _route_of("a", _m41) != ["a", "b", "c"]:
+                bad.append(f"0041: route must walk a->b->c and cap before the cycle: {_route_of('a', _m41)!r}")
+            if _route_of("b", _m41) != ["b", "c", "a"]:
+                bad.append(f"0041: mid-chain seed must walk its tail, cycle-blocked at the 4th hop: {_route_of('b', _m41)!r}")
+            if _route_of("d", _m41):
+                bad.append("0041: dead-end seed must yield no route")
+            if _route_of("ghost", _m41):
+                bad.append("0041: unknown seed must yield no route")
+            if "ROUTE: if a fits" not in _ranked_mandate([("a", "desc", 0.4), ("z", "desc", 0.3)]):
+                bad.append("0041: top candidate with successors must render the ROUTE line")
+            for _lit in ("SKILL-CHECK:", "self-referential recap lane"):
+                if _lit in _ranked_mandate([("a", "desc", 0.4)]):
+                    bad.append(f"0041: render must not contain locked literal {_lit!r}")
+            CHAIN_PROJECTION = False
+            if "ROUTE:" in _ranked_mandate([("a", "desc", 0.4)]):
+                bad.append("0041: projection flag off must suppress the ROUTE line")
+            CHAIN_PROJECTION = True
+            MULTI_INTENT = False
+            if "distinct intents" in _ranked_mandate(_c41):
+                bad.append("0041: multi-intent flag off must revert to the pre-0041 note")
+            MULTI_INTENT = True
+        _SIDECAR_PATH, _NEXT_SKILLS_OVERRIDES = _saved_41_paths
+    finally:
+        MULTI_INTENT, CHAIN_PROJECTION, _MINED_CHAINS_PATH = _saved_41
 
     if bad:
         print("enforcer --selftest FAIL:")
