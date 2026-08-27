@@ -4,6 +4,19 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.33.1] — 2026-08-28
+
+### Fixed
+- **`chat()` retries the transient 5xx class, not just 503.** The overnight flywheel run
+  (first under the 0.30.x lock/retry/detail stack) closed coverage to 715/715 with 617
+  generated — and its 98 manifest errors, fully diagnosable for the first time via
+  `skills[].detail`, were 93 × HTTP 502: a real gateway outage window that the 503-only
+  retry ladder let burn one attempt per skill. 502 and 504 now join 503 on the same
+  3-attempt/5s-10s backoff. Bounded by design: a *sustained* outage still exhausts the
+  ladder in ~15 s/skill and defers the skill to the next run (content-hash unadvanced);
+  500 and 4xx keep failing fast. Mocked round-trips pin retry-then-success and the
+  500-no-retry boundary.
+
 ## [0.33.0] — 2026-08-28
 
 ### Added

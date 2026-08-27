@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.33.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.33.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -343,6 +343,7 @@ reverts that drop that harness's roots + scopes byte-identically (see AGENTS.md 
 
 
 
+`0.33.1` — **published, flywheel retry ladder widened to the transient 5xx class: `chat()` now retries HTTP 502/504 alongside 503 (3 attempts, 5s/10s backoff) — the overnight run's 93-error 502 outage window is the evidence; sustained outages still exhaust the ladder in ~15s/skill and defer to the next run, and 500/4xx keep failing fast.**
 `0.33.0` — **published, skill-chain-intelligence Phase 4 — the loop closes: offer events now log the fired CHAIN-HINT's `[seed]+successors` (`hint` key, from the same `_chain_hint_data` the injected line renders), and `analyze.py --continuation` computes the follow rates — route-follow (projected successor invoked within 30 min), hint-follow, multi-intent uptake vs a single-intent control — epoch-scoped, sub-lane excluded, with an insufficient-data floor that never pools across the 0.32.x boundary.**
 `0.32.2` — **published, thin-intent precision rule: a second announced intent needs ≥2 candidates (`_qualifying_intents`) — singleton stray rows (ego-browser on a test retrieval, design-system on a planning retrieval) demote to supporting instead of faking an intent; renderer + telemetry share the qualification. Smoke: single-family renders classic, docs+deploy reads exactly 2.**
 `0.32.1` — **published, multi-intent over-split fix (found by the 0.32.0 live smoke): synonym folding (8 conservative domain families), overlap-coefficient merge test instead of Jaccard (siblings carry long skill-specific token tails), and a 3-intent cap with extras folding back as supporting rows; telemetry capped identically. Single-intent turns render classically again; the research/tests/commit smoke reads exactly 3.**
