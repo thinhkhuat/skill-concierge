@@ -1037,6 +1037,19 @@ def check_flywheel():
              f"coverage {c.get('have', '?')}/{c.get('total', '?')}")
         if run.get("last_error"):
             s += f", last_error={run['last_error']}"
+        # (b) per-skill error detail — the run's `skills[].detail` (when present) is the
+        # only place that records WHY a specific skill failed (timeout vs validation vs
+        # rate-limit). Old runs have no `detail` key — gracefully ignored.
+        try:
+            errs = [sk for sk in (run.get("skills") or []) if sk.get("status") == "error" and sk.get("detail")]
+            if errs:
+                # Keep doctor detail on one line — truncate to first 2 with ellipsis
+                sample = "; ".join(f"{e['name']}: {e['detail']}" for e in errs[:2])
+                s += f" — per-skill errors ({len(errs)}): {sample}"
+                if len(errs) > 2:
+                    s += f" (+{len(errs)-2} more; see manifest)"
+        except Exception:
+            pass
         return s
 
     configured = "FLYWHEEL_LLM_ENDPOINT" in os.environ or "FLYWHEEL_LLM_MODEL" in os.environ

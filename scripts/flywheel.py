@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import flywheel_llm  # shared OpenAI-compatible client (ping/live_skills/config)
+import flywheel_lock      # cross-process mutual exclusion (auto vs manual)
 import flywheel_manifest  # shared global run-manifest writer/reader
 import llm_eval_gen  # scenario (positive/negative) generator
 import llm_triggers  # utterance-trigger generator
@@ -111,8 +112,27 @@ def print_status():
         print(f"  when: {lr.get('timestamp','?')}  via {lr.get('endpoint','?')} ({lr.get('model','?')})")
         print(f"  generated {t.get('generated',0)}  error {t.get('error',0)}  skipped {t.get('skipped',0)}"
               + (f"  | last_error: {lr.get('last_error')}" if lr.get("last_error") else ""))
+        # Per-skill error detail (b) — surfaced when present, ignored on old runs
+        errs = [s for s in (lr.get("skills") or []) if s.get("status") == "error" and s.get("detail")]
+        if errs:
+            print(f"  per-skill errors ({len(errs)}):")
+            for s in errs[:10]:
+                print(f"    - {s['name']}: {s['detail']}")
+            if len(errs) > 10:
+                print(f"    ... and {len(errs) - 10} more (see manifest)")
     else:
         print("  none recorded yet (fresh install, or the auto_flywheel hook has not fired)")
+
+    # Lock probe — so `flywheel.py` (status) tells the user why a run was skipped
+    try:
+        if flywheel_lock.is_locked():
+            pid, since = flywheel_lock.holder()
+            hint = f" (pid {pid} since {since:.0f})" if pid and since else ""
+            print(f"Lock: HELD{hint} — another run is in progress; --generate would skip (exit 4)")
+        else:
+            print("Lock: free")
+    except Exception:
+        pass
     return ok, missing
 
 
@@ -133,6 +153,14 @@ def _print_run_summary(run):
           f"coverage {run['coverage']['have']}/{run['coverage']['total']}")
     if run["last_error"]:
         print(f"  last_error: {run['last_error']}")
+    # (b) surface per-skill error detail when present
+    errs = [s for s in (run.get("skills") or []) if s.get("status") == "error" and s.get("detail")]
+    if errs:
+        print(f"  per-skill errors ({len(errs)}):")
+        for s in errs[:8]:
+            print(f"    - {s['name']}: {s['detail']}")
+        if len(errs) > 8:
+            print(f"    ... and {len(errs) - 8} more")
 
 
 def generate(rate=None, limit=None, triggers_only=False):
@@ -149,60 +177,84 @@ def generate(rate=None, limit=None, triggers_only=False):
         _print_run_summary(_write_manifest(last_error=f"unreachable: {detail}"))
         return 2
 
-    _, _, before = coverage()
-    print(f"Before: {len(before)} indexed skills missing utterances")
-    rate = rate if rate is not None else 6.0
+    # --- lock (a): auto vs manual mutual exclusion ---
+    # Acquire BEFORE any LLM work or the final reindex so two concurrent
+    # invocations (SessionStart auto + manual `flywheel --generate`) cannot
+    # double the request rate or race on triggers.json / the index. Early
+    # exits above (venv missing / unreachable) do NOT hold the lock.
+    if not flywheel_lock.acquire(block=False):
+        pid, since = flywheel_lock.holder()
+        held = f" (pid {pid} since {since:.0f})" if pid and since else ""
+        print(f"SKIP: flywheel already running{held} — another run holds {flywheel_lock.LOCK_PATH}",
+              file=sys.stderr)
+        return 4
 
-    results = {}  # name -> worst status seen across the generators run this pass
+    try:
+        _, _, before = coverage()
+        print(f"Before: {len(before)} indexed skills missing utterances")
+        rate = rate if rate is not None else 6.0
 
-    def _note(records):
-        for r in records:
-            if r["status"] == "error" or results.get(r["name"]) != "error":
-                results[r["name"]] = r["status"]
+        results = {}  # name -> {"status": "generated"|"error", "detail": str|None}
 
-    if not triggers_only:
-        print("Generating eval scenarios for new/changed skills (llm_eval_gen.py)...")
+        def _note(records):
+            for r in records:
+                cur = results.get(r["name"])
+                # "error" is the worst status — it sticks even if a later generator
+                # reports "generated" for the same skill (two generators run per pass).
+                if r["status"] == "error" or cur is None or cur.get("status") != "error":
+                    results[r["name"]] = {"status": r["status"], "detail": r.get("detail")}
+
+        if not triggers_only:
+            print("Generating eval scenarios for new/changed skills (llm_eval_gen.py)...")
+            try:
+                _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit, rate=rate))
+            except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
+                print(f"FAIL: scenario generator crashed: {e}", file=sys.stderr)
+                _print_run_summary(_write_manifest(last_error=f"llm_eval_gen crashed: {e}"))
+                return 1
+
+        print("Generating utterance triggers for new/changed skills (llm_triggers.py)...")
         try:
-            _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit, rate=rate))
+            _note(llm_triggers.run(limit=limit, rate=rate))
         except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
-            print(f"FAIL: scenario generator crashed: {e}", file=sys.stderr)
-            _print_run_summary(_write_manifest(last_error=f"llm_eval_gen crashed: {e}"))
+            print(f"FAIL: trigger generator crashed: {e}", file=sys.stderr)
+            _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
             return 1
 
-    print("Generating utterance triggers for new/changed skills (llm_triggers.py)...")
-    try:
-        _note(llm_triggers.run(limit=limit, rate=rate))
-    except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
-        print(f"FAIL: trigger generator crashed: {e}", file=sys.stderr)
-        _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
-        return 1
+        print("Reindexing so the new utterance points go live...")
+        rr = subprocess.run([str(SS_BIN), "--reindex"], env=_engine_env(), check=False)
+        if rr.returncode != 0:
+            print("FAIL: reindex exited non-zero", file=sys.stderr)
+            _print_run_summary(_write_manifest(
+                skills=[{"name": n, "status": s["status"], "when": None,
+                         **({"detail": s["detail"]} if s.get("detail") else {})}
+                        for n, s in results.items()],
+                last_error="reindex exited non-zero"))
+            return rr.returncode
 
-    print("Reindexing so the new utterance points go live...")
-    rr = subprocess.run([str(SS_BIN), "--reindex"], env=_engine_env(), check=False)
-    if rr.returncode != 0:
-        print("FAIL: reindex exited non-zero", file=sys.stderr)
-        _print_run_summary(_write_manifest(
-            skills=[{"name": n, "status": s, "when": None} for n, s in results.items()],
-            last_error="reindex exited non-zero"))
-        return rr.returncode
+        indexed, _covered, after = coverage()
+        print(f"After: {len(after)} indexed skills missing utterances")
 
-    indexed, _covered, after = coverage()
-    print(f"After: {len(after)} indexed skills missing utterances")
-
-    when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    skills_manifest = [{"name": n, "status": s, "when": when} for n, s in sorted(results.items())]
-    totals = {
-        "generated": sum(1 for s in results.values() if s == "generated"),
-        "error": sum(1 for s in results.values() if s == "error"),
-        "skipped": len(indexed) - len(results),
-    }
-    run = flywheel_manifest.write_run(
-        endpoint=flywheel_llm.ENDPOINT, model=flywheel_llm.MODEL,
-        skills=skills_manifest, coverage={"have": len(indexed) - len(after), "total": len(indexed)},
-        totals=totals,
-    )
-    _print_run_summary(run)
-    return 0
+        when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        skills_manifest = [
+            {"name": n, "status": v["status"], "when": when,
+             **({"detail": v["detail"]} if v.get("detail") else {})}
+            for n, v in sorted(results.items())
+        ]
+        totals = {
+            "generated": sum(1 for v in results.values() if v["status"] == "generated"),
+            "error": sum(1 for v in results.values() if v["status"] == "error"),
+            "skipped": len(indexed) - len(results),
+        }
+        run = flywheel_manifest.write_run(
+            endpoint=flywheel_llm.ENDPOINT, model=flywheel_llm.MODEL,
+            skills=skills_manifest, coverage={"have": len(indexed) - len(after), "total": len(indexed)},
+            totals=totals,
+        )
+        _print_run_summary(run)
+        return 0
+    finally:
+        flywheel_lock.release()
 
 
 def main():

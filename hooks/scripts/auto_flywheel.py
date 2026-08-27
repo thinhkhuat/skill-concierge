@@ -149,6 +149,22 @@ def _qdrant_up(url, timeout=0.8):
     return False
 
 
+def _flywheel_locked() -> bool:
+    """True if a flywheel run (auto or manual) currently holds the lock.
+
+    Uses the same lock file as scripts/flywheel_lock.py so a manual
+    `flywheel --generate` and the detached auto run cannot overlap and
+    double the LLM request rate (observed 2026-08-27: 13 s-apart runs).
+    Fail-open (False) if the lock module cannot be imported.
+    """
+    try:
+        sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+        import flywheel_lock
+        return flywheel_lock.is_locked()
+    except Exception:
+        return False
+
+
 def main() -> int:
     try:
         if os.environ.get("SKILL_AUTO_FLYWHEEL", "1") == "0":
@@ -177,6 +193,9 @@ def main() -> int:
 
         if not _ping_ok():
             return 0                                   # endpoint configured but unreachable — fail-open
+
+        if _flywheel_locked():
+            return 0                                   # another run holds the lock — skip, no stamp
 
         LOGDIR.mkdir(parents=True, exist_ok=True)
         # Stamp BEFORE spawning so a crash-looping engine can't re-spawn every session.

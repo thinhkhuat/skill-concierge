@@ -39,9 +39,12 @@ def last_run():
 def write_run(endpoint, model, skills, coverage, totals=None, last_error=None):
     """Append one run record, capped to the last MAX_RUNS.
 
-    skills   : list of {"name", "status": "generated"|"error", "when"} — only skills
-               actually attempted this run (cache-hit/unchanged skills are omitted; their
-               count lives in totals["skipped"]).
+    skills   : list of {"name", "status": "generated"|"error", "when", "detail": str|None}
+               — only skills actually attempted this run (cache-hit/unchanged skills are
+               omitted; their count lives in totals["skipped"]). ``detail`` is the per-skill
+               error message for status=="error" (e.g. "chat failed: ...") and None/omitted
+               for "generated". Stored verbatim for doctor/log consumers; absent on old
+               runs (backward-compatible).
     coverage : {"have": N, "total": M} — post-run index coverage.
     totals   : {"generated", "error", "skipped"} counts; derived from `skills` (skipped=0)
                when not given by the caller.
@@ -101,6 +104,17 @@ def _selftest():
         write_run(endpoint="e", model="m3", skills=[], coverage={"have": 0, "total": 0},
                   last_error="endpoint unreachable")
         assert last_run()["last_error"] == "endpoint unreachable"
+
+        # per-skill detail survives round-trip (backward-compatible: old runs have no detail)
+        write_run(endpoint="e", model="m4",
+                  skills=[{"name": "x", "status": "error", "when": "t2", "detail": "chat failed: timeout"},
+                          {"name": "y", "status": "generated", "when": "t2"}],
+                  coverage={"have": 1, "total": 2})
+        lr = last_run()
+        assert lr["skills"][0]["detail"] == "chat failed: timeout", lr["skills"][0]
+        assert lr["skills"][0]["status"] == "error"
+        # old run without detail still reads as None/missing, not as crash
+        assert last_run()["skills"][1].get("detail") in (None, "")
 
         # cap enforcement
         for i in range(MAX_RUNS + 5):
