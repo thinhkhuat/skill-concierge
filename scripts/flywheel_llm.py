@@ -133,8 +133,11 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
     retrieval eval it roughly doubled MRR (0.231 -> 0.462) and cut mean rank 56.6 -> 13.1.
 
     Raises TruncatedCompletion when the endpoint reports finish_reason != "stop", and
-    HTTPError on a non-503 transport failure. Retried with backoff (3 attempts):
-    HTTP 503 AND timeouts (connect or read — the production gateway is bimodal under
+    HTTPError on a non-retryable transport failure. Retried with backoff (3 attempts):
+    HTTP 502/503/504 (the transient gateway/upstream class — a live outage window on
+    2026-08-27/28 left 93 per-skill 502 errors in one run; a sustained outage still
+    exhausts the ladder in ~15s/skill and fails the skill, which the next run
+    retries) AND timeouts (connect or read — the production gateway is bimodal under
     load, 2-10 s or 60-95 s on the same call, so a timeout is contention, not a
     verdict). Other transport errors (refused, DNS) fail fast on purpose."""
     payload = {
@@ -159,7 +162,7 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
     if API_KEY:
         headers["Authorization"] = f"Bearer {API_KEY}"
     req = urllib.request.Request(ENDPOINT, data=body, headers=headers)
-    for attempt in range(3):                 # transient 503 -> backoff, don't hammer
+    for attempt in range(3):        # transient 5xx/timeout -> backoff, don't hammer
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 choice = json.loads(r.read())["choices"][0]
@@ -180,7 +183,7 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
             time.sleep(rate_s)
             return parse_json_reply(out)
         except urllib.error.HTTPError as e:
-            if e.code == 503 and attempt < 2:
+            if e.code in (502, 503, 504) and attempt < 2:
                 print(f"retry {attempt + 2}/3 after HTTP {e.code} (+{5 * (attempt + 1)}s)")
                 time.sleep(5 * (attempt + 1))
                 continue
