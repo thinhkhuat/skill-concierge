@@ -4,6 +4,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.30.1] — 2026-08-27
+
+### Fixed
+- **`flywheel_llm.ping()` budget widened 5 s → 10 s** (`FLYWHEEL_LLM_PING_TIMEOUT`, env-tunable).
+  The production gateway legitimately serves `/v1/models` in 6-7 s+ under load; at 5 s
+  a real preflight miss (2026-08-27 19:58 ICT) silently skipped a whole flywheel pass.
+  All ping() consumers are fail-open, so the extra budget only delays the skip.
+- **`chat()` now retries timeouts, not just HTTP 503** (3 attempts, same 5 s/10 s backoff,
+  with a one-line retry notice in the run log). The gateway is bimodal under load —
+  2-10 s or 60-95 s on the same call — so a socket timeout is contention, not a verdict;
+  tonight's 11-error pass was all `read operation timed out` per-skill failures that a
+  retry would have absorbed. Timeouts in both urllib shapes count (bare `TimeoutError`
+  read-phase, `URLError` wrapping a timeout connect-phase). Connection-refused / DNS
+  still fail fast — no backoff burned on a gateway that is down, not slow.
+
 ## [0.30.0] — 2026-08-27
 
 ### Fixed
