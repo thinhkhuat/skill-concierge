@@ -1059,8 +1059,9 @@ def _blurb(desc: str) -> str:
 # no route render byte-identically to pre-0041.
 MULTI_INTENT = os.environ.get("ENFORCER_MULTI_INTENT", "1") != "0"
 CHAIN_PROJECTION = os.environ.get("ENFORCER_CHAIN_PROJECTION", "1") != "0"
-INTENT_MERGE_J = float(os.environ.get("ENFORCER_INTENT_MERGE_J", "0.24"))
+INTENT_MERGE_J = float(os.environ.get("ENFORCER_INTENT_MERGE_J", "0.30"))   # overlap-coefficient threshold (see _intent_clusters)
 INTENT2_RATIO = float(os.environ.get("ENFORCER_INTENT2_RATIO", "0.75"))
+MAX_INTENTS = int(os.environ.get("ENFORCER_MAX_INTENTS", "3"))   # >3 "intents" is a clustering miss, not a task shape
 _ROUTE_MAX = 4
 
 # Domain-generic tokens present in nearly every skill description — dropping them is
@@ -1074,6 +1075,27 @@ _INTENT_STOP = frozenset(
     "most other others before after then than so if no yes one two how what which".split())
 
 
+# Domain synonym families (fold AFTER singularization, BEFORE clustering). Live smoke
+# 2026-08-28 exposed why lexical-only fails: same-family skills share no surface tokens
+# — "verify/validate/check/smoke", "fix/debug/repair", "bug/error/failure" — so a
+# single-intent "fix the failing test" turn split into 7 fake intents. Folding these
+# families makes overlap track intent, not vocabulary choice. Conservative and
+# inspectable; grows only with observed mis-splits.
+_INTENT_FOLD = {}
+for _fam in (
+    ("verify", "validate", "check", "confirm", "audit", "smoke", "prove", "vet"),
+    ("test", "coverage", "qa", "e2e", "regression"),
+    ("fix", "debug", "diagnose", "repair", "troubleshoot"),
+    ("bug", "defect", "error", "failure", "failing", "broken", "crash"),
+    ("research", "investigate", "study", "evaluate", "analyze"),
+    ("document", "docs", "documentation", "readme"),
+    ("plan", "roadmap", "phase", "milestone", "scope"),
+    ("deploy", "ship", "release", "publish", "launch"),
+):
+    for _w in _fam[1:]:
+        _INTENT_FOLD[_w] = _fam[0]
+
+
 def _intent_tokens(name: str, desc: str) -> frozenset:
     # Naive singularization (drop a trailing 's' on >=4-char tokens, guard 'ss') so
     # report/reports and suite/suites count as overlap — without it, plural siblings
@@ -1085,7 +1107,7 @@ def _intent_tokens(name: str, desc: str) -> frozenset:
             continue
         if len(t) >= 4 and t.endswith("s") and not t.endswith("ss"):
             t = t[:-1]
-        toks.add(t)
+        toks.add(_INTENT_FOLD.get(t, t))
     return frozenset(toks)
 
 
@@ -1098,13 +1120,18 @@ def _intent_clusters(cands: list) -> list:
     leads are simply each cluster's first (highest-scoring) member; intra-cluster
     score order is preserved.
     """
+    # OVERLAP coefficient (inter / min(|a|,|b|)), not Jaccard: sibling skills share
+    # intent vocabulary but carry long, skill-specific tails (playwright/vitest/k6 vs
+    # execution/analysis/report), and Jaccard punishes that breadth — a same-family
+    # pair at inter=3, |a|=11, |b|=8 scores 3/16 = 0.19 (split) on Jaccard but
+    # 3/8 = 0.38 (merge) on overlap. Disjoint intents stay 0 on either metric.
     clusters, unions = [], []
     for name, desc, _score in cands:
         toks = _intent_tokens(name, desc)
         placed = False
         for i, u in enumerate(unions):
             inter = len(toks & u)
-            if inter and inter / len(toks | u) >= INTENT_MERGE_J:
+            if inter and inter / min(len(toks), len(u)) >= INTENT_MERGE_J:
                 clusters[i].append((name, desc, _score))
                 unions[i] = u | toks
                 placed = True
@@ -1170,12 +1197,22 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
     if MULTI_INTENT and multi:
         _clusters = _intent_clusters(cands)
         if _multi_intent_gate(_clusters):
-            n_intents = len(_clusters)
+            # ADR-0041 amendment (0.32.1): a task with >3 genuinely distinct intents
+            # is vanishingly rare — beyond the cap, extra clusters are a clustering
+            # miss and fold back in as supporting rows, not announced intents.
+            _extras = []
+            if len(_clusters) > MAX_INTENTS:
+                _ranked = sorted(_clusters, key=lambda c: -c[0][2])
+                _clusters = _ranked[:MAX_INTENTS]
+                _extras = [m for c in _ranked[MAX_INTENTS:] for m in c]
+                n_intents = MAX_INTENTS
+            else:
+                n_intents = len(_clusters)
             # leads-first: rows 1..N name the N primaries (one per intent), then the
             # supporting rows grouped behind their lead — the "first N rows" the note
             # promises. Intra-cluster score order preserved within each group.
             ordered = ([c[0] for c in _clusters]
-                       + [m for c in _clusters for m in c[1:]])
+                       + [m for c in _clusters for m in c[1:]] + _extras)
     lines = [f"  • {name}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
              for name, desc, score in ordered]
     if multi and n_intents > 1:
@@ -1422,7 +1459,7 @@ def main() -> int:
         if MULTI_INTENT and len(shown) > 1:
             _cls = _intent_clusters(shown)
             if _multi_intent_gate(_cls):
-                _ni = len(_cls)
+                _ni = min(len(_cls), MAX_INTENTS)   # same cap the renderer applies
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
@@ -2148,6 +2185,30 @@ def _selftest() -> int:
         _first_rows = [l for l in r41.splitlines() if l.startswith("  • ")][:2]
         if not (_first_rows[0].startswith("  • plan") and _first_rows[1].startswith("  • test")):
             bad.append(f"0041: leads must render first, got {_first_rows!r}")
+        # smoke-shaped regression (live 0.32.0 over-split): one test/fix family with
+        # synonym vocabulary must NOT split into fake intents; and >MAX_INTENTS clusters
+        # are capped, folding extras back as supporting rows.
+        _t1 = ("ak-web-testing", "Web testing with Playwright, Vitest, k6. E2E/unit/integration/load/security/visual/a11y", 0.34)
+        _t2 = ("ak-fix", "Fix bugs, errors, test failures, and CI/CD issues with intelligent routing", 0.33)
+        _t3 = ("ak-test", "Run unit, integration, e2e, and UI tests. Test execution, coverage analysis, QA reports", 0.32)
+        _t4 = ("dogfood", "Systematically explore and test a web application to find bugs, UX issues", 0.30)
+        _t5 = ("ak-debug", "Debug systematically with root cause analysis before fixes. For bugs, test failures", 0.29)
+        _smoke_cls = _intent_clusters([_t1, _t2, _t3, _t4, _t5])
+        if len(_smoke_cls) > 2:
+            bad.append(f"0041: same-family synonyms must not fake-split: {[ [m[0] for m in c] for c in _smoke_cls ]!r}")
+        _smoke_render = _ranked_mandate([_t1, _t2, _t3, _t4, _t5])
+        if "distinct intents" in _smoke_render and "8 distinct" in _smoke_render:
+            bad.append("0041: smoke regression — absurd intent count")
+        # cap: 5 lexically disjoint candidates -> at most MAX_INTENTS announced
+        _dis = [("aa", "alpha beta gamma delta epsilon zeta", 0.40),
+                ("bb", "eta theta iota kappa lambda mu", 0.39),
+                ("cc", "nu xi omicron pi rho sigma", 0.38),
+                ("dd", "tau upsilon phi chi psi omega", 0.37),
+                ("ee", "one two three four five six", 0.36)]
+        _cap_render = _ranked_mandate(_dis)
+        if f"Reads as {MAX_INTENTS} distinct intents" not in _cap_render:
+            bad.append(f"0041: >MAX_INTENTS clusters must cap at {MAX_INTENTS}: "
+                       + repr([l for l in _cap_render.splitlines() if "distinct intents" in l]))
         # weak second cluster: low score -> no split, standard note
         _weak = [_plan, ("test", "run the unit and integration suites, coverage gaps, failing checks", 0.10)]
         if "distinct intents" in _ranked_mandate(_weak):

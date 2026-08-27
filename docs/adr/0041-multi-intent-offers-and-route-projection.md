@@ -73,3 +73,17 @@ injected text cannot disagree. Analyzers extend `analyze.py` later
   one extra bounded read per offer-bearing turn, no network.
 - Epoch note: `n_intents`/`route` keys date this change in the ledger; any
   offer-composition comparison across the 0.32.0 boundary is epoch-scoped.
+
+## Amendment (0.32.1, 2026-08-28)
+
+The 0.32.0 live smoke exposed an over-split: same-family skills share no surface tokens
+(synonymy), so a single-intent prompt announced 7 fake intents. Three deterministic fixes,
+selftest-pinned against the live prompt shapes: synonym folding (8 conservative domain
+families) before clustering; the merge test switched from Jaccard to the overlap
+coefficient (Jaccard punishes the long skill-specific token tails siblings carry —
+inter=3 over |a|=11,|b|=8 is 0.19 split vs 0.38 merge), with the threshold moved
+0.24 → 0.30 accordingly; and `ENFORCER_MAX_INTENTS` (default 3) — beyond the cap,
+extra clusters fold back as supporting rows, never announced intents, and the
+telemetry cap matches. Known bounded residual: a lexically disjoint near-tied candidate
+can appear as a low-value third intent; advisory only, Phase-4's continuation metric
+is the arbiter.
