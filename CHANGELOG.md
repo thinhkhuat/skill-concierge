@@ -4,6 +4,28 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.33.0] — 2026-08-28
+
+### Added
+- **Skill-chain-intelligence Phase 4 — the measurement loop (ADR-0040/0041 L4).**
+  The chain annotations now prove whether they earn their lines:
+  - Offer events log the fired CHAIN-HINT's `[seed]+successors` as an additive
+    `hint` key (`_chain_hint_data`, split from the renderer so the ledger row and
+    the injected line cannot disagree).
+  - `analyze.py --continuation` computes three follow rates over the windowed
+    epoch: **route-follow** (a projected ROUTE successor invoked within
+    `ANALYZE_FOLLOW_WINDOW_S`, default 30 min), **hint-follow** (a CHAIN-HINT
+    successor likewise), and **multi-intent uptake** (≥2 distinct offered skills
+    invoked after an n_intents ≥ 2 offer) against a single-intent control row.
+    Subagent lanes excluded (ADR-0020); sub-floor samples (<5) print
+    "insufficient data" and never a rate — epoch-scoped, never pooled across the
+    0.32.x boundary where the keys first appear.
+  First live run (epoch = release day): route-follow n=4 (floor), hint-follow n=0
+  (key ships with this release), multi-intent 0/14 vs control 0/49 — honest
+  insufficient/small-data state; the rates become meaningful as the epoch accrues.
+  Miner automation trigger (documented in the plan): arm a rebuild cadence for
+  `build_chains.py` once route-follow shows a non-trivial rate on a healthy epoch.
+
 ## [0.32.2] — 2026-08-28
 
 ### Fixed
