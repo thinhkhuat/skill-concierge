@@ -4,6 +4,31 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.32.0] — 2026-08-28
+
+### Added
+- **Multi-intent offers + route projection (ADR-0041, skill-chain-intelligence
+  Phases 2–3).** The turn-zero offer no longer assumes one intent and no longer waits
+  for a skill to fire before showing chains:
+  - **Intent clustering** — deterministic, zero-network greedy lexical clustering of the
+    shown candidates (Jaccard ≥ 0.24 over name+description tokens, domain-generic
+    stoplist, naive singularization). When ≥ 2 disjoint clusters clear the strength gate
+    (second lead ≥ 0.75 × first lead), the render goes leads-first: rows 1..N are the N
+    primaries, one per detected intent, with the rest grouped behind their lead —
+    "research it, build it, ship it" surfaces three primaries instead of one blurred
+    list. Kill-switch `ENFORCER_MULTI_INTENT=0`; tuning `ENFORCER_INTENT_MERGE_J` /
+    `ENFORCER_INTENT2_RATIO`.
+  - **Route projection** — the top candidate's typical continuation from the merged
+    chain map (ADR-0030 overrides > ADR-0029 declared > ADR-0040 mined): a bounded,
+    cycle-safe 4-node `ROUTE:` line at the moment of choice (live example:
+    `ak-brainstorm -> ak-plan -> ak-cook -> ak-test`). Kill-switch
+    `ENFORCER_CHAIN_PROJECTION=0`.
+  - Both are context-only: candidate set, scores, gates, floors, and the locked
+    header/footer literals are untouched; single-intent turns with no route render
+    byte-identically to pre-0.32.0. Offer events gain additive `n_intents`/`route` keys
+    (computed by the same pure helpers the renderer uses) — the seed of the Phase-4
+    continuation-rate metric.
+
 ## [0.31.0] — 2026-08-28
 
 ### Added
