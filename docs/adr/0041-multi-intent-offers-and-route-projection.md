@@ -95,3 +95,11 @@ lexically-disjoint near-tied row still announced itself. Precision rule added: a
 announced intent must bring ≥2 candidates (`_qualifying_intents`; the top's own cluster
 always qualifies; renderer and telemetry share the filter). Deliberate recall cost: a thin
 TRUE third intent may go unannounced — advisory annotations must not cry wolf.
+
+## Amendment (0.33.0, 2026-08-28) — the loop closes
+
+L4 shipped: offer events log the fired CHAIN-HINT as an additive `hint` key
+(`_chain_hint_data`, shared with the renderer so ledger and injection cannot
+disagree), and `analyze.py --continuation` reports route-follow / hint-follow /
+multi-intent uptake vs a single-intent control — epoch-scoped, sub-lane excluded,
+sub-floor samples print "insufficient data" and never a pooled rate.

@@ -1,6 +1,6 @@
 # Plan: Skill-Chain Intelligence — better single picks, proactive multi-skill chains
 
-Opened: 2026-08-28 00:04 ICT · Status: Phases 1–3 implemented and live (0.31.0, 0.32.0 / ADR-0040, ADR-0041); Phase 4 (continuation-rate telemetry in analyze.py) designed, not started — offer rows already carry n_intents/route
+Opened: 2026-08-28 00:04 ICT · Status: Phases 1–3 implemented and live (0.31.0, 0.32.0 / ADR-0040, ADR-0041); Phase 4 implemented (0.33.0): offer rows carry n_intents/route/hint; `analyze.py --continuation` reports the follow rates. ALL FOUR PHASES LIVE.
 Owner ask: strengthen the agent's decision on which skill fits the user's intent — and stop
 assuming one skill: most real tasks benefit from chaining 2–3+ skills end-to-end.
 

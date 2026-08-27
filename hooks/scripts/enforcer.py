@@ -648,26 +648,34 @@ def _last_used_skill(sid: str):
         return None
 
 
+def _chain_hint_data(sid: str) -> list:
+    """(seed, successors) the CHAIN-HINT line would name this turn, or [].
+    Split out from the renderer so the offer event can log the SAME data the
+    injected line carried (ADR-0041 L4: hint-continuation metric)."""
+    if not CHAIN_HINT:
+        return []
+    seed = _last_used_skill(sid)
+    if not seed:
+        return []
+    names_map = _visible_sidecar_names()
+    succ = names_map.get(seed)
+    if not isinstance(succ, list) or not succ:
+        return []
+    shown = [n for n in succ
+             if isinstance(n, str) and n and n in names_map and n not in KEEPOFF]
+    return [seed] + shown if shown else []
+
+
 def _chain_hint(sid: str) -> str:
     """The CHAIN-HINT line for this turn, or ''. Wording deliberately avoids the
     audit's locked literals (`SKILL-CHECK:` and the `_AUTHORIZED_SIGNATURES`
     phrases) so a collision can never miscount dodges as authorized — parity-pinned
     by selftest (9)."""
-    if not CHAIN_HINT:
+    data = _chain_hint_data(sid)
+    if not data:
         return ""
-    seed = _last_used_skill(sid)
-    if not seed:
-        return ""
-    names_map = _visible_sidecar_names()
-    succ = names_map.get(seed)
-    if not isinstance(succ, list) or not succ:
-        return ""
-    shown = [n for n in succ
-             if isinstance(n, str) and n and n in names_map and n not in KEEPOFF]
-    if not shown:
-        return ""
-    return ("\nCHAIN-HINT: after " + seed + ", catalogue declares: "
-            + ", ".join(shown) + " — candidates, fit still required.")
+    return ("\nCHAIN-HINT: after " + data[0] + ", catalogue declares: "
+            + ", ".join(data[1:]) + " — candidates, fit still required.")
 
 
 # ── per-skill calibrated tau (Phase D wiring, default-INERT) ───────────────
@@ -808,7 +816,7 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None) -> None:
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None, hint=None) -> None:
     """Append the offer event. Fail-silent: telemetry must never surface.
     ADR-0032: `ext` records the external annex names offered this turn (external offer→take
     is measured against the ADR-0031 get_skill takes); absent when no external annexed.
@@ -833,6 +841,8 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
             ev["n_intents"] = n_intents
         if route:
             ev["route"] = route
+        if hint and len(hint) >= 2:
+            ev["hint"] = hint    # ADR-0041 L4: [seed] + successors named by the CHAIN-HINT line
         if embed_ms is not None:
             ev["embed_ms"] = int(embed_ms)
         if qdrant_ms is not None:
@@ -1476,7 +1486,8 @@ def main() -> int:
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
                       ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None,
                       xh=[[n, round(s, 4)] for (n, _d, s) in _foreign] or None,
-                      n_intents=_ni, route=_route_of(shown[0][0]) if shown else None)
+                      n_intents=_ni, route=_route_of(shown[0][0]) if shown else None,
+                      hint=_chain_hint_data(sid))
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError,
             OverflowError):
         return 0  # fail-silent, never block

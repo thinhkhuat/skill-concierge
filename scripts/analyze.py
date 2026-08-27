@@ -268,6 +268,66 @@ def _chain_report(events, catalogue=None):
     return len(seqs), bigrams, lengths, [s for _n, s in longest[:5]]
 
 
+FOLLOW_WINDOW_S = int(os.environ.get("ANALYZE_FOLLOW_WINDOW_S", "1800"))   # 30 min
+MIN_SAMPLE = 5   # below this the rate prints "insufficient data", never a number
+
+
+def _continuation_report(events):
+    """ADR-0040/0041 L4 — do the chain annotations EARN their lines?
+
+    Three follow rates over the windowed epoch (all epoch-scoped; never pool
+    across the 0.32.x boundary, where `route`/`n_intents` keys first appear):
+      route-follow — offers carrying a projected ROUTE: did any route[1:]
+        successor fire (auto/manual, same sid, non-sub) within FOLLOW_WINDOW_S?
+      hint-follow  — offers whose CHAIN-HINT named successors: same test.
+      multi-intent uptake — offers announced n_intents >= 2: did >=2 DISTINCT
+        offered skills fire in the window? (control: single-intent offers'
+        same-window distinct-uptake rate, for contrast)
+    Subagent lanes are excluded from the invocation timeline (ADR-0020).
+    Returns printed lines; callers decide plumbing."""
+    invocations = {}   # sid -> [(t, name)]
+    for e in events:
+        if e.get("ev") in ("auto", "manual") and not e.get("sub"):
+            n = e.get("name")
+            if isinstance(n, str) and n and n != "?" and e.get("sid") is not None and e.get("t"):
+                invocations.setdefault(e["sid"], []).append((e["t"], n))
+
+    def _later_names(sid, t0):
+        return [n for (t, n) in invocations.get(sid, ()) if t0 < t <= t0 + FOLLOW_WINDOW_S]
+
+    lines = []
+    offers = [e for e in events if e.get("ev") == "offer" and e.get("t") and e.get("sid")]
+
+    def _rate(label, hits, n):
+        if n < MIN_SAMPLE:
+            lines.append(f"{label:34s} insufficient data (n={n}) — epoch-scoped, do not pool")
+        else:
+            lines.append(f"{label:34s} {hits}/{n}  {hits * 100 // n}%")
+
+    routed = [e for e in offers if isinstance(e.get("route"), list) and len(e["route"]) >= 2]
+    rf = sum(1 for e in routed
+             if set(_later_names(e["sid"], e["t"])) & set(e["route"][1:]))
+    _rate("route-follow (projection taken)", rf, len(routed))
+
+    hinted = [e for e in offers if isinstance(e.get("hint"), list) and len(e["hint"]) >= 2]
+    hf = sum(1 for e in hinted
+             if set(_later_names(e["sid"], e["t"])) & set(e["hint"][1:]))
+    _rate("hint-follow (chain-hint taken)", hf, len(hinted))
+
+    def _distinct_uptake(e):
+        offered = {n for n, _s in (e.get("offered") or []) if isinstance(n, str)}
+        return len(set(_later_names(e["sid"], e["t"])) & offered)
+
+    multi = [e for e in offers if isinstance(e.get("n_intents"), int) and e["n_intents"] >= 2]
+    mu = sum(1 for e in multi if _distinct_uptake(e) >= 2)
+    _rate("multi-intent uptake (>=2 took)", mu, len(multi))
+    single = [e for e in offers if not e.get("n_intents") or e["n_intents"] < 2]
+    su = sum(1 for e in single if _distinct_uptake(e) >= 2)
+    _rate("control: single-intent >=2 took", su, len(single))
+    lines.append(f"(follow window {FOLLOW_WINDOW_S}s · floor {MIN_SAMPLE} · keys exist since 0.32.0)")
+    return lines
+
+
 def _run_selftest():
     """Pin the C1 join contract on synthetic turn-windows."""
     windows = [
@@ -356,6 +416,51 @@ def _run_selftest():
     if _cross_harness_annex_stats([]) != (0, 0, 0, 0):
         bad.append("cross-harness annex stats must be zero on empty ledger")
 
+    # L4 continuation report (ADR-0040/0041): synthetic epoch with two route offers
+    # (one followed), two hint offers (one followed, one sub-lane follow that must NOT
+    # count), two multi-intent offers (one with >=2 distinct takes), one single-intent
+    # control with 2 takes, plus out-of-window follows that must not count.
+    T = 1000.0
+    cont_events = [
+        {"sid": "r1", "ev": "offer", "t": T, "route": ["a", "b", "c"], "offered": [["a", .5]]},
+        {"sid": "r1", "ev": "auto", "t": T + 60, "name": "b"},                      # route followed
+        {"sid": "r2", "ev": "offer", "t": T, "route": ["a", "b", "c"], "offered": [["a", .5]]},
+        {"sid": "r2", "ev": "auto", "t": T + FOLLOW_WINDOW_S + 10, "name": "b"},    # too late
+        {"sid": "h1", "ev": "offer", "t": T, "hint": ["x", "y"], "offered": [["x", .5]]},
+        {"sid": "h1", "ev": "manual", "t": T + 30, "name": "y"},                    # hint followed
+        {"sid": "h2", "ev": "offer", "t": T, "hint": ["x", "y"], "offered": [["x", .5]]},
+        {"sid": "h2", "ev": "auto", "t": T + 30, "name": "y", "sub": True},          # sub-lane: excluded
+        {"sid": "m1", "ev": "offer", "t": T, "n_intents": 2, "offered": [["p", .5], ["q", .4]]},
+        {"sid": "m1", "ev": "auto", "t": T + 10, "name": "p"},
+        {"sid": "m1", "ev": "auto", "t": T + 20, "name": "q"},                       # 2 distinct -> uptake
+        {"sid": "m2", "ev": "offer", "t": T, "n_intents": 2, "offered": [["p", .5], ["q", .4]]},
+        {"sid": "m2", "ev": "auto", "t": T + 10, "name": "p"},                       # only 1
+        {"sid": "s1", "ev": "offer", "t": T, "offered": [["p", .5], ["q", .4]]},
+        {"sid": "s1", "ev": "auto", "t": T + 10, "name": "p"},
+        {"sid": "s1", "ev": "auto", "t": T + 20, "name": "q"},                       # control with 2 takes
+    ]
+    global MIN_SAMPLE
+    _floor_saved = MIN_SAMPLE
+    MIN_SAMPLE = 2   # fixtures are small; the floor path itself is asserted below
+    try:
+        lines = _continuation_report(cont_events)
+    finally:
+        MIN_SAMPLE = _floor_saved
+    joined = "\n".join(lines)
+    # control rows = every offer lacking a >=2 n_intents annotation (r1, r2, h1, h2, s1)
+    for label, value, why in [("route-follow (projection taken)", "1/2  50%", "route follow miscounted"),
+                              ("hint-follow (chain-hint taken)", "1/2  50%", "hint follow miscounted (sub-lane or window)"),
+                              ("multi-intent uptake (>=2 took)", "1/2  50%", "multi-intent uptake miscounted"),
+                              ("control: single-intent >=2 took", "1/5  20%", "control uptake miscounted")]:
+        row = next((l for l in lines if l.startswith(label)), None)
+        if row is None or not row.rstrip().endswith(value):
+            bad.append(f"continuation: {why}: {row!r}")
+    # the floor path: a sub-floor sample must print "insufficient data", never a rate
+    tiny = _continuation_report([cont_events[0]])
+    if "insufficient data" not in "\n".join(tiny):
+        bad.append(f"continuation: sub-floor sample must not print a rate: {tiny!r}")
+
+
     if bad:
         print("analyze --selftest FAIL:")
         for b in bad:
@@ -381,6 +486,10 @@ def main():
     ap.add_argument("--latency", action="store_true",
                     help="print embed/qdrant latency histogram from enforcer offer events "
                          "(embed_ms/qdrant_ms, since 0.22)")
+    ap.add_argument("--continuation", action="store_true",
+                    help="print the ADR-0040/0041 L4 follow-rate report: route-follow, "
+                         "hint-follow, multi-intent uptake vs single-intent control "
+                         "(route/n_intents/hint keys exist since 0.32.x — epoch-scope with --since)")
     ap.add_argument("--selftest", action="store_true",
                     help="run the C1 offer->take join self-check and exit")
     args = ap.parse_args()
@@ -400,6 +509,14 @@ def main():
                   and (since is None or e["t"] >= since)
                   and (until is None or e["t"] < until)]
     events.sort(key=lambda e: e.get("t", 0))
+
+    if args.continuation:
+        print(f"ledger        : {path}")
+        if since is not None or until is not None:
+            print(f"window        : [{args.since or '…'} .. {args.until or '—'})")
+        for line in _continuation_report(events):
+            print(line)
+        return
 
     if args.latency:
         # Latency histogram from enforcer offer events (embed_ms/qdrant_ms).
