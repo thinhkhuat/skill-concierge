@@ -1142,14 +1142,25 @@ def _intent_clusters(cands: list) -> list:
     return clusters
 
 
+def _qualifying_intents(clusters: list) -> list:
+    """Clusters allowed to be ANNOUNCED as intents. The top's own cluster always
+    qualifies; every further cluster needs >= 2 candidates — a single stray
+    lexically-disjoint row (ego-browser on a test-family retrieval, design-system on
+    a planning retrieval) is retrieval breadth, not evidence of an intent. Cluster
+    order (by lead score) is preserved."""
+    return clusters[:1] + [c for c in clusters[1:] if len(c) >= 2]
+
+
 def _multi_intent_gate(clusters: list) -> bool:
-    """>=2 clusters AND the second intent's lead is not a weak neighbour: its score
-    must be >= INTENT2_RATIO of the first lead's. Without the strength gate, a lexically
-    odd but low-scoring sibling would split a single-intent turn into fake 'intents'."""
-    if len(clusters) < 2:
+    """>=2 QUALIFYING clusters AND the second intent's lead is not a weak neighbour:
+    its score must be >= INTENT2_RATIO of the first lead's. Without the strength gate,
+    a lexically odd but low-scoring sibling would split a single-intent turn into
+    fake 'intents'."""
+    qual = _qualifying_intents(clusters)
+    if len(qual) < 2:
         return False
-    top = clusters[0][0][2]
-    return top > 0 and clusters[1][0][2] >= INTENT2_RATIO * top
+    top = qual[0][0][2]
+    return top > 0 and qual[1][0][2] >= INTENT2_RATIO * top
 
 
 def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_MAX) -> list:
@@ -1195,8 +1206,8 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
     ordered = list(cands)
     n_intents = 1
     if MULTI_INTENT and multi:
-        _clusters = _intent_clusters(cands)
-        if _multi_intent_gate(_clusters):
+        _clusters = _qualifying_intents(_intent_clusters(cands))
+        if _multi_intent_gate(_intent_clusters(cands)):
             # ADR-0041 amendment (0.32.1): a task with >3 genuinely distinct intents
             # is vanishingly rare — beyond the cap, extra clusters are a clustering
             # miss and fold back in as supporting rows, not announced intents.
@@ -1457,9 +1468,9 @@ def main() -> int:
         # the ledger row and the injected text can never disagree.
         _ni = 1
         if MULTI_INTENT and len(shown) > 1:
-            _cls = _intent_clusters(shown)
-            if _multi_intent_gate(_cls):
-                _ni = min(len(_cls), MAX_INTENTS)   # same cap the renderer applies
+            _cls = _qualifying_intents(_intent_clusters(shown))
+            if _multi_intent_gate(_intent_clusters(shown)):
+                _ni = min(len(_cls), MAX_INTENTS)   # same qualification + cap the renderer applies
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
@@ -2199,16 +2210,25 @@ def _selftest() -> int:
         _smoke_render = _ranked_mandate([_t1, _t2, _t3, _t4, _t5])
         if "distinct intents" in _smoke_render and "8 distinct" in _smoke_render:
             bad.append("0041: smoke regression — absurd intent count")
-        # cap: 5 lexically disjoint candidates -> at most MAX_INTENTS announced
+        # cap: 4 two-member disjoint clusters -> at most MAX_INTENTS announced
+        # (each non-first intent qualifies with 2 members; the 4th folds back as support)
         _dis = [("aa", "alpha beta gamma delta epsilon zeta", 0.40),
-                ("bb", "eta theta iota kappa lambda mu", 0.39),
-                ("cc", "nu xi omicron pi rho sigma", 0.38),
-                ("dd", "tau upsilon phi chi psi omega", 0.37),
-                ("ee", "one two three four five six", 0.36)]
+                ("aa2", "alpha beta gamma delta epsilon", 0.39),
+                ("bb", "eta theta iota kappa lambda mu", 0.38),
+                ("bb2", "eta theta iota kappa lambda", 0.37),
+                ("cc", "nu xi omicron pi rho sigma", 0.36),
+                ("cc2", "nu xi omicron pi rho", 0.35),
+                ("dd", "tau upsilon phi chi psi omega", 0.34),
+                ("dd2", "tau upsilon phi chi psi", 0.33)]
         _cap_render = _ranked_mandate(_dis)
         if f"Reads as {MAX_INTENTS} distinct intents" not in _cap_render:
             bad.append(f"0041: >MAX_INTENTS clusters must cap at {MAX_INTENTS}: "
                        + repr([l for l in _cap_render.splitlines() if "distinct intents" in l]))
+        # singleton second cluster no longer qualifies (0.32.2 precision rule)
+        _solo = [("aa", "alpha beta gamma delta epsilon zeta", 0.40),
+                 ("zz", "unrelated disjoint vocabulary entirely", 0.39)]
+        if "distinct intents" in _ranked_mandate(_solo):
+            bad.append("0041: a singleton second cluster must not be announced as an intent")
         # weak second cluster: low score -> no split, standard note
         _weak = [_plan, ("test", "run the unit and integration suites, coverage gaps, failing checks", 0.10)]
         if "distinct intents" in _ranked_mandate(_weak):

@@ -87,3 +87,11 @@ extra clusters fold back as supporting rows, never announced intents, and the
 telemetry cap matches. Known bounded residual: a lexically disjoint near-tied candidate
 can appear as a low-value third intent; advisory only, Phase-4's continuation metric
 is the arbiter.
+
+## Amendment (0.32.2, 2026-08-28)
+
+Second smoke pass: the cap bounded but did not silence thin false intents — a single stray
+lexically-disjoint near-tied row still announced itself. Precision rule added: a second
+announced intent must bring ≥2 candidates (`_qualifying_intents`; the top's own cluster
+always qualifies; renderer and telemetry share the filter). Deliberate recall cost: a thin
+TRUE third intent may go unannounced — advisory annotations must not cry wolf.
