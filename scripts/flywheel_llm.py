@@ -20,6 +20,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
@@ -67,6 +68,28 @@ ENDPOINT = _cfg("FLYWHEEL_LLM_ENDPOINT", "http://localhost:4310/v1/chat/completi
 MODEL = _cfg("FLYWHEEL_LLM_MODEL", "gemma-4-e4b-it-qat-optiq")
 API_KEY = _cfg("FLYWHEEL_LLM_API_KEY", "")
 SCHEMA_MODE = _cfg("FLYWHEEL_LLM_SCHEMA_MODE", "json_schema")
+# Ping budget. 5 s was too tight for the production gateway (api.thinhkhuat.com
+# legitimately serves /v1/models in 6-7 s+ under load; a real preflight miss was
+# observed 2026-08-27 19:58 ICT, silently skipping a whole flywheel pass). All
+# ping() consumers are fail-open, so the extra budget only delays the skip.
+PING_TIMEOUT = float(_cfg("FLYWHEEL_LLM_PING_TIMEOUT", "10"))
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """True when `exc` is a connect/read timeout in any of the shapes urllib raises.
+
+    - bare TimeoutError (socket.timeout aliases it on 3.10+) — read timeouts during
+      r.read() surface unwrapped;
+    - URLError whose .reason is a timeout — connect-phase timeouts get wrapped.
+    Other OSErrors (refused, DNS, TLS) stay non-retryable: they fail fast instead
+    of burning backoff on a gateway that is down, not slow.
+    """
+    if isinstance(exc, TimeoutError) or isinstance(exc, socket.timeout):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(reason, TimeoutError) or isinstance(reason, socket.timeout)
+    return False
 
 
 class TruncatedCompletion(RuntimeError):
@@ -110,7 +133,10 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
     retrieval eval it roughly doubled MRR (0.231 -> 0.462) and cut mean rank 56.6 -> 13.1.
 
     Raises TruncatedCompletion when the endpoint reports finish_reason != "stop", and
-    HTTPError on a non-503 transport failure (503 is retried with backoff)."""
+    HTTPError on a non-503 transport failure. Retried with backoff (3 attempts):
+    HTTP 503 AND timeouts (connect or read — the production gateway is bimodal under
+    load, 2-10 s or 60-95 s on the same call, so a timeout is contention, not a
+    verdict). Other transport errors (refused, DNS) fail fast on purpose."""
     payload = {
         "model": MODEL,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -155,17 +181,28 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
             return parse_json_reply(out)
         except urllib.error.HTTPError as e:
             if e.code == 503 and attempt < 2:
+                print(f"retry {attempt + 2}/3 after HTTP {e.code} (+{5 * (attempt + 1)}s)")
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise
+        except OSError as e:  # URLError + TimeoutError are both OSError subclasses
+            if _is_timeout(e) and attempt < 2:
+                print(f"retry {attempt + 2}/3 after timeout ({e}; +{5 * (attempt + 1)}s)")
                 time.sleep(5 * (attempt + 1))
                 continue
             raise
 
 
-def ping(timeout=5):
+def ping(timeout=None):
     """Cheap reachability preflight: GET <base>/models (base = ENDPOINT with the trailing
     /chat/completions path dropped). Returns (ok: bool, detail: str) — never raises. Consumed
-    by `doctor.py` check_flywheel() and the flywheel skill; makes no network call unless invoked."""
+    by `doctor.py` check_flywheel(), the auto-flywheel hook's `_ping_ok()`, and the flywheel
+    skill; makes no network call unless invoked. Default budget is PING_TIMEOUT (10 s,
+    FLYWHEEL_LLM_PING_TIMEOUT) — see its comment for why 5 s was too tight."""
     base = ENDPOINT.rsplit("/chat/completions", 1)[0]
     url = base.rstrip("/") + "/models"
+    if timeout is None:
+        timeout = PING_TIMEOUT
     headers = {}
     if API_KEY:
         headers["Authorization"] = f"Bearer {API_KEY}"
@@ -237,6 +274,15 @@ def _selftest():
     assert _response_format("json_object", dummy_schema) == {"type": "json_object"}, "json_object mode"
     assert _response_format("off", dummy_schema) is None, "off mode omits response_format"
     assert _response_format("json_schema", None) is None, "no schema -> no response_format regardless of mode"
+
+    # timeout classification — what chat() may retry vs what must fail fast
+    assert _is_timeout(TimeoutError("read timed out")), "bare TimeoutError must classify as timeout"
+    assert _is_timeout(urllib.error.URLError(TimeoutError("timed out"))), "wrapped connect timeout must classify"
+    assert not _is_timeout(urllib.error.URLError(ConnectionRefusedError())), "refused is NOT a timeout"
+    assert not _is_timeout(urllib.error.URLError(OSError("dns failure"))), "DNS is NOT a timeout"
+    assert not _is_timeout(ValueError("unrelated")), "non-OSError is never a timeout"
+    # PING_TIMEOUT: env-tunable float, default widened past the gateway's real 6-7s budget
+    assert PING_TIMEOUT >= 10, f"PING_TIMEOUT default must be >= 10s, got {PING_TIMEOUT}"
 
     try:
         names = live_skill_names()
