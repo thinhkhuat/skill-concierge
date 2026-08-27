@@ -4,6 +4,35 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.32.1] — 2026-08-28
+
+### Fixed
+- **Multi-intent over-split (found by the 0.32.0 live smoke, minutes after release).**
+  Real skill descriptions of the SAME intent family share almost no surface tokens
+  ("verify/validate/check/smoke", "fix/debug/repair", "bug/error/failure"), so a
+  single-intent "fix the failing test" turn announced **7 fake intents** and a
+  blended research/test/commit prompt announced 8. Three fixes, all
+  deterministic and selftest-pinned against the live prompt shapes:
+  - **Synonym folding** — 8 conservative domain families (verify/validate/check…,
+    test/coverage/qa…, fix/debug/diagnose…, bug/defect/error…, research/analyze…,
+    document…, plan/roadmap…, deploy/ship…) fold to their family head before
+    clustering, so overlap tracks intent rather than vocabulary choice.
+  - **Overlap coefficient instead of Jaccard** for the merge test — Jaccard punishes
+    the long skill-specific tails siblings carry (playwright/vitest/k6 vs
+    execution/analysis/report): a same-family pair at inter=3, |a|=11, |b|=8 scores
+    0.19 (split) on Jaccard, 0.38 (merge) on overlap. Threshold default
+    `ENFORCER_INTENT_MERGE_J` 0.24 → 0.30 accordingly; disjoint intents stay 0 on
+    either metric.
+  - **Intent cap** (`ENFORCER_MAX_INTENTS`, default 3) — a task with >3 genuinely
+    distinct intents is vanishingly rare; beyond the cap, extra clusters fold back
+    as supporting rows instead of being announced. The telemetry path applies the
+    same cap (`n_intents` can never exceed it).
+  Live after-fix: the single-intent prompt renders the classic note (no intent
+  line); the research/tests/commit prompt reads exactly 3. Known residual, bounded
+  by the cap: a lexically disjoint near-tied candidate (e.g. `ego-browser` on a
+  test-family retrieval) can still appear as a low-value third intent — advisory
+  only, leads stay correct; the Phase-4 continuation metric is the arbiter.
+
 ## [0.32.0] — 2026-08-28
 
 ### Added

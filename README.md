@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.32.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.32.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -343,6 +343,7 @@ reverts that drop that harness's roots + scopes byte-identically (see AGENTS.md 
 
 
 
+`0.32.1` — **published, multi-intent over-split fix (found by the 0.32.0 live smoke): synonym folding (8 conservative domain families), overlap-coefficient merge test instead of Jaccard (siblings carry long skill-specific token tails), and a 3-intent cap with extras folding back as supporting rows; telemetry capped identically. Single-intent turns render classically again; the research/tests/commit smoke reads exactly 3.**
 `0.32.0` — **published, ADR-0041 multi-intent offers + route projection (Phases 2–3 of the skill-chain-intelligence plan): the turn-zero offer detects multi-part prompts via deterministic lexical intent clustering and renders N primaries leads-first (strength-gated so weak siblings can't fake a split), and projects the top candidate's typical continuation as a bounded cycle-safe ROUTE line from the merged chain map (overrides > declared > mined) — e.g. `ak-brainstorm -> ak-plan -> ak-cook -> ak-test`. Context-only (locked literals untouched, single-intent-no-route renders byte-identically); `ENFORCER_MULTI_INTENT` / `ENFORCER_CHAIN_PROJECTION` kill-switches; offer events gain `n_intents`/`route` telemetry.**
 `0.31.0` — **published, ADR-0040 behavior-mined skill chains (Phase 1 of the skill-chain-intelligence plan): `scripts/build_chains.py` mines the invocation ledger's real per-session sequences into `mined-chains.json` (support × lift; closure skills die on lift; subagent lanes excluded; catalogue-resolved), merged at the enforcer's read seam as the lowest layer — overrides > declared frontmatter > mined, fills-empty-only, visible-catalogue filtered, riding the same context-only CHAIN-HINT line (`ENFORCER_MINED_CHAINS` kill-switch). Chain coverage 11 → 23 names on the first live run, compounding as the ledger grows; Phases 2–4 (proactive projection, multi-intent offers, continuation telemetry) designed in `plans/260828-0004-skill-chain-intelligence/plan.md`.**
 `0.30.1` — **published, flywheel transport resilience: `ping()` budget widened 5 s → 10 s (`FLYWHEEL_LLM_PING_TIMEOUT`) after a real preflight miss against a gateway that legitimately takes 6-7 s+ on `/v1/models`; `chat()` now retries socket timeouts (both urllib shapes) on the same 3-attempt/5s-10s backoff as HTTP 503 — the gateway is bimodal under load (2-10 s or 60-95 s per call), so a timeout is contention, not a verdict — while refused/DNS errors still fail fast.**
