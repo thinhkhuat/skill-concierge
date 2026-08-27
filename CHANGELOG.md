@@ -4,6 +4,30 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.31.0] — 2026-08-28
+
+### Added
+- **Behavior-mined skill chains (ADR-0040, skill-chain-intelligence Phase 1 of 4).**
+  58% of skill-using sessions invoke ≥2 skills (ledger: 110/191 all-time), but the
+  ADR-0029 chain-hint layer knew only what it was told — `next-skills:` frontmatter,
+  which **3 of 757 skills declare (0.4%)** — plus the operator's curated overrides.
+  New `scripts/build_chains.py` mines the ledger's real per-session sequences into
+  `~/.claude/skill-concierge/mined-chains.json`: support × lift scored (support ≥ 2,
+  lift ≥ 1.5 — closure skills like `session-handoff` follow nearly everything and die
+  on lift alone, no hand-maintained drop-list), session-bounded adjacency, subagent
+  lanes excluded, names catalogue-resolved. The enforcer merges it as the LOWEST
+  layer — operator overrides > declared frontmatter > mined, fills-empty-only
+  (the sidecar's `[]` is absent authoring, not suppression; only the override file's
+  `[]` deliberately suppresses), visible-catalogue filtered, riding the same
+  context-only CHAIN-HINT line (no gate, no floor change). Live first run: 17 mined
+  chains, independently reproducing the curated `ak-brainstorm→ak-plan` and declared
+  `doctor→flywheel`, plus genuinely new continuations (`whereami→ak-cook`,
+  `plugin-scaffold→working-with-claude-code`, `what-next→verify-as-claimed`);
+  chained-name coverage in the live map jumps 11 → 23. Kill-switch
+  `ENFORCER_MINED_CHAINS=0`; path override `SKILL_CONCIERGE_MINED_CHAINS`.
+  Phases 2–4 (proactive chain projection, multi-intent offer shaping, continuation
+  telemetry) designed in `plans/260828-0004-skill-chain-intelligence/plan.md`.
+
 ## [0.30.1] — 2026-08-27
 
 ### Fixed
