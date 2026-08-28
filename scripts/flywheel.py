@@ -14,7 +14,8 @@ Modes:
   python3 scripts/flywheel.py --generate --triggers-only  # triggers only (skip scenario regen)
 
 Coverage = live-index skill names (Qdrant claude_skills, kind=base) vs the skills
-in eval/triggers.json that carry a non-empty `llm_triggers.triggers` list.
+in the canonical corpus (~/.claude/skill-concierge/triggers.json) that carry a non-empty
+`llm_triggers.triggers` list.
 
 Every --generate run appends a record to the global run manifest
 (~/.claude/skill-concierge/flywheel-manifest.json, scripts/flywheel_manifest.py) — same
@@ -40,7 +41,9 @@ import llm_eval_gen  # scenario (positive/negative) generator
 import llm_triggers  # utterance-trigger generator
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
-TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
+# Canonical utterance corpus lives in the OPERATOR home (0.37.0 — see build_triggers.py).
+_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
+TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
 PROVIDERS_DOC = ROOT / "references" / "flywheel-llm-providers.md"
 SS_BIN = VENV / "bin" / "skill-search"
 PY_BIN = VENV / "bin" / "python3"

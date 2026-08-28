@@ -279,6 +279,16 @@ upstream is re-vendored:
   forwards the flag defensively. **Requires re-copy into the stable venv
   (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
 
+- **Durable-home default for `_LLM_TRIG_PATH` (v0.37.0, utterance-canonicalization):** `server.py`
+  `_LLM_TRIG_PATH` default moves from `<cwd4>/eval/triggers.json` (never populated in deployed
+  copies — the plugin-cache tree has no `eval/`) to `~/.claude/skill-concierge/triggers.json`, the
+  operator-owned canonical corpus. Env `SKILL_TRIGGERS` still wins when set. The old default made a
+  bare env-less `skill-search --reindex` silently rebuild the trigger layer WITHOUT utterances
+  (pruning the layer); the durable-home default makes the bare path safe by construction. Mirrors
+  the script-side defaults (`build_triggers.py`/`enrich_index.py`/`llm_triggers.py`/`flywheel.py`)
+  and doctor's durable-home-first seam. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

@@ -12,7 +12,9 @@ metadata:
 
 Surface and drive the **retrieval flywheel** — the utterance layer (ADR-0026). For each
 indexed skill the flywheel stores short, LLM-generated "how a user actually asks for this"
-phrases (English + Vietnamese) under `llm_triggers` in `eval/triggers.json`; those phrases
+phrases (English + Vietnamese) under `llm_triggers` in the canonical corpus
+`~/.claude/skill-concierge/triggers.json` (operator home — personal data, kept out of the
+public repo since 0.37.0); those phrases
 lift retrieval recall. Generation is **offline and incremental** — the generator
 content-hashes each skill, so only new or changed skills ever hit the LLM. Skills with no
 utterances still work (graceful fallback to description+body retrieval); the flywheel just
@@ -35,7 +37,7 @@ This skill is the seamless surface for two things: **seeing** where the flywheel
    - **Coverage** — installed `N/M` plus one line per configured external catalog
      (`antigravity: N/M`), with missing skills by name. Indexed names come from the live
      Qdrant `claude_skills` index; covered = a non-empty `llm_triggers.triggers` in
-     `eval/triggers.json`.
+     the canonical corpus at `~/.claude/skill-concierge/triggers.json`.
    - **State** — lock free vs `IN PROGRESS`; while a run holds the lock (including the
      detached auto-flywheel pass) status samples coverage twice (5s) and prints live
      throughput + ETA — the only way to observe a detached run's progress.

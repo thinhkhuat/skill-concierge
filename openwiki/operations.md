@@ -154,7 +154,7 @@ number rather than a boolean, and `SKILL_TRIGGER_PURITY` defaults to a non-boole
 |----------|---------|--------|-----|
 | `ENFORCER_AUTHORIZED_SKIP` | `1` | enforcer injects a `SKILL-CHECK:` authorization on its two formerly-silent verdict legs instead of nothing; `=0` restores the old silence | [0015](../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
 | `SKILL_BODY_TRIGGERS` | `1` | engine mines each skill body's labeled decision-sections into extra MAX-pool trigger points; `=0` **+ a reindex** reverts to description-only | [0016](../docs/adr/0016-body-derived-trigger-points.md) |
-| `SKILL_LLM_TRIGGERS` | `0` | layers offline flywheel-generated natural-utterance phrases (EN+VN) FIRST in the MAX-pool trigger layer; `=1` **+ a reindex** enables (needs `SKILL_TRIGGERS` → `eval/triggers.json`) | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
+| `SKILL_LLM_TRIGGERS` | `0` | layers offline flywheel-generated natural-utterance phrases (EN+VN) FIRST in the MAX-pool trigger layer; `=1` **+ a reindex** enables (needs `SKILL_TRIGGERS` → the canonical `~/.claude/skill-concierge/triggers.json`) | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
 | `TRIGGERS_MAX` | `12` | per-skill COMBINED cap across all trigger sources; live deploy uses `16` so utterances add slots rather than evict desc/body | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
 | `ENFORCER_SELFREF_SKIP` | `1` | enforcer pre-authorizes a 3rd AUTHORIZED-SKIP leg for pure self-referential recap turns ("explain your last answer"); `=0` restores the old 2-leg behavior | [0019](../docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
 | `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
@@ -166,11 +166,12 @@ Several enforcer levers are additionally **default-inert** and env-gated (`ENFOR
 [enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-three-legs-two-formerly-silent).
 
 > **Utterance-layer deploy caveat.** [`.mcp.json`](../.mcp.json) ships `SKILL_LLM_TRIGGERS=1` +
-> `TRIGGERS_MAX=16`, but the utterance **corpus** (`eval/triggers.json`, ~733 KB, **gitignored** —
-> it regenerates from the flywheel scripts) is **not** in the repo, and its path is read from
-> `SKILL_TRIGGERS`, which lives **machine-local** in `~/.claude/settings.json` `env` — not in
-> `.mcp.json`. So a fresh clone enables the flag but degrades gracefully to desc/body triggers
-> until `SKILL_TRIGGERS` points at a generated `triggers.json`. **v0.16.1 fix:** the detached
+> `TRIGGERS_MAX=16`, but the utterance **corpus** (`~/.claude/skill-concierge/triggers.json`,
+> machine-local, **not in the repo** — the repo is public and the corpus is personal data,
+> 0.37.0) regenerates only via the flywheel scripts. Its path is pinned in `.mcp.json`
+> `SKILL_TRIGGERS` (also the env-less default in every generator and in the vendored engine),
+> so a fresh clone enables the flag but degrades gracefully to desc/body triggers until a
+> flywheel run generates the corpus. **v0.16.1 fix:** the detached
 > SessionStart `auto_reindex` hook ([`hooks/scripts/auto_reindex.py`](../hooks/scripts/auto_reindex.py)
 > `_mcp_env()`) now forwards `SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/`SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS`
 > to the background reindex — before that it rebuilt at engine defaults and **pruned the utterance

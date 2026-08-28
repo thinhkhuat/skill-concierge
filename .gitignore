@@ -24,8 +24,8 @@ ijfw/
 # session handoff notes — scratch, not source (see CLAUDE.md)
 .handoff/
 
-# generated enrichment artifacts (rebuilt by build_triggers.py / calibrate_thresholds.py)
-eval/triggers.json
+# generated enrichment artifacts (rebuilt by calibrate_thresholds.py; the utterance
+# corpus moved to the operator home ~/.claude/skill-concierge/triggers.json in 0.37.0)
 eval/thresholds.json
 
 # generated flywheel eval artifacts (rebuilt by scripts/llm_eval_gen.py / llm_triggers.py)

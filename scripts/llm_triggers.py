@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 llm_triggers.py — generate short LLM utterance-style trigger phrases via the shared
-flywheel_llm client and merge them additively into eval/triggers.json alongside the
+flywheel_llm client and merge them additively into the canonical corpus
+(~/.claude/skill-concierge/triggers.json) alongside the
 existing prose-phrase layer build_triggers.py writes.
 
 See plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 3.
@@ -33,7 +34,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import flywheel_llm
 from build_triggers import MAX_TRIGGERS  # same per-skill cap build_triggers.py uses
 
-TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
+# Canonical utterance corpus lives in the OPERATOR home (0.37.0 — see build_triggers.py).
+_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
+TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
 CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_eval_gen.py
 
 # Bump when SYSTEM_PROMPT changes. The cache key hashes only the skill DESCRIPTION,

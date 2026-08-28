@@ -4,6 +4,28 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.37.0] — 2026-08-28
+
+### Changed
+- **The utterance corpus is canonicalized at the operator home — one copy, out of the public
+  repo (owner decision):** `~/.claude/skill-concierge/triggers.json` is now the single
+  source of truth for generated utterances. The pre-0.37.0 dev-surface copy
+  (`eval/triggers.json`, gitignored, drifting from the durable-home copy by ~160 entries)
+  is retired: the durable-home copy now carries the full corpus (3,406 keys incl. all 1,928
+  antigravity entries; both pre-migration copies backed up under
+  `~/.claude/skill-concierge/backups/triggers-20260828-2030/`). Generator defaults
+  (`build_triggers.py`, `enrich_index.py`, `llm_triggers.py`, `flywheel.py`) resolve
+  `SKILL_TRIGGERS` env first, then the durable home — mirroring doctor's
+  durable-home-first seam; the `settings.json` `env` override that steered writes back to
+  the dev file is removed, and the retired dev path is dropped from `.gitignore`.
+- **Vendored engine patch (re-apply on re-vendor):** `_LLM_TRIG_PATH` default in
+  `vendor/skill-search/skill_search/server.py` moves to the durable home — the old
+  vendored-tree default was never populated in deployed copies, so a bare env-less
+  `skill-search --reindex` silently rebuilt the trigger layer WITHOUT utterances (pruning
+  the layer). The durable-home default makes the bare path safe by construction.
+  Deployed to the stable venv via force-reinstall. Docs swept (README, AGENTS.md,
+  openwiki, SKILL.md, script docstrings); rationale recorded in ADR-0044.
+
 ## [0.36.1] — 2026-08-28
 
 ### Changed

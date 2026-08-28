@@ -93,8 +93,10 @@ SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
 # quality phrases win the capped slots), ahead of description/body phrases.
 # Default OFF = byte-identical to today; set SKILL_LLM_TRIGGERS=1 + reindex to enable.
 SKILL_LLM_TRIGGERS = os.environ.get("SKILL_LLM_TRIGGERS", "0") != "0"
+# 0.37.0: durable-home default (operator-owned corpus; the vendored-tree eval/ path was
+# never populated in deployed copies and fell back to "no utterances" without env).
 _LLM_TRIG_PATH = os.path.expandvars(os.environ.get(
-    "SKILL_TRIGGERS", str(Path(__file__).resolve().parent.parent.parent.parent / "eval" / "triggers.json")))
+    "SKILL_TRIGGERS", str(Path.home() / ".claude" / "skill-concierge" / "triggers.json")))
 # Index manifest: lets us detect drift between disk and the index cheaply. Keyed per
 # project root — the signature it stores is CWD-scoped, so one shared file would make
 # every session with a different project report a false 'disk changed since last index'.

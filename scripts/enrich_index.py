@@ -6,7 +6,7 @@ Recipe (reverse-engineered from the step-0 shadow ground truth, all 14 skills, b
 reconstruction = flat mean): enriched_vector = MEAN( [live S] + [embed(trigger) ...] ).
 The stored vector S IS included (flat mean, so description weight = 1/(N+1); triggers are
 N-capped upstream in build_triggers.py so that weight stays bounded). Triggers come from
-eval/triggers.json (keyed by the LIVE INDEX name).
+the canonical corpus (~/.claude/skill-concierge/triggers.json, keyed by the LIVE INDEX name).
 
 EMBED PARITY (red-team M5, HARD GATE): triggers MUST be embedded via the engine path
 (skill_search.server.embed, fastembed==0.8.0, mpnet-768) — the exact embedder the live
@@ -40,7 +40,9 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TRIGGERS = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
+# Canonical utterance corpus lives in the OPERATOR home (0.37.0 — see build_triggers.py).
+_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
+TRIGGERS = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
 QDRANT = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
 LIVE = os.environ.get("SKILL_COLLECTION", "claude_skills")
 SHADOW = os.environ.get("SKILL_SHADOW_COLLECTION", "claude_skills_shadow")

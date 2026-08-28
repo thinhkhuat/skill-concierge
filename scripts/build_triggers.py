@@ -15,10 +15,10 @@ Utterances (the ceiling) are layered separately later to isolate the delta.
 The authoritative skill set is the LIVE INDEX (claude_skills payloads), not disk — so the
 names here match exactly what enrich_index.py / precision_eval.py key on.
 
-Output: eval/triggers.json  { name: {source, triggers:[...], n} }
+Output: ~/.claude/skill-concierge/triggers.json  { name: {source, triggers:[...], n} }
 
 Pure stdlib. Usage:
-  python3 scripts/build_triggers.py            # build eval/triggers.json from live index
+  python3 scripts/build_triggers.py            # build the canonical triggers.json from live index
   python3 scripts/build_triggers.py --dry-run  # report counts, write nothing
   python3 scripts/build_triggers.py --selftest # phrase-split self-check (no network)
 """
@@ -31,7 +31,10 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = Path(os.environ.get("SKILL_TRIGGERS", ROOT / "eval" / "triggers.json"))
+# Canonical utterance corpus lives in the OPERATOR home (0.37.0: single copy — the repo
+# is public, the corpus is personal; the pre-0.37.0 ROOT/eval default is retired).
+_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
+OUT = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
 QDRANT = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 
