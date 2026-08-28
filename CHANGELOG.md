@@ -4,6 +4,37 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.39.0] — 2026-08-29
+
+### Added
+- **The blocklist — a user-ordered disable tier, origin-agnostic (ADR-0046).** The
+  concierge had curation lists (keep-on, keep-off) but no disable; command-files surfaced
+  as skills (`~/.claude/commands/*.md`) sat outside every retrieval-side filter by design
+  (ADR-0001) and were invocable with zero governance — the trigger incident. New flat
+  `~/.claude/skill-concierge/blocklist.json` (`{"blocked": [...]}`, absent = no-op, never
+  seeded), enforced at four layers: **`skill_guard.py`** — a PreToolUse(Skill) deny hook
+  wired in `hooks/hooks.json`, the repo's second deliberate denying gate after the openwiki
+  commit guard, and the only layer that catches command-files; **enforcer** — blocked
+  names drop from the candidate pool (riding the keep-off `dropped` ledger field),
+  deterministic routes, chain hints (a blocked seed suppresses the hint), ROUTE
+  projections, and the foreign annex; **engine** — `search_skills` filters blocked rows and
+  `get_skill` refuses to serve the body (external deep-pulls included), read LIVE at call
+  time so an edit applies with no reindex and no restart (index-neutral; VENDORED.md
+  entry); **overrides** — `apply-overrides.py` forces a blocked keep-on skill name-only
+  (`keep-on.json` untouched, unblocking restores it). Name semantics identical at every
+  layer: a **bare** entry blocks every qualified twin (`plugin:name`, `alias:name`, any
+  origin); a **qualified** entry blocks only that exact form. Manage via
+  `scripts/blocklist.py` (list/add/remove, mirrors `keep-on.py` incl. the router warning
+  and reconcile) or the new `skill-concierge:blocklist` skill. Kill-switch:
+  `SKILL_BLOCKLIST=0` turns the whole feature off everywhere. Test seam:
+  `SKILL_CONCIERGE_BLOCKLIST`. Doctor gains a `Blocklist` check (absent file healthy,
+  present file must parse, missing guard = FAIL). Pinned by enforcer selftest (4b),
+  `apply-overrides` selftest (strip + kill-switch restore), and
+  `tests/test_blocklist.py` (guard deny/allow/fail-open/kill-switch/non-Skill, enforcer
+  semantics, CLI round-trip). Harness coverage honestly scoped: the deny guard rides the
+  plugin hook surface (Claude Code + ZCode native); Codex/OMP enforce via
+  retrieval-and-offer filtering only.
+
 ## [0.38.2] — 2026-08-29
 
 ### Fixed

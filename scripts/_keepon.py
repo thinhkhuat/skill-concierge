@@ -12,8 +12,9 @@ The keep-on allowlist is SEEDED there once from the plugin's shipped default (co
 thereafter the user owns it and an update never clobbers their edits.
 
 Env seams:
-  SKILL_CONCIERGE_HOME    the canonical durable home (default ~/.claude/skill-concierge)
-  SKILL_CONCIERGE_KEEPON  exact allowlist file — wins, never seeded (tests / advanced override)
+  SKILL_CONCIERGE_HOME     the canonical durable home (default ~/.claude/skill-concierge)
+  SKILL_CONCIERGE_KEEPON   exact allowlist file — wins, never seeded (tests / advanced override)
+  SKILL_CONCIERGE_BLOCKLIST exact blocklist file — wins, never created (ADR-0046; tests / advanced)
 """
 import os
 import shutil
@@ -37,6 +38,17 @@ def keepon_path(plugin_root) -> Path:
     return stable
 
 
+def blocklist_path() -> Path:
+    """ADR-0046: stable blocklist path under the canonical home. NEVER seeded —
+    an absent file IS the empty blocklist (the no-op default), unlike keep-on
+    which carries a shipped default. An explicit SKILL_CONCIERGE_BLOCKLIST
+    override wins (tests / advanced override)."""
+    override = os.environ.get("SKILL_CONCIERGE_BLOCKLIST")
+    if override:
+        return Path(override)
+    return HOME / "blocklist.json"
+
+
 def _selftest():
     import json
     import tempfile
@@ -55,6 +67,11 @@ def _selftest():
         p.write_text('{"keep_on": ["a", "b"]}', encoding="utf-8")
         keepon_path(td)                                   # second call must NOT re-seed
         assert json.loads(p.read_text())["keep_on"] == ["a", "b"], "re-seeded over a user edit"
+        os.environ["SKILL_CONCIERGE_BLOCKLIST"] = str(td / "bl.json")
+        assert blocklist_path() == td / "bl.json"         # override wins
+        del os.environ["SKILL_CONCIERGE_BLOCKLIST"]
+        assert blocklist_path() == td / "home" / "blocklist.json"   # canonical home, no seeding
+        assert not (td / "home" / "blocklist.json").exists(), "blocklist must not be seeded"
     print("selftest ok")
 
 

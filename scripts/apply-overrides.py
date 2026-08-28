@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from _keepon import keepon_path  # sibling module (scripts/ is on sys.path at run)
+from _keepon import blocklist_path, keepon_path  # sibling module (scripts/ is on sys.path at run)
 
 ROOT = Path(__file__).resolve().parent.parent          # skill-concierge/
 SETTINGS = Path(os.environ.get(
@@ -59,6 +59,32 @@ def discover_skill_names():
 def _compute_overrides(keep_on, names):
     """Every discovered skill -> on|name-only. Sorted keys for deterministic comparison."""
     return {n: ("on" if n in keep_on else "name-only") for n in sorted(set(names))}
+
+
+def _blocked_names():
+    """ADR-0046 disable tier, read live. Empty when absent/off — the no-op default."""
+    if os.environ.get("SKILL_BLOCKLIST", "1") == "0":
+        return set()
+    try:
+        data = json.loads(blocklist_path().read_text(encoding="utf-8"))
+        lst = data.get("blocked", []) if isinstance(data, dict) else []
+        if not isinstance(lst, list):
+            return set()  # wrong-typed value = total fail-open
+        return {n for n in lst if isinstance(n, str)}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return set()
+
+
+def _stripped_by_blocklist(keep_on):
+    """keep-on entries the blocklist kills: exact match, or a BARE blocklist entry
+    catching a qualified keep-on name (`origin:name`) — the same twin rule the
+    guard/enforcer/engine match by. A disabled skill must never stay fully
+    described; keep-on.json itself is left untouched so unblocking restores it."""
+    blocked = _blocked_names()
+    if not blocked:
+        return set()
+    return {n for n in keep_on
+            if n in blocked or (":" in n and n.rsplit(":", 1)[1] in blocked)}
 
 
 def _diff(new, cur):
@@ -156,6 +182,23 @@ def _selftest():
         assert run("--if-changed").returncode == 0
         assert json.loads(settings.read_text())["skillOverrides"]["alpha"] == "on"
 
+        # ADR-0046: a bare blocklist entry forces a keep-on name back to name-only
+        (d / "blocklist.json").write_text(json.dumps({"blocked": ["alpha"]}),
+                                          encoding="utf-8")
+        env2 = {**env, "SKILL_CONCIERGE_BLOCKLIST": str(d / "blocklist.json")}
+        run2 = lambda *a: subprocess.run([sys.executable, __file__, *a],
+                                         env=env2, capture_output=True, text=True, check=False)
+        assert run2("--if-changed").returncode == 0
+        assert json.loads(settings.read_text())["skillOverrides"]["alpha"] == "name-only", \
+            "a blocked skill must never stay fully described"
+        # kill-switch off -> keep-on verdict restored without touching keep-on.json
+        env3 = {**env2, "SKILL_BLOCKLIST": "0"}
+        run3 = lambda *a: subprocess.run([sys.executable, __file__, *a],
+                                         env=env3, capture_output=True, text=True, check=False)
+        assert run3("--if-changed").returncode == 0
+        assert json.loads(settings.read_text())["skillOverrides"]["alpha"] == "on", \
+            "SKILL_BLOCKLIST=0 must restore the keep-on verdict byte-identically"
+
     print("selftest ok")
     return 0
 
@@ -180,6 +223,11 @@ def main():
               file=sys.stderr)
         return 1
     keep_on = set(keep_list)
+    stripped = _stripped_by_blocklist(keep_on)   # ADR-0046: disable outranks always-on
+    if stripped:
+        keep_on -= stripped
+        print(f"stripped: {', '.join(sorted(stripped))} on the blocklist — forced name-only "
+              "(blocklist outranks keep-on, ADR-0046; keep-on.json untouched)")
     if not any(n == "skill-search" or n.endswith(":skill-search") for n in keep_on):
         print("WARN: 'skill-concierge:skill-search' (the router) is not in keep_on — the retriever entry "
               "point would go name-only/dark. Add it unless that's intended.", file=sys.stderr)

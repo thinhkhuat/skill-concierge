@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.38.2-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.39.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -215,6 +215,7 @@ Behavior-changing kill-switches, all **default ON** except `SKILL_LLM_TRIGGERS` 
 | `SKILL_BODY_TRIGGERS` | `1` (ON) | Vendored engine mines each skill body's labeled decision sections into extra MAX-pool trigger points, on top of the existing description-derived ones. `=0` + a reindex reverts to description-only (byte-identical to before). [ADR-0016](docs/adr/0016-body-derived-trigger-points.md). |
 | `SKILL_LLM_TRIGGERS` | `0` (OFF) | Layers offline flywheel-generated natural-utterance phrases (canonical corpus `~/.claude/skill-concierge/triggers.json`, EN+VN) FIRST in the MAX-pool trigger layer, ahead of description/body. `=1` + a reindex enables; needs `SKILL_TRIGGERS` pointed at the corpus (machine-local, not in this public repo). Live deploy sets this ON via `.mcp.json`. [ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md). |
 | `TRIGGERS_MAX` | `12` | Per-skill COMBINED cap on trigger points across all sources. Raise (live deploy uses `16`) so LLM-utterance phrases add slots rather than evict description/body ones. |
+| `SKILL_BLOCKLIST` | `1` (ON) | The user-ordered disable tier ([ADR-0046](docs/adr/0046-blocklist-disable-tier.md)): `~/.claude/skill-concierge/blocklist.json` entries are denied at invocation (PreToolUse(Skill) guard — catches command-files surfaced as skills too), dropped from enforcer offers/hints/routes, filtered from `search_skills`, refused by `get_skill`, and forced name-only if keep-on'd. Read live — no reindex, no restart. `=0` turns the whole feature off everywhere. |
 
 ### Always-on policy (the keep-on allowlist)
 
@@ -236,6 +237,27 @@ python3 scripts/keep-on.py list                 # view the always-on set
 python3 scripts/keep-on.py add <skill-name>…    # add, then reconcile immediately
 python3 scripts/keep-on.py remove <skill-name>… # remove, then reconcile
 ```
+
+### Blocklist (disable a skill)
+
+A user-ordered **disable tier**, origin-agnostic ([ADR-0046](docs/adr/0046-blocklist-disable-tier.md)):
+personal skills, plugin skills, external catalog entries, and command-files surfaced as
+skills (`~/.claude/commands/*.md` — which the index deliberately excludes, so only the
+invocation guard can catch them). A blocked skill is never offered, never returned by
+`search_skills`, never served by `get_skill`, and its Skill-tool invocation is **denied**
+by the PreToolUse guard — the repo's second deliberate denying gate. The flat list lives at
+`~/.claude/skill-concierge/blocklist.json` and is read live (no reindex, no restart); a
+**bare** entry blocks every qualified twin (`plugin:name`, `alias:name`), a **qualified**
+entry blocks only that exact form.
+
+```bash
+python3 scripts/blocklist.py list                  # view the disabled set
+python3 scripts/blocklist.py add <skill-name>…     # disable (forces keep-on name-only)
+python3 scripts/blocklist.py remove <skill-name>…  # re-enable
+```
+
+Kill-switch: `SKILL_BLOCKLIST=0` turns the whole feature off everywhere (guard, enforcer,
+engine, overrides). Doctor reports the list and fails if the deny guard is missing.
 
 ### External catalogs (search without installing)
 
@@ -355,6 +377,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 
 
+`0.39.0` — **published, the blocklist — a user-ordered disable tier, origin-agnostic (ADR-0046; owner request "disable that resume-session skill — build one properly, external or builtin, doesn't matter"): a flat `~/.claude/skill-concierge/blocklist.json` (absent = no-op, never seeded) enforced at four layers — `skill_guard.py` PreToolUse(Skill) DENY (the repo's second deliberate denying gate, and the only layer that catches command-files surfaced as skills, which ADR-0001 keeps out of the index), enforcer offer/hint/route exclusion, engine search-filter + get_skill refusal (read LIVE at call time — edits apply with no reindex and no restart; index-neutral), and an apply-overrides strip forcing blocked keep-on skills name-only (keep-on.json untouched, unblocking restores it). Bare entry blocks every qualified twin; qualified entry is exact-only. `blocklist.py` CLI + `skill-concierge:blocklist` skill; kill-switch `SKILL_BLOCKLIST=0`; doctor gains a Blocklist check. Verified: tests/test_blocklist.py 6/6, enforcer selftest (4b pins), apply-overrides selftest (strip + kill-switch restore), guard JSON probes, live engine probe, doctor green, driftcheck 0.**
 `0.38.2` — **published, MCP launcher resync made asynchronous — the first spawn after a plugin upgrade no longer blocks the stdio handshake ~40s and dies ("handshaking with MCP server failed: connection closed", observed live on the 0.38.1 rollout); the detached, mkdir-lock-serialized resync (bash-3.2 safe, SIGHUP-hardened, lock actually released) serves the prior engine for ONE spawn, then the new build takes over; interrupted attempts self-repair on retry. Verified: forced-mismatch spawn handshakes <1s, background resync completes to stamp, lock released, doctor green.**
 `0.38.1` — **published, mined chains admit get_skill pulls (ADR-0045 option (a), owner pick): build_chains.load_sequences mines get_skill body-pull events as full sequence nodes so external-catalog skills — whose only observable usage is a pull — can enter the mined layer; the CHAIN-HINT seed deliberately stays invocation-only (a pull proves interest, not compliance); sub-stamped pulls excluded; CHAIN_MINE_PULLS=0 reverts; EPOCH v0.38.1 for mined-chain metrics. Verified: build_chains selftest green (pull in / sub-pull out / flag-off pins), live map regenerated.**
 `0.38.0` — **published, catalog tier parity (ADR-0045; owner decision "no favor, none of the unfairness" after a five-asymmetry audit): `_retrieve` drops `must_not tier=external` — externals compete with installed skills on score alone in ONE merged pool, sharing `ITEM_FLOOR` (0.18, the old annex floor was 2.2× higher), the same `TOP_K` slots and %-share pool, rendered inline `[external:<alias>]` with a get_skill footer (the ADR-0032 annex block, its floors/slots, and the zero-displacement invariant are gone); the getaway/actionability gates run tier-blind, so a strong external now carries a turn the installed shelf scores below floor on — measured live at ship: 6 of 8 offer slots externals on a catalog-flavored intent; chain routing admits externals (the sidecar records `catalog:*` scopes — CHAIN-HINT/ROUTE name them, tagged; mined chains still can't see `get_skill` takes, recorded not built); `flywheel --generate` defaults to EVERY scope (installed first, then each configured catalog, each capped by `--limit`; `--installed-only` restores the old default) with manifest records carrying an explicit `scope`; kill-switch `ENFORCER_EXTERNAL_OFFER=0` (legacy `ENFORCER_EXTERNAL_ANNEX=0` honored) restores the ADR-0031 search-only tier; ledger `ext` keeps its shape but lists external rows inside the PRIMARY offer — EPOCH v0.38.0 for offer-composition and external offer→take rates. Verified: enforcer selftest green (rewritten parity cases), live e2e probe, driftcheck 0.**

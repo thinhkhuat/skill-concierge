@@ -232,6 +232,7 @@ that the catch-loop silently swallowed, costing that skill its triggers. See
 | [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, Qdrant URL, `SKILL_TOP_K=10` |
 | [`config/keep-on.json`](../config/keep-on.json) | the **shipped SEED** for the curated always-on allowlist (**32 entries** in `keep_on`); on first run it is seeded once into the canonical durable home `~/.claude/skill-concierge/keep-on.json` (survives `/plugin update`, [ADR-0025](../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) writes the policy to `~/.claude/settings.json` (atomic, backs up, refuses empty). Curate it with the `keep-on` skill / `scripts/keep-on.py`. **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
 | [`config/keep-off.json`](../config/keep-off.json) | ledger-derived offer-suppression — chronic never-take skills dropped from the enforcer menu ([ADR-0011](../docs/adr/0011-ledger-derived-offer-suppression.md)) |
+| `~/.claude/skill-concierge/blocklist.json` | the **user-ordered disable tier** ([ADR-0046](../docs/adr/0046-blocklist-disable-tier.md)) — flat `{"blocked": [...]}`, absent = no-op, **never seeded**. Enforced at four layers: PreToolUse(Skill) **deny** (`hooks/scripts/skill_guard.py`, the plugin-level gate), enforcer offers/hints/routes, engine search-filter + `get_skill` refusal (live-read, index-neutral), and an apply-overrides strip of blocked keep-on names. Bare entry blocks every qualified twin; qualified entry is exact-only. Manage with the `blocklist` skill / `scripts/blocklist.py`; kill-switch `SKILL_BLOCKLIST=0` |
 | [`config/deterministic-routes.json`](../config/deterministic-routes.json) | optional exact-route overrides — **inert unless `ENFORCER_DETERMINISTIC` is set** |
 
 `apply-overrides.py` uses the **same** discovery module as the index, so overrides and the
@@ -242,7 +243,19 @@ is catalogue-specific). It stays fresh on its own: the SessionStart `auto_overri
 allowlist with the `keep-on` skill / `scripts/keep-on.py` (`list` / `add` / `remove`, reconciles
 immediately).
 
+The **blocklist** is the third list and the only *disable*: keep-on and keep-off curate
+attention, the blocklist removes the skill from every concierge surface and denies its
+invocation ([ADR-0046](../docs/adr/0046-blocklist-disable-tier.md)). It is the sole mechanism
+that also covers command-files surfaced as skills (`~/.claude/commands/*.md`), which the index
+deliberately excludes (ADR-0001) — only the invocation guard can catch those. Edits apply
+live (read at call time; no reindex, no restart) and the list is index-neutral, so unblocking
+is instant.
+
 ## Commit guardrails — two `PreToolUse(Bash)` hooks
+
+(A third denying gate exists at the PLUGIN level, not project scope: the ADR-0046
+`skill_guard.py` `PreToolUse(Skill)` blocklist guard in `hooks/hooks.json` — covered in
+*Configuration files* above.)
 
 Both are wired in [`.claude/settings.json`](../.claude/settings.json) (project scope, **not** the
 plugin's `hooks/hooks.json` — a plugin hook would fire in every project the plugin is enabled in,

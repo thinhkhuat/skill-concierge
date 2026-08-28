@@ -116,6 +116,30 @@ SERVER_RECORDS  = Path(os.path.expandvars(os.environ.get(
 NEXT_SKILLS_PATH = Path(os.path.expandvars(os.environ.get(
     "SKILL_CONCIERGE_NEXT_SKILLS",
     str(Path.home() / ".claude" / "skill-concierge" / "next-skills.json"))))
+# ADR-0046 blocklist (user-ordered disable tier): blocked skills are filtered from
+# search_skills results and refused by get_skill. Read LIVE at call time — this server
+# is long-lived (the hook processes are per-turn), so blocklist.py edits apply with no
+# restart and no reindex. Absent file = empty = no-op. SKILL_BLOCKLIST=0 is the shared
+# kill-switch (guard + enforcer + engine); SKILL_CONCIERGE_BLOCKLIST is the exact-file
+# test seam. Matching mirrors the guard/enforcer: exact, or a BARE entry catching every
+# qualified twin (`origin:name`).
+_BLOCKLIST_PATH = Path(os.path.expandvars(os.environ.get(
+    "SKILL_CONCIERGE_BLOCKLIST",
+    str(Path.home() / ".claude" / "skill-concierge" / "blocklist.json"))))
+
+
+def _blocked(name: str) -> bool:
+    if os.environ.get("SKILL_BLOCKLIST", "1") == "0":
+        return False
+    try:
+        data = json.loads(_BLOCKLIST_PATH.read_text(encoding="utf-8"))
+        lst = data.get("blocked", []) if isinstance(data, dict) else []
+        if not isinstance(lst, list):
+            return False  # wrong-typed value = total fail-open
+        entries = frozenset(n for n in lst if isinstance(n, str))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False  # fail-open: the disable list must never break retrieval
+    return name in entries or (":" in name and name.rsplit(":", 1)[1] in entries)
 
 mcp = FastMCP("skill-search")
 
@@ -783,7 +807,8 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
             limit=TOP_K, group_size=1, with_payload=True).groups
         for qv in embed_batch(queries)
     ]
-    out = {"query": query, "results": _fuse_ranked(group_lists, TOP_K)}
+    rows = [r for r in _fuse_ranked(group_lists, TOP_K) if not _blocked(r.get("name", ""))]
+    out = {"query": query, "results": rows}
     if len(queries) > 1:
         out["queries"] = queries
     # Surface index drift in-band so dark/stale skills don't fail silently.
@@ -797,6 +822,10 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
 def get_skill(name: str) -> str:
     """Return the full SKILL.md text for a named skill (explicit deep pull)."""
     name = name.lstrip("/")
+    if _blocked(name):   # ADR-0046: a disabled skill serves no body — search-filter + this
+        return json.dumps({"error": f"skill '{name}' is on the skill-concierge blocklist "
+                                     "(user-disabled). Re-enable: "
+                                     "python3 scripts/blocklist.py remove " + name})
     # Fast path: resolve the file path from the index payload — O(1) lookup,
     # no walking/parsing every SKILL.md on disk.
     try:

@@ -625,6 +625,55 @@ def _drop_keepoff(cands: list, keepoff: frozenset):
     return survivors, dropped
 
 
+# ── ADR-0046: user-ordered blocklist (disable tier) ──────────────────────
+# The inverse of keep-on: skills the USER ordered off — never offered, never hinted,
+# never routed to. Unlike keep-off (mined, offer-menu-only, still catalogue-reachable),
+# the blocklist removes the skill from every concierge surface; invocation itself is
+# denied by the PreToolUse guard (hooks/scripts/skill_guard.py), the layer that also
+# catches command-files surfaced as skills (ADR-0001 keeps those out of the index, so
+# no retrieval-side filter can ever see them). Name semantics, shared with the guard
+# and the engine: a BARE entry blocks every qualified twin (`origin:name`); a qualified
+# entry blocks only itself. FAIL-OPEN like every suppression config here.
+# SKILL_BLOCKLIST=0 is the one-var kill-switch (guard passes, this filter no-ops,
+# engine filter no-ops). SKILL_CONCIERGE_BLOCKLIST is the exact-file test seam.
+_BLOCKLIST_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_BLOCKLIST",
+    Path.home() / ".claude" / "skill-concierge" / "blocklist.json"))
+
+
+def _load_blocklist() -> frozenset:
+    if os.environ.get("SKILL_BLOCKLIST", "1") == "0":
+        return frozenset()
+    try:
+        data = json.loads(_BLOCKLIST_PATH.read_text(encoding="utf-8"))
+        lst = data.get("blocked", []) if isinstance(data, dict) else []
+        if not isinstance(lst, list):
+            return frozenset()  # wrong-typed value = total fail-open, not char-iterated noise
+        return frozenset(n for n in lst if isinstance(n, str))
+    except (OSError, UnicodeError, ValueError, AttributeError, TypeError):
+        return frozenset()  # fail-open: the disable list must never break a turn
+
+
+BLOCKLIST = _load_blocklist()
+
+
+def _blocked(name: str) -> bool:
+    """Exact entry match, or a BARE entry catching every qualified twin."""
+    if not BLOCKLIST:
+        return False
+    if name in BLOCKLIST:
+        return True
+    return ":" in name and name.rsplit(":", 1)[1] in BLOCKLIST
+
+
+def _drop_blocklisted(cands: list):
+    """(survivors, dropped-names) by the blocklist. Pure + order-preserving, same
+    contract as _drop_keepoff so the offer event's `dropped` field stays honest."""
+    survivors = [c for c in cands if not _blocked(c[0])]
+    dropped = [c[0] for c in cands if _blocked(c[0])]
+    return survivors, dropped
+
+
 # ── ADR-0029: next-skill chain hint ─────────────────────────────────────────
 # Soft chaining: when this session used skill A (auto OR manual — the ledger records
 # both) within the TTL and A declares `next-skills:`, append ONE candidate line to
@@ -827,12 +876,15 @@ def _chain_hint_data(sid: str) -> list:
     seed = _last_used_skill(sid)
     if not seed:
         return []
+    if _blocked(seed):        # ADR-0046: a disabled skill leaves no trace in offers
+        return []
     names_map = _visible_sidecar_names()
     succ = names_map.get(seed)
     if not isinstance(succ, list) or not succ:
         return []
     shown = [n for n in succ
-             if isinstance(n, str) and n and n in names_map and n not in KEEPOFF]
+             if isinstance(n, str) and n and n in names_map and n not in KEEPOFF
+             and not _blocked(n)]
     return [seed] + shown if shown else []
 
 
@@ -931,7 +983,7 @@ def _deterministic_hits(prompt: str, cands: list, keepoff: frozenset = frozenset
     have = {n for (n, _d, _s) in cands}
     out = []
     for sub, skill in _ROUTES:
-        if sub in low and skill not in have and skill not in keepoff:
+        if sub in low and skill not in have and skill not in keepoff and not _blocked(skill):
             out.append((skill, "deterministic route", 1.0))
             have.add(skill)
     return out
@@ -1185,7 +1237,7 @@ def _retrieve_foreign(vector: list, top_row: float = 0.0) -> list:
             continue
         pl = hits[0].get("payload", {}) or {}
         name = pl.get("name", g.get("id", "?"))
-        if _invocable_twin(name):
+        if _invocable_twin(name) or _blocked(name):   # ADR-0046: blocked = no annex row
             continue
         out.append((name, pl.get("description", ""), score))
         if len(out) >= FOREIGN_SLOTS:
@@ -1344,7 +1396,8 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
         if not isinstance(succ, list):
             break
         nxt = next((s for s in succ
-                    if isinstance(s, str) and s and s not in seen and s in names_map), None)
+                    if isinstance(s, str) and s and s not in seen and s in names_map
+                    and not _blocked(s)), None)
         if not nxt:
             break
         route.append(nxt)
@@ -1573,6 +1626,11 @@ def main() -> int:
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
+        # ADR-0046: user-ordered disable outranks everything — a blocked skill never
+        # reaches floors, gates, or the menu. Dropped names ride the same `dropped`
+        # field so the ledger keeps the full picture.
+        cands, _bl_dropped = _drop_blocklisted(cands)
+        _dropped = _dropped + _bl_dropped
 
         # Deterministic routes (default-inert): guarantee an unambiguously-intended skill in
         # the menu even when semantic ranking missed it. A hit leads (score 1.0) and bypasses
@@ -1731,6 +1789,40 @@ def _selftest() -> int:
     s2, d2 = _drop_keepoff([("a", "", 0.3)], frozenset())
     if [n for n, _, _ in s2] != ["a"] or d2 != []:
         bad.append("keepoff empty-set must pass everything through")
+
+    # (4b) ADR-0046 blocklist drop: bare entry catches qualified twins, qualified entry is
+    # exact-only, empty set is a no-op, and the kill-switch empties the loaded set.
+    global BLOCKLIST, _BLOCKLIST_PATH
+    _saved_bl, _saved_blp = BLOCKLIST, _BLOCKLIST_PATH
+    try:
+        BLOCKLIST = frozenset({"victim", "only:exact"})
+        if not _blocked("victim") or not _blocked("antigravity:victim"):
+            bad.append("blocklist: bare entry must catch the qualified twin")
+        if _blocked("only:exact") is False or _blocked("x:exact"):
+            bad.append("blocklist: qualified entry must be exact-only")
+        if _blocked("innocent") or not _blocked("other:victim"):
+            bad.append("blocklist: innocent must pass while a bare twin is caught")
+        s3, d3 = _drop_blocklisted(
+            [("a", "", 0.3), ("victim", "", 0.25), ("antigravity:victim", "", 0.2), ("c", "", 0.1)])
+        if [n for n, _, _ in s3] != ["a", "c"] or d3 != ["victim", "antigravity:victim"]:
+            bad.append(f"blocklist drop wrong: survivors={[n for n, _, _ in s3]} dropped={d3}")
+        BLOCKLIST = frozenset()
+        s4, d4 = _drop_blocklisted([("a", "", 0.3)])
+        if [n for n, _, _ in s4] != ["a"] or d4 != []:
+            bad.append("blocklist empty-set must pass everything through")
+        # kill-switch + file read through the loader (env-seamed to a temp file)
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as _td:
+            _BLOCKLIST_PATH = Path(_td) / "bl.json"
+            _BLOCKLIST_PATH.write_text('{"blocked": ["z"]}', encoding="utf-8")
+            os.environ["SKILL_BLOCKLIST"] = "0"
+            if _load_blocklist() != frozenset():
+                bad.append("blocklist: SKILL_BLOCKLIST=0 must empty the set")
+            del os.environ["SKILL_BLOCKLIST"]
+            if _load_blocklist() != frozenset({"z"}):
+                bad.append("blocklist: loader must read the file when the switch is on")
+    finally:
+        BLOCKLIST, _BLOCKLIST_PATH = _saved_bl, _saved_blp
 
     # (5) P6 gap-collapse: decided in _apply_dominance (so the CALLER logs the post-collapse menu),
     # default-inert. Plus a collapsed input must render as a lone candidate (no %-share, no note).
@@ -2531,7 +2623,7 @@ def _selftest() -> int:
     print(f"enforcer --selftest OK: refusal guard ({len(must_fire)} fire / "
           f"{len(must_not_fire)} silent) + ranked-mandate %-share "
           f"+ actionability imperative-veto ({len(imp_fire)} fire / {len(imp_off)} off) "
-          "+ keepoff-drop + gap-collapse "
+          "+ keepoff-drop + blocklist-drop (ADR-0046) + gap-collapse "
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
           f"{len(selfref_off)} off) "

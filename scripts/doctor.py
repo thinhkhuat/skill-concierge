@@ -811,6 +811,35 @@ def check_overrides():
     return {"id": "overrides", "label": "Settings overrides", "status": OK, "detail": base, "fix": None}
 
 
+def check_blocklist():
+    """ADR-0046 disable tier. An absent file IS the healthy no-op default (nothing
+    disabled); a present file must parse and carry a "blocked" list, and the
+    PreToolUse deny guard must exist or no disable is actually enforced."""
+    guard = ROOT / "hooks" / "scripts" / "skill_guard.py"
+    if not guard.exists():
+        return {"id": "blocklist", "label": "Blocklist", "status": FAIL,
+                    "detail": f"{guard} missing — the PreToolUse deny gate is gone "
+                              "(re-install the plugin)", "fix": None}
+    path = Path(os.environ.get(
+        "SKILL_CONCIERGE_BLOCKLIST",
+        Path.home() / ".claude" / "skill-concierge" / "blocklist.json"))
+    if not path.exists():
+        return {"id": "blocklist", "label": "Blocklist", "status": OK,
+                    "detail": "no blocklist (nothing disabled)", "fix": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
+        return {"id": "blocklist", "label": "Blocklist", "status": FAIL,
+                    "detail": f"{path} invalid JSON — guard fails open, nothing is denied",
+                    "fix": None}
+    lst = data.get("blocked") if isinstance(data, dict) else None
+    if not isinstance(lst, list):
+        return {"id": "blocklist", "label": "Blocklist", "status": FAIL,
+                    "detail": f"{path} has no \"blocked\" list", "fix": None}
+    return {"id": "blocklist", "label": "Blocklist", "status": OK,
+                "detail": f"{len(lst)} skill(s) disabled — {path}", "fix": None}
+
+
 def check_ledger():
     try:
         LOGDIR.mkdir(parents=True, exist_ok=True)
@@ -1467,6 +1496,7 @@ CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
+          check_blocklist,
           check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
           check_ledger, check_dup_mcp, check_mcp_enabled]
 

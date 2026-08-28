@@ -289,6 +289,21 @@ upstream is re-vendored:
   and doctor's durable-home-first seam. **Requires re-copy into the stable venv
   (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
 
+- **Blocklist query-time filter (ADR-0046, v0.39.0):** `server.py` adds `_BLOCKLIST_PATH`
+  (seam `SKILL_CONCIERGE_BLOCKLIST`, default `~/.claude/skill-concierge/blocklist.json`) and
+  `_blocked(name)` — read LIVE at each call because this server is long-lived (the hook
+  processes are per-turn), so `blocklist.py` edits apply with no restart of the CLI and no
+  reindex; absent file = empty = no-op; `SKILL_BLOCKLIST=0` is the shared kill-switch
+  (guard + enforcer + engine). `search_skills` filters blocked rows from the fused results;
+  `get_skill` refuses to serve a blocked skill's body (external-catalog deep pulls included —
+  search-filtering without body-refusal would leak the skill through the other lane).
+  Matching mirrors the guard/enforcer: exact entry, or a BARE entry catching every qualified
+  twin (`origin:name`). INDEX-NEUTRAL by design — the blocklist never touches points, so
+  unlike every patch above there is **no reindex step**; unblocking is instant and leaves
+  the index untouched. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) to deploy; long-lived MCP
+  servers keep executing the old bytes until restarted (ADR-0018 class).**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.
