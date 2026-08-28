@@ -5,14 +5,24 @@
 # original ENOENT cause), so the MCP survives reinstalls — ADR-0004. The MCP env
 # (SKILL_QDRANT_URL, SKILL_EMBED_*, SKILL_TOP_K) comes from .mcp.json via exec.
 #
-# Engine self-heal (ADR-0018): a /plugin update ships new engine code into the version-pinned
-# cache but never touches the venv's COPIED engine, so the MCP silently served STALE code until
-# a manual setup.sh (ADR-0013 only DETECTED it). The launcher now compares the deployed plugin
-# version to a stamp written at install time; on a mismatch it resyncs the engine into the venv
-# before exec. Cost profile: the guard is O(1) (two tiny reads) so the common in-version spawn
-# stays fast; the resync runs ONCE per update, is best-effort + FAIL-OPEN (a failed/slow resync
-# still execs the existing engine — never block the MCP connect, ADR-0004), and writes NOTHING
-# to stdout (this is a stdio MCP; stray stdout corrupts the protocol handshake).
+# Engine self-heal (ADR-0018, amended async): a /plugin update ships new engine code into the
+# version-pinned cache but never touches the venv's COPIED engine, so the MCP silently served
+# STALE code until a manual setup.sh (ADR-0013 only DETECTED it). The launcher compares the
+# deployed plugin version to a stamp written at install time; on a mismatch it starts the
+# resync DETACHED in the background and execs the existing engine immediately. Rationale
+# (observed live 2026-08-28): the old synchronous pip resync blocked the stdio handshake for
+# ~40s on the first spawn after an upgrade and the MCP client killed the connection
+# ("handshaking with MCP server failed: connection closed"). Cost profile: the guard is O(1)
+# (two tiny reads) so the common in-version spawn stays fast; the resync runs ONCE per update,
+# is best-effort + FAIL-OPEN (a failed/slow resync still execs the existing engine — never
+# block the MCP connect, ADR-0004), and the trade-off is ONE-SPAWN STALENESS: the current
+# spawn serves the prior engine; the new engine serves from the next spawn. The detached
+# child redirects its stdio away from the MCP pipes (a stray child must never hold or write
+# the protocol fds) and serializes through a mkdir lock (owner-pid stamped, stale locks
+# stolen) so concurrent harness spawns cannot race pip against the shared venv. If the
+# harness kills the spawn's process group mid-resync, the stamp stays unwritten and the next
+# spawn retries — pip --force-reinstall rewrites the package wholesale, so an interrupted
+# attempt self-repairs.
 #
 # ONE-DIRECTIONAL since ADR-0042: resync only when the deployed cache is NEWER than the venv
 # stamp (or the stamp is absent). A stale cache must NEVER downgrade a newer shared venv — on
@@ -51,15 +61,50 @@ if [ -f "$PLUGIN_JSON" ] && [ -d "$VENDOR" ]; then
   installed_ver="$(cat "$STAMP" 2>/dev/null || true)"
   if [ -n "$deployed_ver" ] && [ "$deployed_ver" != "$installed_ver" ]; then
     if [ -z "$installed_ver" ] || _ver_ge "$deployed_ver" "$installed_ver"; then
-      echo "skill-concierge: plugin at v$deployed_ver, venv engine stamped '${installed_ver:-none}' — resyncing engine…" >&2
-      # --force-reinstall: the vendored package version is a static 0.1.0, so pip would otherwise
-      # skip re-copying changed code. --no-deps: deps already present → fast + offline-safe.
-      if "$VENV/bin/pip" install -q --no-input --no-deps --force-reinstall "$VENDOR" >/dev/null 2>&1; then
-        printf '%s' "$deployed_ver" > "$STAMP"
-        echo "skill-concierge: engine resynced to v$deployed_ver." >&2
-      else
-        echo "skill-concierge: engine resync FAILED — serving the existing engine; run ./setup.sh to repair." >&2
-      fi
+      echo "skill-concierge: plugin at v$deployed_ver, venv engine stamped '${installed_ver:-none}' — resyncing in background; this spawn serves the existing engine." >&2
+      (
+        trap '' HUP   # survive the client-disconnect SIGHUP; finish the resync
+        RESYNC_LOG="$VENV/.engine-resync.log"
+        LOCK="$VENV/.engine-resync.lock"
+        # This subshell's own pid. bash<4 has no $BASHPID and $$ in a subshell is
+        # the launcher's pid, so ask a child shell for its PPID instead.
+        self_pid="$(sh -c 'echo $PPID')"
+        acquired=0
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          if mkdir "$LOCK" 2>/dev/null; then
+            echo "$self_pid" > "$LOCK/pid"
+            acquired=1
+            break
+          fi
+          # Stale-lock recovery: if the lock's owner pid is gone, steal it.
+          old_pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
+          # A lock dir with no readable pid file is stale by definition.
+          if [ -z "$old_pid" ] || ! kill -0 "$old_pid" 2>/dev/null; then
+            rm -rf "$LOCK"
+            if mkdir "$LOCK" 2>/dev/null; then
+              echo "$self_pid" > "$LOCK/pid"
+              acquired=1
+              break
+            fi
+          fi
+          sleep 1
+        done
+        [ "$acquired" = 1 ] || exit 0
+        # rmdir only removes EMPTY dirs — drop the pid file first, or the lock leaks.
+        trap 'rm -f "$LOCK/pid" 2>/dev/null; rmdir "$LOCK" 2>/dev/null' EXIT
+        # Double-check under the lock: a concurrent resync may have finished already.
+        now_stamp="$(cat "$STAMP" 2>/dev/null || true)"
+        [ "$now_stamp" = "$deployed_ver" ] && exit 0
+        # --force-reinstall: the vendored package version is a static 0.1.0, so pip would
+        # otherwise skip re-copying changed code. --no-deps: deps already present → fast
+        # + offline-safe.
+        if "$VENV/bin/pip" install -q --no-input --no-deps --force-reinstall "$VENDOR" >>"$RESYNC_LOG" 2>&1; then
+          printf '%s' "$deployed_ver" > "$STAMP"
+          echo "skill-concierge: engine resynced to v$deployed_ver (background)." >&2
+        else
+          echo "skill-concierge: background engine resync FAILED — see $RESYNC_LOG; run ./setup.sh to repair." >&2
+        fi
+      ) </dev/null >>"$VENV/.engine-resync.log" 2>&1 &
     else
       echo "skill-concierge: plugin cache v$deployed_ver is OLDER than the venv engine v$installed_ver — serving the newer engine. Update this harness's plugin copy when convenient (a stale cache must not downgrade the shared venv; ADR-0042)." >&2
     fi

@@ -4,6 +4,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.38.2] — 2026-08-29
+
+### Fixed
+- **MCP launcher resync no longer blocks the handshake:** `bin/skill-search-mcp` ran its
+  ADR-0018 engine resync (pip --force-reinstall) synchronously before exec, so the first
+  MCP spawn after a plugin upgrade blocked the stdio initialize for ~40s and the client
+  aborted with "handshaking with MCP server failed: connection closed" (observed live
+  2026-08-28 on the 0.38.1 rollout). The resync now runs detached: mkdir-lock serialized
+  (owner-pid stamped, stale locks stolen, pid file cleaned before rmdir — bash-3.2 safe,
+  no $BASHPID), stamp double-checked under the lock, SIGHUP-hardened, stdio fully
+  redirected away from the protocol pipes. Trade-off (documented in the launcher header):
+  ONE-SPAWN STALENESS — the first post-upgrade spawn serves the prior engine build; the
+  new engine serves from the next spawn. Interrupted attempts self-repair on retry
+  (--force-reinstall rewrites the package wholesale).
+
 ## [0.38.1] — 2026-08-28
 
 ### Changed
