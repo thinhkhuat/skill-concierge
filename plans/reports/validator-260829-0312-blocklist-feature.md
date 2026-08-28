@@ -151,3 +151,24 @@ stale: the live file holds 15 entries (edited 03:16, after the 03:12 handoff).
    determined from the filesystem; only the mtime is known.
 2. Whether Codex/ZCode plugin hook surfaces fire `skill_guard.py` as claimed is asserted by
    the ADR's harness-coverage section but not testable from this session.
+
+## Addendum — post-fix re-verification (2026-08-29, after commit b792f2a)
+
+The blocking issue was fixed and shipped as part of `b792f2a feat(blocklist): user-ordered
+disable tier, origin-agnostic (ADR-0046)` (HEAD of main, clean tree). Independently
+re-verified by this validator after the fix:
+
+- **Blocking issue #1 resolved.** `scripts/blocklist.py:155-162` now patches the
+  `_keepon.HOME` module global in a save/restore block (the prescribed idiom).
+  `python3 scripts/blocklist.py selftest` → `selftest ok`, exit 0, **with the live
+  15-entry blocklist file present** — the exact environment that failed.
+- **Advisory #2 resolved at all four layers.** Wrong-typed `blocked` values now fail open
+  to empty: `skill_guard.py:57-60`, `apply-overrides.py:70-73`, `enforcer.py:649-652`,
+  `server.py:136-139` each guard `isinstance(data, dict)` and `isinstance(lst, list)`.
+  Probe: `"blocked": "abc"` file → guard silent, exit 0.
+- **No regression.** Guard still denies `resume-session` (bare entry, live file); pytest
+  19/19.
+
+**Verdict after fix: PASS** (advisories 1, 3-6 remain as recorded — advisory 1, the MCP
+restart, is operational and documented in ADR-0046). The original FAIL above stands as the
+state at first validation; this addendum records the closure.
