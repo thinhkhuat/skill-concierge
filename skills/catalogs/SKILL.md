@@ -5,17 +5,18 @@ description: Manage external skill-catalog roots — third-party skill collectio
 argument-hint: "[list | add <alias> <path> | remove <alias> | promote <alias>:<skill>]"
 license: MIT
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # skill-concierge catalogs
 
 Register **external catalog roots** — local directories of third-party skills (each
 child dir carrying a `SKILL.md`, e.g. a cloned awesome-skills repo) that get indexed
-for semantic retrieval **without being installed**: they never appear in Claude Code's
-per-turn context and never enter the per-turn offer preview (search-only tier). Their
-skills index as `<alias>:<dirname>` and surface only via `search_skills`, marked
-`[external: <alias>]`.
+for semantic retrieval **without being installed**: they cost zero per-turn resident
+context (no description in Claude Code's every-turn listing) yet since ADR-0045 tier
+parity they compete in the per-turn offer at full parity with installed skills — one
+merged ranked pool, same floor, same slots — rendered inline marked
+`[external: <alias>]`. They also surface via `search_skills` with the same marking.
 
 **Consumption:** an external skill cannot be invoked by the Skill tool. `USING:` one
 means pulling its body with `get_skill("<alias>:<name>")` and following that SKILL.md

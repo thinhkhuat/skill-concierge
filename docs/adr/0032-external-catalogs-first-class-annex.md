@@ -1,6 +1,13 @@
 # ADR-0032 — External catalogs first-class in the offer (additive annex + usage-promotion)
 
-Status: Accepted + implemented (2026-08-23).
+Status: Accepted + implemented (2026-08-23). **Superseded in part by
+[ADR-0045](0045-catalog-tier-parity.md) (2026-08-28):** the additive-annex shape (§1),
+the 2.2× external floor (§2), the annex block render (§3), and the zero-displacement
+invariant are replaced by ONE merged tier-parity pool — externals compete on score alone,
+share `ITEM_FLOOR` and `TOP_K`, and render inline. The `get_skill` consumption lane,
+usage-promotion (§5), and telemetry (§6; `ext` now records external rows inside the
+primary offer) survive. `ENFORCER_EXTERNAL_ANNEX=0` keeps its kill-switch meaning under
+its new name `ENFORCER_EXTERNAL_OFFER` (§7).
 Supersedes in part: [ADR-0031](0031-external-catalog-roots.md) — the "search-only tier,
 promote to preview later, measured" stance (its Decision 5). ADR-0031's substrate
 (catalog-roots config, `catalog:<alias>` scope, `tier: external` payload, get_skill

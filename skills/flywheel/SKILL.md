@@ -5,7 +5,7 @@ description: See the retrieval-flywheel status and trigger an incremental uttera
 argument-hint: "[--generate] [--rate <seconds>] [--catalog <alias>] [--workers <N>]"
 license: MIT
 metadata:
-  version: 0.1.2
+  version: 0.2.0
 ---
 
 # skill-concierge flywheel
@@ -61,13 +61,14 @@ This skill is the seamless surface for two things: **seeing** where the flywheel
    is cheap and safe. Every run is recorded to the global manifest (below).
 
    Flags: `--triggers-only` skips the measurement-only scenario pass (triggers are what serve
-   retrieval); `--limit <N>` caps how many skills are processed in one pass; `--rate <seconds>`
-   spaces out LLM calls when sharing a busy endpoint; `--catalog <alias>` runs generation
-   against ONE external catalog's `<alias>:*` skills instead of installed skills (the
-   ADR-0031 D10 deferral, owner-commissioned — default coverage counts stay installed-only);
+   retrieval); `--limit <N>` caps how many skills are processed per scope in one pass; `--rate <seconds>`
+   spaces out LLM calls when sharing a busy endpoint; since ADR-0045 a bare `--generate` covers
+   EVERY scope — installed first, then each configured external catalog (`--catalog <alias>`
+   narrows to one, `--installed-only` restores the old installed-only default);
    `--workers <N>` fans the LLM network phase out over N concurrent calls while all file
    writes stay single-threaded (default 1 = sequential; effective gateway load scales with
-   N). Full rationale: [ADR-0043](../../docs/adr/0043-catalog-flywheel-generation-and-bounded-parallel-workers.md).
+   N). Full rationale: [ADR-0043](../../docs/adr/0043-catalog-flywheel-generation-and-bounded-parallel-workers.md)
+   + [ADR-0045](../../docs/adr/0045-catalog-tier-parity.md).
 
 ## Auto-flywheel (background, default ON) + the run manifest
 

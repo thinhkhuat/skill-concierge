@@ -4,6 +4,33 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.38.0] — 2026-08-28
+
+### Changed
+- **Catalog tier parity — ONE merged offer pool (ADR-0045; owner decision 2026-08-28
+  "no favor, none of the unfairness" after the five-asymmetry audit):** `_retrieve` drops
+  `must_not tier=external` — external catalog skills now compete with installed skills on
+  score alone, sharing `ITEM_FLOOR` (0.18; the old annex floor was 2.2× higher), the same
+  `TOP_K` slots and the same %-share pool, rendering INLINE marked `[external:<alias>]`
+  with one `get_skill` footer (the ADR-0032 separate annex block, its floors/slots, and the
+  zero-displacement invariant are gone). The getaway/actionability gates run tier-blind, so
+  a strong external now carries a turn the installed shelf scores below floor on — the
+  exact turns the old annex was silent on. Measured live at ship: a catalog-flavored intent
+  fills 6 of 8 offer slots with externals, ranked by score. **Chain routing admits
+  externals:** the sidecar records `catalog:*` scopes (write + read, parity-gated), so
+  CHAIN-HINT and ROUTE can name them, tagged; KEEPOFF still filters — tier-equal. Mined
+  chains still cannot see externals (`get_skill` takes are not ledger rows yet) — recorded,
+  not built. **Flywheel default covers EVERY scope:** a bare `--generate` runs installed
+  first, then each configured catalog, each capped by `--limit` (ADR-0043's installed-only
+  default reversed); `--installed-only` restores it, `--catalog <alias>` still narrows, the
+  `auto_flywheel` hook collapses to the single default call, and manifest records carry an
+  explicit `scope` the status card prefers over total-matching. **Kill-switch**
+  `ENFORCER_EXTERNAL_OFFER=0` (legacy `ENFORCER_EXTERNAL_ANNEX=0` honored) restores the
+  ADR-0031 search-only tier exactly. Ledger `ext` keeps its `[name, score]` shape but lists
+  external rows inside the PRIMARY offer — **EPOCH v0.38.0** for offer-composition and
+  external offer→take rates. `ENFORCER_ANNEX_DYNAMIC`/`_ANNEX_MARGIN` survive for the
+  ADR-0034 foreign annex only. Docs swept (ADR-0045 + status notes on 0031/0032/0036/0043,
+  README, CLAUDE/AGENTS flags, openwiki ×4, catalogs/flywheel SKILL.md).
 ## [0.37.0] — 2026-08-28
 
 ### Changed

@@ -76,14 +76,20 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    Every network leg is separately capped, so the worst case is the sum of the caps
    (≈850 ms) against a 5 s hook timeout, not an unbounded wait.)
 5. **Retrieve.** POST the vector to Qdrant `points/query/groups` with `group_by:"name"`,
-   `group_size:1` (the same MAX-pool retrieval as the tool), excluding `tier=external`
-   ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)). `TOP_K = 8` — widened from 5 by
+   `group_size:1` (the same MAX-pool retrieval as the tool). Since `0.38.0`
+   ([ADR-0045](../../docs/adr/0045-catalog-tier-parity.md)) the query carries **no tier
+   filter** — external catalog rows compete with installed ones in ONE merged pool, same
+   `ITEM_FLOOR` (0.18), same `TOP_K`, aliased from their own `catalog:<alias>` payload scope
+   and rendered inline marked `[external:<alias>]` with a `get_skill` footer (the old
+   `must_not tier=external` shape survives only behind `ENFORCER_EXTERNAL_OFFER=0`).
+   `TOP_K = 8` — widened from 5 by
    the operator on 2026-07-05 ([ADR-0017](../../docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md)).
    Since `0.25.0` ([ADR-0034](../../docs/adr/0034-cross-harness-offer-isolation.md)) the query
    asks for `RETRIEVE_LIMIT = TOP_K * 5` and the **running harness's non-invocable rows are
-   dropped client-side**, then the list is trimmed back to `TOP_K` — so every row is something the
-   Skill tool can actually invoke. The multiplier is headroom, not a guarantee: where the sibling
-   harness dominates a domain the menu can come back short, and a shorter menu of invocable rows
+   dropped client-side**, then the list is trimmed back to `TOP_K` — so every row is either
+   something the Skill tool can invoke here or a marked external catalog skill consumed via
+   `get_skill`. The multiplier is headroom, not a guarantee: where the sibling
+   harness dominates a domain the menu can come back short, and a shorter menu of usable rows
    is the accepted trade. It is a post-filter rather than
    a Qdrant `scope` condition because scope records where a skill's indexed copy *lives*, not
    whether this harness can invoke it: a plugin enabled only for the current project is dropped

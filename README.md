@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.37.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.38.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -197,7 +197,7 @@ in [`references/flywheel-llm-providers.md`](references/flywheel-llm-providers.md
 | `FLYWHEEL_LLM_MODEL` | `gemma-4-e4b-it-qat-optiq` | must match the endpoint's exact served model name. |
 | `FLYWHEEL_LLM_API_KEY` | unset | when set, sent as `Authorization: Bearer <key>` — for 3rd-party gateways. |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` (strict, LM-Studio) \| `json_object` (Ollama/loose) \| `off` (prompt-only). |
-| `SKILL_AUTO_FLYWHEEL` | `1` (ON) | the `auto_flywheel` SessionStart hook auto-generates utterances for new/changed skills when the endpoint is reachable (detached, throttled, fail-open — ADR-0027). Since 0.35.1 the detached pass also runs one capped pass per configured external catalog (ADR-0043). `=0` disables; manual `skill-concierge:flywheel --generate` still works. |
+| `SKILL_AUTO_FLYWHEEL` | `1` (ON) | the `auto_flywheel` SessionStart hook auto-generates utterances for new/changed skills when the endpoint is reachable (detached, throttled, fail-open — ADR-0027). Since 0.38.0 the detached run is ONE default pass covering every scope — installed first, then each configured external catalog, each capped (ADR-0045; the 0.35.1 installed-then-per-alias loop is folded into it). `=0` disables; manual `skill-concierge:flywheel --generate` still works. |
 | `AUTO_FLYWHEEL_THROTTLE_S` | `21600` (6h) | min seconds between background auto-flywheel runs. |
 | `AUTO_FLYWHEEL_WORKERS` | `4` | concurrent LLM calls per auto-flywheel run — network phase only, file writes stay single-writer (0.35.1, ADR-0043). |
 | `AUTO_FLYWHEEL_MAX_PER_RUN` | `25` | cap on skills generated per background run (protects metered endpoints). |
@@ -259,16 +259,22 @@ catalog twin is auto-suppressed, and removing a root prunes its points at the ne
 Embeddings + body triggers only by default — the flywheel utterance layer skips externals from
 default coverage, but since `0.35.0` an owner-commissioned `flywheel --generate --catalog <alias>`
 run generates them for one named catalog ([ADR-0043](docs/adr/0043-catalog-flywheel-generation-and-bounded-parallel-workers.md)).
+Since `0.38.0` ([ADR-0045](docs/adr/0045-catalog-tier-parity.md)) a bare `--generate` covers
+EVERY scope — installed first, then each configured catalog, each capped by `--limit` — so no
+tier depends on remembering a flag; `--installed-only` restores the old default.
 
 Since `0.23.0` externals are **first-class in the per-turn offer**, not just explicit search
-([ADR-0032](docs/adr/0032-external-catalogs-first-class-annex.md)): the enforcer appends an
-**additive annex** of up to `ENFORCER_EXTERNAL_SLOTS` (2) externals scoring
-≥ `ENFORCER_EXTERNAL_FLOOR` (0.40), marked `[external:<alias>]` with the `get_skill`
-instruction. The installed offer is **byte-identical** whether the annex is on or off (a
-separate query supplies it — externals never take an installed slot). An external used across
+([ADR-0032](docs/adr/0032-external-catalogs-first-class-annex.md)); since `0.38.0`
+([ADR-0045](docs/adr/0045-catalog-tier-parity.md)) they compete at **full tier parity**:
+ONE merged ranked pool — no separate annex, no 2.2× floor, no displacement protection.
+Externals share the installed `ITEM_FLOOR` (0.18) and the same `TOP_K` slots and %-share
+pool, render inline marked `[external:<alias>]` with the `get_skill` footer, and can carry
+a turn outright when the installed shelf scores below floor. Chain hints name them, and the
+flywheel treats them like any other scope. An external used across
 ≥ `PROMOTE_MIN_TAKES` (3) distinct sessions **auto-graduates** to a real installed skill
 (`hooks/scripts/auto_promote.py`) — organic curation by demonstrated usage. Kill-switch
-`ENFORCER_EXTERNAL_ANNEX=0` restores search-only.
+`ENFORCER_EXTERNAL_OFFER=0` (legacy `ENFORCER_EXTERNAL_ANNEX=0` honored) restores
+search-only.
 
 ## Architecture
 
@@ -349,6 +355,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 
 
+`0.38.0` — **published, catalog tier parity (ADR-0045; owner decision "no favor, none of the unfairness" after a five-asymmetry audit): `_retrieve` drops `must_not tier=external` — externals compete with installed skills on score alone in ONE merged pool, sharing `ITEM_FLOOR` (0.18, the old annex floor was 2.2× higher), the same `TOP_K` slots and %-share pool, rendered inline `[external:<alias>]` with a get_skill footer (the ADR-0032 annex block, its floors/slots, and the zero-displacement invariant are gone); the getaway/actionability gates run tier-blind, so a strong external now carries a turn the installed shelf scores below floor on — measured live at ship: 6 of 8 offer slots externals on a catalog-flavored intent; chain routing admits externals (the sidecar records `catalog:*` scopes — CHAIN-HINT/ROUTE name them, tagged; mined chains still can't see `get_skill` takes, recorded not built); `flywheel --generate` defaults to EVERY scope (installed first, then each configured catalog, each capped by `--limit`; `--installed-only` restores the old default) with manifest records carrying an explicit `scope`; kill-switch `ENFORCER_EXTERNAL_OFFER=0` (legacy `ENFORCER_EXTERNAL_ANNEX=0` honored) restores the ADR-0031 search-only tier; ledger `ext` keeps its shape but lists external rows inside the PRIMARY offer — EPOCH v0.38.0 for offer-composition and external offer→take rates. Verified: enforcer selftest green (rewritten parity cases), live e2e probe, driftcheck 0.**
 `0.37.0` — **published, ADR-0044 utterance corpus canonicalized at the operator home (owner decision): `~/.claude/skill-concierge/triggers.json` is now the single source of truth — the public repo never carries the corpus (it is personal data and the ONLY full-text record; Qdrant stores embeddings + hashes, not recoverable text); the drifting dev-surface copy (`eval/triggers.json`, ~160 keys behind) is retired after a both-copies backup, all generator defaults resolve env-first then the durable home (doctor's idiom), the `settings.json` override that steered writes back to the dev file is removed, and the vendored engine's `_LLM_TRIG_PATH` default joins the seam (a bare env-less reindex previously rebuilt WITHOUT utterances, silently pruning the layer). Verified: post-migration status reads 728/728 + 1928/1928 from the canonical file with no env; all selftests PASS; driftcheck 0.**
 `0.36.1` — **published, "Recent runs" redesigned for meaning (operator feedback): each status line now tells the run's story — local time + age, which scope it touched (matched against live scope totals), the utterance delta, errors, resulting coverage, and a verdict (COMPLETE / PARTIAL — rerun to fill the gap / no-op); the raw generated/error/skipped counter soup is gone (skipped N read like failures on healthy complete runs).**
 `0.36.0` — **published, flywheel observability card: `flywheel.py` status mode is now the single check-up surface — per-scope coverage (installed + every configured external catalog, missing skills named), lock State with LIVE throughput + ETA sampled while any run holds the lock (the detached auto-flywheel pass previously had no observable progress at all), an Auto-flywheel section (gate, workers/cap/throttle, throttle-window countdown from the machine stamp, last hook log line), and the last 3 manifest runs with per-skill error detail. Verified live against the completed antigravity backfill: 1,928/1,928 coverage, 0 failures, +14.3k utterance points in Qdrant (16,527 → 30,818), and a retrieval probe with an utterance-style query returning antigravity hits at 0.92 with the get_skill consumption note.**

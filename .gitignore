@@ -61,3 +61,6 @@ tmp/
 # Note the trailing-slash form below would make the negation unreachable, hence `.claude/*`.
 .claude/*
 !.claude/settings.json
+
+# unlazy gate ledgers/dispatch state (session tooling)
+.unlazy/
