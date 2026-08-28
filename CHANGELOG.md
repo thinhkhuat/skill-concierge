@@ -4,6 +4,23 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.36.0] — 2026-08-28
+
+### Added
+- **Flywheel observability card — `status` mode now answers "is it running, how fast, when
+  done" in one command:** coverage is per-scope (installed + every configured external
+  catalog, with missing skills named); **State** shows lock state and — while ANY run holds
+  the lock, including the detached auto-flywheel pass that had no observable progress before —
+  samples coverage twice (5s) and prints live throughput + ETA against the scope totals;
+  an **Auto-flywheel** section surfaces the gate, workers/cap/throttle config, the
+  throttle-window countdown from the machine stamp, and the last hook log line; **Recent
+  runs** lists the last 3 manifest runs with per-skill error detail. Verified live against the
+  commissioned antigravity run (1,928/1,928 coverage, 0 failures, retrieval probe 0.92).
+
+### Fixed
+- Status coverage lists now truncate long missing-skill listings (10 installed / 5 per
+  catalog) instead of printing unbounded lines.
+
 ## [0.35.1] — 2026-08-28
 
 ### Added

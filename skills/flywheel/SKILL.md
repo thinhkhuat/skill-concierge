@@ -29,12 +29,20 @@ This skill is the seamless surface for two things: **seeing** where the flywheel
    python3 "$CLAUDE_PLUGIN_ROOT/scripts/flywheel.py"
    ```
 
-   It prints:
+   It prints the full observability card:
    - **Endpoint** — the configured `FLYWHEEL_LLM_ENDPOINT` + model, whether an API key is
      set, the schema mode, and a live `ping()` reachability result.
-   - **Coverage** — `N/M indexed skills have utterances; K missing`, then the missing skills
-     by name. Indexed names come from the live Qdrant `claude_skills` index (kind=base);
-     covered = a non-empty `llm_triggers.triggers` in `eval/triggers.json`.
+   - **Coverage** — installed `N/M` plus one line per configured external catalog
+     (`antigravity: N/M`), with missing skills by name. Indexed names come from the live
+     Qdrant `claude_skills` index; covered = a non-empty `llm_triggers.triggers` in
+     `eval/triggers.json`.
+   - **State** — lock free vs `IN PROGRESS`; while a run holds the lock (including the
+     detached auto-flywheel pass) status samples coverage twice (5s) and prints live
+     throughput + ETA — the only way to observe a detached run's progress.
+   - **Auto-flywheel** — gate value, workers/cap/throttle config, throttle-window
+     countdown from the machine stamp, and the last hook log line.
+   - **Recent runs** — the last 3 manifest runs (model, generated/error/skipped,
+     coverage, last_error) plus per-skill error detail from the most recent run.
 
 2. **Generate (`--generate`)** — fill utterances for new/changed skills, then reindex:
 

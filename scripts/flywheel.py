@@ -94,6 +94,58 @@ def catalog_coverage(alias):
     return indexed, sorted(set(indexed) - covered)
 
 
+def _config_home():
+    return Path(os.environ.get("SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "skill-concierge"))
+
+
+def _configured_aliases():
+    """External catalog aliases from the operator's catalog-roots.json (ADR-0031),
+    fail-open to [] — status must never crash on a malformed config."""
+    try:
+        data = json.loads((_config_home() / "catalog-roots.json").read_text(encoding="utf-8"))
+        return sorted(k for k, v in data.items() if isinstance(v, dict))
+    except (OSError, ValueError):
+        return []
+
+
+def _utterance_covered_count(alias=None):
+    """Raw count of triggers.json entries carrying a non-empty llm_triggers block,
+    optionally scoped to one catalog's alias-namespaced keys. Fast snapshot source
+    for live-progress sampling (live index membership is not re-checked per sample)."""
+    try:
+        data = json.loads(TRIGGERS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    if alias is None:
+        return sum(1 for v in data.values()
+                   if isinstance(v, dict) and (v.get("llm_triggers") or {}).get("triggers"))
+    prefix = f"{alias}:"
+    return sum(1 for k, v in data.items()
+               if isinstance(k, str) and k.startswith(prefix)
+               and isinstance(v, dict) and (v.get("llm_triggers") or {}).get("triggers"))
+
+
+def _print_live_progress(scope_targets):
+    """While the lock is HELD, sample utterance coverage twice (5s apart) and print
+    throughput + ETA against the scope totals the caller computed. This is the only
+    way to observe a DETACHED run's progress (auto_flywheel spawns into background
+    with no terminal attached) — one command answers 'is it running, how fast, when done'."""
+    def _snap():
+        return sum(_utterance_covered_count(a) for a in scope_targets)
+    first, t0 = _snap(), time.time()
+    time.sleep(5)
+    second, t1 = _snap(), time.time()
+    per_s = (second - first) / max(t1 - t0, 0.001)
+    total = sum(t for t in scope_targets.values())
+    print(f"  live     : {second}/{total} utterances across all scopes")
+    if per_s > 0.01:
+        remain = max(total - second, 0)
+        print(f"  rate     : ~{per_s * 60:.0f} skills/min — ETA ~{remain / per_s / 60:.0f} min "
+              f"for the remaining {remain}")
+    else:
+        print("  rate     : ~0/min — embedding/reindex phase, or no generation throughput")
+
+
 def print_status():
     ok, detail = flywheel_llm.ping()
     print("Flywheel LLM endpoint")
@@ -104,49 +156,109 @@ def print_status():
     print(f"  reachable: {'YES' if ok else 'NO'} — {detail}")
     print()
 
+    # --- coverage: installed base + every configured external catalog ----------
     indexed, _covered, missing = coverage()
     have = len(indexed) - len(missing)
+    aliases = _configured_aliases()
+    scope_targets = {"(installed)": len(indexed)}
+    for alias in aliases:
+        cat_indexed, _cat_missing = catalog_coverage(alias)
+        scope_targets[alias] = len(cat_indexed)
     print("Utterance coverage (llm_triggers)")
-    print(f"  {have}/{len(indexed)} indexed skills have utterances; {len(missing)} missing")
-    for m in missing:
+    print(f"  installed: {have}/{len(indexed)}; {len(missing)} missing")
+    for m in missing[:10]:
         print(f"    - {m}")
-    if missing:
-        print()
-        print("  fix: python3 scripts/flywheel.py --generate  (or run the skill-concierge:flywheel skill)")
-
-    # A malformed manifest is equivalent to no recorded run for status display.
-    try:
-        lr = flywheel_manifest.last_run()
-    except (AttributeError, KeyError, TypeError):
-        lr = None
+    if len(missing) > 10:
+        print(f"    ... and {len(missing) - 10} more")
+    for alias in aliases:
+        cat_indexed, cat_missing = catalog_coverage(alias)
+        print(f"  {alias}: {len(cat_indexed) - len(cat_missing)}/{len(cat_indexed)}; "
+              f"{len(cat_missing)} missing")
+        for m in cat_missing[:5]:
+            print(f"    - {m}")
+        if len(cat_missing) > 5:
+            print(f"    ... and {len(cat_missing) - 5} more")
+    print("  fix: python3 scripts/flywheel.py --generate [--catalog <alias>]  "
+          "(or run the skill-concierge:flywheel skill)")
     print()
-    print("Last flywheel run (global manifest ~/.claude/skill-concierge/flywheel-manifest.json)")
-    if lr:
-        t = lr.get("totals", {})
-        print(f"  when: {lr.get('timestamp','?')}  via {lr.get('endpoint','?')} ({lr.get('model','?')})")
-        print(f"  generated {t.get('generated',0)}  error {t.get('error',0)}  skipped {t.get('skipped',0)}"
-              + (f"  | last_error: {lr.get('last_error')}" if lr.get("last_error") else ""))
-        # Per-skill error detail (b) — surfaced when present, ignored on old runs
-        errs = [s for s in (lr.get("skills") or []) if s.get("status") == "error" and s.get("detail")]
-        if errs:
-            print(f"  per-skill errors ({len(errs)}):")
-            for s in errs[:10]:
-                print(f"    - {s['name']}: {s['detail']}")
-            if len(errs) > 10:
-                print(f"    ... and {len(errs) - 10} more (see manifest)")
-    else:
-        print("  none recorded yet (fresh install, or the auto_flywheel hook has not fired)")
 
-    # Lock probe — so `flywheel.py` (status) tells the user why a run was skipped
+    # --- state: lock + live progress for a DETACHED run -------------------------
+    running = False
     try:
-        if flywheel_lock.is_locked():
-            pid, since = flywheel_lock.holder()
-            hint = f" (pid {pid} since {since:.0f})" if pid and since else ""
-            print(f"Lock: HELD{hint} — another run is in progress; --generate would skip (exit 4)")
-        else:
-            print("Lock: free")
+        running = flywheel_lock.is_locked()
     except Exception:
         pass
+    print("State")
+    if running:
+        pid, since = flywheel_lock.holder()
+        hint = f" (pid {pid} since {since:.0f})" if pid and since else ""
+        print(f"  run      : IN PROGRESS{hint} — --generate would skip (exit 4)")
+        try:
+            _print_live_progress(scope_targets)
+        except (OSError, ValueError) as e:
+            print(f"  live     : unavailable ({e})")
+    else:
+        print("  run      : idle (lock free)")
+    print()
+
+    # --- auto-flywheel: gate + throttle window + last hook log line -------------
+    print("Auto-flywheel (SessionStart hook)")
+    gate = os.environ.get("SKILL_AUTO_FLYWHEEL", "1")
+    print(f"  gate     : SKILL_AUTO_FLYWHEEL={gate} ({'ON' if gate != '0' else 'OFF'})")
+    print(f"  workers  : {os.environ.get('AUTO_FLYWHEEL_WORKERS', '4')}  "
+          f"cap/run: {os.environ.get('AUTO_FLYWHEEL_MAX_PER_RUN', '25')}  "
+          f"throttle: {int(os.environ.get('AUTO_FLYWHEEL_THROTTLE_S', '21600')) // 60} min")
+    try:
+        logdir = Path(os.environ.get("SKILL_CONCIERGE_LOG", _config_home() / "logs"))
+        stamp = logdir / ".auto-flywheel-stamp"
+        window = int(os.environ.get("AUTO_FLYWHEEL_THROTTLE_S", "21600"))
+        if stamp.exists():
+            age = time.time() - stamp.stat().st_mtime
+            if age >= window:
+                print(f"  throttle : eligible now (last auto run {age / 3600:.1f}h ago)")
+            else:
+                print(f"  throttle : {age / 60:.0f}min into the {window // 60}min window — "
+                      f"eligible in {(window - age) / 60:.0f}min")
+        else:
+            print("  throttle : no auto run recorded yet — eligible now")
+        logfile = logdir / "auto-flywheel.log"
+        if logfile.exists():
+            lines = [ln for ln in logfile.read_text(encoding="utf-8", errors="replace")
+                     .splitlines() if ln.strip()]
+            if lines:
+                print(f"  last hook: {lines[-1][:120]}")
+    except OSError as e:
+        print(f"  throttle : unknown ({e})")
+    print()
+
+    # --- recent runs from the global manifest ----------------------------------
+    print("Recent runs (global manifest ~/.claude/skill-concierge/flywheel-manifest.json)")
+    try:
+        runs = (json.loads(flywheel_manifest.MANIFEST_PATH.read_text(encoding="utf-8"))
+                or {}).get("runs", [])
+    except (OSError, ValueError, AttributeError):
+        runs = []
+    if not runs:
+        print("  none recorded yet (fresh install, or the auto_flywheel hook has not fired)")
+    for lr in runs[-3:][::-1]:
+        t = lr.get("totals", {})
+        line = (f"  {lr.get('timestamp','?')}  via {lr.get('model','?')}: "
+                f"generated {t.get('generated',0)}  error {t.get('error',0)}  "
+                f"skipped {t.get('skipped',0)}")
+        cov = lr.get("coverage") or {}
+        if cov.get("total"):
+            line += f"  | coverage {cov.get('have')}/{cov.get('total')}"
+        if lr.get("last_error"):
+            line += f"  | last_error: {lr['last_error']}"
+        print(line)
+    errs = [s for s in ((runs[-1] if runs else {}).get("skills") or [])
+            if s.get("status") == "error" and s.get("detail")]
+    if errs:
+        print(f"  per-skill errors in last run ({len(errs)}):")
+        for s in errs[:10]:
+            print(f"    - {s['name']}: {s['detail']}")
+        if len(errs) > 10:
+            print(f"    ... and {len(errs) - 10} more (see manifest)")
     return ok, missing
 
 
