@@ -42,7 +42,7 @@ Scope: built-in and external catalog skills compete at parity in the per-turn of
 - [x] G8: Independent blind validator confirms parity on the live system and files a report under plans/reports/.
   EVIDENCE: plans/reports/validator-260828-2200-catalog-tier-parity.md — VERDICT: PASS (independent agent, read-only, all five asymmetries refuted with file:line evidence; C1 stale ADR cross-ref fixed in-turn in CLAUDE.md:14 + AGENTS.md:73; C3 driftcheck run by committer via G7 release probe — exit 0)
 
-- [ ] G9: Shipped — release commit pushed, worktree clean.
+- [x] G9: Shipped — release commit pushed, worktree clean.
   CHECK: sh -c 'test -z "$(git status --porcelain)" && test -z "$(git log origin/main..HEAD --oneline)" && echo SHIPPED_CLEAN || echo NOT_SHIPPED'
   EXPECT: SHIPPED_CLEAN
-  EVIDENCE: pending
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge; path=e30d09cfba2e/88 entries; EXPECT=matched; output-sha256=fc768bb29769eec801a047f1c78adbfc839b15bbfd0d8a0483569299ac900177; output-bytes=14
