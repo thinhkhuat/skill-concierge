@@ -19,8 +19,8 @@ All notable changes to **skill-concierge**. Format loosely follows
   fills 6 of 8 offer slots with externals, ranked by score. **Chain routing admits
   externals:** the sidecar records `catalog:*` scopes (write + read, parity-gated), so
   CHAIN-HINT and ROUTE can name them, tagged; KEEPOFF still filters — tier-equal. Mined
-  chains still cannot see externals (`get_skill` takes are not ledger rows yet) — recorded,
-  not built. **Flywheel default covers EVERY scope:** a bare `--generate` runs installed
+  chains don't yet consume externals (`get_skill` takes ARE recorded — auto-promote uses
+  them; the chain miners filter `auto`/`manual` events only) — recorded, not built. **Flywheel default covers EVERY scope:** a bare `--generate` runs installed
   first, then each configured catalog, each capped by `--limit` (ADR-0043's installed-only
   default reversed); `--installed-only` restores it, `--catalog <alias>` still narrows, the
   `auto_flywheel` hook collapses to the single default call, and manifest records carry an
