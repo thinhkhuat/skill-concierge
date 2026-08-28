@@ -53,9 +53,11 @@ valve + the get_skill lane remain the safety story).
    `auto_promote.py` consumes them), but the chain layer mines only `auto`/`manual`
    events — `build_chains.load_sequences` and the enforcer's `_last_used_skill` both
    filter `ev not in ("auto", "manual")` — so a pull cannot enter a mined sequence or
-   seed a hint. That is a design choice to make, not a recorder gap: a body pull is one
-   step weaker than an invocation (following the SKILL.md inline is not observable).
-   Recorded, not built.
+   seed a hint. That was a design choice — made 2026-08-28 (owner pick, option (a),
+   shipped 0.38.1): `build_chains.load_sequences` now admits `get_skill` rows as full
+   sequence nodes (`CHAIN_MINE_PULLS=0` reverts), while the CHAIN-HINT seed stays
+   invocation-only — learn broadly, suggest conservatively. Sub-stamped pulls stay
+   excluded (ADR-0020).
 5. Flywheel: a bare `--generate` covers EVERY scope — installed first, then each configured
    catalog, each scope capped by `--limit` — one lock, one closing reindex, one manifest
    record now tagged with its `scope` (the status card prefers the explicit field over the

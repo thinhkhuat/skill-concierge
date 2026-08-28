@@ -4,6 +4,20 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.38.1] — 2026-08-28
+
+### Changed
+- **Mined chains admit `get_skill` pulls (ADR-0045 option (a), owner pick):**
+  `build_chains.load_sequences` now mines `get_skill` body-pull events as full sequence
+  nodes alongside invocations, so external-catalog skills — whose only observable usage
+  IS a pull — can enter the mined layer (the sidecar and promotion already carried
+  them). The CHAIN-HINT **seed** deliberately stays invocation-only
+  (`_last_used_skill` untouched): a pull proves interest, not that the procedure was
+  followed — learn broadly, suggest conservatively. Sub-stamped (subagent) pulls stay
+  excluded (ADR-0020); consecutive-repeat collapse unchanged. Kill-switch
+  `CHAIN_MINE_PULLS=0` reverts to invocations-only mining. **EPOCH v0.38.1 for
+  mined-chain metrics** (sequence composition changed; live map regenerated at ship:
+  18 chained skills from 467 events / 178 sessions).
 ## [0.38.0] — 2026-08-28
 
 ### Changed

@@ -57,6 +57,13 @@ MIN_LIFT = 1.5           # B must be ≥1.5× more likely after A than at baseli
 MAX_GAP_S = 120 * 60     # adjacent steps >2h apart in one session are different sittings
 MAX_SUCC = 3             # successors per skill, best-first — a menu, not a firehose
 
+# ADR-0045 option (a), 0.38.1: get_skill body-pulls count toward MINED sequences (they
+# are real usage — the agent chose to read the manual) but the pull is one step weaker
+# than an invocation, so the CHAIN-HINT SEED stays invocation-only by design (enforcer's
+# _last_used_skill is untouched). CHAIN_MINE_PULLS=0 reverts to invocations-only mining.
+MINE_PULLS = os.environ.get("CHAIN_MINE_PULLS", "1") != "0"
+_MINABLE_EV = ("auto", "manual", "get_skill") if MINE_PULLS else ("auto", "manual")
+
 
 def _parse_when(s):
     """'YYYY-MM-DD'[:HH[:MM]] (local) -> epoch seconds, or None."""
@@ -88,9 +95,11 @@ def catalogue_names():
 
 
 def load_sequences(ledger_path, catalogue, since=None):
-    """Per-sid ordered [name] lists. Only main-session auto/manual rows (subagent
-    lanes are a different lane, ADR-0020); names must resolve in the catalogue;
-    consecutive repeats collapse (a re-invoked skill is one node)."""
+    """Per-sid ordered [name] lists. Main-session invocation rows (auto/manual) plus —
+    since 0.38.1, ADR-0045 option (a) — `get_skill` body-pull rows (CHAIN_MINE_PULLS=0
+    reverts; subagent lanes are a different lane, ADR-0020, always excluded); names must
+    resolve in the catalogue; consecutive repeats collapse (a re-invoked skill is one
+    node)."""
     seqs = {}
     events = 0
     try:
@@ -108,7 +117,7 @@ def load_sequences(ledger_path, catalogue, since=None):
             continue
         if not isinstance(e, dict):
             continue
-        if e.get("ev") not in ("auto", "manual") or e.get("sub"):
+        if e.get("ev") not in _MINABLE_EV or e.get("sub"):
             continue
         t = float(e.get("t") or 0)
         if t < cutoff:
@@ -226,9 +235,27 @@ def _selftest():
         cat = build_chains.catalogue_names()
         assert cat == {"a", "b", "c", "tail", "x", "y"}, cat
         seqs, events = build_chains.load_sequences(ledger, cat)
-        assert events == 3 * 2 + 4 * 2 + 4 * 2 + 2 + 1, events  # 23 nodes; sub/unknown/offer/repeat excluded
+        assert events == 3 * 2 + 4 * 2 + 4 * 2 + 2 + 1, events  # 25 nodes; sub/unknown/offer/repeat excluded
         assert seqs["s0"] == ["a", "b", "tail"], seqs.get("s0")
         assert seqs["s2"] == ["a", "b", "a"], seqs.get("s2")    # trailing repeat collapsed to one a
+
+        # ADR-0045 option (a): get_skill pulls join the mined sequences as full nodes;
+        # sub-stamped pulls do not; CHAIN_MINE_PULLS=0 reverts to invocations-only.
+        rows += [{"t": 6000, "sid": "p1", "ev": "get_skill", "name": "a"},
+                 {"t": 6001, "sid": "p1", "ev": "get_skill", "name": "b", "sub": True},
+                 {"t": 6002, "sid": "p1", "ev": "auto", "name": "c"}]
+        ledger.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        seqs, events = build_chains.load_sequences(ledger, cat)
+        assert seqs["p1"] == ["a", "c"], seqs.get("p1")     # pull is a node; sub-pull dropped
+        assert events == 25 + 2, events
+        _saved_mp = (build_chains.MINE_PULLS, build_chains._MINABLE_EV)
+        build_chains.MINE_PULLS, build_chains._MINABLE_EV = False, ("auto", "manual")
+        try:
+            seqs, events = build_chains.load_sequences(ledger, cat)
+            assert seqs["p1"] == ["c"], seqs.get("p1")      # flag off: pulls invisible again
+            assert events == 25 + 1, events                 # only p1's invocation row remains
+        finally:
+            build_chains.MINE_PULLS, build_chains._MINABLE_EV = _saved_mp
 
         chains = build_chains.mine(seqs)
         # a->b: support 3, P(b)=3/11 sessions, lift=(3/3)/(3/11)=3.67 -> kept
