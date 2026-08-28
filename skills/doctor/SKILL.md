@@ -60,7 +60,7 @@ the engine's own `skill-search --health`, so the two never drift.
    > before running `--fix` so the change isn't a surprise.
    >
    > **The `Trigger hygiene` fix DELETES data** — it drops each junk utterance layer from
-   > `eval/triggers.json` (backed up to `triggers.json.bak-junk-<ts>` first) and clears that
+   > the canonical corpus `~/.claude/skill-concierge/triggers.json` (backed up to `triggers.json.bak-junk-<ts>` first) and clears that
    > skill's generation-cache key, then reindexes. It does **not** regenerate: doctor never
    > calls the LLM. A purged skill falls back to description+body retrieval (no worse than
    > junk phrases pointing the wrong way) until the next flywheel run rewrites it — which it
