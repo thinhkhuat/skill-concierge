@@ -2,10 +2,10 @@
 name: flywheel
 user-invocable: true
 description: See the retrieval-flywheel status and trigger an incremental utterance-generation run. Use this skill when the user asks about the flywheel, "how many skills have utterances / triggers", "flywheel coverage", "which skills are missing utterances", "is the LLM endpoint configured/reachable", or wants to "generate triggers", "run the flywheel", "refresh utterances", or "index the new skills' utterances". The flywheel is the utterance layer (ADR-0026) that teaches the retriever how users actually ask for a skill (EN+VN), lifting recall. Runs scripts/flywheel.py — status mode (default, read-only) prints endpoint config + reachability and per-skill utterance coverage (N/M covered, and the missing skills by name); --generate runs the incremental generator (only new/changed skills hit the LLM) then reindexes so the new points go live, printing before/after coverage. Generation fails loud if the LLM endpoint is unreachable.
-argument-hint: "[--generate] [--rate <seconds>]"
+argument-hint: "[--generate] [--rate <seconds>] [--catalog <alias>] [--workers <N>]"
 license: MIT
 metadata:
-  version: 0.1.1
+  version: 0.1.2
 ---
 
 # skill-concierge flywheel
@@ -52,7 +52,12 @@ This skill is the seamless surface for two things: **seeing** where the flywheel
 
    Flags: `--triggers-only` skips the measurement-only scenario pass (triggers are what serve
    retrieval); `--limit <N>` caps how many skills are processed in one pass; `--rate <seconds>`
-   spaces out LLM calls when sharing a busy endpoint.
+   spaces out LLM calls when sharing a busy endpoint; `--catalog <alias>` runs generation
+   against ONE external catalog's `<alias>:*` skills instead of installed skills (the
+   ADR-0031 D10 deferral, owner-commissioned — default coverage counts stay installed-only);
+   `--workers <N>` fans the LLM network phase out over N concurrent calls while all file
+   writes stay single-threaded (default 1 = sequential; effective gateway load scales with
+   N). Full rationale: [ADR-0043](../../docs/adr/0043-catalog-flywheel-generation-and-bounded-parallel-workers.md).
 
 ## Auto-flywheel (background, default ON) + the run manifest
 

@@ -4,6 +4,44 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.35.0] — 2026-08-28
+
+### Added
+- **ADR-0043 catalog-scoped flywheel generation — the ADR-0031 D10 deferral lands as an explicit,
+  named opt-in:** `flywheel.py --generate --catalog <alias>` runs the utterance generator over ONE
+  external catalog's `<alias>:*` skills (first commissioned run: `antigravity`, 1,928 skills) —
+  `build_triggers.scroll_all_points(catalog=)` lifts the `tier=external` skip for exactly that
+  scope filter; the default path stays byte-identical (externals still excluded from default
+  coverage counts, preserving the 0.22.1 no-false-gap contract), a catalog with zero indexed
+  skills fails loud (exit 5) before any LLM call, and manifest coverage scopes to the catalog for
+  that run.
+- **Bounded parallel generation, `--workers <N>` (default 1):** only the network phase (chat +
+  VN retry) fans out over a `ThreadPoolExecutor` — validate/merge/`triggers.json`/cache writes
+  stay single-writer in the main thread as futures complete, so the files never see concurrent
+  writers; per-call `rate_s` politeness unchanged so effective gateway load scales with N;
+  `llm_eval_gen` gains the same seam for coherence. Measured live: sequential 16.0 s/skill →
+  **1.9 s/skill at 4 workers** (21 skills/40 s, zero per-skill failures), turning the commissioned
+  catalog's projected 8.4 h into ~50 min.
+
+### Fixed
+- **200-wrapped upstream 503s now ride the retry ladder:** the gateway returns HTTP 200 with
+  `finish_reason: "stop"` and content literally `[CommandCode error: {… "statusCode":503,
+  "isRetryable":true}]` on transient upstream failures — invisible to the HTTP-5xx ladder, it
+  surfaced as an opaque parse error, and the first catalog pass died when the client raised a
+  `RuntimeError` no per-skill handler catches (one bad skill killed the pass). `chat()` now
+  detects the envelope, retries `isRetryable` errors on the existing 3-attempt/5s-10s ladder, and
+  raises `URLError` (an `OSError`, caught by every per-skill handler) on exhaustion — a sustained
+  outage fails the skill, never the pass (re-verified: 0 WARN lines across hundreds of skills in
+  the production pass).
+- `flywheel_llm.py` docstring production-model mention updated to the live deployment
+  (`cmc/MiniMaxAI/MiniMax-M3`; model choice remains operator env in `~/.config/harness-env.sh`).
+
+### Docs
+- `skills/flywheel/SKILL.md` documents `--catalog` / `--workers`; README catalog section and
+  openwiki operations flywheel section updated to match; ADR-0043 records the design + live
+  evidence (including the model head-to-head that rejected `cmc/xiaomi/mimo-v2.5` at 6-8× the
+  latency).
+
 ## [0.34.0] — 2026-08-28
 
 ### Added

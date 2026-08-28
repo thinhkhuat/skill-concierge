@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import flywheel_llm  # shared OpenAI-compatible client (ping/live_skills/config)
+import build_triggers     # live-index scroll (catalog= for external catalogs, ADR-0031)
 import flywheel_lock      # cross-process mutual exclusion (auto vs manual)
 import flywheel_manifest  # shared global run-manifest writer/reader
 import llm_eval_gen  # scenario (positive/negative) generator
@@ -78,6 +79,19 @@ def coverage():
                 covered.add(name)
     missing = sorted(indexed - covered)
     return sorted(indexed), covered, missing
+
+
+def catalog_coverage(alias):
+    """(indexed sorted, missing sorted) for ONE external catalog (ADR-0031 D10).
+    Same covered-test as coverage(), over the catalog's alias-namespaced skills."""
+    indexed = sorted({n for n, _ in build_triggers.scroll_all_points(catalog=alias)})
+    covered = set()
+    if TRIGGERS_FILE.exists():
+        data = json.loads(TRIGGERS_FILE.read_text(encoding="utf-8"))
+        for name, entry in data.items():
+            if isinstance(entry, dict) and (entry.get("llm_triggers", {}) or {}).get("triggers"):
+                covered.add(name)
+    return indexed, sorted(set(indexed) - covered)
 
 
 def print_status():
@@ -163,7 +177,7 @@ def _print_run_summary(run):
             print(f"    ... and {len(errs) - 8} more")
 
 
-def generate(rate=None, limit=None, triggers_only=False):
+def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1):
     if not SS_BIN.exists() or not PY_BIN.exists():
         msg = f"engine venv missing at {VENV}"
         print(f"FAIL: {msg} — run the skill-concierge:setup skill (./setup.sh) first", file=sys.stderr)
@@ -190,8 +204,19 @@ def generate(rate=None, limit=None, triggers_only=False):
         return 4
 
     try:
-        _, _, before = coverage()
-        print(f"Before: {len(before)} indexed skills missing utterances")
+        run_cov = None
+        if catalog is not None:
+            cat_indexed, before = catalog_coverage(catalog)
+            if not cat_indexed:
+                print(f"FAIL: catalog {catalog!r} has no indexed skills — check "
+                      f"`catalogs.py list` and reindex first", file=sys.stderr)
+                _print_run_summary(_write_manifest(last_error=f"catalog {catalog}: no indexed skills"))
+                return 5
+            print(f"Catalog {catalog!r}: {len(cat_indexed)} indexed skills, "
+                  f"{len(before)} missing utterances")
+        else:
+            _, _, before = coverage()
+            print(f"Before: {len(before)} indexed skills missing utterances")
         rate = rate if rate is not None else 6.0
 
         results = {}  # name -> {"status": "generated"|"error", "detail": str|None}
@@ -207,7 +232,8 @@ def generate(rate=None, limit=None, triggers_only=False):
         if not triggers_only:
             print("Generating eval scenarios for new/changed skills (llm_eval_gen.py)...")
             try:
-                _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit, rate=rate))
+                _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit,
+                                       rate=rate, catalog=catalog, workers=workers))
             except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
                 print(f"FAIL: scenario generator crashed: {e}", file=sys.stderr)
                 _print_run_summary(_write_manifest(last_error=f"llm_eval_gen crashed: {e}"))
@@ -215,7 +241,7 @@ def generate(rate=None, limit=None, triggers_only=False):
 
         print("Generating utterance triggers for new/changed skills (llm_triggers.py)...")
         try:
-            _note(llm_triggers.run(limit=limit, rate=rate))
+            _note(llm_triggers.run(limit=limit, rate=rate, catalog=catalog, workers=workers))
         except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
             print(f"FAIL: trigger generator crashed: {e}", file=sys.stderr)
             _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
@@ -232,8 +258,13 @@ def generate(rate=None, limit=None, triggers_only=False):
                 last_error="reindex exited non-zero"))
             return rr.returncode
 
-        indexed, _covered, after = coverage()
-        print(f"After: {len(after)} indexed skills missing utterances")
+        if catalog is not None:
+            cat_indexed, after = catalog_coverage(catalog)
+            print(f"After: {len(after)} {catalog}:* skills missing utterances")
+            run_cov = {"have": len(cat_indexed) - len(after), "total": len(cat_indexed)}
+        else:
+            indexed, _covered, after = coverage()
+            print(f"After: {len(after)} indexed skills missing utterances")
 
         when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         skills_manifest = [
@@ -244,11 +275,12 @@ def generate(rate=None, limit=None, triggers_only=False):
         totals = {
             "generated": sum(1 for v in results.values() if v["status"] == "generated"),
             "error": sum(1 for v in results.values() if v["status"] == "error"),
-            "skipped": len(indexed) - len(results),
+            "skipped": (run_cov["total"] if run_cov is not None else len(indexed)) - len(results),
         }
         run = flywheel_manifest.write_run(
             endpoint=flywheel_llm.ENDPOINT, model=flywheel_llm.MODEL,
-            skills=skills_manifest, coverage={"have": len(indexed) - len(after), "total": len(indexed)},
+            skills=skills_manifest,
+            coverage=run_cov or {"have": len(indexed) - len(after), "total": len(indexed)},
             totals=totals,
         )
         _print_run_summary(run)
@@ -267,9 +299,16 @@ def main():
                     help="with --generate: skip the scenario (llm_eval_gen) regen, triggers only")
     ap.add_argument("--limit", type=int, default=None,
                     help="with --generate: cap the number of skills processed this run")
+    ap.add_argument("--catalog", default=None,
+                    help="with --generate: run against ONE external catalog "
+                         "(<alias>:* skills, ADR-0031) instead of installed skills")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="with --generate: concurrent LLM calls (network phase "
+                         "only; file writes stay single-threaded). Default 1.")
     args = ap.parse_args()
     if args.generate:
-        sys.exit(generate(rate=args.rate, limit=args.limit, triggers_only=args.triggers_only))
+        sys.exit(generate(rate=args.rate, limit=args.limit, triggers_only=args.triggers_only,
+                          catalog=args.catalog, workers=args.workers))
     print_status()
 
 

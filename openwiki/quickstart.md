@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.34.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
+- **Version:** `0.35.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 

@@ -109,11 +109,24 @@ def save_cache(cache):
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
 
-def run(out_dir, limit=None, only=None, rate=6.0):
+def run(out_dir, limit=None, only=None, rate=6.0, catalog=None, workers=1):
     """Returns a list of {"name", "status": "generated"|"error", "detail"} records —
     one per skill actually attempted this call (cache-hit/unchanged skills are skipped
-    silently and produce no record, consumed by flywheel.py's manifest writer)."""
-    skills = flywheel_llm.live_skills()
+    silently and produce no record, consumed by flywheel.py's manifest writer).
+
+    `catalog="<alias>"` enumerates ONE external catalog's skills (ADR-0031 D10,
+    owner-commissioned) instead of the installed base index — see llm_triggers.run().
+
+    workers > 1 fans the network phase out over a ThreadPoolExecutor while
+    scenario files and the cache stay single-writer — see llm_triggers.run()."""
+    if catalog is None:
+        skills = flywheel_llm.live_skills()
+    else:
+        import build_triggers
+        skills = {}
+        for name, desc in build_triggers.scroll_all_points(catalog=catalog):
+            if name and name not in skills:
+                skills[name] = desc or ""
     names = sorted(skills) if only is None else [only]
 
     cache = load_cache()
@@ -132,11 +145,10 @@ def run(out_dir, limit=None, only=None, rate=6.0):
         names = names[:limit]
 
     results = []
-    for name in names:
+
+    def _net(name):
+        """Network phase only — safe to run concurrently (see llm_triggers.run)."""
         desc = skills.get(name, "")
-        h = flywheel_llm.body_hash(desc)
-        if not _needs_work(name):
-            continue  # unchanged + already generated
         try:
             reply = flywheel_llm.chat(SYSTEM_PROMPT, user_prompt(name, desc), rate_s=rate, schema=SCHEMA)
             # VN coverage is core (VN-heavy retrieval): if the model skipped Vietnamese,
@@ -149,15 +161,37 @@ def run(out_dir, limit=None, only=None, rate=6.0):
                     print(f"WARN: {name}: still <2 Vietnamese positives after retry (kept)")
         except (flywheel_llm.TruncatedCompletion, json.JSONDecodeError,
                 KeyError, IndexError, TypeError, UnicodeError, OSError) as e:
-            print(f"WARN: skipping {name}: chat failed ({e})")
-            results.append({"name": name, "status": "error", "detail": f"chat failed: {e}"})
-            continue
+            return name, e
+        return name, reply
+
+    def _merge(name, reply):
+        """Single-writer phase — scenario files + cache stay in the main thread."""
         if write_scenario(name, reply, out_dir):
-            cache[name] = h
+            cache[name] = flywheel_llm.body_hash(skills.get(name, ""))
             save_cache(cache)
-            results.append({"name": name, "status": "generated", "detail": None})
-        else:
-            results.append({"name": name, "status": "error", "detail": "malformed reply"})
+            return {"name": name, "status": "generated", "detail": None}
+        return {"name": name, "status": "error", "detail": "malformed reply"}
+
+    def _collect(name, out):
+        if isinstance(out, BaseException):
+            print(f"WARN: skipping {name}: chat failed ({out})")
+            return {"name": name, "status": "error", "detail": f"chat failed: {out}"}
+        return _merge(name, out)
+
+    if workers <= 1 or len(names) <= 1:
+        for name in names:
+            if not _needs_work(name):
+                continue  # unchanged + already generated
+            name2, out = _net(name)
+            results.append(_collect(name2, out))
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        batch = [n for n in names if _needs_work(n)]
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_net, n) for n in batch]
+            for fut in as_completed(futs):
+                name, out = fut.result()
+                results.append(_collect(name, out))
     return results
 
 
@@ -203,10 +237,17 @@ if __name__ == "__main__":
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--only", default=None)
     p.add_argument("--rate", type=float, default=6.0)
+    p.add_argument("--catalog", default=None,
+                   help="generate for ONE external catalog's skills (<alias>:* "
+                        "names) instead of installed skills")
+    p.add_argument("--workers", type=int, default=1,
+                   help="concurrent LLM calls (network phase only; file writes "
+                        "stay single-threaded). Default 1 = sequential.")
     p.add_argument("--selftest", action="store_true")
     args = p.parse_args()
 
     if args.selftest:
         _selftest()
     else:
-        run(args.out, limit=args.limit, only=args.only, rate=args.rate)
+        run(args.out, limit=args.limit, only=args.only, rate=args.rate,
+            catalog=args.catalog, workers=args.workers)

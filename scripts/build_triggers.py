@@ -80,22 +80,30 @@ def split_phrases(description: str) -> list[str]:
     return out[:MAX_TRIGGERS]
 
 
-def scroll_all_points():
+def scroll_all_points(catalog=None):
     """Yield (name, description) for every live-index point (paged scroll).
 
     External catalog points (payload tier=external, ADR-0031) are skipped:
     flywheel/trigger generation is for installed skills only — the utterance
     layer for search-only externals is an explicitly deferred phase, and running
-    the LLM over 1.5k+ catalog skills would burn the gateway for nothing."""
+    the LLM over 1.5k+ catalog skills would burn the gateway for nothing.
+
+    `catalog="<alias>"` lifts that skip for ONE catalog (owner-commissioned run
+    of the deferred phase): the scroll is scope-filtered to `catalog:<alias>`
+    and the tier=external skip above is bypassed. catalog=None stays
+    byte-identical to the installed-only default."""
     nxt = None
+    scope = f"catalog:{catalog}" if catalog is not None else None
     while True:
         body = {"limit": 256, "with_payload": True, "with_vector": False}
+        if scope is not None:
+            body["filter"] = {"must": [{"key": "scope", "match": {"value": scope}}]}
         if nxt is not None:
             body["offset"] = nxt
         res = _post(f"{QDRANT}/collections/{COLLECTION}/points/scroll", body)["result"]
         for pt in res.get("points", []):
             pl = pt.get("payload", {})
-            if pl.get("tier") == "external":
+            if scope is None and pl.get("tier") == "external":
                 continue
             yield pl.get("name", ""), pl.get("description", "")
         nxt = res.get("next_page_offset")

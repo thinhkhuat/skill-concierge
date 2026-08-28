@@ -2,7 +2,7 @@
 """flywheel_llm.py — shared LLM client for the retrieval-flywheel generator
 scripts (llm_eval_gen.py, llm_triggers.py). Stdlib only. Any OpenAI-compatible
 endpoint; production today is the private cloud gateway api.thinhkhuat.com/v1
-(model cmc/deepseek/deepseek-v4-flash, FLYWHEEL_LLM_SCHEMA_MODE=off), configured
+(model cmc/MiniMaxAI/MiniMax-M3, FLYWHEEL_LLM_SCHEMA_MODE=off), configured
 in ~/.config/harness-env.sh — the canonical cross-harness env home (caveats §20).
 
 Config resolution order (see _cfg below): real environment wins, then
@@ -180,6 +180,30 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
                     f"{len(out)} chars). Not retried: given the same prompt+schema this "
                     f"is deterministic. Raise max_tokens, or relax the schema constraint "
                     f"the model cannot satisfy.")
+            # The gateway can wrap an upstream 503 INSIDE a 200 envelope:
+            # content is literally `[CommandCode error: {...,"statusCode":503,
+            # "isRetryable":true}]` with finish_reason "stop" (observed live
+            # 2026-08-28 on cmc/minimax/minimax-m3-free). finish is "stop" and the
+            # text is non-JSON, so neither the HTTPError ladder above nor the
+            # caller's JSON handling ever retries it — the skill just fails.
+            # Same transient class as HTTP 503: route it through the same ladder.
+            err_m = re.search(r"\[CommandCode error: (\{.*\})\]\s*$", out, re.DOTALL)
+            if err_m:
+                try:
+                    err = json.loads(err_m.group(1))
+                except ValueError:
+                    err = {}
+                if err.get("isRetryable") and attempt < 2:
+                    print(f"retry {attempt + 2}/3 after 200-wrapped HTTP "
+                          f"{err.get('statusCode', '?')} (+{5 * (attempt + 1)}s)")
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                # URLError (an OSError) on purpose: every per-skill handler in the
+                # generators catches OSError — the contract is "sustained outage
+                # fails the SKILL, which the next run retries", never the pass.
+                raise urllib.error.URLError(
+                    f"gateway 200-wrapped HTTP {err.get('statusCode', '?')} "
+                    f"after retries: {out[:160]}")
             time.sleep(rate_s)
             return parse_json_reply(out)
         except urllib.error.HTTPError as e:

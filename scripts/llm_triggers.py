@@ -190,11 +190,29 @@ def save_cache(cache):
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
 
-def run(limit=None, only=None, rate=6.0):
+def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     """Returns a list of {"name", "status": "generated"|"error", "detail"} records —
     one per skill actually attempted this call (cache-hit/unchanged skills are skipped
-    silently and produce no record, consumed by flywheel.py's manifest writer)."""
-    skills = flywheel_llm.live_skills()
+    silently and produce no record, consumed by flywheel.py's manifest writer).
+
+    `catalog="<alias>"` enumerates ONE external catalog's skills (ADR-0031 D10,
+    owner-commissioned) instead of the installed base index; names stay
+    alias-namespaced (`<alias>:<skill>`) so the engine's reindex picks the
+    utterance layer up for the catalog points unchanged.
+
+    workers > 1 fans the network phase out over a ThreadPoolExecutor (same
+    prompts, retry ladder, and VN retry per call) while triggers.json and the
+    cache stay single-writer — merged in this thread as futures complete.
+    rate_s remains the per-call politeness sleep, so effective gateway load
+    scales with `workers`; per-skill failure isolation is unchanged."""
+    if catalog is None:
+        skills = flywheel_llm.live_skills()
+    else:
+        import build_triggers
+        skills = {}
+        for name, desc in build_triggers.scroll_all_points(catalog=catalog):
+            if name and name not in skills:
+                skills[name] = desc or ""
     names = sorted(skills) if only is None else [only]
 
     triggers = load_triggers()
@@ -216,12 +234,11 @@ def run(limit=None, only=None, rate=6.0):
         names = names[:limit]
 
     results = []
-    for name in names:
+
+    def _net(name):
+        """Network phase only — safe to run concurrently. Returns (name, reply)
+        on success or (name, exception) on a caught chat failure."""
         desc = skills.get(name, "")
-        h = flywheel_llm.body_hash(desc)
-        key = CACHE_PREFIX + name
-        if not _needs_work(name):
-            continue  # unchanged + already merged
         try:
             reply = flywheel_llm.chat(SYSTEM_PROMPT, user_prompt(name, desc), rate_s=rate, schema=SCHEMA)
             # VN parity with llm_eval_gen: re-ask once if the model skipped Vietnamese,
@@ -241,19 +258,45 @@ def run(limit=None, only=None, rate=6.0):
             flywheel_llm.TruncatedCompletion,
             urllib.error.URLError,
         ) as e:
-            print(f"WARN: skipping {name}: chat failed ({e})")
-            results.append({"name": name, "status": "error", "detail": f"chat failed: {e}"})
-            continue
+            return name, e
+        return name, reply
+
+    def _merge(name, reply):
+        """Single-writer phase — triggers/cache state and file writes stay in the
+        calling (main) thread, so concurrent workers never race on the files."""
+        h = flywheel_llm.body_hash(skills.get(name, ""))
         err = validate_reply(reply)
         if err:
             print(f"WARN: skipping {name}: {err}")
-            results.append({"name": name, "status": "error", "detail": err})
-            continue
+            return {"name": name, "status": "error", "detail": err}
         merge_utterance_layer(triggers, name, clean_triggers(reply["triggers"]))
-        cache[key] = h
+        cache[CACHE_PREFIX + name] = h
         save_triggers(triggers)
         save_cache(cache)
-        results.append({"name": name, "status": "generated", "detail": None})
+        return {"name": name, "status": "generated", "detail": None}
+
+    def _collect(name, out):
+        if isinstance(out, BaseException):
+            print(f"WARN: skipping {name}: chat failed ({out})")
+            return {"name": name, "status": "error", "detail": f"chat failed: {out}"}
+        return _merge(name, out)
+
+    if workers <= 1 or len(names) <= 1:
+        for name in names:
+            if not _needs_work(name):
+                continue  # unchanged + already merged
+            name2, out = _net(name)
+            results.append(_collect(name2, out))
+    else:
+        # Fan the network phase out; politeness (rate_s) stays per-call inside
+        # chat(), so effective gateway load scales with `workers`.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        batch = [n for n in names if _needs_work(n)]
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_net, n) for n in batch]
+            for fut in as_completed(futs):
+                name, out = fut.result()
+                results.append(_collect(name, out))
     return results
 
 
@@ -320,10 +363,17 @@ if __name__ == "__main__":
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--only", default=None)
     p.add_argument("--rate", type=float, default=6.0)
+    p.add_argument("--catalog", default=None,
+                   help="generate for ONE external catalog's skills (<alias>:* "
+                        "names) instead of installed skills")
+    p.add_argument("--workers", type=int, default=1,
+                   help="concurrent LLM calls (network phase only; file writes "
+                        "stay single-threaded). Default 1 = sequential.")
     p.add_argument("--selftest", action="store_true")
     args = p.parse_args()
 
     if args.selftest:
         _selftest()
     else:
-        run(limit=args.limit, only=args.only, rate=args.rate)
+        run(limit=args.limit, only=args.only, rate=args.rate, catalog=args.catalog,
+            workers=args.workers)

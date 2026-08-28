@@ -197,12 +197,21 @@ relies on description + body triggers only — the graceful fallback is unchange
 **Usage:**
 - **`skill-concierge:flywheel`** skill — status mode (default, read-only) shows endpoint health +
   per-skill utterance coverage; `--generate` runs the incremental generator (only new/changed
-  skills call the LLM) then reindexes.
+  skills call the LLM) then reindexes. `--catalog <alias>` (v0.35.0, ADR-0043) runs generation
+  against ONE external catalog's `<alias>:*` skills — the ADR-0031 D10 deferral as an explicit
+  opt-in; default coverage counts stay installed-only. `--workers <N>` (v0.35.0, default 1 =
+  sequential) fans only the LLM network phase out over N concurrent calls; all file writes stay
+  single-writer, and effective gateway load scales with N (measured 16.0 → 1.9 s/skill at N=4).
 - **`auto_flywheel`** SessionStart hook — runs the same generator detached + throttled when a
   local LLM endpoint is configured + reachable. Every run is recorded in the global manifest
   (`~/.claude/skill-concierge/flywheel-manifest.json`). The regeneration cache lives in the
   canonical durable home (`~/.claude/skill-concierge/.flywheel-cache.json`, v0.18.1 fix — was under
   the versioned cache dir that `/plugin update` wipes).
+
+**v0.35.0 hardening:** `flywheel_llm.chat()` detects the gateway's HTTP-200-wrapped upstream 503
+envelope (`[CommandCode error: {… "isRetryable":true}]` with `finish_reason: "stop"`), retries it
+on the existing 3-attempt ladder, and raises `URLError` on exhaustion — a sustained outage fails
+the skill, never the pass.
 
 **v0.20.0 hardening:** `flywheel_llm.chat()` now raises `TruncatedCompletion` on any explicit
 `finish_reason != "stop"` — a truncated completion previously surfaced as an opaque `JSONDecodeError`
