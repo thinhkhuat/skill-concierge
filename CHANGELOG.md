@@ -4,6 +4,16 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.36.1] — 2026-08-28
+
+### Changed
+- **"Recent runs" lines redesigned for meaning (operator feedback on the 0.36.0 card):** each
+  line now reads as a story — local time + age (`19:46 (8m ago)`), WHICH scope the run touched
+  (matched against live scope totals), the utterance delta, errors, the resulting coverage, and
+  a verdict (`COMPLETE` / `PARTIAL — rerun to fill the gap` / `no-op`). Dropped the raw
+  `generated/error/skipped` counter soup — `skipped N` (skills not attempted because already
+  covered) read like failures on healthy, complete runs.
+
 ## [0.36.0] — 2026-08-28
 
 ### Added

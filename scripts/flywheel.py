@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -240,21 +241,45 @@ def print_status():
         runs = []
     if not runs:
         print("  none recorded yet (fresh install, or the auto_flywheel hook has not fired)")
-    for lr in runs[-3:][::-1]:
-        t = lr.get("totals", {})
-        line = (f"  {lr.get('timestamp','?')}  via {lr.get('model','?')}: "
-                f"generated {t.get('generated',0)}  error {t.get('error',0)}  "
-                f"skipped {t.get('skipped',0)}")
+
+    def _describe(lr):
+        """One human line: WHEN (local + age) — WHICH scope: +delta, errors → resulting
+        coverage and a verdict. 'skipped N' (skills not attempted because already
+        covered) is deliberately dropped — it read like failures on healthy runs."""
         cov = lr.get("coverage") or {}
-        if cov.get("total"):
-            line += f"  | coverage {cov.get('have')}/{cov.get('total')}"
-        if lr.get("last_error"):
-            line += f"  | last_error: {lr['last_error']}"
-        print(line)
+        have, total = cov.get("have") or 0, cov.get("total") or 0
+        scope = next((name for name, tot in scope_targets.items() if tot == total),
+                     f"{have}/{total}" if total else "unknown scope")
+        t = lr.get("totals", {})
+        gen, err = t.get("generated", 0), t.get("error", 0)
+        if total and have >= total:
+            verdict = "COMPLETE"
+        elif gen == 0 and err == 0:
+            verdict = "no-op (nothing needed work)"
+        else:
+            verdict = "PARTIAL — rerun to fill the gap" if gen or err else "no-op"
+        ts = lr.get("timestamp", "?")
+        when = ts
+        try:
+            dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            ago = max(0, int(time.time() - dt.timestamp()))
+            ago_s = (f"{ago // 3600}h{(ago % 3600) // 60:02d}m ago" if ago >= 3600
+                     else f"{ago // 60}m ago" if ago >= 60 else "just now")
+            when = f"{dt.astimezone().strftime('%H:%M')} ({ago_s})"
+        except ValueError:
+            pass
+        line = (f"  {when}  {scope}: +{gen} utterances, {err} error(s) "
+                f"-> coverage {have}/{total}  {verdict}")
+        if err:
+            line += " — see error detail below" if lr is runs[-1] else ""
+        return line
+
+    for lr in runs[-3:][::-1]:
+        print(_describe(lr))
     errs = [s for s in ((runs[-1] if runs else {}).get("skills") or [])
             if s.get("status") == "error" and s.get("detail")]
     if errs:
-        print(f"  per-skill errors in last run ({len(errs)}):")
+        print(f"  error detail, last run ({len(errs)}):")
         for s in errs[:10]:
             print(f"    - {s['name']}: {s['detail']}")
         if len(errs) > 10:
