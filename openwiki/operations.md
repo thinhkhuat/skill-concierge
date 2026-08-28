@@ -203,7 +203,9 @@ relies on description + body triggers only — the graceful fallback is unchange
   sequential) fans only the LLM network phase out over N concurrent calls; all file writes stay
   single-writer, and effective gateway load scales with N (measured 16.0 → 1.9 s/skill at N=4).
 - **`auto_flywheel`** SessionStart hook — runs the same generator detached + throttled when a
-  local LLM endpoint is configured + reachable. Every run is recorded in the global manifest
+  local LLM endpoint is configured + reachable; since v0.35.1 installed skills first, then one
+  capped pass per configured external catalog alias, with `--workers` (`AUTO_FLYWHEEL_WORKERS`,
+  default 4). Every run is recorded in the global manifest
   (`~/.claude/skill-concierge/flywheel-manifest.json`). The regeneration cache lives in the
   canonical durable home (`~/.claude/skill-concierge/.flywheel-cache.json`, v0.18.1 fix — was under
   the versioned cache dir that `/plugin update` wipes).

@@ -79,3 +79,15 @@ Three facts converged on 2026-08-28:
   skills.
 - Selftests PASS (`llm_triggers`, `llm_eval_gen`), compile clean, live
   `--limit 4 --workers 4` smoke generated 4/4.
+
+## Update — v0.35.1: the auto path covers catalogs too
+
+Owner directive the same day: the flywheel must be autonomous and seamless —
+"always run on skills that need a new flywheel run." The `auto_flywheel`
+SessionStart hook now runs installed skills first, then one capped pass per
+configured catalog alias in the same detached shell, with
+`AUTO_FLYWHEEL_WORKERS` (default 4) riding the parallel path. Cost stays
+bounded by the same three gates as before: the cache keys on skill content
+(only new/changed skills reach the LLM), `AUTO_FLYWHEEL_MAX_PER_RUN`, and the
+6h throttle + lock. Decision 4's "owner-commissioned" framing now applies to
+full backfills only; steady-state catalog autonomy is the default.

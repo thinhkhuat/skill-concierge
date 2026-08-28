@@ -4,6 +4,24 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.35.1] — 2026-08-28
+
+### Added
+- **The auto-flywheel is now fully autonomous over catalogs too (owner directive, ADR-0043
+  update):** the `auto_flywheel` SessionStart hook runs installed skills first, then one capped
+  pass per configured external catalog alias (`antigravity` today) in the same detached run.
+  Steady-state cost stays bounded by the existing gates — the regeneration cache keys on skill
+  content, so only NEW/changed catalog skills ever reach the LLM, each pass is capped at
+  `AUTO_FLYWHEEL_MAX_PER_RUN`, and the 6h throttle + flywheel lock are unchanged.
+- **`AUTO_FLYWHEEL_WORKERS` (default 4):** the detached auto pass now spawns `--workers`, riding
+  the measured 1.9 s/skill parallel path — a capped 25-skill auto run takes ~50 s instead of
+  ~7 min.
+
+### Fixed
+- `SKILL_AUTO_FLYWHEEL` in `~/.claude/settings.json` was `"false"` — inert under the hook's
+  `== "0"` gate (so the hook ran anyway) but a landmine: any future strict-boolean parse would
+  have silently disabled the flywheel. Now explicitly `"1"`.
+
 ## [0.35.0] — 2026-08-28
 
 ### Added
