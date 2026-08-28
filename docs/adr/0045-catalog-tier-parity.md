@@ -49,8 +49,13 @@ valve + the get_skill lane remain the safety story).
    write + enforcer-side read, both gated on `EXTERNAL_OFFER`); CHAIN-HINT successors and
    ROUTE projections mark external names `[external:<alias>]`. KEEPOFF still filters —
    tier-equal. Honest limit: mined chains (ADR-0040) read Skill-invocation take sequences;
-   `get_skill` takes are not ledger rows yet, so externals enter chains only via declared
-   `next-skills` until a get_skill-take recorder exists. Recorded, not built.
+   `get_skill` takes ARE ledger rows (the PostToolUse matcher records them and
+   `auto_promote.py` consumes them), but the chain layer mines only `auto`/`manual`
+   events — `build_chains.load_sequences` and the enforcer's `_last_used_skill` both
+   filter `ev not in ("auto", "manual")` — so a pull cannot enter a mined sequence or
+   seed a hint. That is a design choice to make, not a recorder gap: a body pull is one
+   step weaker than an invocation (following the SKILL.md inline is not observable).
+   Recorded, not built.
 5. Flywheel: a bare `--generate` covers EVERY scope — installed first, then each configured
    catalog, each scope capped by `--limit` — one lock, one closing reindex, one manifest
    record now tagged with its `scope` (the status card prefers the explicit field over the
