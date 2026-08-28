@@ -148,7 +148,7 @@ RETRIEVE_LIMIT = TOP_K * 5
 def _running_harness() -> str:
     """Which harness is executing this hook.
 
-    Returns one of: 'commandcode', 'codex', 'omp', or 'claude'.
+    Returns one of: 'commandcode', 'codex', 'omp', 'zcode', or 'claude'.
 
     PRECEDENCE:
     1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter
@@ -157,21 +157,33 @@ def _running_harness() -> str:
        `OMPCODE` and `CLAUDE`'s own markers (`CLAUDE_PLUGIN_ROOT`, `CLAUDE.md` presence, etc.),
        so `OMPCODE=1` alone is proof of OMP; `CLAUDE`-only markers never are (OMP's provider
        union reads .claude too, but that is discovery, not the acting harness).
+       `ZCODE_PLUGIN_ROOT` (absolute) -> 'zcode': ZCode injects it — alongside
+       `CLAUDE_PLUGIN_ROOT` — into plugin-hook processes, so it is a positive zcode signal
+       available before path markers; no other harness sets it. A falsy or non-absolute
+       value is never probed (`Path("")` is the cwd, the ADR-0034 falsy-candidate rule).
     3. Where the hook/plugin was installed: `.omp` in path -> 'omp', `.codex` in path -> 'codex',
-       `.claude` in path -> 'claude'.
-    4. Fallback: 'commandcode' if run from anywhere else.
+       `.zcode` in path -> 'zcode', `.claude` in path -> 'claude'.
+    4. Fallback: 'claude' (the pre-ADR-0038 default; commandcode runs through its mod
+       adapter, which sets SKILL_CONCIERGE_HARNESS explicitly).
     """
     explicit = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if explicit in ("commandcode", "cmd", "command-code"):
         return "commandcode"
     if explicit in ("codex", "claude", "omp", "oh-my-pi"):
         return "omp" if explicit in ("omp", "oh-my-pi") else explicit
+    if explicit in ("zcode", "z-code"):
+        return "zcode"
 
     if os.environ.get("OMPCODE", "").strip() == "1":
         return "omp"
 
+    _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
+    if _zpr and os.path.isabs(_zpr):
+        return "zcode"
+
     marker_omp = f"{os.sep}.omp{os.sep}"
     marker_codex = f"{os.sep}.codex{os.sep}"
+    marker_zcode = f"{os.sep}.zcode{os.sep}"
     marker_claude = f"{os.sep}.claude{os.sep}"
     for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
         if not cand or not os.path.isabs(cand):
@@ -184,6 +196,8 @@ def _running_harness() -> str:
             return "omp"
         if marker_codex in resolved:
             return "codex"
+        if marker_zcode in resolved:
+            return "zcode"
         if marker_claude in resolved:
             return "claude"
     return "claude"
@@ -193,6 +207,7 @@ RUNNING_HARNESS = _running_harness()
 UNDER_CODEX = (RUNNING_HARNESS == "codex")
 UNDER_COMMANDCODE = (RUNNING_HARNESS == "commandcode")
 UNDER_OMP = (RUNNING_HARNESS == "omp")
+UNDER_ZCODE = (RUNNING_HARNESS == "zcode")
 
 
 def _foreign_harness_label() -> str:
@@ -206,10 +221,31 @@ def _foreign_harness_label() -> str:
         # one harness it does NOT read: Command Code. The label drives the `[Commandcode]`
         # marker in the annex render.
         return "commandcode"
+    if RUNNING_HARNESS == "zcode":
+        # ZCode reads only its own roots (~/.zcode/skills, ~/.agents/skills, its plugin
+        # cache) — every OTHER harness's scopes are foreign here, so the residual pool is
+        # compound (Command Code's label precedent).
+        return "claude/codex/omp"
     return "codex"
 
 
 FOREIGN_HARNESS = _foreign_harness_label()
+
+
+def _zcode_shares_personal_shelf() -> bool:
+    """True iff ZCode's ~/.agents/skills root resolves to Claude's personal root — the
+    shared-shelf layout where every `personal`-scoped skill is ZCode-invocable through
+    the symlink (observed live 2026-08-28: ~/.agents/skills -> ~/.claude/skills). Anything
+    else — divergent directory, missing directory, OSError — is NOT positive knowledge;
+    the caller then treats `personal` as foreign and per-row survival moves to the
+    filesystem twin check. Resolved per session, never baked into the machine-global
+    index (the ADR-0028 cwd-scoped-view hazard)."""
+    try:
+        agents = Path.home() / ".agents" / "skills"
+        claude = Path.home() / ".claude" / "skills"
+        return agents.is_dir() and claude.is_dir() and agents.resolve() == claude.resolve()
+    except (OSError, RuntimeError):
+        return False
 
 
 def _foreign_scopes() -> tuple:
@@ -225,6 +261,11 @@ def _foreign_scopes() -> tuple:
     scans only `~/.codex/skills` and `<cwd>/.codex/skills` (OMP source discovery/codex.ts:238-240,
     loadSkills), so `codex-plugin` rows are foreign here. commandcode scopes are foreign too
     (OMP never loads Command Code's personal/project roots).
+    From ZCode (ADR-0042): every other harness's plugin caches and native roots. `personal`
+    joins the foreign set ONLY when ZCode's ~/.agents/skills root does NOT resolve to
+    Claude's personal root — the shared-shelf symlink is positive knowledge the whole
+    scope is ZCode-invocable; on a divergent machine per-row survival moves to the
+    `_invocable_twin` filesystem check instead.
 
     `project:` scopes are cwd-derived and shared by construction. Never foreign.
     """
@@ -234,6 +275,10 @@ def _foreign_scopes() -> tuple:
         return ("plugin", "commandcode-personal")
     if RUNNING_HARNESS == "omp":
         return ("codex-plugin", "commandcode-personal")
+    if RUNNING_HARNESS == "zcode":
+        base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
+                "omp-personal", "omp-managed", "omp-plugin")
+        return base if _zcode_shares_personal_shelf() else base + ("personal",)
     return ("codex-plugin", "codex-personal", "commandcode-personal")
 
 FOREIGN_SCOPES = _foreign_scopes()
@@ -266,6 +311,77 @@ _INSTALLED_PLUGINS_JSON = Path(os.environ.get(
 _OMP_INSTALLED_PLUGINS_JSON = Path(os.environ.get(
     "SKILL_OMP_INSTALLED_PLUGINS", Path.home() / ".omp" / "plugins" / "installed_plugins.json"))
 
+# ZCode's own registries (ADR-0042): installed_plugins.json is a LIST of
+# {id: "<name>@<marketplace>", installPath, ...}; enablement lives in
+# ~/.zcode/cli/config.json -> plugins.enabledPlugins (absent key = enabled) with
+# plugins.suppressedBuiltins for the builtin plugins, which never appear in the registry.
+_ZCODE_INSTALLED_PLUGINS_JSON = Path(os.environ.get(
+    "SKILL_ZCODE_INSTALLED_PLUGINS", Path.home() / ".zcode" / "cli" / "plugins" / "installed_plugins.json"))
+_ZCODE_CONFIG_JSON = Path(os.environ.get(
+    "SKILL_ZCODE_CONFIG", Path.home() / ".zcode" / "cli" / "config.json"))
+_ZCODE_PLUGIN_CACHE = Path(os.environ.get(
+    "SKILL_ZCODE_PLUGIN_CACHE", Path.home() / ".zcode" / "cli" / "plugins" / "cache"))
+
+
+def _zcode_invocable_plugin_ids():
+    """Plugin NAME ids a ZCode session can invoke (ADR-0042).
+
+    '<name>@<marketplace>' ids from ZCode's installed_plugins.json (installation checked —
+    installPath on disk — like the Claude loop) plus the builtin cache plugins (newest
+    version dir present), gated by config.json plugins.enabledPlugins (an explicit false
+    disables; an absent key means enabled — ZCode writes explicit true entries and leaves
+    the rest implied) minus suppressedBuiltins. Claude's registry/settings are never
+    consulted under zcode: they describe a different harness's sessions.
+
+    Returns None when NOTHING is positively readable — None means UNKNOWN and the caller
+    filters nothing (fail toward ADR-0033's union). An empty-but-readable world is a
+    positive empty set. Everything filesystem-touching is guarded (the deleted-cwd rule)."""
+    ids: set = set()
+    saw_any = False
+    disabled: dict = {}
+    suppressed: set = set()
+    try:
+        cfg = json.loads(_ZCODE_CONFIG_JSON.read_text(encoding="utf-8"))
+        pcfg = cfg.get("plugins") if isinstance(cfg, dict) and isinstance(cfg.get("plugins"), dict) else {}
+        em = pcfg.get("enabledPlugins") if isinstance(pcfg.get("enabledPlugins"), dict) else {}
+        disabled = {str(k) for k, v in em.items() if v is False}
+        suppressed = {str(s) for s in (pcfg.get("suppressedBuiltins") or []) if s}
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        pass
+    registry_ids: set = set()
+    try:
+        installed = json.loads(_ZCODE_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))
+        if isinstance(installed, dict) and isinstance(installed.get("plugins"), list):
+            for entry in installed["plugins"]:
+                if not isinstance(entry, dict):
+                    continue
+                pid = str(entry.get("id") or "")
+                path = entry.get("installPath")
+                if pid and path and Path(str(path)).is_dir():
+                    saw_any = True
+                    registry_ids.add(pid)
+                    if pid not in disabled:
+                        ids.add(pid.split("@", 1)[0])
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        pass
+    # Builtins: cache plugin dirs with no registry entry (the official marketplaces'
+    # plugins are enabled-but-unregistered). The cache is append-only, so "installed"
+    # for a builtin = at least one version dir exists.
+    try:
+        for mkt in _ZCODE_PLUGIN_CACHE.iterdir():
+            for plug in mkt.iterdir():
+                pid = f"{plug.name}@{mkt.name}"
+                if pid in registry_ids or pid in suppressed or pid in disabled:
+                    continue
+                if any(v.is_dir() for v in plug.iterdir()):
+                    saw_any = True
+                    ids.add(plug.name)
+    except (OSError, ValueError, TypeError):
+        pass
+    if not saw_any:
+        return None
+    return ids
+
 
 def _invocable_plugin_ids():
     """Plugin ids THIS session can invoke: present in an installed-plugins registry AND not
@@ -293,6 +409,11 @@ def _invocable_plugin_ids():
     plugin id, so if ANY `<id>@<marketplace>` copy is installed and on, the id is invocable.
     Everything touching the filesystem is inside the guard — `Path.cwd()` raises when the working
     directory has been deleted, and this runs at import, outside main()'s try."""
+    if RUNNING_HARNESS == "zcode":
+        # ZCode resolves invocability from ITS OWN registries (ADR-0042); Claude's
+        # registry and settings layers describe a different harness's sessions and must
+        # not leak ids into the twin test.
+        return _zcode_invocable_plugin_ids()
     installed = {}
     saw_registry = False
     try:
@@ -349,13 +470,36 @@ def _invocable_plugin_ids():
 INVOCABLE_PLUGIN_IDS = _invocable_plugin_ids()
 
 
+_ZCODE_READ_ROOTS = (Path.home() / ".agents" / "skills", Path.home() / ".zcode" / "skills")
+
+
+def _zcode_readable_skill(name: str) -> bool:
+    """ADR-0042 filesystem twin: True when `<name>/SKILL.md` exists in a ZCode-readable
+    personal root (~/.agents/skills — the shared shelf — or ~/.zcode/skills). This is how
+    a `personal`-scoped row survives the foreign filter on machines where the two shelves
+    are NOT one symlinked directory, and how un-namespaced foreign rows with a real local
+    twin stay offerable. OSError is UNKNOWN — returns True so the caller's
+    drop-only-on-positive-knowledge rule keeps the row."""
+    try:
+        return any((root / name / "SKILL.md").exists() for root in _ZCODE_READ_ROOTS)
+    except (OSError, ValueError):
+        return True
+
+
 def _invocable_twin(name: str) -> bool:
     """True when a foreign-scoped row names a skill THIS harness can invoke anyway, because the
     same plugin is installed and switched on here and its twin merely lost the discovery dedup.
 
     Meaningful from Claude and OMP: both harnesses' claude-plugins provider reads the claude/
     omp plugin registries, so a `claude-plugin` row may name a skill this session invokes.
-    Under Codex/Command Code the plugin caches are isolated, so there is no twin to rescue."""
+    Under Codex/Command Code the plugin caches are isolated, so there is no twin to rescue.
+    Under ZCode (ADR-0042) TWO rescues apply: the plugin-id twin (a namespaced `plugin:skill`
+    row whose plugin is installed+enabled in Zcode's OWN registry) and a FILESYSTEM twin
+    (`<name>/SKILL.md` present in a ZCode-readable personal root)."""
+    if RUNNING_HARNESS == "zcode":
+        if INVOCABLE_PLUGIN_IDS and ":" in name and name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS:
+            return True
+        return _zcode_readable_skill(name)
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
@@ -577,6 +721,11 @@ def _visible_sidecar_names() -> dict:
         scopes += ["codex-personal", "codex-plugin"]
         if cwd is not None:
             scopes.append(f"codex-project:{cwd / '.codex' / 'skills'}")
+    if os.environ.get("SKILL_ZCODE_ROOTS", "1") != "0":  # ADR-0042 zcode mirror
+        scopes += ["zcode-personal", "zcode-plugin"]
+        if cwd is not None:
+            scopes += [f"zcode-project:{cwd / '.zcode' / 'skills'}",
+                       f"zcode-project:{cwd / '.agents' / 'skills'}"]
     for scope in scopes:
         m = data.get(scope)
         if isinstance(m, dict):
@@ -1880,6 +2029,7 @@ def _selftest() -> int:
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
     global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS, FOREIGN_HARNESS
+    global _zcode_readable_skill, _zcode_shares_personal_shelf
     _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
     _reqs = []
@@ -2006,7 +2156,8 @@ def _selftest() -> int:
     _saved_rh = RUNNING_HARNESS
     _saved_fh = FOREIGN_HARNESS
     try:
-        if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex", "commandcode") or not FOREIGN_SCOPES:
+        if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex", "commandcode",
+                                   "claude/codex/omp") or not FOREIGN_SCOPES:
             bad.append(f"cross-harness: harness label / foreign scopes unset: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
         if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-")) for x in FOREIGN_SCOPES):
             bad.append(f"cross-harness: claude harness label disagrees with the foreign scope set: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
@@ -2159,6 +2310,74 @@ def _selftest() -> int:
                 os.environ["OMPCODE"] = _saved_omp_env[1]
             RUNNING_HARNESS, FOREIGN_HARNESS = _saved_rh2, _saved_fh2
             FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_fs2, _saved_inv2
+
+        # ZCode direction (ADR-0042): detection (explicit env, ZCODE_PLUGIN_ROOT env with the
+        # falsy/non-absolute fallthroughs, explicit-env precedence), foreign label/scopes with
+        # the shared-shelf personal rule, the registry twin, and the filesystem twin.
+        # Mirrors the OMP direction block above.
+        _saved_z_env = (os.environ.get("SKILL_CONCIERGE_HARNESS"),
+                        os.environ.get("ZCODE_PLUGIN_ROOT"))
+        _saved_rh3, _saved_fs3, _saved_inv3 = RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
+        _saved_fstwin, _saved_shelf = _zcode_readable_skill, _zcode_shares_personal_shelf
+        try:
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "zcode"
+            if _running_harness() != "zcode":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=zcode must resolve to zcode")
+            os.environ["SKILL_CONCIERGE_HARNESS"] = ""
+            os.environ["ZCODE_PLUGIN_ROOT"] = "/tmp/.zcode/cli/plugins/cache/p/x/1.0"
+            if _running_harness() != "zcode":
+                bad.append("cross-harness: ZCODE_PLUGIN_ROOT set must resolve to zcode")
+            os.environ["ZCODE_PLUGIN_ROOT"] = ""
+            if _running_harness() == "zcode":
+                bad.append("cross-harness: empty ZCODE_PLUGIN_ROOT must fall through (never the cwd)")
+            os.environ["ZCODE_PLUGIN_ROOT"] = "relative/path"
+            if _running_harness() == "zcode":
+                bad.append("cross-harness: non-absolute ZCODE_PLUGIN_ROOT must fall through")
+            # explicit SKILL_CONCIERGE_HARNESS outranks the zcode env signal
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "claude"
+            if _running_harness() != "claude":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=claude must stay claude under ZCODE_PLUGIN_ROOT")
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+            os.environ.pop("ZCODE_PLUGIN_ROOT", None)
+
+            RUNNING_HARNESS = "zcode"
+            if _foreign_harness_label() != "claude/codex/omp":
+                bad.append(f"cross-harness: zcode foreign label wrong: {_foreign_harness_label()!r}")
+            _zcode_shares_personal_shelf = lambda: True
+            _fs = _foreign_scopes()
+            if "personal" in _fs or "zcode-personal" in _fs or \
+                    not {"plugin", "codex-plugin", "commandcode-personal", "omp-managed"} <= set(_fs):
+                bad.append(f"cross-harness: zcode shared-shelf foreign scopes wrong: {_fs!r}")
+            _zcode_shares_personal_shelf = lambda: False
+            if "personal" not in _foreign_scopes():
+                bad.append("cross-harness: zcode divergent-shelf must foreign personal "
+                           "(the per-row filesystem twin rescues what is actually readable)")
+            _zcode_shares_personal_shelf = _saved_shelf
+            # twins: registry plugin twin, filesystem twin, a true non-twin, and the
+            # unknown-manifest rule (must not rescue — mirrors the OMP assertion).
+            FOREIGN_SCOPES = ("personal", "plugin")
+            INVOCABLE_PLUGIN_IDS = {"twinpl"}
+            if not _invocable_twin("twinpl:dup"):
+                bad.append("cross-harness: zcode must rescue a registry plugin twin")
+            _zcode_readable_skill = lambda n: n == "fstwin"
+            INVOCABLE_PLUGIN_IDS = set()
+            if not _invocable_twin("fstwin"):
+                bad.append("cross-harness: zcode must rescue a filesystem twin")
+            if _invocable_twin("other:nope"):
+                bad.append("cross-harness: zcode must not rescue a row with no twin")
+            _zcode_readable_skill = _saved_fstwin
+            INVOCABLE_PLUGIN_IDS = None
+            if _invocable_twin("twinpl:dup"):
+                bad.append("cross-harness: zcode unknown manifest must not rescue a plugin twin")
+        finally:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+            os.environ.pop("ZCODE_PLUGIN_ROOT", None)
+            if _saved_z_env[0] is not None:
+                os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_z_env[0]
+            if _saved_z_env[1] is not None:
+                os.environ["ZCODE_PLUGIN_ROOT"] = _saved_z_env[1]
+            RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_rh3, _saved_fs3, _saved_inv3
+            _zcode_readable_skill, _zcode_shares_personal_shelf = _saved_fstwin, _saved_shelf
 
         # kill-switch off -> pre-ADR-0034 request shape and output
         CROSS_HARNESS = False

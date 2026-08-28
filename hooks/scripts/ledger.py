@@ -44,6 +44,30 @@ GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
 
 
+def _zcode_harness() -> str | None:
+    """ZCode stamp fallback (ADR-0042). Payload harness and SKILL_CONCIERGE_HARNESS keep
+    their existing precedence (the OMP adapter passes it via payload); this runs only when
+    both are absent, via ZCode's two positive signals: ZCODE_PLUGIN_ROOT (injected —
+    alongside CLAUDE_PLUGIN_ROOT — into plugin-hook processes; falsy/non-absolute values
+    are never probed) and the `.zcode` path marker on the hook's own install location.
+    Other harnesses are untouched by construction: they never set the env var and their
+    install paths never carry the marker."""
+    _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
+    if _zpr and os.path.isabs(_zpr):
+        return "zcode"
+    marker = f"{os.sep}.zcode{os.sep}"
+    for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
+        if not cand or not os.path.isabs(cand):
+            continue
+        try:
+            resolved = str(Path(cand).resolve())
+        except (OSError, RuntimeError):
+            continue
+        if marker in resolved:
+            return "zcode"
+    return None
+
+
 def _append(ev: dict) -> None:
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -68,7 +92,9 @@ def main() -> int:
         # subagent lanes instead of mixing them into the main session's chains.
         sub = bool(d.get("agent_id"))
 
-        harness = d.get("harness") or os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower() or None
+        harness = (d.get("harness")
+                   or os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
+                   or _zcode_harness())
 
         if evt == "UserPromptSubmit":
             prompt = d.get("prompt") or ""

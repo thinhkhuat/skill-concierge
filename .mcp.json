@@ -1,7 +1,8 @@
 {
   "mcpServers": {
     "skill-search": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/skill-search-mcp",
+      "command": "/bin/bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/skill-search-mcp"],
       "env": {
         "SKILL_QDRANT_URL": "http://localhost:6333",
         "SKILL_EMBED_BACKEND": "fastembed",
@@ -10,7 +11,7 @@
         "SKILL_LLM_TRIGGERS": "1",
         "TRIGGERS_MAX": "16",
         "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",
-        "SKILL_SERVER_RECORDS": "${HOME}/.cache/skill-search/servers"
+        "SKILL_SERVER_RECORDS": "/Users/thinhkhuat/.cache/skill-search/servers"
       }
     }
   }

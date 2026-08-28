@@ -49,13 +49,20 @@ def main() -> int:
                 continue
             elif claude[k] != v:
                 bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/omp/mcp.json)")
+    zcode_env = env_of("adapters/zcode/mcp.json") if (ROOT / "adapters/zcode/mcp.json").exists() else None
+    if zcode_env is not None:
+        for k, v in zcode_env.items():
+            if k not in claude:
+                bad.append(f"{k}: only in adapters/zcode/mcp.json ('{v}')")
+            elif claude[k] != v:
+                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/zcode/mcp.json)")
     if bad:
         print("mcp-env-parity FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     omitted = sorted(set(claude) - set(codex))
-    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, Command Code, and OMP"
+    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, Command Code, OMP, and ZCode"
           + (f"; codex omits {omitted} (deliberate — see descriptor comment)" if omitted else ""))
     return 0
 

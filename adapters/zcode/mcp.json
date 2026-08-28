@@ -1,0 +1,18 @@
+{
+  "_comment": "ZCode MCP descriptor (ADR-0042) — MANUAL FALLBACK ONLY. The PRIMARY wiring is the plugin's own .mcp.json: ZCode expands ${CLAUDE_PLUGIN_ROOT} for plugin-provided servers and auto-connects them, so a marketplace-installed plugin needs NO entry here. Merge this server into ~/.zcode/cli/config.json at mcp.servers.skill-search ONLY when the plugin layer is unavailable (e.g. a desktop-managed MCP list overrides files) — config-file servers never expand templates, hence absolute paths. Do not run both layers deliberately for the same server. Env block is kept in strict lockstep with .mcp.json (scripts/check_mcp_env_parity.py); SKILL_SERVER_RECORDS is omitted here deliberately — the engine's Path.home() default resolves the same directory without a machine-pinned literal.",
+  "mcpServers": {
+    "skill-search": {
+      "command": "/bin/bash",
+      "args": ["/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/bin/skill-search-mcp"],
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "fastembed",
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "SKILL_TOP_K": "6",
+        "SKILL_LLM_TRIGGERS": "1",
+        "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json"
+      }
+    }
+  }
+}

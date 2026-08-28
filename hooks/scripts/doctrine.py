@@ -89,6 +89,12 @@ def _harness_adapt(doctrine: str) -> str:
       tool: `skill-concierge:skill-search/search_skills` (namespaced plugin:server/tool)
       slash: none — OMP consumes skills via the read tool on `skill://<name>` URLs, so the
       slash-command hint and the get_skill consumption hint are both rewritten to that form.
+
+    Under ZCode (ADR-0042): NO rewrite — ZCode flattens plugin MCP ids exactly like Claude
+    Code (`mcp__plugin_skill-concierge_skill-search__search_skills`, verified live
+    2026-08-28) and resolves plugin skills by the same `plugin:skill` alias, so the
+    Claude-default rendering above is already the ZCode-correct one. `SKILL_CONCIERGE_HARNESS=zcode`
+    therefore falls through every rewrite branch unchanged.
     """
     harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if harness in ("omp", "oh-my-pi"):
@@ -240,6 +246,22 @@ def _selftest() -> int:
         bad.append("omp adapt: external consumption must be read(skill://...) not get_skill()")
     if 'read("skill://<alias>:<skill>")' not in _adapted:
         bad.append("omp adapt: external consumption hint must read skill://<alias>:<skill>")
+
+    # ZCode (ADR-0042): NO rewrite — the Claude-default rendering is already ZCode-correct
+    # (identical flattened plugin MCP tool id + plugin:skill alias), so an explicit zcode
+    # harness must return the doctrine byte-identical. Pin it so a future rewrite branch
+    # cannot silently mangle the zcode rendering.
+    _saved_z = os.environ.get("SKILL_CONCIERGE_HARNESS")
+    os.environ["SKILL_CONCIERGE_HARNESS"] = "zcode"
+    try:
+        if _harness_adapt(_sample) != _sample:
+            bad.append("zcode adapt: SKILL_CONCIERGE_HARNESS=zcode must leave the doctrine "
+                       "byte-identical (claude-default rendering is zcode-correct)")
+    finally:
+        if _saved_z is None:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+        else:
+            os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_z
 
     if bad:
         print("doctrine --selftest FAIL:")

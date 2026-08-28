@@ -4,6 +4,70 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.34.0] — 2026-08-28
+
+### Added
+- **ADR-0042 ZCode quintuple-harness parity — ZCode is the fifth first-class citizen, and the
+  first harness in the set needing NO adapter vehicle:** ZCode natively reads `.claude-plugin/`
+  manifests, fires the plugin `hooks/hooks.json` (SessionStart doctrine + self-heals,
+  UserPromptSubmit enforcer + ledger, PostToolUse ledger capture — all verified live from
+  inside a ZCode session on 2026-08-28), and auto-connects the plugin `.mcp.json` under the
+  `plugin:<plugin>:<server>` namespace. The integration was designed from a live validation of
+  the v0.20.8-era install that found four defects, each reproduced:
+  - **The MCP retrieval organ was dead in every ZCode session.** ZCode's marketplace cache copy
+    shipped `bin/skill-search-mcp` as `-rw-r--r--` (Claude's cache copy of the same file:
+    `-rwxr-xr-x`), so every spawn died with `Permission denied` before the stdio handshake —
+    no `search_skills`/`get_skill` existed in any session while the doctrine kept naming them.
+    Fix (all harnesses): the shared `.mcp.json` moves to the interpreter form
+    `"command": "/bin/bash", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/skill-search-mcp"]` — a cache
+    copy without exec bits can no longer kill the server anywhere. `SKILL_SERVER_RECORDS`
+    drops its `${HOME}` literal for an absolute path (ZCode expands only a whitelist of
+    templates for plugin servers — the 0.21.1 `SKILL_TRIGGERS` class; `check_mcp_env_parity`
+    stays green across all five descriptors).
+  - **ZCode sessions were mis-detected as `claude`** (the marker set had no `.zcode` entry;
+    live proof: an offer named `add-harness-to-skill-concierge`, scope `omp-managed` — an
+    OMP-managed skill ZCode cannot invoke). `_running_harness()` resolves `zcode` via
+    `SKILL_CONCIERGE_HARNESS=zcode|z-code` → `ZCODE_PLUGIN_ROOT` (absolute; ZCode injects it
+    into plugin-hook processes) → `.zcode/` path marker; `UNDER_ZCODE` constant;
+    `_invocable_plugin_ids()` under zcode reads ZCode's OWN registries (LIST-shaped
+    `installed_plugins.json` installPaths + builtin cache plugins, gated by
+    `~/.zcode/cli/config.json` `plugins.enabledPlugins` minus `suppressedBuiltins`, absent key
+    = enabled); `_invocable_twin()` gains a filesystem twin (`<name>/SKILL.md` under
+    `~/.agents/skills` or `~/.zcode/skills`, OSError = keep); `_foreign_scopes()` under zcode
+    treats `personal` as invocable **iff `~/.agents/skills` resolves to `~/.claude/skills`**
+    (the shared-shelf symlink — the load-bearing structural fact: ZCode's ~400-skill shelf IS
+    the already-indexed `personal` scope, so on the reference machine nothing changes for
+    personal rows); foreign annex label `claude/codex/omp`; chain-hint scope mirror unions the
+    zcode scopes under the same flag; ledger rows stamp `harness: "zcode"`; doctrine needs NO
+    zcode rewrite (ZCode flattens plugin MCP ids exactly like Claude Code — pinned by a
+    doctrine selftest case). All zcode branches selftest-pinned alongside the existing
+    claude/codex/omp pins.
+  - **`SKILL_ZCODE_ROOTS` discovery (default ON, one-var revert):** `~/.zcode/skills`
+    (`zcode-personal`), `<cwd>/.zcode/skills` + `<cwd>/.agents/skills` (`zcode-project:<abspath>`),
+    and ZCode's plugin cache (`zcode-plugin`) — **registry-enumerated** (installPaths + newest
+    builtin version dirs, enablement-filtered), never a wholesale append-only-cache glob, with
+    `_scope_for()` checking `.zcode` INSIDE the shared `/plugins/cache/` block before the
+    generic `plugin` fallthrough (without it every ZCode plugin skill would land in Claude's
+    scope). `~/.agents/skills` is deliberately NOT a root (symlinks to `~/.claude/skills`;
+    invocability is the enforcer's per-session twin check, not the index's).
+    `auto_reindex._mcp_env()` forwards the flag defensively. Live smoke: 9 registry+builtin
+    plugin roots, correct namespacing (`zcode-guide:diagnosing-hooks`), `=0` drops everything
+    zcode byte-clean.
+  - **The ADR-0018 launcher self-heal becomes ONE-DIRECTIONAL:** resync fires only when the
+    deployed cache is ≥ the venv stamp; a stale cache warns on stderr and serves the newer
+    engine. Closes the latent ping-pong where a stale 0.20.8 ZCode cache would have
+    *downgraded* the shared 0.33.x venv on every ZCode spawn until Claude re-upgraded it.
+    Both branches proven with a fake venv (refusal warns + stamp intact; upgrade fail-opens
+    exactly as before).
+  - **Ops mirror:** `doctor.py check_zcode()` (WARN-only: cache presence, version parity vs
+    SSOT, launcher exec bits — on the defect machine it flags exactly the two live defects);
+    `adapters/zcode/install.sh` (idempotent verifier/repair: chmod +x cached bins, optional
+    `--mcp-fallback` merge with backup, doctor row, verification checklist) +
+    `adapters/zcode/mcp.json` (manual fallback only, duplicate-server caution);
+    README harness-matrix row + uninstall section; driftcheck paths; VENDORED.md engine-patch
+    entry. Accepted caveat (stated, not solved): ZCode has no `skillOverrides` seam, so the
+    keep-on budget organ is N/A there — the enforcement organ is the only lever. Ledger epoch
+    boundary at ship.
 ## [0.33.1] — 2026-08-28
 
 ### Fixed

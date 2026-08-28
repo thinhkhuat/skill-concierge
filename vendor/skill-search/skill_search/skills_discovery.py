@@ -77,12 +77,35 @@ OMP_MANAGED_ROOT = Path.home() / ".omp" / "agent" / "managed-skills" # OMP auto-
 OMP_PLUGIN_GLOB = str(Path.home() / ".omp" / "plugins" / "cache" / "plugins"
                       / "**" / "skills" / "*" / "SKILL.md")
 
+# ZCode skill roots (quintuple-harness parity, ADR-0042): ZCode stores personal skills
+# at ~/.zcode/skills/, project skills at .zcode/skills/ AND .agents/skills/, and plugin
+# skills under ~/.zcode/cli/plugins/cache/<marketplace>/<plugin>/<version>/skills/ — the
+# same cache layout as Claude's, so _namespaced_name needs no zcode branch.
+# ~/.agents/skills is deliberately NOT a discovery root: on the reference machine it is
+# a symlink to ~/.claude/skills (the shared shelf), so it would dedup into `personal`
+# anyway, and baking a per-machine symlink into the machine-global index is the
+# ADR-0028 hazard — per-session invocability of `personal` rows under ZCode is settled
+# by the enforcer's twin check (ADR-0042), never by the index.
+# Same one-var revert as the other harnesses: SKILL_ZCODE_ROOTS=0 drops every ZCode path
+# + scope (byte-identical to the pre-ZCode engine; a reindex prunes the zcode-* points).
+ZCODE_ROOTS = os.environ.get("SKILL_ZCODE_ROOTS", "1") != "0"
+ZCODE_PERSONAL_ROOT = Path.home() / ".zcode" / "skills"           # ZCode personal (all projects)
+ZCODE_PROJECT_ROOT = Path.cwd() / ".zcode" / "skills"             # ZCode project-scoped, CWD-relative
+ZCODE_AGENTS_PROJECT_ROOT = Path.cwd() / ".agents" / "skills"     # agents-convention project dir ZCode also reads
+ZCODE_PLUGIN_CACHE = Path.home() / ".zcode" / "cli" / "plugins" / "cache"
+ZCODE_INSTALLED_PLUGINS_JSON = Path(os.environ.get(
+    "SKILL_ZCODE_INSTALLED_PLUGINS", Path.home() / ".zcode" / "cli" / "plugins" / "installed_plugins.json"))
+ZCODE_CONFIG_JSON = Path(os.environ.get(
+    "SKILL_ZCODE_CONFIG", Path.home() / ".zcode" / "cli" / "config.json"))
+
 SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else []
 ) + (
     [COMMANDCODE_PERSONAL_ROOT, COMMANDCODE_PROJECT_ROOT] if COMMANDCODE_ROOTS else []
 ) + (
     [OMP_PERSONAL_ROOT, OMP_PROJECT_ROOT, OMP_MANAGED_ROOT] if OMP_ROOTS else []
+) + (
+    [ZCODE_PERSONAL_ROOT, ZCODE_PROJECT_ROOT, ZCODE_AGENTS_PROJECT_ROOT] if ZCODE_ROOTS else []
 )
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
@@ -529,8 +552,104 @@ def _glob_both_depths(g: str) -> list[str]:
     return out
 
 
+def _ver_key(s: str) -> tuple:
+    """Version-dir sort key ("0.33.10" > "0.33.9"). Non-numeric components fold to 0."""
+    return tuple(int(x) if x.isdigit() else 0 for x in s.split("."))
+
+
+def _zcode_plugin_roots() -> set[str] | None:
+    """Install directories of ZCode's installed+enabled plugins (ADR-0042).
+
+    ZCode's registry (installed_plugins.json) is a LIST of
+    {id: "<name>@<marketplace>", installPath: <version dir>} — unlike Claude's
+    name-keyed dict — and its BUILTIN plugins (the official marketplaces' plugins)
+    are enabled-but-absent from the registry, so they are enumerated from the cache
+    tree itself, newest version dir only. Enablement lives in
+    ~/.zcode/cli/config.json plugins.enabledPlugins (absent key = enabled, mirroring
+    the Claude rule); suppressedBuiltins is the builtin opt-out.
+
+    Returns None when nothing is positively known (no cache tree / nothing readable)
+    — the caller then falls back to the whole cache, the same blind-spot-beats-stale
+    trade _installed_plugin_roots makes for Claude.
+    """
+    if not ZCODE_PLUGIN_CACHE.is_dir():
+        return None
+    config = _read_json(ZCODE_CONFIG_JSON) or {}
+    plugins_cfg = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    enabled_map = (plugins_cfg.get("enabledPlugins")
+                   if isinstance(plugins_cfg.get("enabledPlugins"), dict) else {})
+    suppressed = {str(s) for s in (plugins_cfg.get("suppressedBuiltins") or []) if s}
+
+    roots: set[str] = set()
+    registry_ids: set[str] = set()
+    installed = _read_json(ZCODE_INSTALLED_PLUGINS_JSON)
+    if isinstance(installed, dict) and isinstance(installed.get("plugins"), list):
+        for entry in installed["plugins"]:
+            if not isinstance(entry, dict):
+                continue
+            pid = str(entry.get("id") or "")
+            if not pid:
+                continue
+            registry_ids.add(pid)
+            if enabled_map.get(pid, True) is False:
+                continue  # explicitly switched off in enabledPlugins
+            p = entry.get("installPath")
+            if p:
+                roots.add(str(p).rstrip("/"))
+    # Builtins: cache plugin dirs with no registry entry — newest version dir wins.
+    # The ZCode cache is append-only exactly like Claude's; indexing every retained
+    # version would be the ADR-0028 stale-copy pollution class.
+    try:
+        market_dirs = sorted(ZCODE_PLUGIN_CACHE.iterdir())
+    except OSError:
+        market_dirs = []
+    for mkt in market_dirs:
+        try:
+            plugin_dirs = sorted(mkt.iterdir())
+        except OSError:
+            continue
+        for plug in plugin_dirs:
+            pid = f"{plug.name}@{mkt.name}"
+            if pid in registry_ids:
+                continue  # the registry's installPath is authoritative for this one
+            if pid in suppressed or enabled_map.get(pid, True) is False:
+                continue
+            try:
+                versions = [v for v in plug.iterdir() if v.is_dir()]
+            except OSError:
+                continue
+            if versions:
+                roots.add(str(max(versions, key=lambda v: _ver_key(v.name))).rstrip("/"))
+    return roots or None
+
+
+def _zcode_plugin_paths() -> list[Path]:
+    """SKILL.md paths under ZCode's plugin cache roots (ADR-0042), both depths.
+
+    Registry-enumerated rather than a wholesale cache glob. Unreadable-everything
+    degrades to the whole-cache glob with a warning — a few stale entries beat a
+    blind spot over an entire harness's plugin universe (the _installed_plugin_roots
+    trade). Returns [] when SKILL_ZCODE_ROOTS=0 or no cache exists."""
+    if not ZCODE_ROOTS or not ZCODE_PLUGIN_CACHE.is_dir():
+        return []
+    roots = _zcode_plugin_roots()
+    if roots is None:
+        log.warning("ZCode plugin registries unreadable — indexing the whole ZCode cache")
+        hits: list[str] = []
+        for pat in (str(ZCODE_PLUGIN_CACHE / "**" / "skills" / "*" / "SKILL.md"),
+                    str(ZCODE_PLUGIN_CACHE / "**" / "skills" / "*" / "*" / "SKILL.md")):
+            hits += glob.glob(pat, recursive=True)
+        return [Path(p) for p in dict.fromkeys(hits)]
+    out: list[str] = []
+    for r in sorted(roots):
+        for pat in (str(Path(r) / "skills" / "*" / "SKILL.md"),
+                    str(Path(r) / "skills" / "*" / "*" / "SKILL.md")):
+            out += glob.glob(pat)
+    return [Path(p) for p in dict.fromkeys(out)]
+
+
 def _plugin_paths() -> list[Path]:
-    """Cache SKILL.md paths from the harness plugin caches (ADR-0033/0038).
+    """Cache SKILL.md paths from the harness plugin caches (ADR-0033/0038/0042).
 
     Claude hits are narrowed to installed+enabled via installed_plugins.json.
     Codex and OMP hits are unfiltered: Codex tracks enablement in config.toml
@@ -539,7 +658,9 @@ def _plugin_paths() -> list[Path]:
     skill universe, the same trade the unreadable-manifest fallback already
     makes for Claude. OMP's cache/plugins/ holds only INSTALLED plugins by
     construction (node_modules/ is a symlink farm back into it), so the stale
-    risk there is limited to retained old versions.
+    risk there is limited to retained old versions. ZCode hits are
+    registry-enumerated (installed_plugins.json installPaths + newest builtin
+    version dirs, enablement-filtered) — pre-filtered by construction.
 
     Every cache is globbed at two depths (see _nested_glob) so category-grouped
     plugins are not silently invisible across harnesses.
@@ -547,25 +668,27 @@ def _plugin_paths() -> list[Path]:
     hits = _glob_both_depths(PLUGIN_GLOB)
     codex_hits = _glob_both_depths(CODEX_PLUGIN_GLOB) if CODEX_ROOTS else []
     omp_hits = _glob_both_depths(OMP_PLUGIN_GLOB) if OMP_ROOTS else []
+    zcode_hits = _zcode_plugin_paths()
     if not SKILL_PLUGIN_FILTER:
-        return [Path(p) for p in hits + codex_hits + omp_hits]
+        return [Path(p) for p in hits + codex_hits + omp_hits + zcode_hits]
 
     roots = _installed_plugin_roots()
     if roots is None:
         log.warning("plugin manifests unreadable — indexing the whole cache "
                     "(stale versions and disabled plugins included)")
-        return [Path(p) for p in hits + codex_hits + omp_hits]
+        return [Path(p) for p in hits + codex_hits + omp_hits + zcode_hits]
 
     kept = [p for p in hits if any(p.startswith(r + os.sep) for r in roots)]
     kept += codex_hits
     kept += omp_hits
+    kept += zcode_hits
     if not kept:
         log.warning("installed/enabled filter matched no cache skills — "
                     "falling back to the unfiltered cache")
-        return [Path(p) for p in hits + codex_hits + omp_hits]
-    if len(kept) < len(hits) + len(codex_hits) + len(omp_hits):
-        log.info("plugin cache: kept %d of %d SKILL.md (Claude installed+enabled; all Codex/OMP)",
-                 len(kept), len(hits) + len(codex_hits) + len(omp_hits))
+        return [Path(p) for p in hits + codex_hits + omp_hits + zcode_hits]
+    if len(kept) < len(hits) + len(codex_hits) + len(omp_hits) + len(zcode_hits):
+        log.info("plugin cache: kept %d of %d SKILL.md (Claude installed+enabled; all Codex/OMP; ZCode registry-enumerated)",
+                 len(kept), len(hits) + len(codex_hits) + len(omp_hits) + len(zcode_hits))
     return [Path(p) for p in kept]
 
 
@@ -601,6 +724,8 @@ def _scope_for(path: Path) -> str:
         return "omp-personal"
     if p.startswith(str(OMP_MANAGED_ROOT) + os.sep):
         return "omp-managed"
+    if p.startswith(str(ZCODE_PERSONAL_ROOT) + os.sep):
+        return "zcode-personal"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:
             return "codex-plugin"
@@ -608,6 +733,12 @@ def _scope_for(path: Path) -> str:
         # ".omp" path segment distinguishes it from Claude's own cache.
         if f"{os.sep}.omp{os.sep}" in p:
             return "omp-plugin"
+        # ZCode's cache lives under ~/.zcode/cli/plugins/cache/** — checked BEFORE
+        # the generic fallthrough so a ZCode plugin skill never lands in Claude's
+        # `plugin` scope (ADR-0042; live defect this closes: the shared /plugins/cache/
+        # substring alone misattributed it).
+        if f"{os.sep}.zcode{os.sep}" in p:
+            return "zcode-plugin"
         return "plugin"
     if p.startswith(str(CODEX_PROJECT_ROOT) + os.sep):
         return f"codex-project:{CODEX_PROJECT_ROOT}"
@@ -615,6 +746,10 @@ def _scope_for(path: Path) -> str:
         return f"commandcode-project:{COMMANDCODE_PROJECT_ROOT}"
     if p.startswith(str(OMP_PROJECT_ROOT) + os.sep):
         return f"omp-project:{OMP_PROJECT_ROOT}"
+    if p.startswith(str(ZCODE_PROJECT_ROOT) + os.sep):
+        return f"zcode-project:{ZCODE_PROJECT_ROOT}"
+    if p.startswith(str(ZCODE_AGENTS_PROJECT_ROOT) + os.sep):
+        return f"zcode-project:{ZCODE_AGENTS_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -632,6 +767,10 @@ def visible_scopes() -> set[str]:
         scopes |= {"commandcode-personal", f"commandcode-project:{COMMANDCODE_PROJECT_ROOT}"}
     if OMP_ROOTS:
         scopes |= {"omp-personal", "omp-managed", "omp-plugin", f"omp-project:{OMP_PROJECT_ROOT}"}
+    if ZCODE_ROOTS:
+        scopes |= {"zcode-personal", "zcode-plugin",
+                   f"zcode-project:{ZCODE_PROJECT_ROOT}",
+                   f"zcode-project:{ZCODE_AGENTS_PROJECT_ROOT}"}
     return scopes | {f"catalog:{a}" for a in catalog_roots()}
 
 

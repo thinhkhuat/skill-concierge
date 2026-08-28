@@ -64,6 +64,13 @@ OMP_PLUGIN_CACHE = OMP_DIR / "plugins" / "cache" / "plugins"
 # WARN-only — a Codex-free machine is one 'codex: not installed' row, not a failure.
 CODEX_DIR = Path.home() / ".codex"
 CODEX_PLUGIN_CACHE = CODEX_DIR / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+# ZCode harness surface (ADR-0042) — skill-concierge installs through ZCode's plugin
+# marketplace, which natively reads .claude-plugin/ manifests, fires the plugin hooks,
+# and auto-connects the plugin .mcp.json (no adapter vehicle — the first harness with
+# full Claude-format plugin parity). Cache at
+# ~/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/<ver>/. WARN-only.
+ZCODE_DIR = Path.home() / ".zcode"
+ZCODE_PLUGIN_CACHE = ZCODE_DIR / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
 # Command Code harness surface (ADR-0038) — skill-concierge integrates via a mod,
 # SessionStart hooks in settings.json, and an mcp.json entry. No version record file
 # (the mod and settings reference the dev path directly). WARN-only.
@@ -1199,6 +1206,11 @@ def _descriptor_version(path):
         return None
 
 
+def _ver_tuple(s: str) -> tuple:
+    """Dotted-integer version sort key ("0.33.10" > "0.33.9"); non-numeric parts fold to 0."""
+    return tuple(int(x) if x.isdigit() else 0 for x in s.split("."))
+
+
 def _omp_installed_version():
     """(version, enabled) of skill-concierge@skill-concierge in OMP's install record,
     or (None, None) when OMP has no record for it. The record keys plugins by
@@ -1402,11 +1414,60 @@ def check_commandcode():
             "fix": None}
 
 
+def check_zcode():
+    """ZCode harness install state — cache presence, version parity, exec bits (ADR-0042).
+
+    ZCode installs skill-concierge through its plugin marketplace (it natively reads
+    `.claude-plugin/` manifests, fires the plugin hooks/hooks.json, and auto-connects
+    the plugin `.mcp.json` — the first harness in the set needing NO adapter vehicle).
+    The cached copy lives under ~/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/<ver>/.
+    Two signals beyond codex's, both born from the live 2026-08-28 validation:
+      1. version parity — cached vs SSOT; a stale cache WARNs (it also can no longer
+         downgrade the shared venv — the launcher's one-directional guard — but its
+         hooks/enforcer/doctrine still run the old behavior, so staleness stays loud);
+      2. exec bits — ZCode's cache copy has been observed shipping bin/ without +x
+         (the exact cause of a dead MCP). The .mcp.json interpreter form makes the bit
+         cosmetic, but the row keeps the regression visible.
+    WARN-only — no ZCode install is one 'zcode: not installed' row, never a failure.
+    """
+    if not ZCODE_DIR.exists():
+        return {"id": "zcode", "label": "ZCode integration", "status": WARN,
+                "detail": "zcode: not installed (no ~/.zcode) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+    cached_ver = None
+    try:
+        if ZCODE_PLUGIN_CACHE.is_dir():
+            versions = sorted((d for d in ZCODE_PLUGIN_CACHE.iterdir() if d.is_dir()),
+                              key=lambda d: _ver_tuple(d.name), reverse=True)
+            if versions:
+                cached_ver = versions[0].name
+    except (OSError, ValueError):
+        pass
+    if cached_ver is None:
+        findings.append("no ZCode plugin cache found (never installed via the skill-concierge marketplace)")
+    else:
+        if ssot and cached_ver != ssot:
+            findings.append(f"ZCode cache v{cached_ver} != SSOT v{ssot} — update via "
+                            "Settings → Plugin Management (skill-concierge marketplace)")
+        launcher = ZCODE_PLUGIN_CACHE / cached_ver / "bin" / "skill-search-mcp"
+        if launcher.is_file() and not os.access(launcher, os.X_OK):
+            findings.append(f"bin/skill-search-mcp in the ZCode cache v{cached_ver} lost its exec bit "
+                            "(cosmetic under the interpreter-form .mcp.json; repair: chmod +x)")
+    if findings:
+        return {"id": "zcode", "label": "ZCode integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "zcode", "label": "ZCode integration", "status": OK,
+            "detail": f"ZCode cache v{cached_ver} matches SSOT v{ssot}; launcher executable",
+            "fix": None}
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_catalogs, check_omp, check_codex, check_commandcode,
+          check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
           check_ledger, check_dup_mcp, check_mcp_enabled]
 
 

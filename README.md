@@ -1,11 +1,11 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.33.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.34.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
 
-A **skill-governance layer** over Claude Code, Codex, Command Code, and Oh My Pi (OMP) default skill mechanisms. Where the
+A **skill-governance layer** over Claude Code, Codex, Command Code, Oh My Pi (OMP), and ZCode default skill mechanisms. Where the
 default dumps every skill description into context every turn and hopes the model picks
 one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + measure**.
 
@@ -30,7 +30,7 @@ one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + m
 
 ## Why this exists
 
-The default skill discovery in Claude Code, Codex, Command Code, and OMP injects **every** installed skill's description into
+The default skill discovery in Claude Code, Codex, Command Code, OMP, and ZCode injects **every** installed skill's description into
 the context window on **every** turn, then trusts the model to notice the right one. As a
 catalogue grows past a few dozen skills, that approach burns context and quietly degrades:
 the model skims, misses the fitting skill, or "wings it" instead of invoking one at all.
@@ -68,7 +68,7 @@ skill-concierge addresses three distinct failure modes the default conflates:
 
 | Requirement | Version / notes |
 |-------------|-----------------|
-| [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://codex.openai.com), [Command Code](https://github.com/sst/command-code), or [Oh My Pi](https://ohmy.pi) | host for the plugin, hooks, and MCP server |
+| [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://codex.openai.com), [Command Code](https://github.com/sst/command-code), [Oh My Pi](https://ohmy.pi), or [ZCode](https://z.ai) | host for the plugin, hooks, and MCP server |
 | Python | 3.10–3.12 (set `SKILL_PYTHON` to pin a specific interpreter) |
 | Docker / [OrbStack](https://orbstack.dev/) | runs the Qdrant vector store (server tier) |
 
@@ -277,6 +277,7 @@ skill-concierge/
 ├── package.json                               # root manifest: {"omp":{"extensions":["adapters/omp/skill-concierge.ext.ts"]}} — loads the OMP extension module
 ├── adapters/commandcode/                      # Command Code adapter: mod adapter + install.sh + mcp.json (ADR-0038)
 ├── adapters/omp/                              # Oh My Pi adapter: skill-concierge.ext.ts + install.sh + mcp.json (ADR-0039)
+├── adapters/zcode/                            # ZCode surface: verifier/repair install.sh + manual-fallback mcp.json — no adapter vehicle needed (ADR-0042)
 ├── .mcp.json                                  # registers the MCP via bin/skill-search-mcp launcher
 ├── bin/skill-search-mcp                       # launcher → stable venv (survives cache wipes; ADR-0004)
 ├── setup.sh                                    # bootstrap: venv + Qdrant + reindex + apply-overrides
@@ -306,10 +307,11 @@ not embedded.
 
 ### Harness matrix
 
-skill-concierge is a first-class citizen in all four harnesses. Enforcement rides whatever
+skill-concierge is a first-class citizen in all five harnesses. Enforcement rides whatever
 each harness's extension mechanism supports (settings hooks for Claude Code, a mod adapter for
-Command Code, a TS extension module for OMP — Codex auto-discovers hooks, no `hooks` field);
-discovery always indexes **all** harnesses' roots into one shared Qdrant collection under
+Command Code, a TS extension module for OMP — Codex auto-discovers hooks, no `hooks` field; ZCode
+natively runs the Claude-format plugin hooks — the first harness needing no adapter vehicle at
+all); discovery always indexes **all** harnesses' roots into one shared Qdrant collection under
 distinct per-harness scopes (fail-open — a harness you don't run is simply absent from disk);
 and the MCP server is wired per-harness from the shared descriptor, never duplicated.
 
@@ -319,9 +321,11 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 | Codex | `~/.codex/skills`, `$CWD/.codex/skills`, `~/.codex/plugins/cache/**` (`codex-*`) | auto-discovered settings hooks (no `hooks` field; ADR-0033) | `.codex-plugin/mcp.json` (relative command; ADR-0035) |
 | Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformInput` (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038) | `adapters/commandcode/mcp.json` (absolute paths; ADR-0038) |
 | Oh My Pi (OMP) | `~/.omp/agent/skills`, `$CWD/.omp/skills`, `~/.omp/agent/managed-skills`, `~/.omp/plugins/cache/plugins/**` (`omp-*`) | extension module `before_agent_start` (`adapters/omp/skill-concierge.ext.ts` via `package.json` `omp.extensions`; ADR-0039) | plugin `.mcp.json` imported natively (`${CLAUDE_PLUGIN_ROOT}` expanded by OMP); `adapters/omp/mcp.json` manual fallback only |
+| ZCode | `~/.zcode/skills`, `$CWD/.zcode/skills`, `$CWD/.agents/skills`, `~/.zcode/cli/plugins/cache/**` (registry-enumerated) (`zcode-*`) | **none needed** — ZCode natively runs the plugin `hooks/hooks.json` (ADR-0042) | plugin `.mcp.json` auto-connected (interpreter-form command, exec-bit-proof); `adapters/zcode/mcp.json` manual fallback only |
 
-`SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` (all default ON) are one-var
-reverts that drop that harness's roots + scopes byte-identically (see AGENTS.md → Runtime flags).
+`SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` / `SKILL_ZCODE_ROOTS`
+(all default ON) are one-var reverts that drop that harness's roots + scopes byte-identically
+(see AGENTS.md → Runtime flags).
 
 ### How a request flows
 
@@ -343,6 +347,7 @@ reverts that drop that harness's roots + scopes byte-identically (see AGENTS.md 
 
 
 
+`0.34.0` — **published, ADR-0042 ZCode quintuple-harness parity: ZCode joins as the fifth first-class citizen with FULL native Claude-plugin parity — it reads `.claude-plugin/` manifests, fires the plugin `hooks/hooks.json`, and auto-connects the plugin `.mcp.json`, so NO adapter vehicle is needed (the contrast with Command Code's mod and OMP's extension module). Four live-validated defects closed: (1) the MCP organ was dead in every ZCode session — the marketplace cache copy shipped `bin/skill-search-mcp` without its exec bit (`Permission denied` before the stdio handshake); the shared `.mcp.json` now invokes the launcher through `/bin/bash <script>` so the bit is irrelevant in every harness, and `SKILL_SERVER_RECORDS` drops its `${HOME}` literal for an absolute path (ZCode expands only a whitelist of templates). (2) ZCode sessions were mis-detected as `claude` — a live offer named an `omp-managed` skill ZCode cannot invoke; `_running_harness()` now resolves `zcode` (`SKILL_CONCIERGE_HARNESS` → `ZCODE_PLUGIN_ROOT` → `.zcode/` marker), `_invocable_plugin_ids()` reads ZCode's OWN registries, `_foreign_scopes()` treats `personal` as invocable iff `~/.agents/skills` resolves to `~/.claude/skills` (the shared-shelf symlink — the load-bearing structural fact: ZCode's big shelf IS the already-indexed `personal` scope), and `_invocable_twin()` gains a filesystem twin. (3) `SKILL_ZCODE_ROOTS` discovery scopes (`zcode-personal`/`zcode-project:`/`zcode-plugin`, registry-enumerated — never a wholesale append-only-cache glob; `~/.agents/skills` deliberately NOT a root), forwarded by `auto_reindex`; `=0` + reindex reverts byte-identically. (4) The ADR-0018 launcher self-heal becomes ONE-DIRECTIONAL — a stale cache warns and serves the newer engine, never downgrades the shared venv (the latent ping-pong a stale 0.20.8 ZCode cache would have caused on every spawn). Ledger rows stamp `harness: "zcode"`; doctor gains `check_zcode` (version parity + exec bits, WARN-only); `adapters/zcode/` carries only a verifier/repair install.sh + manual-fallback mcp.json; doctrine needs NO zcode rewrite (ZCode flattens plugin MCP ids exactly like Claude Code — selftest-pinned). Accepted caveat: ZCode has no `skillOverrides` seam, so the keep-on budget organ is N/A there — enforcement is the only lever. Ledger epoch boundary at ship.**
 `0.33.1` — **published, flywheel retry ladder widened to the transient 5xx class: `chat()` now retries HTTP 502/504 alongside 503 (3 attempts, 5s/10s backoff) — the overnight run's 93-error 502 outage window is the evidence; sustained outages still exhaust the ladder in ~15s/skill and defer to the next run, and 500/4xx keep failing fast.**
 `0.33.0` — **published, skill-chain-intelligence Phase 4 — the loop closes: offer events now log the fired CHAIN-HINT's `[seed]+successors` (`hint` key, from the same `_chain_hint_data` the injected line renders), and `analyze.py --continuation` computes the follow rates — route-follow (projected successor invoked within 30 min), hint-follow, multi-intent uptake vs a single-intent control — epoch-scoped, sub-lane excluded, with an insufficient-data floor that never pools across the 0.32.x boundary.**
 `0.32.2` — **published, thin-intent precision rule: a second announced intent needs ≥2 candidates (`_qualifying_intents`) — singleton stray rows (ego-browser on a test retrieval, design-system on a planning retrieval) demote to supporting instead of faking an intent; renderer + telemetry share the qualification. Smoke: single-family renders classic, docs+deploy reads exactly 2.**
@@ -455,7 +460,7 @@ Full landmine list: [`docs/caveats.md`](docs/caveats.md).
 
 ## Uninstall
 
-Removing skill-concierge requires cleaning up across four harnesses plus the shared infrastructure. Each section below names what the installer created and the exact reversal steps.
+Removing skill-concierge requires cleaning up across five harnesses plus the shared infrastructure. Each section below names what the installer created and the exact reversal steps.
 
 ### Shared components
 
@@ -528,6 +533,15 @@ Installed by [`adapters/omp/install.sh`](adapters/omp/install.sh) — two possib
 2. Dev-mode: edit `~/.omp/agent/config.yml` to delete the skill-concierge marker line and its extension path from the `extensions:` list.
 3. Optionally remove skill files from OMP roots: `rm -rf ~/.omp/agent/skills/skill-concierge/ ~/.omp/agent/managed-skills/skill-concierge/` + check `~/.omp/plugins/cache/plugins/skill-concierge/`.
 4. Optionally drop the scope env pins: `SKILL_OMP_ROOTS`.
+
+### ZCode
+
+Installed through ZCode's own plugin marketplace (it natively reads the `.claude-plugin/` manifest — no adapter files are written outside the plugin cache; ADR-0042). The cached copy lives under `~/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/<version>/`; the optional manual MCP fallback (only if `adapters/zcode/install.sh --mcp-fallback` was run) lives in `~/.zcode/cli/config.json` → `mcp.servers.skill-search`.
+
+**To uninstall:**
+1. Remove the plugin: ZCode **Settings → Plugin Management** → uninstall skill-concierge (deletes the versioned cache dir), or `rm -rf ~/.zcode/cli/plugins/cache/skill-concierge/` + delete the `skill-concierge@skill-concierge` entry from `~/.zcode/cli/plugins/installed_plugins.json` and the `"skill-concierge@skill-concierge": true` key from `~/.zcode/cli/config.json` → `plugins.enabledPlugins`.
+2. If the manual MCP fallback was merged: delete the `skill-search` entry from `~/.zcode/cli/config.json` → `mcp.servers`.
+3. Optionally drop the scope env pin: `SKILL_ZCODE_ROOTS`.
 
 After removing a harness, run `skill-concierge:doctor --fix` or `python3 scripts/doctor.py --fix` to reindex the shared catalogue (the harness's scope points are pruned at the next reindex).
 

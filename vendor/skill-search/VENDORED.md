@@ -260,6 +260,25 @@ upstream is re-vendored:
   **Requires re-copy into the stable venv
   (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
 
+- **ZCode quintuple-harness discovery (ADR-0042, v0.34.0):** `skills_discovery.py` adds
+  `ZCODE_*` roots — `~/.zcode/skills` (`zcode-personal`), `{cwd}/.zcode/skills` +
+  `{cwd}/.agents/skills` (`zcode-project:{root}`), and ZCode plugin-cache paths
+  (`zcode-plugin`) — folded into `SKILL_DIRS`, `_plugin_paths()`, `_scope_for()` (the
+  `.zcode` check sits INSIDE the shared `/plugins/cache/` block BEFORE the generic
+  `plugin` fallthrough, so a ZCode plugin skill can never land in Claude's scope), and
+  `visible_scopes()`. ZCode plugin paths are REGISTRY-ENUMERATED (`_zcode_plugin_roots()`
+  reads the LIST-shaped `~/.zcode/cli/plugins/installed_plugins.json` installPaths plus
+  newest builtin version dirs, enablement-filtered via `~/.zcode/cli/config.json`
+  `plugins.enabledPlugins`/`suppressedBuiltins`), never a wholesale cache glob — the
+  append-only-cache pollution class. `~/.agents/skills` is deliberately NOT a root (it
+  symlinks to `~/.claude/skills` on the reference machine and would dedup into
+  `personal`; per-session invocability is the enforcer's twin check). One-var revert:
+  `SKILL_ZCODE_ROOTS=0` (default on) drops every ZCode path + scope, byte-identical;
+  a reindex prunes the zcode points. Plugin-side companions: `enforcer.py` zcode identity
+  + twin tests + chain-hint scope mirror under the same flag; `auto_reindex._mcp_env()`
+  forwards the flag defensively. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

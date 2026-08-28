@@ -65,6 +65,9 @@
     "adapters/omp/mcp.json",
     "adapters/omp/skill-concierge.ext.ts",
     "adapters/omp/install.sh",
+    "adapters/zcode/mcp.json",
+    "adapters/zcode/install.sh",
+    "docs/adr/0042-zcode-quintuple-harness-parity.md",
     "package.json"
   ],
   "command_checks": [

@@ -13,6 +13,12 @@
 # stays fast; the resync runs ONCE per update, is best-effort + FAIL-OPEN (a failed/slow resync
 # still execs the existing engine — never block the MCP connect, ADR-0004), and writes NOTHING
 # to stdout (this is a stdio MCP; stray stdout corrupts the protocol handshake).
+#
+# ONE-DIRECTIONAL since ADR-0042: resync only when the deployed cache is NEWER than the venv
+# stamp (or the stamp is absent). A stale cache must NEVER downgrade a newer shared venv — on
+# multi-harness machines one forgotten marketplace update in one harness used to flip-flop the
+# engine version on every spawn (observed live: a ZCode cache pinned at 0.20.8 against a
+# 0.33.x venv would have rewritten the shared engine down on every ZCode MCP start).
 set -euo pipefail
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
 BIN="$VENV/bin/skill-search"
@@ -24,7 +30,19 @@ if [ ! -x "$BIN" ]; then
   exit 127
 fi
 
-# ── engine self-heal: resync the venv's copied engine when the deployed plugin version moved ──
+# ver_ge A B — true iff dotted-integer version A >= B ("0.33.10" >= "0.33.9").
+# Non-numeric components fold to 0; unequal lengths compare as if zero-padded.
+_ver_ge() {
+  [ "$1" = "$2" ] && return 0
+  awk -v a="$1" -v b="$2" 'BEGIN{
+    na=split(a,A,"."); nb=split(b,B,".")
+    n=(na>nb)?na:nb
+    for(i=1;i<=n;i++){x=(i<=na)?A[i]+0:0; y=(i<=nb)?B[i]+0:0
+      if(x>y) exit 0; if(x<y) exit 1}
+    exit 0}'
+}
+
+# ── engine self-heal: resync the venv's copied engine when the deployed plugin version moved UP ──
 STAMP="$VENV/.engine-plugin-version"
 VENDOR="$ROOT/vendor/skill-search"
 PLUGIN_JSON="$ROOT/.claude-plugin/plugin.json"
@@ -32,14 +50,18 @@ if [ -f "$PLUGIN_JSON" ] && [ -d "$VENDOR" ]; then
   deployed_ver="$("$VENV/bin/python" -c "import json;print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || true)"
   installed_ver="$(cat "$STAMP" 2>/dev/null || true)"
   if [ -n "$deployed_ver" ] && [ "$deployed_ver" != "$installed_ver" ]; then
-    echo "skill-concierge: plugin at v$deployed_ver, venv engine stamped '${installed_ver:-none}' — resyncing engine…" >&2
-    # --force-reinstall: the vendored package version is a static 0.1.0, so pip would otherwise
-    # skip re-copying changed code. --no-deps: deps already present → fast + offline-safe.
-    if "$VENV/bin/pip" install -q --no-input --no-deps --force-reinstall "$VENDOR" >/dev/null 2>&1; then
-      printf '%s' "$deployed_ver" > "$STAMP"
-      echo "skill-concierge: engine resynced to v$deployed_ver." >&2
+    if [ -z "$installed_ver" ] || _ver_ge "$deployed_ver" "$installed_ver"; then
+      echo "skill-concierge: plugin at v$deployed_ver, venv engine stamped '${installed_ver:-none}' — resyncing engine…" >&2
+      # --force-reinstall: the vendored package version is a static 0.1.0, so pip would otherwise
+      # skip re-copying changed code. --no-deps: deps already present → fast + offline-safe.
+      if "$VENV/bin/pip" install -q --no-input --no-deps --force-reinstall "$VENDOR" >/dev/null 2>&1; then
+        printf '%s' "$deployed_ver" > "$STAMP"
+        echo "skill-concierge: engine resynced to v$deployed_ver." >&2
+      else
+        echo "skill-concierge: engine resync FAILED — serving the existing engine; run ./setup.sh to repair." >&2
+      fi
     else
-      echo "skill-concierge: engine resync FAILED — serving the existing engine; run ./setup.sh to repair." >&2
+      echo "skill-concierge: plugin cache v$deployed_ver is OLDER than the venv engine v$installed_ver — serving the newer engine. Update this harness's plugin copy when convenient (a stale cache must not downgrade the shared venv; ADR-0042)." >&2
     fi
   fi
 fi
