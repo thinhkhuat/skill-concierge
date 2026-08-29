@@ -1632,17 +1632,27 @@ def _intent_conversational(vector: list) -> bool:
 # so false routes can be replayed from the ledger before the phrase list is widened
 # (epoch-watch v0.43.0 watch item).
 CONSULT_ROUTE = os.environ.get("SKILL_CONSULT_ROUTE", "1") != "0"
-# High-precision EN phrase class v1. Anchored on curation SHAPES (modals+I, strategy/
-# combo/chain nouns, consult/curate verbs with a skill object) — a bare 'skill' noun or
-# a reflexive past ("which skill did you use") must stay silent.
+# High-precision EN phrase class v2 (widened 2026-08-30 from REPLAYED ledger evidence,
+# per the epoch-watch W1 rule — never from vibes): the live first-dish miss was
+# "which set of skills that we should be using" — intervening words, we-form, progressive
+# — so the anchor pairs are now windowed (which/what … skills … modal … i/we) and accept
+# the plural pronoun. The blind tester's parked over-fires (past-conditional
+# "should I have used", org-talk "skills gap", reflexive past) are held out by
+# _CONSULT_NEG_RE. A bare 'skill' noun still never fires.
 _CONSULT_RE = re.compile(
-    r"\bwhich skills? (?:should|do|can)\s+i\b"
-    r"|\bwhat skills? (?:should|do|can)\s+i\b"
-    r"|\bwhich skills? to\b"
+    r"\b(?:which|what)\b[^.\n]{0,30}\bskills?\b[^.\n]{0,25}\b(?:should|do|can|to|would|might|shall)\b[^.\n]{0,12}\b(?:i|we)\b"
+    r"|\b(?:which|what) skills? (?:to|for)\b"
+    r"|\bwhich (?:combo|chain|set|mix|sequence) of skills?\b"
     r"|\bskill[-\s]strateg(?:y|ies)\b"
-    r"|\bbest (?:combo|chain|combination|set|sequence) of skills?\b"
+    r"|\bbest (?:combo|chain|combination|set|sequence|mix) of skills?\b"
     r"|\b(?:consult|curate)\b[^.\n]{0,40}\bskills?\b"
     r"|\bconsult which\b",
+    re.IGNORECASE)
+# Tense/reflexive/genre guards — a positive match with any of these stays silent.
+_CONSULT_NEG_RE = re.compile(
+    r"\bshould (?:i|we) have\b"
+    r"|\bdid (?:you|i|we) (?:just )?(?:use|pick|choose|run|invoke)\b"
+    r"|\bskills? gap\b",
     re.IGNORECASE)
 CONSULT_MANDATE = (
     "CONSULT-ROUTE · this turn asks for a deliberated skill curation (ADR-0049).\n"
@@ -1683,7 +1693,8 @@ def main() -> int:
         # reflex offer's I/O here would be the exact waste the annex-position note
         # below warns about). Runs after the refusal guard: an explicit user refusal
         # of skill behavior outranks routing into a skill-planning turn.
-        if CONSULT_ROUTE and not data.get("agent_id") and _CONSULT_RE.search(prompt):
+        if (CONSULT_ROUTE and not data.get("agent_id")
+                and _CONSULT_RE.search(prompt) and not _CONSULT_NEG_RE.search(prompt)):
             _inject(CONSULT_MANDATE)
             _append_offer(sid, "consult_route", [], "consult_intent", prompt)
             return 0
@@ -2774,6 +2785,10 @@ def _selftest() -> int:
         "consult which skills fit this task",
         "please curate the skills for this pipeline work",
         "which skills to use for the deployment tonight",
+        # v2 widening — replayed live miss (ledger, session 4ea5ee04, 2026-08-30)
+        "which set of skills that we should be using to work on the new task",
+        # v2 widening — we-form under-fire caught by the blind tester
+        "what skills can we use for tomorrow's build?",
     ]
     cons_off = [
         "which skill did you just use?",            # reflexive past, not a curation ask
@@ -2782,12 +2797,15 @@ def _selftest() -> int:
         "what does this function do",               # conversational
         "use the formatter on these files",         # affirmation
         "review the skill-search docs section",     # 'skill' noun without curation intent
+        # v2 guards — the blind tester's parked over-fires, now held out by NEG
+        "which skill should I have used earlier?",  # past-conditional
+        "consult with my team about the skills gap",  # org-capability talk, not curation
     ]
     for t in cons_fire:
-        if not _CONSULT_RE.search(t):
+        if not (_CONSULT_RE.search(t) and not _CONSULT_NEG_RE.search(t)):
             bad.append("consult MISS (should fire): " + repr(t))
     for t in cons_off:
-        if _CONSULT_RE.search(t):
+        if _CONSULT_RE.search(t) and not _CONSULT_NEG_RE.search(t):
             bad.append("consult FALSE-FIRE (should stay silent): " + repr(t))
     if "USING: skill-concierge:consult" not in CONSULT_MANDATE:
         bad.append("consult mandate: must name the USING line")

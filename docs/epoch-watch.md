@@ -16,7 +16,10 @@ say "insufficient data" when the window is too small. Never pool across epochs
 ## v0.43.0 — consult-intent routing (ADR-0049 phase 2; deployed 2026-08-29 late)
 
 Live epoch. Routing fires only on main sessions (subagent payloads suppressed) and
-only on the EN phrase class v1 — segment by ledger `band: consult_route` rows.
+only on the EN phrase class (v2 since 0.43.1 — widened from the first live miss,
+"which set of skills that we should be using", replayed from the ledger per the W1
+rule; negative guards hold out past-conditional/reflexive/skills-gap shapes) —
+segment by ledger `band: consult_route` rows.
 
 | # | Watch | Trigger | Action |
 |---|-------|---------|--------|

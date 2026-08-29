@@ -4,6 +4,22 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.43.1] — 2026-08-30
+
+### Changed — consult-intent phrase class v2, widened from replayed ledger evidence
+
+The first live routed-task miss (session 4ea5ee04, 2026-08-30): *"which set of skills
+that we should be using…"* slipped all three v1 anchors — intervening words, we-form,
+progressive tense — so the reflex offer answered instead and the model recovered the
+consult lane on its own judgment. Per the epoch-watch W1 rule (widen only from
+replayed ledger evidence, never vibes), v2 makes the anchor pairs windowed
+(which/what … skills … modal … i/we), accepts the plural pronoun, and adds
+`_CONSULT_NEG_RE` guards holding out the blind tester's parked over-fires
+(past-conditional "should I have used", reflexive past "did you use", org-talk
+"skills gap"). Selftest pins grow to 10 fire / 8 silent; the exact live-miss
+phrase now routes, both parked over-fires stay silent, and "what skills can we use"
+(the tester's v1 under-fire) now fires. `SKILL_CONSULT_ROUTE=0` unchanged.
+
 ## [0.43.0] — 2026-08-29
 
 ### Added — consult-intent routing: ADR-0049 phase 2
