@@ -141,11 +141,9 @@ SKILL_PLUGIN_FILTER = os.environ.get("SKILL_PLUGIN_FILTER", "1") != "0"
 #   {"<alias>": {"path": "/abs/dir", "include": ["glob"...], "exclude": ["glob"...]}}
 # (a bare string value is shorthand for {"path": ...}; keys starting with "_" are
 # comments). Every catalog skill indexes as `<alias>:<dirname>` under scope
-# `catalog:<alias>` and its points carry `tier: "external"` — since ADR-0045 tier
-# parity they compete in the per-turn offer at parity with installed skills (the tier
-# still drives the ENFORCER_EXTERNAL_OFFER kill-switch back to the ADR-0031 search-only
-# tier, plus telemetry). Absent/malformed file -> {} -> byte-identical behavior:
-# absence IS the off-switch (ADR-0030 idiom).
+# `catalog:<alias>` and its points carry `tier: "external"` so the per-turn
+# enforcer can exclude them (search-only tier). Absent/malformed file -> {} ->
+# byte-identical behavior: absence IS the off-switch (ADR-0030 idiom).
 CATALOG_ROOTS_PATH = Path(os.environ.get(
     "SKILL_CONCIERGE_CATALOG_ROOTS",
     Path.home() / ".claude" / "skill-concierge" / "catalog-roots.json"))

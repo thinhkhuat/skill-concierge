@@ -169,6 +169,20 @@ def _flywheel_locked() -> bool:
         return False
 
 
+def _catalog_aliases() -> list:
+    """Configured external catalog aliases (ADR-0031), fail-open to []. The auto
+    pass covers them AFTER installed skills (v0.35.1): the cache keys on skill
+    content, so steady-state only NEW/changed catalog skills ever reach the LLM
+    and each pass stays capped at MAX_PER_RUN."""
+    try:
+        home = Path(os.environ.get("SKILL_CONCIERGE_HOME",
+                                   Path.home() / ".claude" / "skill-concierge"))
+        data = json.loads((home / "catalog-roots.json").read_text(encoding="utf-8"))
+        return sorted(k for k, v in data.items() if isinstance(v, dict))
+    except Exception:
+        return []
+
+
 def main() -> int:
     try:
         if os.environ.get("SKILL_AUTO_FLYWHEEL", "1") == "0":
@@ -207,14 +221,16 @@ def main() -> int:
         with LOGFILE.open("a", encoding="utf-8") as logf:
             logf.write(f"\n=== auto-flywheel {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
             logf.flush()
-            # ADR-0045: ONE default run covers every scope — installed first, then each
-            # configured external catalog, serial inside flywheel.py itself, each scope
-            # capped at MAX_PER_RUN. The generator's own lock makes overlap with a manual
-            # run impossible. (The old installed-pass + per-alias loop is gone: the
-            # default now IS installed-first-then-catalogs.)
-            run = [str(PY_BIN), str(FLYWHEEL_PY), "--generate",
-                   "--limit", str(MAX_PER_RUN), "--workers", str(WORKERS)]
-            shell_cmd = " ".join(shlex.quote(a) for a in run)
+            # Installed skills first, then each configured external catalog, serial in
+            # ONE detached shell — the generator's own lock makes overlap with a manual
+            # run impossible, and each pass is capped at MAX_PER_RUN.
+            runs = [[str(PY_BIN), str(FLYWHEEL_PY), "--generate",
+                     "--limit", str(MAX_PER_RUN), "--workers", str(WORKERS)]]
+            for alias in _catalog_aliases():
+                runs.append([str(PY_BIN), str(FLYWHEEL_PY), "--generate",
+                             "--catalog", alias, "--limit", str(MAX_PER_RUN),
+                             "--workers", str(WORKERS)])
+            shell_cmd = " && ".join(" ".join(shlex.quote(a) for a in r) for r in runs)
             subprocess.Popen(
                 ["/bin/bash", "-c", shell_cmd],
                 env=env, stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,

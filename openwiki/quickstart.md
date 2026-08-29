@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.39.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
+- **Version:** `0.40.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -123,22 +123,21 @@ installed ([ADR-0031](../docs/adr/0031-external-catalog-roots.md)). They rank ma
 [`scripts/catalogs.py`](../scripts/catalogs.py) / the `skill-concierge:catalogs` skill.
 
 Since `0.23.0` externals are **first-class in the per-turn offer** too, not just explicit
-search ([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)) — and since
-`0.38.0` ([ADR-0045](../docs/adr/0045-catalog-tier-parity.md)) they compete at **full tier
-parity**: ONE merged ranked pool with the installed shelf — no separate annex, no 2.2×
-floor, no displacement protection. Externals share the installed `ITEM_FLOOR` (0.18) and
-the same `TOP_K` slots and %-share pool, render inline marked `[external:<alias>]` with a
-`get_skill` footer, and can carry a turn outright when the installed shelf scores below
-floor (the old annex was silent on exactly those turns). Chain hints name them too, and
-`flywheel --generate` covers every scope by default — installed first, then each configured
-catalog (`--installed-only` restores the old installed-only default). An external used
+search ([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)): an **additive
+annex** below the installed offer — the installed ranking is untouched (zero displacement),
+and a separate query appends up to 4 externals clearing the annex floor, marked
+`[external:<alias>]` with the `get_skill` consumption instruction. The one-day `0.38.x`
+merged-pool parity experiment (ADR-0045) was reverted by
+[ADR-0047](../docs/adr/0047-revert-tier-parity-restore-annex.md) with the annex defaults
+tuned friendlier: `ENFORCER_EXTERNAL_FLOOR` 0.32 (was 0.40), `ENFORCER_ANNEX_MARGIN` 0.08
+(was 0.05). Chain hints and `flywheel --generate` are installed-only. An external used
 across enough distinct sessions still auto-graduates to a real installed skill.
-`ENFORCER_EXTERNAL_OFFER=0` (legacy `ENFORCER_EXTERNAL_ANNEX=0`) restores the ADR-0031
-search-only tier.
+`ENFORCER_EXTERNAL_ANNEX=0` (parity-era `ENFORCER_EXTERNAL_OFFER=0` honored as an alias)
+restores the ADR-0031 search-only tier.
 
-Since `0.26.0` the remaining annex (cross-harness) is **dynamically sized**
-([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)): a foreign row earns its slot by
-scoring within `ENFORCER_ANNEX_MARGIN` (0.05) of the merged-pool top, capped at 2 —
+Since `0.26.0` both annexes (external + cross-harness) are **dynamically sized**
+([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)): an annex row earns its slot by
+scoring within `ENFORCER_ANNEX_MARGIN` (0.08) of the installed top, capped at 4/2 —
 a well-served intent shrinks it toward 0, a thin-inventory intent widens it to the cap.
 `ENFORCER_ANNEX_DYNAMIC=0` restores the old fixed 2.
 

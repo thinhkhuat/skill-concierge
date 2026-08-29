@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted. **Superseded in part by [ADR-0045](0045-catalog-tier-parity.md) (2026-08-28):** the external annex this rule sized is GONE — externals compete in the merged primary pool. The competitive-margin rule survives for ONE consumer: the ADR-0034 foreign annex. |
+| **Status** | Accepted |
 | **Date** | 2026-08-24 |
 | **Supersedes** | none |
 | **Amends** | ADR-0032 and ADR-0034 (their fixed `*_SLOTS = 2` sizing; their zero-displacement invariant is untouched) |

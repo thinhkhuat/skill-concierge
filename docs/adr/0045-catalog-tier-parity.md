@@ -1,6 +1,9 @@
 # ADR-0045 — Catalog tier parity: one offer, one floor
 
-Status: Accepted + implemented (2026-08-28).
+Status: Superseded by [ADR-0047](0047-revert-tier-parity-restore-annex.md) (2026-08-29) —
+the parity mechanism was reverted in full after one day live (owner: "a regression rather
+than an enhancement"); the ADR-0032 annex is the mechanism again, with tuned floors.
+Was: Accepted + implemented (2026-08-28).
 Supersedes: [ADR-0032](0032-external-catalogs-first-class-annex.md) (the additive-annex
 shape and its zero-displacement invariant; the get_skill consumption lane and
 usage-promotion survive) and [ADR-0043](0043-catalog-flywheel-generation-and-bounded-parallel-workers.md)

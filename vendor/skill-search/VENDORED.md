@@ -304,6 +304,15 @@ upstream is re-vendored:
   (`pip install --force-reinstall --no-deps vendor/skill-search`) to deploy; long-lived MCP
   servers keep executing the old bytes until restarted (ADR-0018 class).**
 
+- **Catalog tier parity reverted (ADR-0047, v0.40.0):** the ADR-0045 engine hunks (v0.38.0)
+  are backed out — `_write_next_skills_sidecar` again SKIPS `catalog:*` scopes (chain hints
+  return to installed-only; a live sidecar carrying parity-era catalog keys is pruned once at
+  deploy, the enforcer never reads them), and the `skills_discovery.py` tier comment returns
+  to the ADR-0031 wording. The ADR-0031 entry above is authoritative again as written.
+  `search_skills`/`get_skill` are untouched (externals were always searchable/pullable).
+  **Requires re-copy into the stable venv + a reindex is NOT needed (no point payloads
+  changed); long-lived MCP servers keep the old sidecar-writing bytes until restarted.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

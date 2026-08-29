@@ -1,10 +1,6 @@
 # ADR-0043: Catalog-Scoped Flywheel Generation + Bounded Parallel Workers
 
-- **Status**: Accepted. **Amended by [ADR-0045](0045-catalog-tier-parity.md)
-  (2026-08-28):** the installed-only DEFAULT is reversed — a bare `--generate` now covers
-  EVERY scope (installed first, then each configured catalog, each capped by `--limit`);
-  `--installed-only` restores this ADR's original default, `--catalog <alias>` still
-  narrows, and manifest records carry an explicit `scope` field.
+- **Status**: Accepted
 - **Date**: 2026-08-28
 - **Relates to**: ADR-0031 Decision 10 (the deferral this lands), ADR-0026 (utterance
   layer), ADR-0027 (auto-flywheel + manifest)

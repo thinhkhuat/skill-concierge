@@ -251,12 +251,8 @@ def print_status():
         covered) is deliberately dropped — it read like failures on healthy runs."""
         cov = lr.get("coverage") or {}
         have, total = cov.get("have") or 0, cov.get("total") or 0
-        # ADR-0045: runs record their scope explicitly; total-matching is the legacy
-        # fallback for pre-scope records (default runs span installed + catalogs, so the
-        # "all" record's coverage names the installed base it closes with).
-        scope = lr.get("scope") or next(
-            (name for name, tot in scope_targets.items() if tot == total),
-            f"{have}/{total}" if total else "unknown scope")
+        scope = next((name for name, tot in scope_targets.items() if tot == total),
+                     f"{have}/{total}" if total else "unknown scope")
         t = lr.get("totals", {})
         gen, err = t.get("generated", 0), t.get("error", 0)
         if total and have >= total:
@@ -321,13 +317,7 @@ def _print_run_summary(run):
             print(f"    ... and {len(errs) - 8} more")
 
 
-def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1,
-             installed_only=False):
-    """ADR-0045 (supersedes ADR-0043 D10): a bare --generate covers EVERY scope — the
-    installed base first, then each configured external catalog — so no tier depends on
-    remembering an opt-in flag. --catalog <alias> narrows to one catalog; --installed-only
-    restores the old installed-only default. Per-scope coverage prints, one lock, ONE
-    closing reindex, one manifest record tagged with its scope."""
+def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1):
     if not SS_BIN.exists() or not PY_BIN.exists():
         msg = f"engine venv missing at {VENV}"
         print(f"FAIL: {msg} — run the skill-concierge:setup skill (./setup.sh) first", file=sys.stderr)
@@ -355,37 +345,18 @@ def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1
 
     try:
         run_cov = None
-        # ADR-0045: default = every scope (installed first, then each configured catalog).
         if catalog is not None:
-            scopes = [catalog]
-        elif installed_only:
-            scopes = [None]
-        else:
-            scopes = [None] + _configured_aliases()
-        all_scopes = len(scopes) > 1
-        cat_scopes = [sc for sc in scopes if sc is not None]
-        for sc in scopes:
-            if sc is None:
-                _, _, before = coverage()
-                print(f"Before (installed): {len(before)} indexed skills missing utterances")
-                continue
-            cat_indexed, before = catalog_coverage(sc)
+            cat_indexed, before = catalog_coverage(catalog)
             if not cat_indexed:
-                if catalog is not None:
-                    print(f"FAIL: catalog {sc!r} has no indexed skills — check "
-                          f"`catalogs.py list` and reindex first", file=sys.stderr)
-                    _print_run_summary(_write_manifest(last_error=f"catalog {sc}: no indexed skills"))
-                    return 5
-                # ADR-0045: in the all-scope default a broken catalog must not abort the
-                # run — the installed pass and the healthy catalogs still go. Explicit
-                # --catalog runs keep the loud exit 5.
-                print(f"WARN: catalog {sc!r} has no indexed skills — skipped this run "
-                      f"(check `catalogs.py list` and reindex)", file=sys.stderr)
-                scopes = [s for s in scopes if s != sc]
-                cat_scopes = [s for s in cat_scopes if s != sc]
-                continue
-            print(f"Catalog {sc!r}: {len(cat_indexed)} indexed skills, "
+                print(f"FAIL: catalog {catalog!r} has no indexed skills — check "
+                      f"`catalogs.py list` and reindex first", file=sys.stderr)
+                _print_run_summary(_write_manifest(last_error=f"catalog {catalog}: no indexed skills"))
+                return 5
+            print(f"Catalog {catalog!r}: {len(cat_indexed)} indexed skills, "
                   f"{len(before)} missing utterances")
+        else:
+            _, _, before = coverage()
+            print(f"Before: {len(before)} indexed skills missing utterances")
         rate = rate if rate is not None else 6.0
 
         results = {}  # name -> {"status": "generated"|"error", "detail": str|None}
@@ -398,27 +369,23 @@ def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1
                 if r["status"] == "error" or cur is None or cur.get("status") != "error":
                     results[r["name"]] = {"status": r["status"], "detail": r.get("detail")}
 
-        for sc in scopes:
-            label = "(installed)" if sc is None else f"catalog:{sc}"
-            if all_scopes:
-                print(f"--- scope {label} ---")
-            if not triggers_only:
-                print(f"Generating eval scenarios for new/changed skills (llm_eval_gen.py, {label})...")
-                try:
-                    _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit,
-                                           rate=rate, catalog=sc, workers=workers))
-                except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
-                    print(f"FAIL: scenario generator crashed: {e}", file=sys.stderr)
-                    _print_run_summary(_write_manifest(last_error=f"llm_eval_gen crashed: {e}"))
-                    return 1
-
-            print(f"Generating utterance triggers for new/changed skills (llm_triggers.py, {label})...")
+        if not triggers_only:
+            print("Generating eval scenarios for new/changed skills (llm_eval_gen.py)...")
             try:
-                _note(llm_triggers.run(limit=limit, rate=rate, catalog=sc, workers=workers))
+                _note(llm_eval_gen.run(out_dir=llm_eval_gen.DEFAULT_OUT, limit=limit,
+                                       rate=rate, catalog=catalog, workers=workers))
             except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
-                print(f"FAIL: trigger generator crashed: {e}", file=sys.stderr)
-                _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
+                print(f"FAIL: scenario generator crashed: {e}", file=sys.stderr)
+                _print_run_summary(_write_manifest(last_error=f"llm_eval_gen crashed: {e}"))
                 return 1
+
+        print("Generating utterance triggers for new/changed skills (llm_triggers.py)...")
+        try:
+            _note(llm_triggers.run(limit=limit, rate=rate, catalog=catalog, workers=workers))
+        except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
+            print(f"FAIL: trigger generator crashed: {e}", file=sys.stderr)
+            _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
+            return 1
 
         print("Reindexing so the new utterance points go live...")
         rr = subprocess.run([str(SS_BIN), "--reindex"], env=_engine_env(), check=False)
@@ -438,9 +405,6 @@ def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1
         else:
             indexed, _covered, after = coverage()
             print(f"After: {len(after)} indexed skills missing utterances")
-            for sc in cat_scopes:
-                _cat_indexed, cat_after = catalog_coverage(sc)
-                print(f"After: {len(cat_after)} {sc}:* skills missing utterances")
 
         when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         skills_manifest = [
@@ -453,14 +417,11 @@ def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1
             "error": sum(1 for v in results.values() if v["status"] == "error"),
             "skipped": (run_cov["total"] if run_cov is not None else len(indexed)) - len(results),
         }
-        run_scope = ("all" if all_scopes
-                     else "installed" if catalog is None
-                     else f"catalog:{catalog}")
         run = flywheel_manifest.write_run(
             endpoint=flywheel_llm.ENDPOINT, model=flywheel_llm.MODEL,
             skills=skills_manifest,
             coverage=run_cov or {"have": len(indexed) - len(after), "total": len(indexed)},
-            totals=totals, scope=run_scope,
+            totals=totals,
         )
         _print_run_summary(run)
         return 0
@@ -480,18 +441,14 @@ def main():
                     help="with --generate: cap the number of skills processed this run")
     ap.add_argument("--catalog", default=None,
                     help="with --generate: run against ONE external catalog "
-                         "(<alias>:* skills, ADR-0031) only")
-    ap.add_argument("--installed-only", action="store_true",
-                    help="with --generate: restore the pre-ADR-0045 default and skip "
-                         "external catalogs (default now covers installed + all catalogs)")
+                         "(<alias>:* skills, ADR-0031) instead of installed skills")
     ap.add_argument("--workers", type=int, default=1,
                     help="with --generate: concurrent LLM calls (network phase "
                          "only; file writes stay single-threaded). Default 1.")
     args = ap.parse_args()
     if args.generate:
         sys.exit(generate(rate=args.rate, limit=args.limit, triggers_only=args.triggers_only,
-                          catalog=args.catalog, workers=args.workers,
-                          installed_only=args.installed_only))
+                          catalog=args.catalog, workers=args.workers))
     print_status()
 
 

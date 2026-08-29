@@ -198,17 +198,16 @@ relies on description + body triggers only — the graceful fallback is unchange
 **Usage:**
 - **`skill-concierge:flywheel`** skill — status mode (default, read-only) shows endpoint health +
   per-skill utterance coverage; `--generate` runs the incremental generator (only new/changed
-  skills call the LLM) then reindexes. Since v0.38.0 (ADR-0045) a bare `--generate` covers EVERY
-  scope — installed first, then each configured external catalog, each capped by `--limit`;
-  `--catalog <alias>` (v0.35.0, ADR-0043) narrows to ONE catalog's `<alias>:*` skills, and
-  `--installed-only` restores the pre-ADR-0045 installed-only default. `--workers <N>` (v0.35.0,
+  skills call the LLM) then reindexes. A bare `--generate` covers installed skills only (the
+  v0.38.0 every-scope default was reverted by ADR-0047);
+  `--catalog <alias>` (v0.35.0, ADR-0043) runs ONE catalog's `<alias>:*` skills. `--workers <N>` (v0.35.0,
   default 1 = sequential) fans only the LLM network phase out over N concurrent calls; all file
   writes stay single-writer, and effective gateway load scales with N (measured 16.0 → 1.9
   s/skill at N=4).
 - **`auto_flywheel`** SessionStart hook — runs the same generator detached + throttled when a
-  local LLM endpoint is configured + reachable; since v0.38.0 it issues ONE default run covering
-  every scope (installed first, then each configured catalog — the old v0.35.1 installed-then-
-  per-alias loop is folded into it), with `--workers` (`AUTO_FLYWHEEL_WORKERS`, default 4).
+  local LLM endpoint is configured + reachable; it runs installed skills first, then each
+  configured catalog via the v0.35.1 per-alias serial loop (reinstated by ADR-0047), with
+  `--workers` (`AUTO_FLYWHEEL_WORKERS`, default 4).
   Every run is recorded in the global manifest
   (`~/.claude/skill-concierge/flywheel-manifest.json`, records carry an explicit `scope` since
   v0.37.0). The regeneration cache lives in the

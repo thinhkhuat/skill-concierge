@@ -36,7 +36,7 @@ def last_run():
     return runs[-1] if runs else None
 
 
-def write_run(endpoint, model, skills, coverage, totals=None, last_error=None, scope=None):
+def write_run(endpoint, model, skills, coverage, totals=None, last_error=None):
     """Append one run record, capped to the last MAX_RUNS.
 
     skills   : list of {"name", "status": "generated"|"error", "when", "detail": str|None}
@@ -50,10 +50,6 @@ def write_run(endpoint, model, skills, coverage, totals=None, last_error=None, s
                when not given by the caller.
     last_error: a short string describing a run-level failure (venv missing, endpoint
                unreachable, generator crash), or None on a clean run.
-    scope    : which scope(s) this run covered — "installed" | "all" | "catalog:<alias>".
-               ADR-0045: since default runs span every scope, coverage totals alone no
-               longer identify the scope; the record carries it explicitly. Absent on old
-               runs (backward-compatible) — status falls back to total-matching.
     """
     if totals is None:
         totals = {
@@ -63,7 +59,7 @@ def write_run(endpoint, model, skills, coverage, totals=None, last_error=None, s
         }
     manifest = read_manifest()
     runs = manifest.get("runs") or []
-    rec = {
+    runs.append({
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "endpoint": endpoint,
         "model": model,
@@ -71,10 +67,7 @@ def write_run(endpoint, model, skills, coverage, totals=None, last_error=None, s
         "totals": totals,
         "coverage": coverage,
         "last_error": last_error,
-    }
-    if scope is not None:
-        rec["scope"] = scope
-    runs.append(rec)
+    })
     manifest["runs"] = runs[-MAX_RUNS:]
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = MANIFEST_PATH.with_suffix(".tmp")

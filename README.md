@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.39.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.40.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -197,7 +197,7 @@ in [`references/flywheel-llm-providers.md`](references/flywheel-llm-providers.md
 | `FLYWHEEL_LLM_MODEL` | `gemma-4-e4b-it-qat-optiq` | must match the endpoint's exact served model name. |
 | `FLYWHEEL_LLM_API_KEY` | unset | when set, sent as `Authorization: Bearer <key>` — for 3rd-party gateways. |
 | `FLYWHEEL_LLM_SCHEMA_MODE` | `json_schema` | `json_schema` (strict, LM-Studio) \| `json_object` (Ollama/loose) \| `off` (prompt-only). |
-| `SKILL_AUTO_FLYWHEEL` | `1` (ON) | the `auto_flywheel` SessionStart hook auto-generates utterances for new/changed skills when the endpoint is reachable (detached, throttled, fail-open — ADR-0027). Since 0.38.0 the detached run is ONE default pass covering every scope — installed first, then each configured external catalog, each capped (ADR-0045; the 0.35.1 installed-then-per-alias loop is folded into it). `=0` disables; manual `skill-concierge:flywheel --generate` still works. |
+| `SKILL_AUTO_FLYWHEEL` | `1` (ON) | the `auto_flywheel` SessionStart hook auto-generates utterances for new/changed skills when the endpoint is reachable (detached, throttled, fail-open — ADR-0027). The detached run covers installed skills first, then each configured external catalog via a per-alias serial loop, each pass capped (0.35.1 shape, reinstated by ADR-0047). `=0` disables; manual `skill-concierge:flywheel --generate` still works. |
 | `AUTO_FLYWHEEL_THROTTLE_S` | `21600` (6h) | min seconds between background auto-flywheel runs. |
 | `AUTO_FLYWHEEL_WORKERS` | `4` | concurrent LLM calls per auto-flywheel run — network phase only, file writes stay single-writer (0.35.1, ADR-0043). |
 | `AUTO_FLYWHEEL_MAX_PER_RUN` | `25` | cap on skills generated per background run (protects metered endpoints). |
@@ -281,22 +281,25 @@ catalog twin is auto-suppressed, and removing a root prunes its points at the ne
 Embeddings + body triggers only by default — the flywheel utterance layer skips externals from
 default coverage, but since `0.35.0` an owner-commissioned `flywheel --generate --catalog <alias>`
 run generates them for one named catalog ([ADR-0043](docs/adr/0043-catalog-flywheel-generation-and-bounded-parallel-workers.md)).
-Since `0.38.0` ([ADR-0045](docs/adr/0045-catalog-tier-parity.md)) a bare `--generate` covers
-EVERY scope — installed first, then each configured catalog, each capped by `--limit` — so no
-tier depends on remembering a flag; `--installed-only` restores the old default.
+A bare `--generate` covers installed skills only ([ADR-0043](docs/adr/0043-catalog-flywheel-generation-and-bounded-parallel-workers.md);
+the one-day ADR-0045 every-scope default was reverted by
+[ADR-0047](docs/adr/0047-revert-tier-parity-restore-annex.md)) — catalogs are covered by the
+auto-flywheel's per-alias loop and by explicit `--catalog <alias>` runs.
 
 Since `0.23.0` externals are **first-class in the per-turn offer**, not just explicit search
-([ADR-0032](docs/adr/0032-external-catalogs-first-class-annex.md)); since `0.38.0`
-([ADR-0045](docs/adr/0045-catalog-tier-parity.md)) they compete at **full tier parity**:
-ONE merged ranked pool — no separate annex, no 2.2× floor, no displacement protection.
-Externals share the installed `ITEM_FLOOR` (0.18) and the same `TOP_K` slots and %-share
-pool, render inline marked `[external:<alias>]` with the `get_skill` footer, and can carry
-a turn outright when the installed shelf scores below floor. Chain hints name them, and the
-flywheel treats them like any other scope. An external used across
+([ADR-0032](docs/adr/0032-external-catalogs-first-class-annex.md)): an **additive annex** —
+the installed ranking is untouched (zero displacement, a hard invariant), and a separate
+query appends up to `ENFORCER_EXTERNAL_SLOTS` externals clearing the annex floor, marked
+`[external:<alias>]` with the `get_skill` consumption instruction. The one-day `0.38.x`
+merged-pool "tier parity" experiment (ADR-0045) was reverted by
+[ADR-0047](docs/adr/0047-revert-tier-parity-restore-annex.md) — it let externals fill most
+of the offer window — with the annex defaults tuned friendlier than the 0.23.0 era:
+`ENFORCER_EXTERNAL_FLOOR` 0.40 → **0.32** and `ENFORCER_ANNEX_MARGIN` 0.05 → **0.08**.
+Chain hints and mined chains are installed-only. An external used across
 ≥ `PROMOTE_MIN_TAKES` (3) distinct sessions **auto-graduates** to a real installed skill
 (`hooks/scripts/auto_promote.py`) — organic curation by demonstrated usage. Kill-switch
-`ENFORCER_EXTERNAL_OFFER=0` (legacy `ENFORCER_EXTERNAL_ANNEX=0` honored) restores
-search-only.
+`ENFORCER_EXTERNAL_ANNEX=0` (parity-era `ENFORCER_EXTERNAL_OFFER=0` honored as an alias)
+restores the ADR-0031 search-only tier.
 
 ## Architecture
 
@@ -377,6 +380,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 
 
+`0.40.0` — **published, catalog tier parity REVERTED (ADR-0047; owner order "a regression rather than an enhancement — return the mechanism to before that implementation"): the ADR-0032 additive annex is the offer mechanism again — `_retrieve` always carries `must_not tier=external`, zero displacement is an invariant, externals return via the separate `_retrieve_external` query into the marked annex block, chain sidecar/hints/ROUTE are installed-only, `flywheel --generate` defaults to installed-only with the auto-flywheel per-alias loop restored, and the 0.38.1 pull-mining layer (`CHAIN_MINE_PULLS`) is removed. Executed by reverse-applying the 0.38.0/0.38.1 diffs (3-way) with the interleaved ADR-0046 blocklist work preserved — annex rows are now blocklist-filtered too, which the 0.23.0 code predated. Tuned per owner refinement ("more helpful than the ADR-0032-era"): `ENFORCER_EXTERNAL_FLOOR` 0.40 → 0.32, `ENFORCER_ANNEX_MARGIN` 0.05 → 0.08 (just under the measured 0.10 saturation). `ENFORCER_EXTERNAL_ANNEX` primary again, `ENFORCER_EXTERNAL_OFFER` honored as alias. EPOCH v0.40.0 for offer-composition, external offer→take, and mined-chain metrics. Verified: enforcer/build_chains/analyze/flywheel_manifest selftests green, pytest, live annex probe, driftcheck 0, independent blind validator.**
 `0.39.0` — **published, the blocklist — a user-ordered disable tier, origin-agnostic (ADR-0046; owner request "disable that resume-session skill — build one properly, external or builtin, doesn't matter"): a flat `~/.claude/skill-concierge/blocklist.json` (absent = no-op, never seeded) enforced at four layers — `skill_guard.py` PreToolUse(Skill) DENY (the repo's second deliberate denying gate, and the only layer that catches command-files surfaced as skills, which ADR-0001 keeps out of the index), enforcer offer/hint/route exclusion, engine search-filter + get_skill refusal (read LIVE at call time — edits apply with no reindex and no restart; index-neutral), and an apply-overrides strip forcing blocked keep-on skills name-only (keep-on.json untouched, unblocking restores it). Bare entry blocks every qualified twin; qualified entry is exact-only. `blocklist.py` CLI + `skill-concierge:blocklist` skill; kill-switch `SKILL_BLOCKLIST=0`; doctor gains a Blocklist check. Verified: tests/test_blocklist.py 6/6, enforcer selftest (4b pins), apply-overrides selftest (strip + kill-switch restore), guard JSON probes, live engine probe, doctor green, driftcheck 0.**
 `0.38.2` — **published, MCP launcher resync made asynchronous — the first spawn after a plugin upgrade no longer blocks the stdio handshake ~40s and dies ("handshaking with MCP server failed: connection closed", observed live on the 0.38.1 rollout); the detached, mkdir-lock-serialized resync (bash-3.2 safe, SIGHUP-hardened, lock actually released) serves the prior engine for ONE spawn, then the new build takes over; interrupted attempts self-repair on retry. Verified: forced-mismatch spawn handshakes <1s, background resync completes to stamp, lock released, doctor green.**
 `0.38.1` — **published, mined chains admit get_skill pulls (ADR-0045 option (a), owner pick): build_chains.load_sequences mines get_skill body-pull events as full sequence nodes so external-catalog skills — whose only observable usage is a pull — can enter the mined layer; the CHAIN-HINT seed deliberately stays invocation-only (a pull proves interest, not compliance); sub-stamped pulls excluded; CHAIN_MINE_PULLS=0 reverts; EPOCH v0.38.1 for mined-chain metrics. Verified: build_chains selftest green (pull in / sub-pull out / flag-off pins), live map regenerated.**

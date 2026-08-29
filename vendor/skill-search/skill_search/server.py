@@ -293,11 +293,14 @@ def _write_next_skills_sidecar(skills: list[dict]) -> None:
         mine: dict[str, dict[str, list]] = {}
         for s in skills:
             scope = s.get("scope", "personal")
-            # ADR-0045 tier parity: catalog scopes JOIN the sidecar. Sidecar key presence
-            # is the enforcer's catalogue-membership signal for chain hints, and since the
-            # tier merge an external skill is a first-class offer row consumed via
-            # get_skill — hinting it is legitimate (the enforcer tags it [external:alias]).
-            # The old ADR-0031 exclusion made chain routing an installed-only network.
+            # ADR-0031 (reinstated by ADR-0047, reverting ADR-0045): catalog skills stay
+            # OUT of the sidecar. Sidecar key presence is the enforcer's
+            # catalogue-membership signal for chain hints — a preview-layer mechanism —
+            # and catalog skills live in the annex/search tiers by decision; admitting
+            # 1.5k+ external names would let chains hint skills the Skill tool cannot
+            # invoke here.
+            if scope.startswith("catalog:"):
+                continue
             mine.setdefault(scope, {})[s["name"]] = list(s.get("next_skills") or [])
         try:
             merged = json.loads(NEXT_SKILLS_PATH.read_text(encoding="utf-8"))

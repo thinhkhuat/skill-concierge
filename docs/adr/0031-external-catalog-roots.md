@@ -3,11 +3,9 @@
 Status: Accepted + implemented (2026-08-23). **Superseded in part by
 [ADR-0032](0032-external-catalogs-first-class-annex.md):** Decision 5's "search-only tier"
 (externals excluded from the per-turn offer) is replaced by ADR-0032's additive external
-annex, itself merged into the primary pool by
-[ADR-0045](0045-catalog-tier-parity.md) (2026-08-28, tier parity). All other mechanics here
-(catalog-roots config, `catalog:<alias>` scope, `tier: external`, get_skill read-inline,
-symlink promotion) remain the load-bearing substrate. Plan:
-`plans/260823-2036-multi-catalog-roots/plan.md`; evidence at foot.
+annex. All other mechanics here (catalog-roots config, `catalog:<alias>` scope,
+`tier: external`, get_skill read-inline, symlink promotion) remain the load-bearing
+substrate. Plan: `plans/260823-2036-multi-catalog-roots/plan.md`; evidence at foot.
 
 Relates to: ADR-0028 (scope field + query-side visibility filter — this adds a scope
 class), ADR-0025 (operator-owned durable home under `~/.claude/skill-concierge/` —

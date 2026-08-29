@@ -4,6 +4,36 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.40.0] — 2026-08-29
+
+### Changed — catalog tier parity REVERTED; the external annex is the mechanism again (ADR-0047)
+
+Owner order ("i find the new implementation is a regression rather than an enhancement"):
+the ADR-0045 merged offer pool is reverted in full after one day live — its own ship
+measurement (6 of 8 offer slots going to `[external:*]` rows the Skill tool cannot invoke)
+became the dominant per-turn experience. The ADR-0032 additive annex returns, executed by
+reverse-applying the 0.38.0 and 0.38.1 diffs (3-way) with the interleaved ADR-0046
+blocklist work preserved.
+
+- **enforcer**: `_retrieve` always carries `must_not tier=external`; zero displacement is an
+  invariant again; externals return via the separate `_retrieve_external` query into the
+  marked annex block; ledger `ext` records annex rows; chain hints/ROUTE installed-only.
+  Annex rows are now blocklist-filtered (ADR-0046 coverage the 0.23.0 code predated).
+- **Tuned defaults** (owner refinement "more helpful than the ADR-0032-era"):
+  `ENFORCER_EXTERNAL_FLOOR` 0.40 → **0.32**, `ENFORCER_ANNEX_MARGIN` 0.05 → **0.08**
+  (just under the measured 0.10 saturation). Revert paths are the env vars themselves.
+- **Flag naming**: `ENFORCER_EXTERNAL_ANNEX` primary again; parity-era
+  `ENFORCER_EXTERNAL_OFFER` honored as an alias. Either `=0` → ADR-0031 search-only tier.
+- **engine**: `_write_next_skills_sidecar` skips `catalog:*` scopes again (parity-era keys
+  in the live sidecar pruned once at deploy); no reindex needed (point payloads unchanged).
+- **chains**: the 0.38.1 `get_skill` pull-mining layer (`CHAIN_MINE_PULLS`) is removed —
+  mining reads invocation events only.
+- **flywheel**: `--generate` defaults to installed-only (`--installed-only` flag dropped);
+  `--catalog <alias>` stays; auto_flywheel's v0.35.1 installed-then-per-alias loop restored.
+  The manifest's explicit `scope` field survives (observability, records truth either way).
+- **EPOCH v0.40.0** for offer-composition, external offer→take, and mined-chain metrics —
+  parity-era (0.38.x–0.39.x) rates describe a mechanism that no longer exists.
+
 ## [0.39.0] — 2026-08-29
 
 ### Added
