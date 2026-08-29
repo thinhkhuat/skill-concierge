@@ -13,6 +13,20 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.42.0 — consult deliberation layer (ADR-0049; deployed 2026-08-29)
+
+Live epoch. The consult layer is opt-in, so segment by sessions whose ledger carries a
+`consult_verdict` row (or the `auto` row naming the consult skill) — never pool these
+into all-turn rates.
+
+| # | Watch | Trigger | Action |
+|---|-------|---------|--------|
+| W1 | **Verdict→take conversion.** How many `consult_verdict` primaries get an `auto` take in the same session. | After ≥10 consults: <50% take-rate on high-confidence verdicts. | Read those verdicts' gap lines — low take on clean cards means the funnel misranks (tune the analyst prompt, bump `PROMPT_VERSION`); low take on gap-heavy cards is the funnel honestly reporting NONE-shaped tasks. |
+| W2 | **Sieve recall gaps persist.** Manual `sieve-missed` admissions appearing in verdict chains (the practice-run failure mode). | Admissions in ≥1/3 of consults after capsule coverage passes ~50% of the index. | Capsule vocabulary is not reaching the sieve — evaluate feeding capsule purpose/capabilities into the trigger-point layer (ADR-0026 v2-style eval FIRST; separate ADR). |
+| W3 | **Capsule corpus staleness.** Body edits outrunning regeneration (fingerprint invalidated but no `--capsules` run since). | `capsule_coverage.have/total` from sieve calls drifting down over weeks while skill churn continues. | Operator runs `flywheel.py --generate --capsules`; if chronic, revisit auto_flywheel inclusion with a per-run cap (ADR-0049 deliberately kept it operator-commissioned). |
+| W4 | **External share of verdicts.** The `externals` field of `consult_verdict` rows. | Sustained 0 external picks across ≥10 consults on cross-domain tasks. | Not a defect by itself (fit rules); investigate only alongside W2 — the same vocabulary gap starves externals at the sieve. |
+| W5 | **--fast vs deep divergence.** Fast-tier cards leading to a different chain than a deep consult on the same task. | User re-consults deep after a fast card on the same task ≥3 times. | Mark `--fast` screening-only in the skill body; if divergence persists, drop the flag. |
+
 ## v0.41.0 — complement annex (ADR-0048; deployed 2026-08-29 ~16:30 local)
 
 Design intent being watched: the annex becomes the builtin's complement — volume

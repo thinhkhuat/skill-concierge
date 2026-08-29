@@ -126,6 +126,26 @@ NEXT_SKILLS_PATH = Path(os.path.expandvars(os.environ.get(
 _BLOCKLIST_PATH = Path(os.path.expandvars(os.environ.get(
     "SKILL_CONCIERGE_BLOCKLIST",
     str(Path.home() / ".claude" / "skill-concierge" / "blocklist.json"))))
+# ADR-0049 consult layer: capsule dossiers (scripts/llm_capsules.py output). Read LIVE
+# at call time like the blocklist — consult_candidates is the only consumer, capsules
+# are payload enrichment (never index points in v1), and a corpus edit applies with no
+# restart. Absent file = empty = rows carry no capsule (graceful degrade to
+# description-only). SKILL_CAPSULES is the corpus PATH (shared with the generator);
+# SKILL_CONSULT=0 is the feature kill-switch for the tool itself.
+_CAPSULES_PATH = Path(os.path.expandvars(os.environ.get(
+    "SKILL_CAPSULES",
+    str(Path.home() / ".claude" / "skill-concierge" / "capsules.json"))))
+
+
+def _capsules() -> dict:
+    """{name: capsule dict} from the corpus, fail-open to {} — a missing or malformed
+    corpus must never break the sieve; rows simply degrade to description-only."""
+    try:
+        data = json.loads(_CAPSULES_PATH.read_text(encoding="utf-8"))
+        return ({k: v for k, v in data.items() if isinstance(v, dict)}
+                if isinstance(data, dict) else {})
+    except (OSError, ValueError):
+        return {}
 
 
 def _blocked(name: str) -> bool:
@@ -753,7 +773,7 @@ def _indexed_names() -> set[str]:
 # ---------------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------------
-def _fuse_ranked(group_lists: list, top_k: int) -> list:
+def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> list:
     """MAX-pool skills across one or more query result sets: each skill keeps its
     single BEST score across all queries, then return the fused top-k by score.
     One query angle can bury the precise skill below the cut; fusing several
@@ -762,8 +782,12 @@ def _fuse_ranked(group_lists: list, top_k: int) -> list:
     ADR-0031: a hit from a `catalog:<alias>` scope is an EXTERNAL skill — merged
     into the same ranking (no artificial tier inside the list) but marked with
     provenance and the read-inline consumption note, because the Skill tool
-    cannot invoke it; `get_skill(name)` returns its full body."""
-    best: dict = {}  # name -> (score, description, scope)
+    cannot invoke it; `get_skill(name)` returns its full body.
+
+    ADR-0049: `with_paths=True` also carries the payload's body path on INSTALLED
+    rows (the consult analyst deep-reads via Read). Default False keeps the
+    search_skills row shape byte-identical."""
+    best: dict = {}  # name -> (score, description, scope, path)
     for groups in group_lists:
         for g in groups:
             if not g.hits:
@@ -772,16 +796,19 @@ def _fuse_ranked(group_lists: list, top_k: int) -> list:
             pl = h.payload or {}
             name = pl.get("name", g.id)
             if name not in best or h.score > best[name][0]:
-                best[name] = (h.score, pl.get("description", ""), pl.get("scope") or "")
+                best[name] = (h.score, pl.get("description", ""),
+                              pl.get("scope") or "", pl.get("path") or "")
     ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
     out = []
-    for n, (s, d, scope) in ranked:
+    for n, (s, d, scope, path) in ranked:
         row = {"name": n, "command": f"/{n}", "description": d, "score": round(s, 4)}
         if scope.startswith("catalog:"):
             row.pop("command")           # not a slash command — it is not installed
             row["external"] = scope.split(":", 1)[1]
             row["note"] = ("external catalog skill — NOT installed; consume by "
                            f"get_skill(\"{n}\") and follow its SKILL.md inline")
+        elif with_paths and path:
+            row["path"] = path
         out.append(row)
     return out
 
@@ -815,6 +842,75 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     if len(queries) > 1:
         out["queries"] = queries
     # Surface index drift in-band so dark/stale skills don't fail silently.
+    warning = _staleness_warning()
+    if warning:
+        out["warning"] = warning
+    return json.dumps(out, indent=2)
+
+
+@mcp.tool()
+def consult_candidates(queries: list[str], top_n: int = 20) -> str:
+    """Sieve for the deliberated consult flow (ADR-0049): WIDE semantic recall over
+    the whole index — installed AND external-catalog skills as first-class rows —
+    with capsule dossiers attached when the corpus covers them.
+
+    Use when composing a deliberated skill-chain recommendation for a task (the
+    consult skill's funnel), not for the per-turn quick find (that is
+    search_skills). Pass ONE query PER SUB-GOAL, up to 5 (e.g.
+    ["author a SKILL.md workflow skill", "extend a python engine with LLM workers",
+    "write an ADR"]) — the server MAX-pools every query, so a niche skill that
+    serves only one sub-goal still surfaces. top_n widens the cut (default 20,
+    clamped to 40).
+
+    Returns rows {name, description, score, capsule?, path?, external?}: installed
+    rows carry `path` (deep-read the body via Read at that path); external rows
+    carry `external` (deep-read via get_skill(name) — the Skill tool cannot invoke
+    it); `capsule` is the dossier dict (purpose/capabilities/inputs/outputs/
+    avoid_when) when present — an absent capsule degrades to description-only.
+    Blocklist-filtered; a staleness warning rides in-band like search_skills."""
+    if os.environ.get("SKILL_CONSULT", "1") == "0":
+        return json.dumps({"error": "consult layer disabled (SKILL_CONSULT=0)"})
+    qs = [q for q in (queries or []) if q and q.strip()][:5]
+    if not qs:
+        return json.dumps({"error": "queries must carry at least one non-empty "
+                                    "sub-goal phrasing"})
+    top_n = max(1, min(int(top_n or 20), 40))
+    scope_filter = _scope_filter()
+    group_lists = [
+        _qdrant.query_points_groups(
+            collection_name=COLLECTION, query=qv, group_by="name",
+            query_filter=scope_filter,
+            limit=top_n, group_size=1, with_payload=True).groups
+        for qv in embed_batch(qs)
+    ]
+    rows = [r for r in _fuse_ranked(group_lists, top_n, with_paths=True)
+            if not _blocked(r.get("name", ""))]
+    # The winning group hit may be a trigger point whose payload omits `path`
+    # (payloads vary per point); the deterministic per-skill id always carries it —
+    # same fast path get_skill uses, batched once for all missing rows.
+    missing = [r["name"] for r in rows if not r.get("external") and not r.get("path")]
+    if missing:
+        try:
+            recs = _qdrant.retrieve(collection_name=COLLECTION,
+                                    ids=[_point_id(n) for n in missing],
+                                    with_payload=True)
+            by_name = {(p.payload or {}).get("name"): (p.payload or {}).get("path")
+                       for p in recs}
+            for r in rows:
+                p = by_name.get(r["name"])
+                if p:
+                    r["path"] = p
+        except Exception:
+            pass  # analyst falls back to get_skill(name) per row
+    caps = _capsules()
+    have = 0
+    for r in rows:
+        c = caps.get(r.get("name", ""))
+        if c:
+            r["capsule"] = c
+            have += 1
+    out = {"queries": qs, "results": rows,
+           "capsule_coverage": {"have": have, "total": len(rows)}}
     warning = _staleness_warning()
     if warning:
         out["warning"] = warning

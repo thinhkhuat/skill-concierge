@@ -313,6 +313,21 @@ upstream is re-vendored:
   **Requires re-copy into the stable venv + a reindex is NOT needed (no point payloads
   changed); long-lived MCP servers keep the old sidecar-writing bytes until restarted.**
 
+- **Consult sieve + capsule attachment (ADR-0049, v0.42.0):** new `consult_candidates(queries, top_n)`
+  MCP tool — the deliberated-lane sibling of `search_skills` (which stays byte-identical). Same
+  MAX-pool fusion, but: one query per sub-goal (up to 5), `top_n` up to 40, externals first-class
+  with the standard read-inline marking (no annex gating — consult is the deliberate lane),
+  `_fuse_ranked` grows a `with_paths` param (default False keeps `search_skills` rows
+  byte-identical) so installed rows carry their payload `path` for the analyst's deep Read, and
+  per-row `capsule` dossiers attach from the corpus at `SKILL_CAPSULES` (default
+  `~/.claude/skill-concierge/capsules.json`, `scripts/llm_capsules.py` output) read LIVE at call
+  time (the blocklist pattern — an edit applies with no restart; absent corpus = rows degrade to
+  description-only). `SKILL_CONSULT=0` is the tool kill-switch. Blocklist-filtered like
+  `search_skills`. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) to deploy; long-lived MCP
+  servers keep executing the old bytes until restarted (ADR-0018 class). No reindex needed —
+  capsules are payload enrichment, never index points.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

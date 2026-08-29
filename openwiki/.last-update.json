@@ -1,6 +1,6 @@
 {
-  "updatedAt": "2026-08-28T14:26:43.000Z",
+  "updatedAt": "2026-08-29T16:10:06.000Z",
   "command": "update",
-  "gitHead": "fdaf90cfdcebb9369d7d0bfc496b529365347bac",
-  "model": "claude-sonnet-5"
+  "gitHead": "a427f04afd545d4a7866f88a020fda6badacb701",
+  "model": "claude-fable-5"
 }

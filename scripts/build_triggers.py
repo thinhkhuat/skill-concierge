@@ -83,7 +83,7 @@ def split_phrases(description: str) -> list[str]:
     return out[:MAX_TRIGGERS]
 
 
-def scroll_all_points(catalog=None):
+def scroll_all_points(catalog=None, paths=False):
     """Yield (name, description) for every live-index point (paged scroll).
 
     External catalog points (payload tier=external, ADR-0031) are skipped:
@@ -94,7 +94,11 @@ def scroll_all_points(catalog=None):
     `catalog="<alias>"` lifts that skip for ONE catalog (owner-commissioned run
     of the deferred phase): the scroll is scope-filtered to `catalog:<alias>`
     and the tier=external skip above is bypassed. catalog=None stays
-    byte-identical to the installed-only default."""
+    byte-identical to the installed-only default.
+
+    `paths=True` (ADR-0049) yields a third field, the payload's body path, for
+    generators that fingerprint the FULL SKILL.md body (llm_capsules.py).
+    Default False keeps the two-field contract callers already unpack."""
     nxt = None
     scope = f"catalog:{catalog}" if catalog is not None else None
     while True:
@@ -108,7 +112,10 @@ def scroll_all_points(catalog=None):
             pl = pt.get("payload", {})
             if scope is None and pl.get("tier") == "external":
                 continue
-            yield pl.get("name", ""), pl.get("description", "")
+            if paths:
+                yield pl.get("name", ""), pl.get("description", ""), pl.get("path", "")
+            else:
+                yield pl.get("name", ""), pl.get("description", "")
         nxt = res.get("next_page_offset")
         if nxt is None:
             break

@@ -4,6 +4,40 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.42.0] — 2026-08-29
+
+### Added — consult: a deliberation layer over the reflex layer (ADR-0049)
+
+An opt-in, reasoning-driven skill-chain curation step, designed from a live practice
+run (the funnel executed manually on a real task before being built). Four parts:
+
+- **`skill-concierge:consult` skill** — the funnel: distill sub-goals → wide sieve →
+  admit sieve misses → mandatory analyst-subagent deep body reads (`agents/analyst.md`
+  template, strict JSON, untrusted-bodies security) → compose with session context →
+  RUN/⚠/ALSO verdict card → verdict log → route by flag (`--fast`, `--advise`,
+  `--top N`). External-catalog picks are first-class in the card with a
+  promote-on-explicit-accept step; harnesses without a spawn primitive get a
+  documented inline fallback.
+- **`consult_candidates` engine tool** — the deliberated-lane sibling of
+  `search_skills` (byte-identical untouched): one query per sub-goal (≤5) MAX-pooled,
+  `top_n` to 40, externals first-class (no annex gating), installed rows carry their
+  body path for the analyst's deep Read, blocklist-filtered, staleness warning
+  in-band. `SKILL_CONSULT=0` is the kill-switch. Vendored patch recorded in
+  `VENDORED.md`; stable-venv re-copy + MCP restart required to serve it live.
+- **Capsule dossiers** — `scripts/llm_capsules.py` generates per-skill structured
+  capsules (purpose/capabilities/inputs/outputs/avoid_when) into the canonical
+  operator-home corpus (`~/.claude/skill-concierge/capsules.json`), incremental over
+  a body+description fingerprint, riding the flywheel's bounded-parallel workers.
+  Opt-in via `flywheel.py --generate --capsules` (first bulk run is
+  operator-commissioned); the sieve attaches capsules LIVE-read and degrades
+  gracefully to description-only when absent.
+- **Verdict telemetry** — `scripts/consult_log.py` appends `consult_verdict` rows to
+  the invocation ledger (fail-silent); uptake was already automatic via existing
+  `auto` rows, so recommended-vs-taken closes without analyzer changes.
+
+Phase 2 (enforcer consult-intent phrase routing, `SKILL_CONSULT_ROUTE`) is sequenced
+after live verification of this core.
+
 ## [0.41.0] — 2026-08-29
 
 ### Changed — complement annex: gap-gated, usage-ranked externals (ADR-0048)

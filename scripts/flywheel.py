@@ -39,6 +39,7 @@ import flywheel_lock      # cross-process mutual exclusion (auto vs manual)
 import flywheel_manifest  # shared global run-manifest writer/reader
 import llm_eval_gen  # scenario (positive/negative) generator
 import llm_triggers  # utterance-trigger generator
+import llm_capsules  # capsule-dossier generator (ADR-0049 consult layer)
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 # Canonical utterance corpus lives in the OPERATOR home (0.37.0 — see build_triggers.py).
@@ -317,7 +318,8 @@ def _print_run_summary(run):
             print(f"    ... and {len(errs) - 8} more")
 
 
-def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1):
+def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1,
+             capsules=False):
     if not SS_BIN.exists() or not PY_BIN.exists():
         msg = f"engine venv missing at {VENV}"
         print(f"FAIL: {msg} — run the skill-concierge:setup skill (./setup.sh) first", file=sys.stderr)
@@ -387,6 +389,19 @@ def generate(rate=None, limit=None, triggers_only=False, catalog=None, workers=1
             _print_run_summary(_write_manifest(last_error=f"llm_triggers crashed: {e}"))
             return 1
 
+        # ADR-0049 capsule dossiers — OPT-IN (--capsules): the first bulk run is a
+        # ~whole-catalogue LLM pass, so it stays operator-commissioned (same doctrine
+        # as the ADR-0031 D10 catalog deferral), not part of the default --generate.
+        if capsules:
+            print("Generating capsule dossiers for new/changed skills (llm_capsules.py)...")
+            try:
+                _note(llm_capsules.run(limit=limit, rate=rate, catalog=catalog,
+                                       workers=workers))
+            except (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as e:
+                print(f"FAIL: capsule generator crashed: {e}", file=sys.stderr)
+                _print_run_summary(_write_manifest(last_error=f"llm_capsules crashed: {e}"))
+                return 1
+
         print("Reindexing so the new utterance points go live...")
         rr = subprocess.run([str(SS_BIN), "--reindex"], env=_engine_env(), check=False)
         if rr.returncode != 0:
@@ -445,10 +460,14 @@ def main():
     ap.add_argument("--workers", type=int, default=1,
                     help="with --generate: concurrent LLM calls (network phase "
                          "only; file writes stay single-threaded). Default 1.")
+    ap.add_argument("--capsules", action="store_true",
+                    help="with --generate: also (re)generate capsule dossiers "
+                         "(ADR-0049 consult layer; first bulk run is "
+                         "operator-commissioned, hence opt-in)")
     args = ap.parse_args()
     if args.generate:
         sys.exit(generate(rate=args.rate, limit=args.limit, triggers_only=args.triggers_only,
-                          catalog=args.catalog, workers=args.workers))
+                          catalog=args.catalog, workers=args.workers, capsules=args.capsules))
     print_status()
 
 

@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.41.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
+- **Version:** `0.42.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -103,17 +103,27 @@ and ledger are SHARED with every other harness install.
 ## The MCP tools
 
 The vendored engine ([`vendor/skill-search/skill_search/server.py`](../vendor/skill-search/skill_search/server.py))
-exposes four tools:
+exposes five tools:
 
 | Tool | Purpose |
 |------|---------|
 | `search_skills` | rank skills by semantic relevance to a query (accepts `extra_queries` for multi-phrasing fusion) |
+| `consult_candidates` | the consult skill's wide sieve: one query per sub-goal (≤5), `top_n` to 40, capsule dossiers attached ([ADR-0049](../docs/adr/0049-consult-deliberation-layer.md)) |
 | `get_skill` | fetch one skill's full description (for thin-description tie-breaks) |
 | `reindex` | rebuild the catalogue index after skills change (incremental by default) |
 | `health` | report index status (collection, count, embedder, staleness) |
 
 Day-to-day, Claude never calls these by hand: the **`skills/skill-search/SKILL.md`** router is
 the always-on entry point that calls `search_skills` at the start of any multi-step request.
+
+Since `0.42.0` ([ADR-0049](../docs/adr/0049-consult-deliberation-layer.md)) the engine also
+serves a **deliberated lane**: `consult_candidates` feeds the `skill-concierge:consult` skill
+(`skills/consult/SKILL.md`) — an opt-in planning step that sieves wide over installed AND
+external skills, attaches **capsule dossiers** (per-skill structured summaries from
+`scripts/llm_capsules.py`, corpus at `~/.claude/skill-concierge/capsules.json`, generated via
+`flywheel.py --generate --capsules`), delegates deep body reads to an analyst subagent, and
+composes a RUN/⚠/ALSO verdict logged as `consult_verdict` ledger rows. `SKILL_CONSULT=0` is
+the kill-switch; an absent corpus degrades rows to description-only.
 
 Since `0.22.0`, `search_skills` can also surface **external catalog skills** — third-party
 collections registered in `~/.claude/skill-concierge/catalog-roots.json` without being
