@@ -4,6 +4,30 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.41.0] — 2026-08-29
+
+### Changed — complement annex: gap-gated, usage-ranked externals (ADR-0048)
+
+Ledger evidence first: 410 of 2,656 offers carried externals, yet only 6 external pulls
+ever — all 6 genuine builtin gaps. The 0.40.0 margin rule admitted echoes of well-served
+intents nobody consumed. The annex stays an annex (zero displacement, separate query,
+marked block) but becomes the builtin's complement:
+
+- **Beat gate** (default ON): installed top ≥ `GETAWAY_FLOOR` (reused by owner pick) →
+  an external must beat that top by `ENFORCER_ANNEX_BEAT` (0.04); below it (thin
+  inventory) the annex widens at the plain `EXTERNAL_FLOOR`. Well-served intents go
+  annex-silent.
+- **Usage ranking**: `auto_promote.py` dumps its distinct-session take counts to the
+  durable `external-takes.json` digest; the enforcer reads it live (fail-open) — proven
+  externals float first and render `used N×`. Provenness reorders, never admits below
+  the gate. Promotion valve unchanged above it.
+- External query over-fetches (`EXTERNAL_SLOTS × 3`) so gating/reordering never shrink
+  the annex. Foreign annex (ADR-0034/0036) untouched.
+- Kill-switch `ENFORCER_ANNEX_COMPLEMENT=0` restores the 0.40.0 margin-rule floor and
+  score-only order (the over-fetch stays — a legacy annex now fills its slots where
+  0.40.0 could return short). EPOCH v0.41.0 for offer-composition and external
+  offer→take rates.
+
 ## [0.40.0] — 2026-08-29
 
 ### Changed — catalog tier parity REVERTED; the external annex is the mechanism again (ADR-0047)

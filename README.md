@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.40.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.41.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -295,11 +295,18 @@ merged-pool "tier parity" experiment (ADR-0045) was reverted by
 [ADR-0047](docs/adr/0047-revert-tier-parity-restore-annex.md) — it let externals fill most
 of the offer window — with the annex defaults tuned friendlier than the 0.23.0 era:
 `ENFORCER_EXTERNAL_FLOOR` 0.40 → **0.32** and `ENFORCER_ANNEX_MARGIN` 0.05 → **0.08**.
-Chain hints and mined chains are installed-only. An external used across
+Since `0.41.0` ([ADR-0048](docs/adr/0048-complement-annex.md)) the annex is the builtin's
+**complement, not its echo**: when the installed top ≥ `GETAWAY_FLOOR` (0.45) an external
+must BEAT it by `ENFORCER_ANNEX_BEAT` (0.04); below it (thin inventory) the annex widens
+at the plain floor. Externals with demonstrated usage (the auto_promote
+`external-takes.json` digest) float first and render `used N×`. Chain hints and mined
+chains are installed-only. An external used across
 ≥ `PROMOTE_MIN_TAKES` (3) distinct sessions **auto-graduates** to a real installed skill
 (`hooks/scripts/auto_promote.py`) — organic curation by demonstrated usage. Kill-switch
 `ENFORCER_EXTERNAL_ANNEX=0` (parity-era `ENFORCER_EXTERNAL_OFFER=0` honored as an alias)
-restores the ADR-0031 search-only tier.
+restores the ADR-0031 search-only tier; `ENFORCER_ANNEX_COMPLEMENT=0` restores the 0.40.0
+margin-rule floor and score-only order (the over-fetch stays — a legacy annex now fills its
+slots where 0.40.0 could return short).
 
 ## Architecture
 
@@ -380,6 +387,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 
 
+`0.41.0` — **published, complement annex (ADR-0048; owner order "make the external catalogs, while staying as annex, far more helpful … along with the builtin"; ledger evidence: 410 of 2,656 offers carried externals yet only 6 external pulls EVER, all genuine builtin gaps — the 0.40.0 margin rule admitted echoes nobody consumed): when the installed top ≥ `GETAWAY_FLOOR` (reused by owner pick) an external must BEAT that top by `ENFORCER_ANNEX_BEAT` (0.04) to annex — well-served intents go annex-silent; thin intents (< 0.45) widen the annex at the plain `EXTERNAL_FLOOR`; externals with demonstrated `get_skill` takes (distinct sessions; `auto_promote.py` now dumps the `external-takes.json` digest, enforcer reads it live, fail-open) rank FIRST and render `used N×` — provenness reorders, never admits below the gate; the external query over-fetches (`EXTERNAL_SLOTS×3`) so gating/reordering never shrinks the annex. Zero displacement, annex shape, blocklist filtering, promotion valve all untouched. Kill-switch `ENFORCER_ANNEX_COMPLEMENT=0` restores the 0.40.0 margin-rule floor and score-only order (over-fetch stays, strictly better). EPOCH v0.41.0 for offer-composition and external offer→take rates. Verified: enforcer selftest case 11c (beat gate / thin widening / proven-first / marker / kill-switch), auto_promote selftest, live probes, driftcheck 0, independent blind validator.**
 `0.40.0` — **published, catalog tier parity REVERTED (ADR-0047; owner order "a regression rather than an enhancement — return the mechanism to before that implementation"): the ADR-0032 additive annex is the offer mechanism again — `_retrieve` always carries `must_not tier=external`, zero displacement is an invariant, externals return via the separate `_retrieve_external` query into the marked annex block, chain sidecar/hints/ROUTE are installed-only, `flywheel --generate` defaults to installed-only with the auto-flywheel per-alias loop restored, and the 0.38.1 pull-mining layer (`CHAIN_MINE_PULLS`) is removed. Executed by reverse-applying the 0.38.0/0.38.1 diffs (3-way) with the interleaved ADR-0046 blocklist work preserved — annex rows are now blocklist-filtered too, which the 0.23.0 code predated. Tuned per owner refinement ("more helpful than the ADR-0032-era"): `ENFORCER_EXTERNAL_FLOOR` 0.40 → 0.32, `ENFORCER_ANNEX_MARGIN` 0.05 → 0.08 (just under the measured 0.10 saturation). `ENFORCER_EXTERNAL_ANNEX` primary again, `ENFORCER_EXTERNAL_OFFER` honored as alias. EPOCH v0.40.0 for offer-composition, external offer→take, and mined-chain metrics. Verified: enforcer/build_chains/analyze/flywheel_manifest selftests green, pytest, live annex probe, driftcheck 0, independent blind validator.**
 `0.39.0` — **published, the blocklist — a user-ordered disable tier, origin-agnostic (ADR-0046; owner request "disable that resume-session skill — build one properly, external or builtin, doesn't matter"): a flat `~/.claude/skill-concierge/blocklist.json` (absent = no-op, never seeded) enforced at four layers — `skill_guard.py` PreToolUse(Skill) DENY (the repo's second deliberate denying gate, and the only layer that catches command-files surfaced as skills, which ADR-0001 keeps out of the index), enforcer offer/hint/route exclusion, engine search-filter + get_skill refusal (read LIVE at call time — edits apply with no reindex and no restart; index-neutral), and an apply-overrides strip forcing blocked keep-on skills name-only (keep-on.json untouched, unblocking restores it). Bare entry blocks every qualified twin; qualified entry is exact-only. `blocklist.py` CLI + `skill-concierge:blocklist` skill; kill-switch `SKILL_BLOCKLIST=0`; doctor gains a Blocklist check. Verified: tests/test_blocklist.py 6/6, enforcer selftest (4b pins), apply-overrides selftest (strip + kill-switch restore), guard JSON probes, live engine probe, doctor green, driftcheck 0.**
 `0.38.2` — **published, MCP launcher resync made asynchronous — the first spawn after a plugin upgrade no longer blocks the stdio handshake ~40s and dies ("handshaking with MCP server failed: connection closed", observed live on the 0.38.1 rollout); the detached, mkdir-lock-serialized resync (bash-3.2 safe, SIGHUP-hardened, lock actually released) serves the prior engine for ONE spawn, then the new build takes over; interrupted attempts self-repair on retry. Verified: forced-mismatch spawn handshakes <1s, background resync completes to stamp, lock released, doctor green.**

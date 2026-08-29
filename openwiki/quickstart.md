@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.40.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
+- **Version:** `0.41.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -132,12 +132,16 @@ merged-pool parity experiment (ADR-0045) was reverted by
 tuned friendlier: `ENFORCER_EXTERNAL_FLOOR` 0.32 (was 0.40), `ENFORCER_ANNEX_MARGIN` 0.08
 (was 0.05). Chain hints and `flywheel --generate` are installed-only. An external used
 across enough distinct sessions still auto-graduates to a real installed skill.
-`ENFORCER_EXTERNAL_ANNEX=0` (parity-era `ENFORCER_EXTERNAL_OFFER=0` honored as an alias)
-restores the ADR-0031 search-only tier.
+Since `0.41.0` ([ADR-0048](../docs/adr/0048-complement-annex.md)) the annex is the
+builtin's **complement**: installed top ≥ `GETAWAY_FLOOR` (0.45) → an external must BEAT
+it by `ENFORCER_ANNEX_BEAT` (0.04); thin intents widen at the plain floor; externals with
+demonstrated usage rank first and render `used N×`; `ENFORCER_ANNEX_COMPLEMENT=0`
+restores the 0.40.0 margin rule. `ENFORCER_EXTERNAL_ANNEX=0` (parity-era
+`ENFORCER_EXTERNAL_OFFER=0` honored as an alias) restores the ADR-0031 search-only tier.
 
-Since `0.26.0` both annexes (external + cross-harness) are **dynamically sized**
-([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)): an annex row earns its slot by
-scoring within `ENFORCER_ANNEX_MARGIN` (0.08) of the installed top, capped at 4/2 —
+Since `0.26.0` the cross-harness annex is **dynamically sized**
+([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)): a foreign row earns its slot by
+scoring within `ENFORCER_ANNEX_MARGIN` (0.08) of the installed top, capped at 2 —
 a well-served intent shrinks it toward 0, a thin-inventory intent widens it to the cap.
 `ENFORCER_ANNEX_DYNAMIC=0` restores the old fixed 2.
 

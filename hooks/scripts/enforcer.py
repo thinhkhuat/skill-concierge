@@ -115,6 +115,37 @@ ANNEX_DYNAMIC = os.environ.get("ENFORCER_ANNEX_DYNAMIC", "1") != "0"
 ANNEX_MARGIN = float(os.environ.get("ENFORCER_ANNEX_MARGIN", "0.08"))
 EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "4" if ANNEX_DYNAMIC else "2"))
 
+# ── complement annex (ADR-0048) ────────────────────────────────────────────────
+# Ledger evidence (2026-08-29): 410 of 2,656 offers carried externals, yet only 6 external
+# pulls EVER — and all 6 were genuine builtin gaps. The margin rule admitted ECHOES of
+# well-served intents (externals trailing the installed top by 0.08) that nobody consumed.
+# Owner order: the annex becomes the builtin's COMPLEMENT, not its echo.
+#   • top_installed >= GETAWAY_FLOOR (builtin answers this intent): an external must BEAT
+#     the installed top by ANNEX_BEAT (0.04) — a complement, not a duplicate voice.
+#   • top_installed < GETAWAY_FLOOR (thin inventory — the case externals exist for): the
+#     plain EXTERNAL_FLOOR applies and the annex widens to its cap.
+# Usage ranking: externals with demonstrated get_skill takes (distinct sessions, digest
+# written by auto_promote.py) float first and render "used N×" — provenness reorders and
+# marks, never admits below the gate. ENFORCER_ANNEX_COMPLEMENT=0 restores the ADR-0047
+# margin-rule annex byte-identically (ANNEX_MARGIN governs the foreign annex either way).
+ANNEX_COMPLEMENT = os.environ.get("ENFORCER_ANNEX_COMPLEMENT", "1") != "0"
+ANNEX_BEAT = float(os.environ.get("ENFORCER_ANNEX_BEAT", "0.04"))
+_TAKES_DIGEST_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_TAKES_DIGEST",
+    Path.home() / ".claude" / "skill-concierge" / "external-takes.json"))
+
+
+def _external_takes() -> dict:
+    """{name: distinct-session take count} from the auto_promote digest, read live (the
+    blocklist pattern: tiny file, user-session-cadence updates, fail-open when absent)."""
+    try:
+        data = json.loads(_TAKES_DIGEST_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, int) and v > 0}
+    except (OSError, UnicodeError, ValueError):
+        return {}
+
 
 def _annex_floor(pool_floor: float, top_installed: float) -> float:
     """The per-turn score threshold an annex row must clear. Fixed mode: the pool floor,
@@ -1177,17 +1208,26 @@ def _retrieve(vector: list) -> list:
 
 def _retrieve_external(vector: list, top_installed: float = 0.0) -> list:
     """ADR-0032 external annex: up to EXTERNAL_SLOTS catalog skills clearing the per-turn annex
-    floor (`_annex_floor(EXTERNAL_FLOOR, top_installed)` — competitive with the installed top
-    under ADR-0036, the plain pool floor when dynamic sizing is off), from a SEPARATE query
-    filtered to tier=external. Returns [(name, desc, score, alias)]. A dedicated query (not a
+    gate, from a SEPARATE query filtered to tier=external. Returns [(name, desc, score, alias)].
+    ADR-0048 complement gate (default): when the installed top clears GETAWAY_FLOOR the
+    builtin answers the intent, so an external must BEAT that top by ANNEX_BEAT; below it
+    (thin inventory) the plain EXTERNAL_FLOOR applies and the annex widens to cap. Rows
+    then rank by demonstrated usage first (distinct-session get_skill takes, digest via
+    auto_promote), score second. Kill-switch ENFORCER_ANNEX_COMPLEMENT=0 restores the
+    ADR-0036/0047 competitive-margin floor and score-only order. A dedicated query (not a
     partition of a widened installed query) is what guarantees the installed offer is never
     displaced. Empty when the annex is off; the caller wraps this in a try/except so an
     external-query failure degrades to no-annex, never breaks the installed offer."""
     if not EXTERNAL_ANNEX:
         return []
-    floor = _annex_floor(EXTERNAL_FLOOR, top_installed)
+    if ANNEX_COMPLEMENT and top_installed >= GETAWAY_FLOOR:
+        floor = top_installed + ANNEX_BEAT      # well-served intent: complement, not echo
+    elif ANNEX_COMPLEMENT:
+        floor = EXTERNAL_FLOOR                  # thin intent: the case externals exist for
+    else:
+        floor = _annex_floor(EXTERNAL_FLOOR, top_installed)   # ADR-0047 margin rule
     res = _post_json(QUERY_GROUPS_URL,
-                     {"query": vector, "group_by": "name", "limit": EXTERNAL_SLOTS,
+                     {"query": vector, "group_by": "name", "limit": EXTERNAL_SLOTS * 3,
                       "group_size": 1, "with_payload": ["name", "description", "scope"],
                       "filter": {"must": [
                           {"key": "tier", "match": {"value": "external"}}]}},
@@ -1206,7 +1246,10 @@ def _retrieve_external(vector: list, top_installed: float = 0.0) -> list:
             continue
         alias = str(pl.get("scope") or "").split(":", 1)[1] if ":" in str(pl.get("scope") or "") else "?"
         out.append((name, pl.get("description", ""), score, alias))
-    return out
+    if ANNEX_COMPLEMENT:
+        takes = _external_takes()
+        out.sort(key=lambda r: (-takes.get(r[0], 0), -r[2]))   # proven first, score second
+    return out[:EXTERNAL_SLOTS]
 
 
 def _retrieve_foreign(vector: list, top_installed: float = 0.0) -> list:
@@ -1413,7 +1456,8 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
     return route if len(route) >= 2 else []
 
 
-def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None) -> str:
+def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None,
+                    takes: dict | None = None) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
     # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
@@ -1472,7 +1516,8 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
                           + " (projection, fit still required).")
     annex_block = ""
     if annex:
-        alines = [f"  • {name} [external:{alias}] — {_blurb(desc)}"
+        takes = takes or {}
+        alines = [f"  • {name} [external:{alias}{'' if not takes.get(name) else f', used {takes[name]}×'}] — {_blurb(desc)}"
                   for (name, desc, _s, alias) in annex]
         annex_block = (
             "\nExternal catalog matches (NOT installed — consume with get_skill, do not use the "
@@ -1694,7 +1739,9 @@ def main() -> int:
 
         shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
         shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
-        _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign) + _chain_hint(sid))
+        _ext_takes = _external_takes() if (ANNEX_COMPLEMENT and _external) else None
+        _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes)
+                + _chain_hint(sid))
         # ADR-0041 telemetry — computed from the same pure helpers the renderer used, so
         # the ledger row and the injected text can never disagree.
         _ni = 1
@@ -2184,8 +2231,8 @@ def _selftest() -> int:
         req = _ereqs[0]
         if {"key": "tier", "match": {"value": "external"}} not in req.get("filter", {}).get("must", []):
             bad.append("annex query: must carry must tier=external filter: {!r}".format(req.get("filter")))
-        if req.get("limit") != EXTERNAL_SLOTS:
-            bad.append("annex query: limit must be EXTERNAL_SLOTS")
+        if req.get("limit") != EXTERNAL_SLOTS * 3:
+            bad.append("annex query: limit must over-fetch (EXTERNAL_SLOTS * 3)")
         if [n for n, _d, _s, _a in ext] != ["cat:hi"]:
             bad.append(f"annex: only ≥FLOOR externals kept (0.30 dropped): {ext!r}")
         if ext and ext[0][3] != "cat":
@@ -2223,6 +2270,60 @@ def _selftest() -> int:
             bad.append("annex: dynamic floor must prune externals losing to a strong installed top")
         if [n for n, _d, _s, _a in _retrieve_external([0.1], top_installed=0.55)] != ["cat:hi"]:
             bad.append("annex: dynamic floor must keep externals competitive with a weak installed top")
+
+        # (11c) ADR-0048 complement annex. The gate is the design: a well-served intent
+        # (installed top >= GETAWAY_FLOOR) admits an external ONLY if it beats that top by
+        # ANNEX_BEAT; a thin intent (< GETAWAY_FLOOR) opens the annex at the plain floor;
+        # demonstrated takes float a row above higher-scoring untaken rows and render
+        # "used N×"; the kill-switch restores the ADR-0047 margin rule and score-only order.
+        # The takes digest is rebound as the MODULE global — _TAKES_DIGEST_PATH resolves at
+        # import, so a live operator digest must not leak into this leg (same class as the
+        # blocklist selftest fix, 2026-08-29).
+        global ANNEX_COMPLEMENT, ANNEX_BEAT, _TAKES_DIGEST_PATH
+        _saved_c = (ANNEX_COMPLEMENT, ANNEX_BEAT, _TAKES_DIGEST_PATH)
+        ANNEX_COMPLEMENT, ANNEX_BEAT, EXTERNAL_SLOTS = True, 0.04, 4
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as _td:
+            _digest = Path(_td) / "takes.json"
+            _digest.write_text(json.dumps({"cat:hi": 2}), encoding="utf-8")
+            _TAKES_DIGEST_PATH = _digest
+
+            def _fake_c_post(url, payload, timeout):
+                return {"result": {"groups": [
+                    {"id": "1", "hits": [{"payload": {"name": "cat:hi", "description": "dh",
+                                                      "scope": "catalog:cat"}, "score": 0.75}]},
+                    {"id": "2", "hits": [{"payload": {"name": "cat:mid", "description": "dm",
+                                                      "scope": "catalog:cat"}, "score": 0.71}]},
+                    {"id": "3", "hits": [{"payload": {"name": "cat:beat", "description": "db",
+                                                      "scope": "catalog:cat"}, "score": 0.99}]}]}}
+            _post_json = _fake_c_post
+            # well-served intent (0.80 >= 0.45): floor 0.84 — the echo dies, the complement lives
+            got = _retrieve_external([0.1], top_installed=0.80)
+            if [n for n, _d, _s, _a in got] != ["cat:beat"]:
+                bad.append(f"complement: well-served intent must keep ONLY the beater: {got!r}")
+            # thin intent (0.40 < 0.45): plain floor 0.40 — annex widens, proven floats first
+            EXTERNAL_FLOOR = 0.40
+            got = _retrieve_external([0.1], top_installed=0.40)
+            if [n for n, _d, _s, _a in got] != ["cat:hi", "cat:beat", "cat:mid"]:
+                bad.append(f"complement: thin intent must rank proven-first then score: {got!r}")
+            rendered = _ranked_mandate([("inst-a", "da", 0.42)], annex=got,
+                                       takes={"cat:hi": 2})
+            if "used 2×" not in rendered:
+                bad.append("complement: proven external must render its used-N× marker")
+            if rendered.find("cat:hi") > rendered.find("cat:beat"):
+                bad.append("complement: render order must match the ranking (proven first)")
+            # kill-switch: ADR-0047 margin rule returns (margin 0.05 in force → floor 0.75
+            # drops cat:mid,
+            # query order preserved — legacy mode never re-sorts — no marker)
+            ANNEX_COMPLEMENT = False
+            got = _retrieve_external([0.1], top_installed=0.80)
+            if sorted(n for n, _d, _s, _a in got) != ["cat:beat", "cat:hi"]:
+                bad.append(f"complement kill-switch: ADR-0047 margin floor must keep exactly "
+                           f"the above-margin rows: {got!r}")
+            if "used " in _ranked_mandate([("inst-a", "da", 0.9)], annex=got, takes={}):
+                bad.append("complement kill-switch: no used-N× marker in legacy mode")
+        (ANNEX_COMPLEMENT, ANNEX_BEAT, _TAKES_DIGEST_PATH) = _saved_c
+        EXTERNAL_SLOTS = 2
     finally:
         (EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR, _post_json,
          ANNEX_DYNAMIC, ANNEX_MARGIN) = _saved

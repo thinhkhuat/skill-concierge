@@ -117,6 +117,7 @@ def run_once() -> int:
     """Promote every external skill at/over the distinct-session threshold. Returns count promoted."""
     aliases = _aliases()
     takes = _distinct_session_takes(aliases)
+    _write_takes_digest(takes)
     promoted = 0
     for name, sids in sorted(takes.items()):
         if len(sids) < MIN_TAKES:
@@ -129,6 +130,24 @@ def run_once() -> int:
             # collision / already promoted / error — idempotent skip, logged at debug volume
             _log(f"skip {name} ({len(sids)} sessions): {msg}")
     return promoted
+
+
+TAKES_DIGEST = Path(os.environ.get(
+    "SKILL_CONCIERGE_TAKES_DIGEST",
+    Path.home() / ".claude" / "skill-concierge" / "external-takes.json"))
+
+
+def _write_takes_digest(takes: dict) -> None:
+    """ADR-0048: dump {name: distinct-session take count} for the enforcer's annex
+    usage ranking. Advisory only — a failed write leaves the previous digest, and an
+    absent digest ranks the annex by score alone (fail-open both sides)."""
+    try:
+        data = {name: len(sids) for name, sids in sorted(takes.items()) if sids}
+        tmp = TAKES_DIGEST.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, TAKES_DIGEST)
+    except (OSError, UnicodeError, ValueError):
+        return
 
 
 def main() -> int:
@@ -187,6 +206,19 @@ def _selftest() -> int:
             ok &= q2 == ["anti:x", "anti:y"]
             # empty ledger / no aliases -> no takes, no crash
             ok &= _distinct_session_takes(()) == {}
+            # ADR-0048 digest: run_once dumps {name: count} for EVERY counted external
+            # (not only ≥ threshold) to TAKES_DIGEST — rebound as the MODULE global
+            # (the env seam resolves at import; a real operator digest must not be
+            # touched by the selftest, and the selftest must not write the real one).
+            global TAKES_DIGEST
+            _saved_digest = TAKES_DIGEST
+            TAKES_DIGEST = tdp / "takes-digest.json"
+            try:
+                _write_takes_digest(takes)
+                got = json.loads(TAKES_DIGEST.read_text(encoding="utf-8"))
+                ok &= got == {"anti:x": 3, "anti:y": 2}   # counts, not sid sets; sub/non-external absent
+            finally:
+                TAKES_DIGEST = _saved_digest
     finally:
         LEDGER, CATALOG_ROOTS, CATALOGS_PY, MIN_TAKES = saved
     print("auto-promote --selftest " + ("OK" if ok else "FAIL"))

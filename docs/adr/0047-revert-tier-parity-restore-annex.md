@@ -1,6 +1,9 @@
 # ADR-0047 — Revert catalog tier parity; restore the external annex, tuned
 
-Status: Accepted + implemented (2026-08-29).
+Status: Accepted + implemented (2026-08-29). Amended by [ADR-0048](0048-complement-annex.md)
+(same day): the external annex this ADR restored now gates by the complement beat rule and
+ranks by demonstrated usage; the annex SHAPE, floors' kill-switch, and everything this ADR
+reinstated stand unchanged — `ENFORCER_ANNEX_COMPLEMENT=0` restores this ADR's margin rule.
 Supersedes: [ADR-0045](0045-catalog-tier-parity.md) in full (the merged offer pool, the
 tier-blind gates, catalog scopes in the chain sidecar, the every-scope flywheel default,
 and the same-day option-(a) amendment that let mined chains ingest `get_skill` pulls).

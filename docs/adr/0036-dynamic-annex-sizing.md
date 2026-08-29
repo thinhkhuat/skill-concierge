@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Accepted; amended by [ADR-0048](0048-complement-annex.md) — the margin rule now governs the FOREIGN annex only; the external annex moved to the complement beat gate (behind `ENFORCER_ANNEX_COMPLEMENT=0` the margin rule governs externals again) |
 | **Date** | 2026-08-24 |
 | **Supersedes** | none |
 | **Amends** | ADR-0032 and ADR-0034 (their fixed `*_SLOTS = 2` sizing; their zero-displacement invariant is untouched) |

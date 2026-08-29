@@ -77,7 +77,13 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    (≈850 ms) against a 5 s hook timeout, not an unbounded wait.)
 5. **Retrieve.** POST the vector to Qdrant `points/query/groups` with `group_by:"name"`,
    `group_size:1` (the same MAX-pool retrieval as the tool), excluding `tier=external`
-   ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)). `TOP_K = 8` — widened from 5 by
+   ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)) — externals never enter the
+   ranked list; since `0.41.0` ([ADR-0048](../../docs/adr/0048-complement-annex.md)) they
+   annex as the builtin's complement: installed top ≥ `GETAWAY_FLOOR` requires an external
+   to beat it by `ENFORCER_ANNEX_BEAT` (0.04), thin intents widen at the plain floor, and
+   demonstrated takes (auto_promote's `external-takes.json` digest) rank first rendering
+   `used N×` (kill-switch `ENFORCER_ANNEX_COMPLEMENT=0` restores the 0.40.0 margin rule).
+   `TOP_K = 8` — widened from 5 by
    the operator on 2026-07-05 ([ADR-0017](../../docs/adr/0017-enforcer-gate-thresholds-v2-widen-offer-menu.md)).
    Since `0.25.0` ([ADR-0034](../../docs/adr/0034-cross-harness-offer-isolation.md)) the query
    asks for `RETRIEVE_LIMIT = TOP_K * 5` and the **running harness's non-invocable rows are
