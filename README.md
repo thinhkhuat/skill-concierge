@@ -385,6 +385,9 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 ## Status & roadmap
 
+Per-epoch watch items (what to monitor after a release, triggers, env-first actions):
+[`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
+
 
 
 `0.41.0` — **published, complement annex (ADR-0048; owner order "make the external catalogs, while staying as annex, far more helpful … along with the builtin"; ledger evidence: 410 of 2,656 offers carried externals yet only 6 external pulls EVER, all genuine builtin gaps — the 0.40.0 margin rule admitted echoes nobody consumed): when the installed top ≥ `GETAWAY_FLOOR` (reused by owner pick) an external must BEAT that top by `ENFORCER_ANNEX_BEAT` (0.04) to annex — well-served intents go annex-silent; thin intents (< 0.45) widen the annex at the plain `EXTERNAL_FLOOR`; externals with demonstrated `get_skill` takes (distinct sessions; `auto_promote.py` now dumps the `external-takes.json` digest, enforcer reads it live, fail-open) rank FIRST and render `used N×` — provenness reorders, never admits below the gate; the external query over-fetches (`EXTERNAL_SLOTS×3`) so gating/reordering never shrinks the annex. Zero displacement, annex shape, blocklist filtering, promotion valve all untouched. Kill-switch `ENFORCER_ANNEX_COMPLEMENT=0` restores the 0.40.0 margin-rule floor and score-only order (over-fetch stays, strictly better). EPOCH v0.41.0 for offer-composition and external offer→take rates. Verified: enforcer selftest case 11c (beat gate / thin widening / proven-first / marker / kill-switch), auto_promote selftest, live probes, driftcheck 0, independent blind validator.**

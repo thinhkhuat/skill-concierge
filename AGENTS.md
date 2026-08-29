@@ -101,7 +101,9 @@ count, so the doctrine's hardest-rule metric doesn't get inflated by lawful, hoo
   trap: this repo changes the very things the ledger measures (gate floors, retrieval engine, doctrine,
   the embed shim) *almost daily*, so the invocation-ledger is a **sequence of short config epochs, not one
   dataset**. A rate pooled across them describes *no real configuration* and manufactures a false "measured"
-  signal. Before citing ANY ledger rate (fallback / conversion / dodge / hit@k):
+  signal. The standing watch items per epoch (what to monitor, triggers, env-first actions) live in
+  **[`docs/epoch-watch.md`](docs/epoch-watch.md)** — the single canonical reference; this rule governs HOW
+  to measure, that doc governs WHAT to watch. Before citing ANY ledger rate (fallback / conversion / dodge / hit@k):
   1. **Find the current epoch start** — the last commit touching `hooks/scripts/enforcer.py` (thresholds/gates),
      `hooks/doctrine/skill-first.md`, `vendor/skill-search/skill_search/server.py` (retrieval), or
      `scripts/embed_server.py`: `git log --date=format:'%Y-%m-%d %H:%M' --pretty='%cd %h %s' -- <those paths>`.

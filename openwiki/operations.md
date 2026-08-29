@@ -49,6 +49,10 @@ rebuilds the venv or the container — heavy bootstrap is handed off to `setup.s
 
 ## Telemetry — `analyze.py`
 
+The standing per-epoch watch items (what to monitor, triggers, env-first actions) live in
+**[`docs/epoch-watch.md`](../docs/epoch-watch.md)** — the single canonical watching reference;
+this section governs the measurement tooling.
+
 [`scripts/analyze.py`](../scripts/analyze.py) is a read-only, **stdlib-only** analyzer over the
 append-only ledger at `~/.claude/skill-concierge/logs/skill-invocation-ledger.log`. It reports:
 **uptake** (turn used a skill), **search rate**, **dodge** (no skill + no search — the behavior
