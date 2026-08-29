@@ -13,6 +13,18 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.43.0 — consult-intent routing (ADR-0049 phase 2; deployed 2026-08-29 late)
+
+Live epoch. Routing fires only on main sessions (subagent payloads suppressed) and
+only on the EN phrase class v1 — segment by ledger `band: consult_route` rows.
+
+| # | Watch | Trigger | Action |
+|---|-------|---------|--------|
+| W1 | **False-route rate.** Replay every `consult_route` ledger row's prompt against the intent it actually carried. | ≥1 in 5 routed turns was NOT a deliberation ask (over-fire), OR known consult-shaped phrasings repeatedly failing to route (under-fire, e.g. "consult me with this sequence of tasks" — deliberately unmatched v1). | Over-fire → tighten `_CONSULT_RE` anchors (add negative context); under-fire → add the replayed phrasing as a new pattern. NEVER widen from vibes — only from replayed ledger evidence. |
+| W2 | **Route→consult uptake.** Routed turns that actually invoke `skill-concierge:consult` (the `auto` row naming it in the same sid). | Routed turns repeatedly answered from the preview instead of invoking consult. | Strengthen the CONSULT-ROUTE mandate wording (the "never from a per-turn preview alone" clause); if still dodged, route-dodge joins the dodge metrics. |
+| W3 | **--fast depth adequacy.** Fast-tier routed consults leading to re-consults at depth. | ≥3 same-task re-consults asking deep after a routed fast consult. | Flip the routed default to deep, or drop the fast default (owner taste — the ADR left it a judgement call). |
+| W4 | **Route volume.** Share of offer-bearing turns that are consult_route. | Sustained >10% — the phrase class is catching ordinary task turns. | Same replay discipline as W1; expect the true rate near the deliberation-ask frequency (low single digits). |
+
 ## v0.42.0 — consult deliberation layer (ADR-0049; deployed 2026-08-29)
 
 Live epoch. The consult layer is opt-in, so segment by sessions whose ledger carries a

@@ -4,6 +4,24 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+## [0.43.0] — 2026-08-29
+
+### Added — consult-intent routing: ADR-0049 phase 2
+
+The enforcer now ROUTES deliberation-shaped turns to the consult lane instead of
+answering them with the reflex offer. A high-precision English phrase class
+("which skills should I use…", "plan a skill strategy", "best combo of skills",
+"consult which skills fit", "curate the skills…") makes the turn emit a
+`CONSULT-ROUTE` mandate (`reply line 1 = USING: skill-concierge:consult`) and return
+BEFORE the embed/retrieve pipeline — the funnel runs its own wide sieve, so the
+reflex offer's I/O is pure waste on those turns. Subagent sessions never route
+(ADR-0020 `agent_id` suppression); the ledger kind `consult_route` carries the
+prompt verbatim so false routes can be replayed from the ledger before the phrase
+list is widened. Routed consults default `--fast` (deep on request). Kill-switch:
+`SKILL_CONSULT_ROUTE=0`. Selftest pins: 8 fire / 6 silent + mandate render + gate;
+live probes green (route / subagent fallthrough / kill-switch). The deployed hook
+picks the routing up at the operator's plugin update.
+
 ## [0.42.0] — 2026-08-29
 
 ### Added — consult: a deliberation layer over the reflex layer (ADR-0049)

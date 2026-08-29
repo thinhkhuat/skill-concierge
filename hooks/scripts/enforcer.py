@@ -1624,6 +1624,37 @@ def _intent_conversational(vector: list) -> bool:
         return False
 
 
+# ADR-0049 phase 2: consult-intent routing. A deliberation-shaped turn gets the
+# consult skill MANDATED instead of the reflex offer — the funnel runs its own wide
+# sieve, so the leg returns before any embed/retrieve I/O. Subagent sessions never
+# route (ADR-0020: their payloads carry agent_id; a subagent consulting would recurse
+# the deliberation lane). The ledger kind `consult_route` carries the prompt verbatim
+# so false routes can be replayed from the ledger before the phrase list is widened
+# (epoch-watch v0.43.0 watch item).
+CONSULT_ROUTE = os.environ.get("SKILL_CONSULT_ROUTE", "1") != "0"
+# High-precision EN phrase class v1. Anchored on curation SHAPES (modals+I, strategy/
+# combo/chain nouns, consult/curate verbs with a skill object) — a bare 'skill' noun or
+# a reflexive past ("which skill did you use") must stay silent.
+_CONSULT_RE = re.compile(
+    r"\bwhich skills? (?:should|do|can)\s+i\b"
+    r"|\bwhat skills? (?:should|do|can)\s+i\b"
+    r"|\bwhich skills? to\b"
+    r"|\bskill[-\s]strateg(?:y|ies)\b"
+    r"|\bbest (?:combo|chain|combination|set|sequence) of skills?\b"
+    r"|\b(?:consult|curate)\b[^.\n]{0,40}\bskills?\b"
+    r"|\bconsult which\b",
+    re.IGNORECASE)
+CONSULT_MANDATE = (
+    "CONSULT-ROUTE · this turn asks for a deliberated skill curation (ADR-0049).\n"
+    "reply line 1 = USING: skill-concierge:consult\n"
+    "Invoke the consult skill NOW with the user's task as its argument; it runs the "
+    "deliberation funnel (sieve → analyst deep-read → RUN/⚠/ALSO verdict) and composes "
+    "the chain — including any follow-on work named in the task. Answer the "
+    "\"which skills\" question from its verdict card, never from a per-turn preview "
+    "alone. Routed consults default to --fast unless the user asks to go deep.\n"
+    "[consult routing: SKILL_CONSULT_ROUTE=0 disables]")
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read()
@@ -1645,6 +1676,16 @@ def main() -> int:
         if _REFUSAL_RE.search(prompt):
             _inject(MANDATE)
             _append_offer(sid, "negation", [], "skill_refusal", prompt)
+            return 0
+
+        # ADR-0049 phase 2: consult-intent → mandate the deliberation lane and return
+        # BEFORE the embed/retrieve pipeline (the funnel sieves itself; paying the
+        # reflex offer's I/O here would be the exact waste the annex-position note
+        # below warns about). Runs after the refusal guard: an explicit user refusal
+        # of skill behavior outranks routing into a skill-planning turn.
+        if CONSULT_ROUTE and not data.get("agent_id") and _CONSULT_RE.search(prompt):
+            _inject(CONSULT_MANDATE)
+            _append_offer(sid, "consult_route", [], "consult_intent", prompt)
             return 0
 
         # H5 over-fire lane (no I/O): a purely self-referential recap of the agent's OWN prior
@@ -2723,6 +2764,38 @@ def _selftest() -> int:
     finally:
         MULTI_INTENT, CHAIN_PROJECTION, _MINED_CHAINS_PATH = _saved_41
 
+    # (12) ADR-0049 consult-intent routing — phrase-class precision + mandate render.
+    cons_fire = [
+        "which skills should I use for this refactor?",
+        "which skill should I pick before starting the work?",
+        "what skills do I have for this task — plan the chain",
+        "plan a skill strategy for this migration",
+        "what's the best combo of skills for this build?",
+        "consult which skills fit this task",
+        "please curate the skills for this pipeline work",
+        "which skills to use for the deployment tonight",
+    ]
+    cons_off = [
+        "which skill did you just use?",            # reflexive past, not a curation ask
+        "fix the login bug now",                    # plain task
+        "consult the doctor about this rash",       # consult without a skill object
+        "what does this function do",               # conversational
+        "use the formatter on these files",         # affirmation
+        "review the skill-search docs section",     # 'skill' noun without curation intent
+    ]
+    for t in cons_fire:
+        if not _CONSULT_RE.search(t):
+            bad.append("consult MISS (should fire): " + repr(t))
+    for t in cons_off:
+        if _CONSULT_RE.search(t):
+            bad.append("consult FALSE-FIRE (should stay silent): " + repr(t))
+    if "USING: skill-concierge:consult" not in CONSULT_MANDATE:
+        bad.append("consult mandate: must name the USING line")
+    if "SKILL_CONSULT_ROUTE=0" not in CONSULT_MANDATE:
+        bad.append("consult mandate: must carry the kill-switch note")
+    if not CONSULT_ROUTE:
+        bad.append("consult gate: default must be ON (SKILL_CONSULT_ROUTE unset = on)")
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
@@ -2731,6 +2804,7 @@ def _selftest() -> int:
     print(f"enforcer --selftest OK: refusal guard ({len(must_fire)} fire / "
           f"{len(must_not_fire)} silent) + ranked-mandate %-share "
           f"+ actionability imperative-veto ({len(imp_fire)} fire / {len(imp_off)} off) "
+          "+ consult-intent routing (ADR-0049) "
           "+ keepoff-drop + blocklist-drop (ADR-0046) + gap-collapse "
           "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
           f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "

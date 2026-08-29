@@ -63,6 +63,9 @@ Four locked decisions (owner, via AskUserQuestion 2026-08-29), implemented as v0
 consult-intent class on the turn emitting `USING: skill-concierge:consult` via the
 existing mandate machinery, gated `SKILL_CONSULT_ROUTE`, never routing subagent
 sessions. Sequenced after the core is verified live.
+*(Status: implemented in v0.43.0 the same night, after the core verified live —
+blind-tested PASS; two borderline over-fires parked as epoch-watch W1 replay items.
+See the 0.43.0 CHANGELOG entry.)*
 
 ## Consequences
 
