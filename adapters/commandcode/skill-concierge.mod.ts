@@ -39,6 +39,18 @@ const PLUGIN_ROOT = resolvePluginRoot();
 const ENFORCER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/enforcer.py");
 const LEDGER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/ledger.py");
 
+function sessionIdOf(cmd: any, ctx?: any): string {
+  try {
+    if (ctx?.session?.leafId) return ctx.session.leafId();
+    if (cmd?.sessions?.leafId) return cmd.sessions.leafId();
+    if (ctx?.sessionId) return String(ctx.sessionId);
+    if (process.env.COMMANDCODE_SESSION_ID) return process.env.COMMANDCODE_SESSION_ID;
+  } catch {
+    // fail-open: session id is telemetry only
+  }
+  return "";
+}
+
 function runLedger(payload: Record<string, unknown>): void {
   try {
     if (!existsSync(LEDGER_SCRIPT)) return;
@@ -55,10 +67,10 @@ function runLedger(payload: Record<string, unknown>): void {
   }
 }
 
-function runEnforcer(promptText: string): string | null {
+function runEnforcer(promptText: string, sessionId: string): string | null {
   try {
     if (!existsSync(ENFORCER_SCRIPT)) return null;
-    const payload = JSON.stringify({ prompt: promptText });
+    const payload = JSON.stringify({ prompt: promptText, session_id: sessionId });
     const res = spawnSync("python3", [ENFORCER_SCRIPT], {
       input: payload,
       env: { ...process.env, SKILL_CONCIERGE_HARNESS: "commandcode" },
@@ -77,8 +89,12 @@ function runEnforcer(promptText: string): string | null {
 
 export default function (cmd: any): void {
   // ── 1. Per-turn enforcer + prompt telemetry via transformInput ──
+  // Session id is captured from the ModContext (second arg) when available,
+  // otherwise from cmd.sessions.leafId() / env — mirrors OMP's sessionIdOf
+  // pattern and restores chain-hint/ROUTE ledger linkage (ADR-0038/0042 parity).
   cmd.hooks({
-    transformInput: ({ text }: { text: string }) => {
+    transformInput: ({ text }: { text: string }, ctx?: any) => {
+      const sid = sessionIdOf(cmd, ctx);
       try {
         const trimmed = text.trim();
         if (!trimmed) return { action: "continue" };
@@ -86,6 +102,7 @@ export default function (cmd: any): void {
         if (trimmed.startsWith("/")) {
           runLedger({
             hook_event_name: "UserPromptSubmit",
+            session_id: sid,
             prompt: trimmed,
             harness: "commandcode",
           });
@@ -95,15 +112,17 @@ export default function (cmd: any): void {
         // Log turn boundary
         runLedger({
           hook_event_name: "UserPromptSubmit",
+          session_id: sid,
           prompt: trimmed,
           harness: "commandcode",
         });
 
-        // Run semantic enforcer
-        const ctx = runEnforcer(trimmed);
-        if (ctx && ctx.trim()) {
+        // Run semantic enforcer — pass session_id so enforcer's
+        // _last_used_skill + ledger offer/turn join stay linked (ZCode parity).
+        const enforcerCtx = runEnforcer(trimmed, sid);
+        if (enforcerCtx && enforcerCtx.trim()) {
           // Prepend hook context so the model sees the mandate before the request
-          const transformed = `<hook_context source="skill-concierge">\n${ctx.trim()}\n</hook_context>\n\n${text}`;
+          const transformed = `<hook_context source="skill-concierge">\n${enforcerCtx.trim()}\n</hook_context>\n\n${text}`;
           return {
             action: "transform",
             text: transformed,
@@ -117,9 +136,12 @@ export default function (cmd: any): void {
   });
 
   // ── 2. Tool & Skill telemetry via Agent Events ──
+  // Session id threaded through ledger rows so analyze.py can join
+  // offer/turn/auto across turns — ZCode/OMP parity (ADR-0042).
   cmd.on("skill_loaded", ({ name }: { name: string }) => {
     runLedger({
       hook_event_name: "PostToolUse",
+      session_id: sessionIdOf(cmd),
       tool_name: "activate_skill",
       tool_input: { name },
       harness: "commandcode",
@@ -136,6 +158,7 @@ export default function (cmd: any): void {
       ) {
         runLedger({
           hook_event_name: "PostToolUse",
+          session_id: sessionIdOf(cmd),
           tool_name: toolName,
           tool_input: event?.input || {},
           harness: "commandcode",

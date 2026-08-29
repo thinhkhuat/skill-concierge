@@ -567,3 +567,23 @@ Landmines verified live 2026-08-25:
    cache, so the collapsed point stays invocable under OMP (verified live — `skill-concierge:doctor`
    offered to an OMP session, 2026-08-25 smoke probe). `omp-plugin` fills only for OMP-ONLY
    plugins. Diagnosing "why is omp-plugin empty?" without this note costs a full false-bug hunt.
+7. **Session start INSIDE the source repo prints a `skill-search` connect failure — expected
+   noise, not a defect (verified live 2026-08-29, OMP log `omp.2026-08-29.10663.log` line 195).**
+   Harnesses that read project-scope MCP (OMP confirmed; Codex same banner, user-observed)
+   auto-load the root `.mcp.json` as a bare project declaration `mcp:skill-search` when CWD is
+   this repo. Project scope never expands `${CLAUDE_PLUGIN_ROOT}`, so `/bin/bash
+   ${CLAUDE_PLUGIN_ROOT}/bin/skill-search-mcp` exits instantly → `connection closed:
+   initialize response`. The deployed plugin-namespace server (`mcp:skill-concierge:skill-search`,
+   log line 198) still loads and serves every tool. The file STAYS — it is the plugin payload
+   and the env SSOT (ADR-0003/0004; `auto_reindex._mcp_env()`). Claude Code suppresses the same
+   project copy via `disabledMcpServers` in `~/.claude.json` (this repo + `skills-dev`).
+
+## §23 — Command Code hardening notes (ADR-0038 parity review, uncommitted)
+
+Covers the Command Code parity gaps found against the ZCode reference (`adapters/zcode/`).
+
+1. **`SessionStart` hooks run WITHOUT `SKILL_CONCIERGE_HARNESS`.** The Command Code Mod (`cmd.hooks({ transformInput })`) threads `SKILL_CONCIERGE_HARNESS=commandcode` for per-turn enforcement, but `settings.json` `SessionStart` hooks (`hooks/scripts/doctrine.py` etc.) spawn without the Mod's env — so `hooks/scripts/doctrine.py` **must** also detect Command Code via the `.commandcode/` path-marker fallback (checked before the `.claude` marker, same precedence ZCode's `ZCODE_PLUGIN_ROOT` gets). Without it, doctrine/ledger render with the Claude `@`-namespace tool name and the install looks healthy while prefix/wiring is wrong.
+2. **Foreign-scope isolation must include `personal`.** A Command Code session never loads `~/.claude/skills` personal skills — so `hooks/scripts/enforcer.py` `commandcode` foreign scopes include `("plugin", "codex-plugin", "codex-personal", "personal", "omp-*", "zcode-*")`, not just Claude/Codex caches. Without `personal`, Claude personal skills leak into the Command Code top-k as if invocable.
+3. **Chain-hint scope mirror must include `commandcode-*` + `omp-*`.** `hooks/scripts/enforcer.py:_visible_sidecar_names()` unions `zcode-*` scopes for chain hints; parity requires `SKILL_COMMANDCODE_ROOTS`/`SKILL_OMP_ROOTS` mirrors too — otherwise `commandcode-personal` skills never surface as hints.
+4. **Session id must be threaded.** `adapters/commandcode/skill-concierge.mod.ts` captures `sessionIdOf(cmd, ctx)` (ModContext `ctx.session.leafId()` / `cmd.sessions.leafId()` / `COMMANDCODE_SESSION_ID` env) and threads `session_id` into ledger + enforcer payloads — restores `offer↔turn` join and chain-hint/ROUTE linkage that ZCode gets natively from hook payloads.
+5. **Installer verify to ZCode standard.** `adapters/commandcode/install.sh` now mirrors `adapters/zcode/install.sh` §6: mod byte-identical to repo HEAD, SessionStart hook presence, MCP launcher resolvable, plus `scripts/doctor.py` `Command Code integration` row.

@@ -99,11 +99,21 @@ def _harness_adapt(doctrine: str) -> str:
     harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if harness in ("omp", "oh-my-pi"):
         harness = "omp"
+    if harness in ("commandcode", "cmd", "command-code"):
+        harness = "commandcode"
+    if harness in ("zcode", "z-code"):
+        return doctrine  # ZCode rendering is Claude-default; no rewrite (ADR-0042)
     if not harness and os.environ.get("OMPCODE", "").strip() == "1":
         harness = "omp"
+    _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
+    if not harness and _zpr and os.path.isabs(_zpr):
+        harness = "zcode"
+        return doctrine
     if not harness:
         marker_omp = f"{os.sep}.omp{os.sep}"
         marker_codex = f"{os.sep}.codex{os.sep}"
+        marker_zcode = f"{os.sep}.zcode{os.sep}"
+        marker_cmd = f"{os.sep}.commandcode{os.sep}"
         marker_claude = f"{os.sep}.claude{os.sep}"
         for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
             if not cand or not os.path.isabs(cand):
@@ -117,6 +127,12 @@ def _harness_adapt(doctrine: str) -> str:
                 break
             if marker_codex in resolved:
                 harness = "codex"
+                break
+            if marker_zcode in resolved:
+                harness = "zcode"
+                return doctrine
+            if marker_cmd in resolved:
+                harness = "commandcode"
                 break
             if marker_claude in resolved:
                 harness = "claude"
@@ -246,6 +262,48 @@ def _selftest() -> int:
         bad.append("omp adapt: external consumption must be read(skill://...) not get_skill()")
     if 'read("skill://<alias>:<skill>")' not in _adapted:
         bad.append("omp adapt: external consumption hint must read skill://<alias>:<skill>")
+
+    # Command Code (ADR-0038): rewrites the plugin-namespaced MCP + slash to the
+    # bare `mcp__skill-search__search_skills` / `/skill-search` Command Code
+    # actually exposes (verified via the mod adapter's SKILL_CONCIERGE_HARNESS).
+    # Pin the explicit env and the .commandcode path-marker fallback.
+    _saved_cc = os.environ.get("SKILL_CONCIERGE_HARNESS")
+    for _env_val in ("commandcode", "cmd"):
+        os.environ["SKILL_CONCIERGE_HARNESS"] = _env_val
+        try:
+            _adapted = _harness_adapt(_sample)
+        finally:
+            pass
+        if "mcp__skill-search__search_skills" not in _adapted:
+            bad.append(f"commandcode adapt ({_env_val}): tool must be mcp__skill-search__search_skills")
+        if "/skill-search" not in _adapted or "/skill-concierge:skill-search" in _adapted:
+            bad.append(f"commandcode adapt ({_env_val}): slash must be /skill-search")
+        if "mcp__plugin_skill-concierge" in _adapted:
+            bad.append(f"commandcode adapt ({_env_val}): must not keep the plugin-namespaced tool")
+    if _saved_cc is None:
+        os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+    else:
+        os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_cc
+    # Path-marker fallback: a script under .commandcode/ without the env var must
+    # still resolve to commandcode (ADR-0038 SessionStart hooks run without the
+    # mod's env). Monkey-patch __file__ to a fake .commandcode path.
+    import types as _types  # local import so selftest stays stdlib
+    _orig_file = __file__
+    try:
+        globals()["__file__"] = "/tmp/.commandcode/hooks/scripts/doctrine.py"
+        os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+        os.environ.pop("OMPCODE", None)
+        os.environ.pop("ZCODE_PLUGIN_ROOT", None)
+        if _harness_adapt(_sample) == _sample:
+            bad.append("commandcode marker: .commandcode path must trigger the commandcode rewrite")
+        elif "mcp__skill-search__search_skills" not in _harness_adapt(_sample):
+            bad.append("commandcode marker: path fallback must yield the bare tool name")
+    finally:
+        globals()["__file__"] = _orig_file
+        if _saved_cc is None:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+        else:
+            os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_cc
 
     # ZCode (ADR-0042): NO rewrite — the Claude-default rendering is already ZCode-correct
     # (identical flattened plugin MCP tool id + plugin:skill alias), so an explicit zcode

@@ -312,7 +312,9 @@ def _foreign_scopes() -> tuple:
     `project:` scopes are cwd-derived and shared by construction. Never foreign.
     """
     if RUNNING_HARNESS == "commandcode":
-        return ("plugin", "codex-plugin", "codex-personal")
+        return ("plugin", "codex-plugin", "codex-personal", "personal",
+                "omp-personal", "omp-managed", "omp-plugin",
+                "zcode-personal", "zcode-plugin")
     if RUNNING_HARNESS == "codex":
         return ("plugin", "commandcode-personal")
     if RUNNING_HARNESS == "omp":
@@ -817,6 +819,14 @@ def _visible_sidecar_names() -> dict:
         if cwd is not None:
             scopes += [f"zcode-project:{cwd / '.zcode' / 'skills'}",
                        f"zcode-project:{cwd / '.agents' / 'skills'}"]
+    if os.environ.get("SKILL_COMMANDCODE_ROOTS", "1") != "0":  # ADR-0038 commandcode mirror
+        scopes += ["commandcode-personal"]
+        if cwd is not None:
+            scopes.append(f"commandcode-project:{cwd / '.commandcode' / 'skills'}")
+    if os.environ.get("SKILL_OMP_ROOTS", "1") != "0":  # ADR-0039 omp mirror
+        scopes += ["omp-personal", "omp-managed", "omp-plugin"]
+        if cwd is not None:
+            scopes.append(f"omp-project:{cwd / '.omp' / 'skills'}")
     for scope in scopes:
         m = data.get(scope)
         if isinstance(m, dict):

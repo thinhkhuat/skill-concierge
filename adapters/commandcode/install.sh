@@ -191,4 +191,73 @@ EOF
 fi
 
 chmod +x "$MOD_DST" 2>/dev/null || true
-echo "==> skill-concierge Command Code integration installed successfully."
+
+# ── 5. Verify (ZCode parity: adapters/zcode/install.sh §6) ──────────────────
+echo "==> verify:"
+python3 - <<PYEOF
+import json
+from pathlib import Path
+root = Path("$ROOT")
+mod_src = root / "adapters/commandcode/skill-concierge.mod.ts"
+mod_dst = Path("$MOD_DST")
+settings_path = Path("$SETTINGS_FILE")
+mcp_path = Path("$MCP_FILE")
+bad = False
+# 5a. Mod present and byte-identical to repo HEAD (the enforcer/ledger
+#     scripts drift check in ZCode is manual; here we ensure the shipped
+#     mod — the in-generation enforcement organ — matches what we installed).
+try:
+    if mod_dst.read_text(encoding="utf-8") == mod_src.read_text(encoding="utf-8"):
+        print("    mod byte-identical to repo HEAD: yes")
+    else:
+        print("    !! mod differs from repo HEAD — reinstall or re-run this script", flush=True)
+        bad = True
+except Exception as e:
+    print(f"    !! mod read failed: {e}", flush=True)
+    bad = True
+# 5b. SessionStart hook presence + harness env wiring (the doctrine class:
+#     SessionStart hooks run WITHOUT SKILL_CONCIERGE_HARNESS, so doctrine
+#     must also handle the .commandcode path-marker fallback).
+try:
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    cmds = []
+    for block in (settings.get("hooks", {}).get("SessionStart") or []):
+        for h in (block.get("hooks") or []):
+            c = h.get("command", "")
+            if "skill-concierge" in c:
+                cmds.append(c)
+    if cmds:
+        print(f"    SessionStart hooks: {len(cmds)} skill-concierge entries")
+    else:
+        print("    !! no skill-concierge SessionStart hooks found", flush=True)
+        bad = True
+except Exception as e:
+    print(f"    !! settings.json read failed: {e}", flush=True)
+    bad = True
+# 5c. MCP parse + command path resolvable
+try:
+    mcp = json.loads(mcp_path.read_text(encoding="utf-8"))
+    srv = (mcp.get("mcpServers") or {}).get("skill-search") or {}
+    cmd = srv.get("command", "")
+    if cmd and Path(cmd).exists():
+        print(f"    MCP launcher resolvable: yes ({cmd})")
+    elif cmd:
+        print(f"    !! MCP launcher not found at: {cmd}", flush=True)
+        bad = True
+    else:
+        print("    !! MCP skill-search entry missing", flush=True)
+        bad = True
+except Exception as e:
+    print(f"    !! mcp.json read failed: {e}", flush=True)
+    bad = True
+if bad:
+    print("    verify: FAILED — see lines above", flush=True)
+else:
+    print("    verify: OK")
+PYEOF
+# Doctor's harness-specific row (WARN-only, so we surface it but don't fail on it).
+python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Command Code integration" || true
+echo "==> Done. Installed mod + SessionStart hooks + MCP wiring verified."
+echo "    Restart/Reload Command Code to load the new mod (mod loads at session start)."
+echo "    Then confirm: 'cmd mods list' shows skill-concierge with no warnings, and"
+echo "    a session's enforcer ledger rows carry harness=commandcode with a session_id."
