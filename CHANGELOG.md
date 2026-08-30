@@ -4,6 +4,21 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+### Added — OMP installer parity: verified CLI refresh + checkout-sync fallback (ZCode §2-6 shape)
+
+`adapters/omp/install.sh` now reads the `plugin.json` SSOT version, short-circuits when the OMP
+deploy already matches it, refreshes via the omp CLI **with a verified outcome** (the CLI can
+silently lag — OMP sat at 0.30.1 against a 0.38.0 SSOT once), and falls back to a manual sync
+from the checkout when the CLI does not reach SSOT: `git archive HEAD` → the versioned cache
+dir `cache/plugins/skill-concierge___skill-concierge___<v>/`, exec bits ensured, then a backed-up
+registry repoint (`installed_plugins.json`, list/dict-tolerant like doctor's reader). A
+one-directional guard refuses to sync a checkout OLDER than the deployed copy (the launcher's
+ADR-0042 doctrine — ZCode's installer lacks this guard). The verify block gained the ZCode §6
+checks (cache manifest version, launcher exec bit, enforcer byte-identical to HEAD, doctor's
+`OMP integration` row, restart note). Unchanged by design: no `~/.omp/agent/mcp.json` write and
+no `--mcp-fallback` flag — installing the OMP fallback alongside the plugin is the caveats §22.3
+duplicate-server hazard.
+
 ## [0.43.1] — 2026-08-30
 
 ### Changed — consult-intent phrase class v2, widened from replayed ledger evidence
