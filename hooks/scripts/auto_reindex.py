@@ -69,7 +69,8 @@ def _mcp_env():
     for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
               "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS",
               "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS",
-              "SKILL_OMP_ROOTS", "SKILL_ZCODE_ROOTS"):
+              "SKILL_OMP_ROOTS", "SKILL_ZCODE_ROOTS", "SKILL_DSH_ROOTS",
+              "SKILL_CLINE_ROOTS"):
         if k in env and k not in os.environ:
             merged[k] = env[k]
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")

@@ -11,7 +11,9 @@
         "SKILL_LLM_TRIGGERS": "1",
         "TRIGGERS_MAX": "16",
         "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",
-        "SKILL_SERVER_RECORDS": "/Users/thinhkhuat/.cache/skill-search/servers"
+        "SKILL_SERVER_RECORDS": "/Users/thinhkhuat/.cache/skill-search/servers",
+        "SKILL_DSH_ROOTS": "1",
+        "SKILL_CLINE_ROOTS": "1"
       }
     }
   }

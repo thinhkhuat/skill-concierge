@@ -4,14 +4,14 @@
     "name": "thinhkhuat"
   },
   "metadata": {
-    "description": "Skill-governance layer for Claude Code, Codex, Command Code, Oh My Pi, and ZCode — semantic retrieval + use-enforcement + invocation ledger.",
-    "version": "0.43.1"
+    "description": "Skill-governance layer for Claude Code, Codex, Command Code, Oh My Pi, ZCode, and DeepSeek Harness — semantic retrieval + use-enforcement + invocation ledger.",
+    "version": "0.44.1"
   },
   "plugins": [
     {
       "name": "skill-concierge",
       "source": "./",
-      "description": "Fuses semantic skill-search (which skill fits) with a use-enforcement hook (whether Claude actually uses one) over a single catalogue, plus a compounding skill-invocation ledger for data-backed always-on curation.",
+      "description": "Fuses semantic skill-search (which skill fits) with a use-enforcement hook (whether Claude actually uses one) over a single catalogue, plus a compounding skill-invocation ledger for data-backed always-on curation. Supports Claude Code, Codex, Command Code, Oh My Pi, ZCode, and DeepSeek Harness.",
       "category": "developer-tools",
       "tags": [
         "skills",
@@ -20,7 +20,7 @@
         "hooks",
         "telemetry"
       ],
-      "version": "0.43.1"
+      "version": "0.44.1"
     }
   ]
 }

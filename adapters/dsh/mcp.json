@@ -1,0 +1,19 @@
+{
+  "_comment": "DSH MCP descriptor (ADR-0050). DSH's MCP client (dsh-mcp-client) bridges stdio MCP servers into ctx.tools; this descriptor is the de facto reference for the server config. DSH loads the MCP server from the HOST Cordis composition (base.cordis.yml or cordis.patch.yml), not from a standalone file — this file documents the canonical config for manual or installer wiring. Env block is kept in strict lockstep with .mcp.json (scripts/check_mcp_env_parity.py). SKILL_SERVER_RECORDS is omitted here deliberately — the engine's Path.home() default resolves the same directory without a machine-pinned literal.",
+  "mcpServers": {
+    "skill-search": {
+      "command": "/bin/bash",
+      "args": ["/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/bin/skill-search-mcp"],
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "fastembed",
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "SKILL_TOP_K": "6",
+        "SKILL_LLM_TRIGGERS": "1",
+        "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",
+        "SKILL_DSH_ROOTS": "1"
+      }
+    }
+  }
+}

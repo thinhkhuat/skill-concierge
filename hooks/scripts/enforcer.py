@@ -190,11 +190,14 @@ RETRIEVE_LIMIT = TOP_K * 5
 def _running_harness() -> str:
     """Which harness is executing this hook.
 
-    Returns one of: 'commandcode', 'codex', 'omp', 'zcode', or 'claude'.
+    Returns one of: 'commandcode', 'codex', 'dsh', 'omp', 'zcode', or 'claude'.
 
     PRECEDENCE:
     1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter
        and the OMP adapter; OMP also maps `oh-my-pi` so the natural name resolves).
+       `dsh` / `deepseek-harness` / `oh-dsh` map to 'dsh'. `cline` / `cline-cli` map to
+       'cline' (ADR-0051 — the Cline file-hook bridge sets it; Cline has no native env
+       identity signal).
     2. Native harness detection BEFORE path markers: `OMPCODE=1` -> 'omp'. OMP sets BOTH
        `OMPCODE` and `CLAUDE`'s own markers (`CLAUDE_PLUGIN_ROOT`, `CLAUDE.md` presence, etc.),
        so `OMPCODE=1` alone is proof of OMP; `CLAUDE`-only markers never are (OMP's provider
@@ -203,8 +206,13 @@ def _running_harness() -> str:
        `CLAUDE_PLUGIN_ROOT` — into plugin-hook processes, so it is a positive zcode signal
        available before path markers; no other harness sets it. A falsy or non-absolute
        value is never probed (`Path("")` is the cwd, the ADR-0034 falsy-candidate rule).
+       `DSH_SHELL=1` -> 'dsh': DSH sets it in the agent subprocess environment alongside
+       `DSH_HOME` (or `OH_DSH_HOME` for Oh-DSH Desktop). No other harness sets it.
     3. Where the hook/plugin was installed: `.omp` in path -> 'omp', `.codex` in path -> 'codex',
-       `.zcode` in path -> 'zcode', `.claude` in path -> 'claude'.
+       `.zcode` in path -> 'zcode', `.ohdsh` or `.dsh` in path -> 'dsh', `.cline` in path ->
+       'cline' (ADR-0051 fallback; the Cline adapter's shim lives under ~/.cline/hooks only if
+       someone copies the enforcer there — the bridge's explicit env is the primary signal),
+       `.claude` in path -> 'claude'.
     4. Fallback: 'claude' (the pre-ADR-0038 default; commandcode runs through its mod
        adapter, which sets SKILL_CONCIERGE_HARNESS explicitly).
     """
@@ -215,6 +223,10 @@ def _running_harness() -> str:
         return "omp" if explicit in ("omp", "oh-my-pi") else explicit
     if explicit in ("zcode", "z-code"):
         return "zcode"
+    if explicit in ("dsh", "deepseek-harness", "oh-dsh", "ohdsh"):
+        return "dsh"
+    if explicit in ("cline", "cline-cli"):
+        return "cline"
 
     if os.environ.get("OMPCODE", "").strip() == "1":
         return "omp"
@@ -223,9 +235,15 @@ def _running_harness() -> str:
     if _zpr and os.path.isabs(_zpr):
         return "zcode"
 
+    if os.environ.get("DSH_SHELL", "").strip() == "1":
+        return "dsh"
+
     marker_omp = f"{os.sep}.omp{os.sep}"
     marker_codex = f"{os.sep}.codex{os.sep}"
     marker_zcode = f"{os.sep}.zcode{os.sep}"
+    marker_dsh = f"{os.sep}.dsh{os.sep}"
+    marker_ohdsh = f"{os.sep}.ohdsh{os.sep}"
+    marker_cline = f"{os.sep}.cline{os.sep}"
     marker_claude = f"{os.sep}.claude{os.sep}"
     for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
         if not cand or not os.path.isabs(cand):
@@ -240,6 +258,10 @@ def _running_harness() -> str:
             return "codex"
         if marker_zcode in resolved:
             return "zcode"
+        if marker_dsh in resolved or marker_ohdsh in resolved:
+            return "dsh"
+        if marker_cline in resolved:
+            return "cline"
         if marker_claude in resolved:
             return "claude"
     return "claude"
@@ -250,6 +272,14 @@ UNDER_CODEX = (RUNNING_HARNESS == "codex")
 UNDER_COMMANDCODE = (RUNNING_HARNESS == "commandcode")
 UNDER_OMP = (RUNNING_HARNESS == "omp")
 UNDER_ZCODE = (RUNNING_HARNESS == "zcode")
+UNDER_DSH = (RUNNING_HARNESS == "dsh")
+UNDER_CLINE = (RUNNING_HARNESS == "cline")
+
+# Cline skill roots (ADR-0051) — the twin test's filesystem rescue set. Mirrors
+# skills_discovery.CLINE_PERSONAL_ROOT / CLINE_PROJECT_ROOT; stdlib-only duplicate
+# because enforcer.py must not import the engine package.
+_CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"
+_CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"
 
 
 def _foreign_harness_label() -> str:
@@ -268,6 +298,14 @@ def _foreign_harness_label() -> str:
         # cache) — every OTHER harness's scopes are foreign here, so the residual pool is
         # compound (Command Code's label precedent).
         return "claude/codex/omp"
+    if RUNNING_HARNESS == "dsh":
+        # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the ~/.agents/skills
+        # convention root — every other harness's scopes are foreign.
+        return "claude/codex/omp/zcode/commandcode"
+    if RUNNING_HARNESS == "cline":
+        # Cline (ADR-0051) reads only its own two skill roots — every other harness's
+        # scopes are foreign (the DSH residual pool, plus DSH itself now in the set).
+        return "claude/codex/omp/zcode/commandcode/dsh"
     return "codex"
 
 
@@ -323,6 +361,23 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin")
         return base if _zcode_shares_personal_shelf() else base + ("personal",)
+    if RUNNING_HARNESS == "dsh":
+        # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the shared
+        # ~/.agents/skills convention. Every other harness scope is foreign: Claude's
+        # personal/project/plugin, Codex, Command Code, OMP, ZCode — all are skills the
+        # dsh-harness session cannot invoke.
+        return ("plugin", "personal", "codex-personal", "codex-plugin",
+                "commandcode-personal",
+                "omp-personal", "omp-managed", "omp-plugin",
+                "zcode-personal", "zcode-plugin")
+    if RUNNING_HARNESS == "cline":
+        # Cline (ADR-0051) reads only its own two roots — ~/.cline/data/settings/skills
+        # and <cwd>/.cline/skills. It reads NO plugin cache and NO other harness's
+        # personal/project dirs, so every other harness scope is foreign (the DSH shape).
+        return ("plugin", "personal", "codex-personal", "codex-plugin",
+                "commandcode-personal",
+                "omp-personal", "omp-managed", "omp-plugin",
+                "zcode-personal", "zcode-plugin")
     return ("codex-plugin", "codex-personal", "commandcode-personal")
 
 FOREIGN_SCOPES = _foreign_scopes()
@@ -458,6 +513,17 @@ def _invocable_plugin_ids():
         # registry and settings layers describe a different harness's sessions and must
         # not leak ids into the twin test.
         return _zcode_invocable_plugin_ids()
+    if RUNNING_HARNESS == "dsh":
+        # DSH has no plugin registry (it uses Cordis plugins, not a skill plugin
+        # manifest). Return None so the twin test filters nothing — every foreign
+        # row with a plausible name survives until _invocable_twin resolves it
+        # filesystem-side.
+        return None
+    if RUNNING_HARNESS == "cline":
+        # Cline has no skill plugin registry either (ADR-0051: its AgentPlugin
+        # plugins contribute rules/commands/mcpServers/hooks/tools — never skills).
+        # Same None-means-UNKNOWN contract as DSH; the filesystem twin settles it.
+        return None
     installed = {}
     saw_registry = False
     try:
@@ -516,6 +582,13 @@ INVOCABLE_PLUGIN_IDS = _invocable_plugin_ids()
 
 _ZCODE_READ_ROOTS = (Path.home() / ".agents" / "skills", Path.home() / ".zcode" / "skills")
 
+# DSH home for filesystem twin checks (ADR-0050). Mirrors skills_discovery.py:
+# explicit SKILL_DSH_HOME > DSH_HOME env > ~/.ohdsh (preferred, Oh-DSH Desktop)
+# > ~/.dsh (legacy fallback). Resolved once at import, zero network.
+_DSH_HOME_RAW = os.environ.get("SKILL_DSH_HOME") or os.environ.get("DSH_HOME")
+_DSH_HOME = Path(_DSH_HOME_RAW) if _DSH_HOME_RAW else (
+    Path.home() / ".ohdsh" if (Path.home() / ".ohdsh").is_dir() else Path.home() / ".dsh")
+
 
 def _zcode_readable_skill(name: str) -> bool:
     """ADR-0042 filesystem twin: True when `<name>/SKILL.md` exists in a ZCode-readable
@@ -544,6 +617,25 @@ def _invocable_twin(name: str) -> bool:
         if INVOCABLE_PLUGIN_IDS and ":" in name and name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS:
             return True
         return _zcode_readable_skill(name)
+    if RUNNING_HARNESS == "dsh":
+        # DSH has no plugin registry; a foreign-scoped row survives here only through a
+        # filesystem twin — the name exists as a directory under DSH_HOME/skills/
+        # (the DSH personal skill root). OSError -> UNKNOWN -> keep (fail-to-non-blocking).
+        if not _DSH_HOME or not _DSH_HOME.exists():
+            return False
+        try:
+            return (_DSH_HOME / "skills" / name / "SKILL.md").exists()
+        except (OSError, ValueError):
+            return True
+    if RUNNING_HARNESS == "cline":
+        # Cline has no plugin registry (ADR-0051); a foreign-scoped row survives only
+        # through a filesystem twin in one of Cline's two skill roots. OSError ->
+        # UNKNOWN -> keep (fail-to-non-blocking).
+        try:
+            return any((root / name / "SKILL.md").exists() for root in
+                       (_CLINE_PERSONAL_ROOT, _CLINE_PROJECT_ROOT))
+        except (OSError, ValueError):
+            return True
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
@@ -2426,7 +2518,9 @@ def _selftest() -> int:
     _saved_fh = FOREIGN_HARNESS
     try:
         if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex", "commandcode",
-                                   "claude/codex/omp") or not FOREIGN_SCOPES:
+                                   "claude/codex/omp",
+                                   "claude/codex/omp/zcode/commandcode",
+                                   "claude/codex/omp/zcode/commandcode/dsh") or not FOREIGN_SCOPES:
             bad.append(f"cross-harness: harness label / foreign scopes unset: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
         if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-")) for x in FOREIGN_SCOPES):
             bad.append(f"cross-harness: claude harness label disagrees with the foreign scope set: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
@@ -2647,6 +2741,50 @@ def _selftest() -> int:
                 os.environ["ZCODE_PLUGIN_ROOT"] = _saved_z_env[1]
             RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_rh3, _saved_fs3, _saved_inv3
             _zcode_readable_skill, _zcode_shares_personal_shelf = _saved_fstwin, _saved_shelf
+
+        # (ADR-0051) cline detection pins: explicit env maps, the .cline path marker,
+        # the foreign-scope set (every other harness's scopes — no registry), and the
+        # filesystem twin rescue on the Cline personal root.
+        _saved_cl = (RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS)
+        _saved_cl_env = (os.environ.get("SKILL_CONCIERGE_HARNESS"),)
+        try:
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "cline"
+            if _running_harness() != "cline":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=cline must resolve to cline")
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "cline-cli"
+            if _running_harness() != "cline":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=cline-cli must resolve to cline")
+            os.environ["SKILL_CONCIERGE_HARNESS"] = ""
+            if _running_harness() == "cline":
+                bad.append("cross-harness: cline must not resolve without a signal (no native env)")
+            # explicit env outranks every other harness's marker
+            os.environ["SKILL_CONCIERGE_HARNESS"] = "claude"
+            if _running_harness() != "claude":
+                bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=claude must stay claude")
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+
+            RUNNING_HARNESS = "cline"
+            if _foreign_harness_label() != "claude/codex/omp/zcode/commandcode/dsh":
+                bad.append(f"cross-harness: cline foreign label wrong: {_foreign_harness_label()!r}")
+            _fs = _foreign_scopes()
+            if "personal" not in _fs or "plugin" not in _fs or \
+                    not {"codex-personal", "codex-plugin", "commandcode-personal",
+                         "omp-personal", "omp-managed", "omp-plugin",
+                         "zcode-personal", "zcode-plugin"} <= set(_fs):
+                bad.append(f"cross-harness: cline foreign scopes wrong: {_fs!r}")
+            if "cline-personal" in _fs:
+                bad.append("cross-harness: cline must never foreign its own scopes")
+            if _invocable_plugin_ids() is not None:
+                bad.append("cross-harness: cline has no skill plugin registry — must return None")
+            FOREIGN_SCOPES = ("personal", "plugin")
+            INVOCABLE_PLUGIN_IDS = None
+            if _invocable_twin("no-such-cline-twin-xyzzy"):
+                bad.append("cross-harness: cline must not rescue a row with no filesystem twin")
+        finally:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+            if _saved_cl_env[0] is not None:
+                os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_cl_env[0]
+            RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_cl
 
         # kill-switch off -> pre-ADR-0034 request shape and output
         CROSS_HARNESS = False

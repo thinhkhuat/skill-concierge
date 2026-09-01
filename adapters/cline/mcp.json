@@ -1,0 +1,20 @@
+{
+  "_comment": "Cline MCP descriptor (ADR-0051) — MANUAL FALLBACK ONLY. The PRIMARY wiring is the installer's merge of this server into ~/.cline/data/settings/cline_mcp_settings.json (the global map Cline actually reads; cline mcp manages it). Cline expands NO ${VAR} templates, so the interpreter form (/bin/bash + absolute launcher path) is used — the ADR-0042 failure-class closure. Do not run BOTH layers deliberately for the same server name. Env block is kept in strict lockstep with .mcp.json (scripts/check_mcp_env_parity.py); SKILL_SERVER_RECORDS is omitted here deliberately (the engine's Path.home() default resolves the same directory without a machine-pinned literal).",
+  "mcpServers": {
+    "skill-search": {
+      "command": "/bin/bash",
+      "args": ["/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/bin/skill-search-mcp"],
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "fastembed",
+        "SKILL_EMBED_MODEL": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+        "SKILL_TOP_K": "6",
+        "SKILL_LLM_TRIGGERS": "1",
+        "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "/Users/thinhkhuat/.claude/skill-concierge/triggers.json",
+        "SKILL_CLINE_ROOTS": "1"
+      },
+      "disabled": false
+    }
+  }
+}

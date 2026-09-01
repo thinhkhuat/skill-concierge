@@ -56,13 +56,28 @@ def main() -> int:
                 bad.append(f"{k}: only in adapters/zcode/mcp.json ('{v}')")
             elif claude[k] != v:
                 bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/zcode/mcp.json)")
+    dsh_env = env_of("adapters/dsh/mcp.json") if (ROOT / "adapters/dsh/mcp.json").exists() else None
+    if dsh_env is not None:
+        for k, v in dsh_env.items():
+            if k not in claude:
+                bad.append(f"{k}: only in adapters/dsh/mcp.json ('{v}')")
+            elif claude[k] != v:
+                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/dsh/mcp.json)")
+    cline_env = env_of("adapters/cline/mcp.json") if (ROOT / "adapters/cline/mcp.json").exists() else None
+    if cline_env is not None:
+        for k, v in cline_env.items():
+            if k not in claude:
+                bad.append(f"{k}: only in adapters/cline/mcp.json ('{v}')")
+            elif claude[k] != v:
+                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/cline/mcp.json)")
     if bad:
         print("mcp-env-parity FAIL:")
         for b in bad:
             print("  " + b)
         return 1
     omitted = sorted(set(claude) - set(codex))
-    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, Command Code, OMP, and ZCode"
+    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, "
+          f"Command Code, OMP, ZCode, DSH, and Cline"
           + (f"; codex omits {omitted} (deliberate — see descriptor comment)" if omitted else ""))
     return 0
 

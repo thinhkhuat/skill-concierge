@@ -68,6 +68,27 @@ def _zcode_harness() -> str | None:
     return None
 
 
+def _dsh_harness() -> str | None:
+    """DSH stamp fallback (ADR-0050). Same precedence as _zcode_harness: runs only when
+    payload harness and SKILL_CONCIERGE_HARNESS are absent. Detects DSH via DSH_SHELL=1
+    (the env flag DSH sets in agent subprocesses) and the `.ohdsh`/`.dsh` path marker
+    on the hook's install location. Other harnesses are untouched by construction:
+    they never set DSH_SHELL and their install paths never carry the marker."""
+    if os.environ.get("DSH_SHELL", "").strip() == "1":
+        return "dsh"
+    for marker in (f"{os.sep}.ohdsh{os.sep}", f"{os.sep}.dsh{os.sep}"):
+        for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
+            if not cand or not os.path.isabs(cand):
+                continue
+            try:
+                resolved = str(Path(cand).resolve())
+            except (OSError, RuntimeError):
+                continue
+            if marker in resolved:
+                return "dsh"
+    return None
+
+
 def _append(ev: dict) -> None:
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -94,7 +115,8 @@ def main() -> int:
 
         harness = (d.get("harness")
                    or os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
-                   or _zcode_harness())
+                   or _zcode_harness()
+                   or _dsh_harness())
 
         if evt == "UserPromptSubmit":
             prompt = d.get("prompt") or ""

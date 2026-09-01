@@ -95,6 +95,14 @@ def _harness_adapt(doctrine: str) -> str:
     2026-08-28) and resolves plugin skills by the same `plugin:skill` alias, so the
     Claude-default rendering above is already the ZCode-correct one. `SKILL_CONCIERGE_HARNESS=zcode`
     therefore falls through every rewrite branch unchanged.
+
+    Under DSH (ADR-0050): DSH's MCP client bridges MCP tools as
+    `mcp__<serverName>__<rawName>`. The skill-search server has no plugin namespace
+    prefix in DSH (it rides the plain `dsh-mcp-client` entry, not a plugin manifest).
+    So the tool name is `mcp__skill-search__search_skills` — same as commandcode.
+    DSH has no slash-commands; the hint is rewritten to reference the skill tool
+    instead (`skill` + skill name lookup). The get_skill consumption hint is also
+    adapted: call `mcp__skill-search__get_skill` with a `name` argument.
     """
     harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if harness in ("omp", "oh-my-pi"):
@@ -103,17 +111,25 @@ def _harness_adapt(doctrine: str) -> str:
         harness = "commandcode"
     if harness in ("zcode", "z-code"):
         return doctrine  # ZCode rendering is Claude-default; no rewrite (ADR-0042)
+    if harness in ("dsh", "deepseek-harness", "oh-dsh", "ohdsh"):
+        harness = "dsh"
+    if harness in ("cline", "cline-cli"):
+        harness = "cline"
     if not harness and os.environ.get("OMPCODE", "").strip() == "1":
         harness = "omp"
     _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
     if not harness and _zpr and os.path.isabs(_zpr):
         harness = "zcode"
         return doctrine
+    if not harness and os.environ.get("DSH_SHELL", "").strip() == "1":
+        harness = "dsh"
     if not harness:
         marker_omp = f"{os.sep}.omp{os.sep}"
         marker_codex = f"{os.sep}.codex{os.sep}"
         marker_zcode = f"{os.sep}.zcode{os.sep}"
         marker_cmd = f"{os.sep}.commandcode{os.sep}"
+        marker_dsh = f"{os.sep}.dsh{os.sep}"
+        marker_ohdsh = f"{os.sep}.ohdsh{os.sep}"
         marker_claude = f"{os.sep}.claude{os.sep}"
         for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
             if not cand or not os.path.isabs(cand):
@@ -134,9 +150,44 @@ def _harness_adapt(doctrine: str) -> str:
             if marker_cmd in resolved:
                 harness = "commandcode"
                 break
+            if marker_dsh in resolved or marker_ohdsh in resolved:
+                harness = "dsh"
+                break
             if marker_claude in resolved:
                 harness = "claude"
                 break
+    if harness == "dsh":
+        # DSH's MCP client bridges as `mcp__<serverName>__<rawName>` — same naming
+        # as Command Code. No slash-commands in DSH; rewrite to reference the skill
+        # tool and the MCP-bridged get_skill form.
+        return doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            "mcp__skill-search__search_skills"
+        ).replace(
+            "/skill-concierge:skill-search",
+            "mcp__skill-search__search_skills"
+        ).replace(
+            "/skill-search",
+            "mcp__skill-search__search_skills"
+        )
+    if harness == "cline":
+        # Cline (ADR-0051): the MCP server rides the plain global mcpServers map (no
+        # plugin namespace). LIVE-VERIFIED 2026-09-01 on Cline CLI 3.0.60: the CLI is
+        # built on the Claude Agent SDK (embedded @anthropic-ai/claude-agent-sdk in
+        # the shipped binary), so MCP tools surface FLATTENED as `<server>__<tool>` —
+        # there is no `use_mcp_tool` in the model-facing tool surface. No
+        # slash-commands hint form either.
+        _cline_tool = "skill-search__search_skills"
+        return doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            _cline_tool
+        ).replace(
+            "/skill-concierge:skill-search",
+            _cline_tool
+        ).replace(
+            "/skill-search",
+            _cline_tool
+        )
     if harness == "omp":
         return doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",

@@ -4,6 +4,46 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+
+## [0.44.1] — 2026-09-01
+### Fixed — ADR-0051 §4 caveat closed: Cline MCP tool naming live-verified
+- **Live verification** (2026-09-01, Cline CLI 3.0.60): MCP tools surface **flattened**
+  as `<server>__<tool>` (`skill-search__search_skills` / `skill-search__get_skill`) —
+  there is no `use_mcp_tool` in the model-facing tool surface. Provenance: the CLI is
+  built on the Claude Agent SDK (embedded `@anthropic-ai/claude-agent-sdk` confirmed in
+  the shipped binary), matching the tool surface observed live in-session. The phase-1
+  **payload shape** (`postToolUse:{toolName, parameters}`, `userPromptSubmit:{prompt}`,
+  `taskId: conversationId`) is confirmed **correct** from the binary's own hook-contract
+  construction — only the tool *naming* needed the fix.
+- `hooks/scripts/doctrine.py` — the `cline` branch now renders the flattened
+  `skill-search__search_skills` form instead of the classical
+  `use_mcp_tool(server_name, tool_name)`.
+- `adapters/cline/skill-concierge.cline-hook.cjs` — `tool_result` capture gains the
+  flattened MCP-name lanes (args forwarded directly, no `{tool_name, arguments}`
+  wrapper) and accepts the live Skill tool name `skills` alongside `use_skill`;
+  the `use_mcp_tool` branch is kept for classical Cline surfaces.
+- ADR-0051 itself is untouched (immutable); the resolution is recorded here, in the
+  ADR index row, and as dated evidence comments at both fix sites.
+
+## [0.44.0] — 2026-09-01
+### Added — ADR-0051 Cline hepta-harness parity: Cline CLI/SDK joins as the seventh first-class citizen
+
+- `adapters/cline/` — native file-hook enforcement vehicle (no TS adapter): a zero-dependency
+  bridge (`skill-concierge.cline-hook.cjs`) dispatched by generated `UserPromptSubmit.cjs` /
+  `PostToolUse.cjs` shims in `~/.cline/hooks/`; the operator's own extension-less bridges are
+  never touched (Cline co-fires same-event hook files and merges `contextModification`
+  strings — `hook-file-hooks.ts mergeHookControls`). `install.sh` is idempotent: shims,
+  backed-up MCP merge into `~/.cline/data/settings/cline_mcp_settings.json`, skills root.
+- `SKILL_CLINE_ROOTS` discovery (`cline-personal` / `cline-project:<abspath>`), forwarded by
+  `auto_reindex._mcp_env()`; `=0` + reindex reverts byte-identically.
+- Enforcer: `cline` harness identity (`SKILL_CONCIERGE_HARNESS=cline|cline-cli` → `.cline`
+  path marker), `UNDER_CLINE`, foreign scopes = every other harness's scopes, registry-None
+  twin policy + filesystem twin on Cline's two roots, selftest pins. Doctrine gains the
+  `use_mcp_tool(server_name, tool_name)` cline rendering (phase-1 assumption, live
+  verification pending — ADR-0051 §4). `.mcp.json` carries `SKILL_CLINE_ROOTS`;
+  `check_mcp_env_parity` + `driftcheck.json` mirror the cline surface; `doctor.py` gains
+  `check_cline` (WARN-only). Version 0.44.0 across the manifest mirror set.
+
 ### Added — OMP installer parity: verified CLI refresh + checkout-sync fallback (ZCode §2-6 shape)
 
 `adapters/omp/install.sh` now reads the `plugin.json` SSOT version, short-circuits when the OMP

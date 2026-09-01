@@ -98,6 +98,37 @@ ZCODE_INSTALLED_PLUGINS_JSON = Path(os.environ.get(
 ZCODE_CONFIG_JSON = Path(os.environ.get(
     "SKILL_ZCODE_CONFIG", Path.home() / ".zcode" / "cli" / "config.json"))
 
+# DeepSeek Harness (DSH) skill roots (hexa-harness parity, ADR-0050): DSH — including
+# Oh-DSH Desktop, the Electron distribution — stores skills in DSH_HOME/skills
+# (personal; DSH_HOME resolves to ~/.ohdsh under Oh-DSH Desktop or ~/.dsh under the
+# legacy dsh CLI) and <cwd>/.dsh/skills (project-scoped, CWD-relative). Home
+# resolution matches dsh-skill-filesystem: explicit SKILL_DSH_HOME override, else
+# the live DSH_HOME env, else Oh-DSH Desktop's ~/.ohdsh (the reference-machine
+# shape), else the legacy ~/.dsh default.
+# The `.agents/skills` convention dir is deliberately NOT a discovery root (the hard-won
+# ADR-0042 rule: it realpath-dedups into `personal` on the shared-shelf machine and
+# baking a per-machine symlink into the machine-global index is the ADR-0028 hazard —
+# invocability stays the session-side twin check's job, never the index's).
+# Same one-var revert as every other harness: SKILL_DSH_ROOTS=0 drops both paths +
+# scope (byte-identical to the pre-DSH engine; a reindex prunes the dsh-* points).
+DSH_ROOTS = os.environ.get("SKILL_DSH_ROOTS", "1") != "0"
+_DSH_HOME_EXPLICIT = os.environ.get("SKILL_DSH_HOME") or os.environ.get("DSH_HOME")
+_OHDSH_HOME = Path.home() / ".ohdsh"
+DSH_HOME = Path(_DSH_HOME_EXPLICIT) if _DSH_HOME_EXPLICIT else (
+    _OHDSH_HOME if _OHDSH_HOME.is_dir() else Path.home() / ".dsh")
+DSH_PERSONAL_ROOT = DSH_HOME / "skills"                          # DSH personal (all projects)
+DSH_PROJECT_ROOT = Path.cwd() / ".dsh" / "skills"                # DSH project-scoped, CWD-relative
+
+# Cline skill roots (hepta-harness parity, ADR-0051): the Cline CLI/SDK agent runtime
+# stores personal skills at ~/.cline/data/settings/skills/ and project skills at
+# <cwd>/.cline/skills/ — plain SKILL.md directories invoked by the model via a
+# `use_skill` tool (docs.cline.bot/features/skills; verified against Cline 3.0.60).
+# Same one-var revert as every other harness: SKILL_CLINE_ROOTS=0 drops both paths +
+# scope (byte-identical to the pre-Cline engine; a reindex prunes the cline-* points).
+CLINE_ROOTS = os.environ.get("SKILL_CLINE_ROOTS", "1") != "0"
+CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"  # Cline personal
+CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"            # Cline project-scoped, CWD-relative
+
 SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else []
 ) + (
@@ -106,6 +137,10 @@ SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [OMP_PERSONAL_ROOT, OMP_PROJECT_ROOT, OMP_MANAGED_ROOT] if OMP_ROOTS else []
 ) + (
     [ZCODE_PERSONAL_ROOT, ZCODE_PROJECT_ROOT, ZCODE_AGENTS_PROJECT_ROOT] if ZCODE_ROOTS else []
+) + (
+    [DSH_PERSONAL_ROOT, DSH_PROJECT_ROOT] if DSH_ROOTS else []
+) + (
+    [CLINE_PERSONAL_ROOT, CLINE_PROJECT_ROOT] if CLINE_ROOTS else []
 )
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
@@ -726,6 +761,10 @@ def _scope_for(path: Path) -> str:
         return "omp-managed"
     if p.startswith(str(ZCODE_PERSONAL_ROOT) + os.sep):
         return "zcode-personal"
+    if p.startswith(str(DSH_PERSONAL_ROOT) + os.sep):
+        return "dsh-personal"
+    if p.startswith(str(CLINE_PERSONAL_ROOT) + os.sep):
+        return "cline-personal"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:
             return "codex-plugin"
@@ -750,6 +789,10 @@ def _scope_for(path: Path) -> str:
         return f"zcode-project:{ZCODE_PROJECT_ROOT}"
     if p.startswith(str(ZCODE_AGENTS_PROJECT_ROOT) + os.sep):
         return f"zcode-project:{ZCODE_AGENTS_PROJECT_ROOT}"
+    if p.startswith(str(DSH_PROJECT_ROOT) + os.sep):
+        return f"dsh-project:{DSH_PROJECT_ROOT}"
+    if p.startswith(str(CLINE_PROJECT_ROOT) + os.sep):
+        return f"cline-project:{CLINE_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -771,6 +814,10 @@ def visible_scopes() -> set[str]:
         scopes |= {"zcode-personal", "zcode-plugin",
                    f"zcode-project:{ZCODE_PROJECT_ROOT}",
                    f"zcode-project:{ZCODE_AGENTS_PROJECT_ROOT}"}
+    if DSH_ROOTS:
+        scopes |= {"dsh-personal", f"dsh-project:{DSH_PROJECT_ROOT}"}
+    if CLINE_ROOTS:
+        scopes |= {"cline-personal", f"cline-project:{CLINE_PROJECT_ROOT}"}
     return scopes | {f"catalog:{a}" for a in catalog_roots()}
 
 

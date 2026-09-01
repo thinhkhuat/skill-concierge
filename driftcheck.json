@@ -67,8 +67,16 @@
     "adapters/omp/install.sh",
     "adapters/zcode/mcp.json",
     "adapters/zcode/install.sh",
+    "adapters/dsh/mcp.json",
+    "adapters/dsh/skill-concierge.dsh.ts",
+    "adapters/dsh/install.sh",
     "docs/adr/0042-zcode-quintuple-harness-parity.md",
-    "package.json"
+    "docs/adr/0050-dsh-hexa-harness-parity.md",
+    "package.json",
+    "adapters/cline/skill-concierge.cline-hook.cjs",
+    "adapters/cline/install.sh",
+    "adapters/cline/mcp.json",
+    "docs/adr/0051-cline-hepta-harness-parity.md"
   ],
   "command_checks": [
     {

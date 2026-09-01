@@ -79,6 +79,16 @@ CCMD_MOD = CCMD_DIR / "mods" / "skill-concierge.ts"
 CCMD_SETTINGS = CCMD_DIR / "settings.json"
 CCMD_MCP = CCMD_DIR / "mcp.json"
 _CCMD_SETTINGS_HOOK_MARKER = "skill-concierge"  # SessionStart commands contain this string
+# DSH (DeepSeek Harness) surface (ADR-0050) — skill-concierge integrates via the
+# Cordis composition patch system (cordis.patch.yml) and the dsh-mcp-client MCP bridge.
+# DSH_HOME resolves to ~/.ohdsh (Oh-DSH Desktop) or ~/.dsh (legacy dsh CLI).
+# WARN-only — no DSH install is one 'dsh: not installed' row, never a failure.
+DSH_DIR = Path(os.environ.get(
+    "SKILL_DSH_HOME",
+    os.environ.get("DSH_HOME", (
+        Path.home() / ".ohdsh" if (Path.home() / ".ohdsh").is_dir() else Path.home() / ".dsh"))))
+DSH_PATCH = DSH_DIR / "profiles" / "desktop" / "cordis.patch.yml"
+DSH_TUI_PATCH = DSH_DIR / "profiles" / "tui" / "cordis.patch.yml"
 # Same seam as flywheel.py/llm_triggers.py: the engine reads triggers from SKILL_TRIGGERS. The
 # env-less default is durable-home-first with the legacy repo-local path as fallback (the
 # 0.25.1 thresholds pattern): the live .mcp.json pins the durable home, so a doctor run from a
@@ -1492,12 +1502,114 @@ def check_zcode():
             "fix": None}
 
 
+def check_dsh():
+    """DSH (DeepSeek Harness) install state — Cordis patch presence, MCP server wiring (ADR-0050).
+
+    DSH integrates skill-concierge through its Cordis composition system: the
+    skill-search MCP server is registered in a cordis.patch.yml that the DSH
+    runtime merges into the host profile. DSH has no marketplace plugin for
+    skill-concierge, so the signals are:
+      1. Profile presence — at least one DSH profile directory exists
+      2. Cordis patch — the MCP server entry in cordis.patch.yml
+      3. Launcher — the skill-search-mcp binary exists and is executable
+    WARN-only — no DSH install is one 'dsh: not installed' row, never a failure.
+    """
+    if not DSH_DIR.exists():
+        return {"id": "dsh", "label": "DSH integration", "status": WARN,
+                "detail": "dsh: not installed (no DSH_HOME) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    # 1. Profile presence
+    desktop_profile = DSH_DIR / "profiles" / "desktop"
+    tui_profile = DSH_DIR / "profiles" / "tui"
+    if not desktop_profile.exists() and not tui_profile.exists():
+        findings.append("no DSH profile directories found (no profiles/desktop or profiles/tui)")
+    # 2. Cordis patch with skill-search entry
+    for label, patch_file in [("desktop", DSH_PATCH), ("tui", DSH_TUI_PATCH)]:
+        if patch_file.exists():
+            try:
+                text = patch_file.read_text(encoding="utf-8")
+                if "skill-search" in text and "skill-concierge" in text:
+                    pass  # found
+                else:
+                    findings.append(f"{label} cordis.patch.yml missing skill-search entry")
+            except (OSError, UnicodeError):
+                findings.append(f"{label} cordis.patch.yml unreadable")
+    # 3. Launcher
+    launcher = ROOT / "bin" / "skill-search-mcp"
+    if not launcher.exists():
+        findings.append("skill-search-mcp launcher missing from the repo bin/")
+    elif not os.access(launcher, os.X_OK):
+        findings.append("skill-search-mcp launcher not executable")
+    # 4. Enforcer present
+    enforcer = ROOT / "hooks" / "scripts" / "enforcer.py"
+    if not enforcer.exists():
+        findings.append("enforcer.py missing from the repo hooks/scripts/")
+    if findings:
+        return {"id": "dsh", "label": "DSH integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "dsh", "label": "DSH integration", "status": OK,
+            "detail": "DSH profile + cordis.patch.yml + MCP launcher + enforcer all present",
+            "fix": None}
+
+
+# Cline (Cline CLI/SDK runtime) surface (ADR-0051) — skill-concierge integrates via
+# Cline's native file-hook surface (UserPromptSubmit.cjs / PostToolUse.cjs shims in
+# ~/.cline/hooks/ bridging to the repo's enforcer/doctrine/ledger) plus an MCP row
+# in the global cline_mcp_settings.json. WARN-only — no Cline install is one
+# 'cline: not installed' row, never a failure.
+CLINE_DIR = Path.home() / ".cline"
+CLINE_HOOKS = CLINE_DIR / "hooks"
+CLINE_MCP_SETTINGS = CLINE_DIR / "data" / "settings" / "cline_mcp_settings.json"
+CLINE_SKILLS = CLINE_DIR / "data" / "settings" / "skills"
+
+
+def check_cline():
+    """Cline install state — hook shims, MCP row, skills root (ADR-0051).
+
+    WARN-only — no Cline install is one 'cline: not installed' row, never a failure.
+    """
+    if not CLINE_DIR.exists():
+        return {"id": "cline", "label": "Cline integration", "status": WARN,
+                "detail": "cline: not installed (no ~/.cline) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    # 1. Own hook shims (the operator's own extension-less bridges are NOT ours to check)
+    for shim in ("UserPromptSubmit.cjs", "PostToolUse.cjs"):
+        if not (CLINE_HOOKS / shim).exists():
+            findings.append(f"missing hook shim {shim} (run adapters/cline/install.sh)")
+    bridge = ROOT / "adapters" / "cline" / "skill-concierge.cline-hook.cjs"
+    if not bridge.exists():
+        findings.append("bridge module missing from the repo adapters/cline/")
+    # 2. MCP row
+    try:
+        if CLINE_MCP_SETTINGS.exists():
+            servers = json.loads(CLINE_MCP_SETTINGS.read_text(encoding="utf-8")).get("mcpServers", {})
+            row = servers.get("skill-search")
+            if not row or not row.get("command"):
+                findings.append("cline_mcp_settings.json missing the skill-search MCP row")
+        else:
+            findings.append("cline_mcp_settings.json missing (no global MCP config yet)")
+    except (OSError, UnicodeError, ValueError):
+        findings.append("cline_mcp_settings.json unreadable")
+    # 3. Skills root (the cline-personal discovery root)
+    if not CLINE_SKILLS.exists():
+        findings.append("personal skills root missing (~/.cline/data/settings/skills)")
+    if findings:
+        return {"id": "cline", "label": "Cline integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "cline", "label": "Cline integration", "status": OK,
+            "detail": "hook shims + MCP row + skills root all present",
+            "fix": None}
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_blocklist,
-          check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
+          check_catalogs, check_omp, check_codex, check_commandcode, check_zcode, check_dsh,
+          check_cline,
           check_ledger, check_dup_mcp, check_mcp_enabled]
 
 
