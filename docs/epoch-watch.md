@@ -13,6 +13,17 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.46.0 — cross-harness plugin-offer gates (ADR-0053; deployed 2026-09-06)
+
+Live epoch. Offer composition changes mechanically in three harnesses (omp gates namespaced
+plugin rows on INVOCABLE membership; dsh/cline drop them) — offer-breadth and take-rate
+baselines reset here. Segment omp sessions by `harness: "omp"` ledger rows.
+
+| # | Watch | Trigger | Action |
+|---|-------|---------|--------|
+| W1 | **OMP plugin-row correctness.** Plugin-scope rows leave omp offers exactly where claude layers/OMP registry disable them; enabled plugins (e.g. repo-re-enabled agent-skills) must still appear. | An ENABLED plugin stops appearing in omp offers, or a disabled one still does. | Re-run the ADR-0053 sims (disabled-plugin prompt under omp must not offer; enabled must); check `ENFORCER_PLUGIN_GATE` on in the ext hook env; re-probe INVOCABLE under omp via import. |
+| W2 | **DSH/Cline offer breadth.** Namespaced plugin rows gone from MAIN offers; personal/project rows unchanged. | A dsh/cline session's main offer loses NON-plugin rows, or still shows `prefix:name` plugin rows in the main menu (annex "NOT invocable" rows are by design). | Inspect the `_plugin_gate_ok` dsh/cline branch; annex appearances are correct — do not "fix" them. |
+
 ## v0.43.0 — consult-intent routing (ADR-0049 phase 2; deployed 2026-08-29 late)
 
 Live epoch. Routing fires only on main sessions (subagent payloads suppressed) and

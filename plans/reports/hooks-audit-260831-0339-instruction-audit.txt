@@ -1,0 +1,39 @@
+============================================================
+HOOKS AUDIT REPORT
+============================================================
+Total hook entries : 59
+Missing files      : 12
+Duplicates         : 2
+
+── MISSING FILES ──────────────────────────────────────
+  [PermissionRequest] matcher=*
+    /.orca/agent-hooks/claude-hook.sh
+  [PostToolUse] matcher=*
+    /.orca/agent-hooks/claude-hook.sh
+  [PostToolUseFailure] matcher=*
+    /.orca/agent-hooks/claude-hook.sh
+  [PreToolUse] matcher=*
+    /.orca/agent-hooks/claude-hook.sh
+  [SessionStart] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [Stop] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [StopFailure] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [SubagentStart] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [SubagentStop] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [TeammateIdle] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [UserPromptSubmit] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+  [PostCompact] matcher=<no matcher>
+    /.orca/agent-hooks/claude-hook.sh
+
+── DUPLICATES ─────────────────────────────────────────
+  [UserPromptSubmit] secret-output-guardrail.cjs  (x2)
+  [UserPromptSubmit] simplify-gate.cjs  (x2)
+
+Total issues: 14  — run with --patch to auto-fix.
+============================================================

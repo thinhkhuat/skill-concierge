@@ -1,0 +1,606 @@
+# Skill Cleaner Report
+
+generated: 2026-08-30T20:43:55.391Z
+months: 3
+skills: 705 discovered, 600 considered
+description_chars: 200224
+rendered_line_chars: 262960
+log_files_scanned: 91
+
+## Skill Budget
+
+model: gpt-5.5
+context_tokens: 272,000
+context_source: fallback:gpt-5.5
+2%_budget_tokens: 5,440
+codex_cost_rule: ceil(utf8_bytes / 4)
+unbudgeted_full_tokens: 66,604
+minimum_no_description_tokens: 15,703
+budgeted_tokens_used: 5,432
+used_of_2%_budget: 99.9%
+unbudgeted_used_of_2%_budget: 1224.3%
+used_of_context: 2.0%
+remaining_2%_budget_tokens: 8
+included_skills_after_budget: 158
+omitted_skills_after_budget: 442
+truncated_description_chars: 200,224
+effective_context_tokens: 258,400 (95%)
+effective_2%_budget_tokens: 5,168
+used_of_effective_2%_budget: 105.1%
+remaining_effective_2%_budget_tokens: -264
+
+## Description Candidates
+
+- vn-news-coverage-tracker
+  path: /Users/thinhkhuat/.codex/skills/vn-news-coverage-tracker/SKILL.md
+  chars: description=1442, rendered_line=1545
+  current: Scan Vietnamese (and general) news + social for ONE topic over a time window and build a dated, classified article list. Use whenever the user wants to track press/social coverage of a topic across outlets over a period — "scan the news for X", "build a list of articles about X", "điểm báo về X", "theo dõi báo chí/dư luận về X", "coverage of X over the last week", "who covered X", "full list of articles on X from date Y", "monitor reaction to X". Composes the news-monitor-cli (Exa / Tavily social / vietnews Google-News backend) and feedbin-cli (archive) skills. Resolves the REAL publish date of every hit (filling a missing date from another engine's date for the same URL, never inventing one), keeps the full no-dedup multiset by default, collapses to one row per article on --dedup (keyed on the article URL, never the title), classifies each article VALID / INVALID / UNRESOLVED against an event or window cutoff (read the cutoff off a per-date count of the corpus when no event date is given — the news break shows up as a spike), and emits markdown + JSON + CSV (xlsx via --xlsx). Then, on request, derives findings from the list (how the headlines vary on the key figure, on attribution, on terminology) and renders a Vietnamese .docx via vn-gov-docx (A4 portrait, Nghị định 30) or a landscape catalogue via officecli-docx. Does NOT author narrative reports (route to vn-author / vn-bctt-report) and does NOT dedup unless asked.
+  suggested: Google, release, search, docs: search, sync, summarize.
+- football-data
+  path: /Users/thinhkhuat/.codex/skills/football-data/SKILL.md
+  chars: description=1120, rendered_line=1201
+  current: Football (soccer) data across 13 leagues — standings, schedules, match stats, xG, transfers, player profiles. Zero config, no API keys. Covers Premier League, La Liga, Bundesliga, Serie A, Ligue 1, MLS, Champions League, World Cup, Championship, Eredivisie, Primeira Liga, Serie A Brazil, European Championship. Use when: user asks about football/soccer standings, fixtures, match stats, xG, lineups, player values, transfers, injury news, league tables, daily fixtures, or player profiles. Don't use when: user asks about American football/NFL (use nfl-data), college football (use cfb-data), NBA (use nba-data), WNBA (use wnba-data), college basketball (use cbb-data), NHL (use nhl-data), MLB (use mlb-data), tennis (use tennis-data), golf (use golf-data), cricket (use cricket-data), Formula 1 (use fastf1), or betting odds (use polymarket or kalshi). Don't use for live/real-time scores — data updates post-match. Don't use get_season_leaders or get_missing_players for non-Premier League leagues (they return empty). Don't use get_event_xg for leagues outside the top 5 (EPL, La Liga, Bundesliga, Serie A, Ligue 1).
+  suggested: debug: deploy, release, verify.
+- vn-deep-dive-report
+  path: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/.backup-control3-20260803-020348/SKILL.md
+  chars: description=1114, rendered_line=1240
+  current: Generate Vietnamese government-style single-topic deep-dive briefings (báo cáo tham mưu chuyên đề) for the Prime Minister and senior leadership. Use whenever the user asks for a chuyên đề / in-depth briefing / deep-dive report on ONE specific topic (a foreign policy development, a new technology, a company/product launch, a geopolitical incident, an international regulation, a cybersecurity event, etc.) written in Vietnamese tham mưu register for PM/Phó TTg readers. Different from vn-bctt-report (multi-topic kỳ báo cáo; its --focus mode narrows the SAME dư-luận/chỉ-đạo BRIEFING spine to 1–2 subjects — route by output format: analysis dossier with own spine = deep-dive; narrowed briefing spine = bctt focus). Use this when the user names ONE target subject and wants comprehensive analysis — facts, reactions, risk assessment, recommendations. Supports `--thorough <high|medium|med|low>` flag (default medium) to control research depth and report length. Triggers: "báo cáo chuyên đề", "báo cáo tham mưu về [X]", "deep-dive về [X]", "phân tích toàn diện [X] kiểu chính phủ", "báo cáo gửi Thủ tướng về [X]".
+  suggested: vn deep dive report: deploy, release, verify.
+- vn-deep-dive-report
+  path: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/.backup-item6-20260803-025300/SKILL.md
+  chars: description=1114, rendered_line=1237
+  current: Generate Vietnamese government-style single-topic deep-dive briefings (báo cáo tham mưu chuyên đề) for the Prime Minister and senior leadership. Use whenever the user asks for a chuyên đề / in-depth briefing / deep-dive report on ONE specific topic (a foreign policy development, a new technology, a company/product launch, a geopolitical incident, an international regulation, a cybersecurity event, etc.) written in Vietnamese tham mưu register for PM/Phó TTg readers. Different from vn-bctt-report (multi-topic kỳ báo cáo; its --focus mode narrows the SAME dư-luận/chỉ-đạo BRIEFING spine to 1–2 subjects — route by output format: analysis dossier with own spine = deep-dive; narrowed briefing spine = bctt focus). Use this when the user names ONE target subject and wants comprehensive analysis — facts, reactions, risk assessment, recommendations. Supports `--thorough <high|medium|med|low>` flag (default medium) to control research depth and report length. Triggers: "báo cáo chuyên đề", "báo cáo tham mưu về [X]", "deep-dive về [X]", "phân tích toàn diện [X] kiểu chính phủ", "báo cáo gửi Thủ tướng về [X]".
+  suggested: vn deep dive report: deploy, release, verify.
+- vn-deep-dive-report
+  path: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/.backup-pre-source-reorder/SKILL.md
+  chars: description=1114, rendered_line=1234
+  current: Generate Vietnamese government-style single-topic deep-dive briefings (báo cáo tham mưu chuyên đề) for the Prime Minister and senior leadership. Use whenever the user asks for a chuyên đề / in-depth briefing / deep-dive report on ONE specific topic (a foreign policy development, a new technology, a company/product launch, a geopolitical incident, an international regulation, a cybersecurity event, etc.) written in Vietnamese tham mưu register for PM/Phó TTg readers. Different from vn-bctt-report (multi-topic kỳ báo cáo; its --focus mode narrows the SAME dư-luận/chỉ-đạo BRIEFING spine to 1–2 subjects — route by output format: analysis dossier with own spine = deep-dive; narrowed briefing spine = bctt focus). Use this when the user names ONE target subject and wants comprehensive analysis — facts, reactions, risk assessment, recommendations. Supports `--thorough <high|medium|med|low>` flag (default medium) to control research depth and report length. Triggers: "báo cáo chuyên đề", "báo cáo tham mưu về [X]", "deep-dive về [X]", "phân tích toàn diện [X] kiểu chính phủ", "báo cáo gửi Thủ tướng về [X]".
+  suggested: vn deep dive report: deploy, release, verify.
+- vn-deep-dive-report
+  path: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/.backup-pre-v2.6.0/SKILL.md
+  chars: description=1114, rendered_line=1226
+  current: Generate Vietnamese government-style single-topic deep-dive briefings (báo cáo tham mưu chuyên đề) for the Prime Minister and senior leadership. Use whenever the user asks for a chuyên đề / in-depth briefing / deep-dive report on ONE specific topic (a foreign policy development, a new technology, a company/product launch, a geopolitical incident, an international regulation, a cybersecurity event, etc.) written in Vietnamese tham mưu register for PM/Phó TTg readers. Different from vn-bctt-report (multi-topic kỳ báo cáo; its --focus mode narrows the SAME dư-luận/chỉ-đạo BRIEFING spine to 1–2 subjects — route by output format: analysis dossier with own spine = deep-dive; narrowed briefing spine = bctt focus). Use this when the user names ONE target subject and wants comprehensive analysis — facts, reactions, risk assessment, recommendations. Supports `--thorough <high|medium|med|low>` flag (default medium) to control research depth and report length. Triggers: "báo cáo chuyên đề", "báo cáo tham mưu về [X]", "deep-dive về [X]", "phân tích toàn diện [X] kiểu chính phủ", "báo cáo gửi Thủ tướng về [X]".
+  suggested: vn deep dive report: deploy, release, verify.
+- vn-deep-dive-report
+  path: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/SKILL.md
+  chars: description=1114, rendered_line=1207
+  current: Generate Vietnamese government-style single-topic deep-dive briefings (báo cáo tham mưu chuyên đề) for the Prime Minister and senior leadership. Use whenever the user asks for a chuyên đề / in-depth briefing / deep-dive report on ONE specific topic (a foreign policy development, a new technology, a company/product launch, a geopolitical incident, an international regulation, a cybersecurity event, etc.) written in Vietnamese tham mưu register for PM/Phó TTg readers. Different from vn-bctt-report (multi-topic kỳ báo cáo; its --focus mode narrows the SAME dư-luận/chỉ-đạo BRIEFING spine to 1–2 subjects — route by output format: analysis dossier with own spine = deep-dive; narrowed briefing spine = bctt focus). Use this when the user names ONE target subject and wants comprehensive analysis — facts, reactions, risk assessment, recommendations. Supports `--thorough <high|medium|med|low>` flag (default medium) to control research depth and report length. Triggers: "báo cáo chuyên đề", "báo cáo tham mưu về [X]", "deep-dive về [X]", "phân tích toàn diện [X] kiểu chính phủ", "báo cáo gửi Thủ tướng về [X]".
+  suggested: vn deep dive report: deploy, release, verify.
+- omo:teammode
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/teammode/skills/teammode/SKILL.md
+  chars: description=1090, rendered_line=1223
+  current: Codex-only team orchestration: run a named team of cooperating Codex workers with durable, script-managed state. MUST USE when the user asks Codex to create, run, coordinate, inspect, archive, or delete a team of agents/threads/sessions, or to work on something as a team in parallel. FIRST inspects the active tool surface (checking tool_search for deferred tools) and tells the user the route: native MultiAgentV2 agents (flat spawn_agent with task_name) when available, Codex App threads as the fallback, or a plain-subagent split when neither set exists. The main session is always the leader; members are defined by a concrete part, ownership area, or perspective - never a vague job role; a bundled cross-platform script writes the .omo/teams state plus an auto-generated member field manual. Use a team when the work is not perfectly isolated but parallelizing helps; use plain subagents when scope is perfectly isolated or the goal is ambiguous. Triggers: team mode, teammode, make a team, run as a team, team of agents, coordinate threads, parallel Codex threads, archive the team.
+  suggested: debug, search: debug, inspect, fix.
+- omo:teammode
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/teammode/SKILL.md
+  chars: description=1090, rendered_line=1203
+  current: Codex-only team orchestration: run a named team of cooperating Codex workers with durable, script-managed state. MUST USE when the user asks Codex to create, run, coordinate, inspect, archive, or delete a team of agents/threads/sessions, or to work on something as a team in parallel. FIRST inspects the active tool surface (checking tool_search for deferred tools) and tells the user the route: native MultiAgentV2 agents (flat spawn_agent with task_name) when available, Codex App threads as the fallback, or a plain-subagent split when neither set exists. The main session is always the leader; members are defined by a concrete part, ownership area, or perspective - never a vague job role; a bundled cross-platform script writes the .omo/teams state plus an auto-generated member field manual. Use a team when the work is not perfectly isolated but parallelizing helps; use plain subagents when scope is perfectly isolated or the goal is ambiguous. Triggers: team mode, teammode, make a team, run as a team, team of agents, coordinate threads, parallel Codex threads, archive the team.
+  suggested: debug, search: debug, inspect, fix.
+- omo:teammode
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/teammode/skills/teammode/SKILL.md
+  chars: description=1090, rendered_line=1223
+  current: Codex-only team orchestration: run a named team of cooperating Codex workers with durable, script-managed state. MUST USE when the user asks Codex to create, run, coordinate, inspect, archive, or delete a team of agents/threads/sessions, or to work on something as a team in parallel. FIRST inspects the active tool surface (checking tool_search for deferred tools) and tells the user the route: native MultiAgentV2 agents (flat spawn_agent with task_name) when available, Codex App threads as the fallback, or a plain-subagent split when neither set exists. The main session is always the leader; members are defined by a concrete part, ownership area, or perspective - never a vague job role; a bundled cross-platform script writes the .omo/teams state plus an auto-generated member field manual. Use a team when the work is not perfectly isolated but parallelizing helps; use plain subagents when scope is perfectly isolated or the goal is ambiguous. Triggers: team mode, teammode, make a team, run as a team, team of agents, coordinate threads, parallel Codex threads, archive the team.
+  suggested: debug, search: debug, inspect, fix.
+- omo:teammode
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/teammode/SKILL.md
+  chars: description=1090, rendered_line=1203
+  current: Codex-only team orchestration: run a named team of cooperating Codex workers with durable, script-managed state. MUST USE when the user asks Codex to create, run, coordinate, inspect, archive, or delete a team of agents/threads/sessions, or to work on something as a team in parallel. FIRST inspects the active tool surface (checking tool_search for deferred tools) and tells the user the route: native MultiAgentV2 agents (flat spawn_agent with task_name) when available, Codex App threads as the fallback, or a plain-subagent split when neither set exists. The main session is always the leader; members are defined by a concrete part, ownership area, or perspective - never a vague job role; a bundled cross-platform script writes the .omo/teams state plus an auto-generated member field manual. Use a team when the work is not perfectly isolated but parallelizing helps; use plain subagents when scope is perfectly isolated or the goal is ambiguous. Triggers: team mode, teammode, make a team, run as a team, team of agents, coordinate threads, parallel Codex threads, archive the team.
+  suggested: debug, search: debug, inspect, fix.
+- archon
+  path: /Users/thinhkhuat/.codex/skills/archon/SKILL.md
+  chars: description=1076, rendered_line=1143
+  current: Use when: User wants to run Archon workflows, CREATE workflows or commands, set up Archon, or manage Archon configuration. Triggers (run): "use archon to", "run archon", "archon workflow", "use archon for", "have archon", "let archon", "ask archon to". Triggers (create): "create a workflow", "write a workflow", "make a command", "author a workflow", "new workflow", "new command", "archon workflow yaml". Triggers (setup): "set up archon", "install archon", "how to use archon", "configure archon", "archon setup", "get started with archon". Triggers (config): "change my archon config", "modify archon config", "archon config", "change archon settings", "update my config", "help me change my config", "edit archon config", "archon configuration". Triggers (init): "initialize archon", "set up .archon", "archon init", "add archon to repo". Capability: Runs AI workflows in isolated git worktrees for parallel development. Also: Creates and manages workflow YAML files, command files, and configuration. NOT for: Direct Claude Code work - only for delegating to Archon CLI.
+  suggested: docs: create, build, validate.
+- omo:debugging
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/debugging/SKILL.md
+  chars: description=1008, rendered_line=1123
+  current: MUST USE for any real runtime debugging across ANY language or binary — crashes, silent failures, wrong responses, stuck processes, memory leaks, async misbehavior, unexplained timing, reverse engineering. Runs a hypothesis-driven loop: form ≥3 hypotheses, investigate in parallel, after 2 failed rounds spawn Oracles from orthogonal angles, confirm root cause, lock with a failing test, fix minimally, QA by actually USING the system, scrub artifacts. The actual HOW lives in `references/` — READ THEM. Triggers: 'debug this', 'why is X not working', 'hanging', 'attach a debugger', 'reverse engineer', 'pwndbg', 'gdb', 'lldb', 'node inspect', 'tsx debug', 'pdb', 'dlv', 'delve', 'rust-gdb', 'set a breakpoint', 'context window exploded', 'why is the response empty', 'why is this happening', 'trace this bug', 'reproduce and fix', 'silent failure', 'HTTP 200 but empty', 'why did it stop', 'inspect the binary', 'playwright', 'flaky test', 'fails intermittently', 'passes in isolation', 'only fails in CI'.
+  suggested: GitHub, debug: debug, inspect, fix.
+- vn-gov-docx
+  path: /Users/thinhkhuat/.codex/skills/vn-gov-docx/SKILL.md
+  chars: description=1002, rendered_line=1079
+  current: Render any Vietnamese government-styled Word document (.docx) from markdown or plain prose using officecli — A4 21×29,7 cm, margins 2-2-3-2 cm per Nghị định 30/2020/NĐ-CP, Times New Roman 14 pt, justified body, first-line indentation ladder (1 cm prose / 1,27 cm per level), literal dash lead points, real auto-numbered Word footnotes, and Word tables. Styling only — it imposes no document form, so it fits báo cáo, tờ trình, công văn, kế hoạch, đề án, biên bản, thông báo, quyết định, phụ lục, or any other văn bản. Use when the user asks to turn Vietnamese text, a markdown report, or a draft into a Word file in government / công vụ / hành chính style, asks for a .docx trình lãnh đạo, or asks to fix a document's font, margins, indentation, or footnotes to the Vietnamese formal-document standard. Triggers: 'xuất ra file Word', 'làm file docx kiểu văn bản nhà nước', 'định dạng theo Nghị định 30', 'căn lề 2-2-3-2', 'Times New Roman 14 chuẩn công văn', 'render báo cáo ra docx', 'gov-style docx'.
+  suggested: docs: audit, clean, verify.
+- vn-comm
+  path: /Users/thinhkhuat/.codex/skills/vn-comm/SKILL.md
+  chars: description=992, rendered_line=1061
+  current: Write or fix short, casual Vietnamese messages — texting a friend, a group-chat hello, a quick reply, a Facebook caption, a Zalo or Messenger message, a forum comment, a social post or status, or a persona/in-character line. Casual and bro register. Use whenever Vietnamese output is short and conversational (a few lines, up to ~200 words), DOWN TO A SINGLE LINE — never skip this skill just because a message seems 'too short'. Output is ALWAYS Vietnamese. vn-comm is the lite sibling of vn-author/vn-editor: it keeps native-voice and calque/AI-tell scrubbing but drops the heavy formal machinery. Does NOT handle long-form or formal Vietnamese (articles, reports, press, government/VGP, whitepapers, anything past ~200 words) — route those to vn-author (new) or vn-editor (existing). Not for code comments, commit messages, or docstrings. The no-calque rule applies to all Vietnamese you write — narration, notes, and replies — not just the deliverable; your reporting voice is not exempt.
+  suggested: docs: audit, clean, verify.
+- omo:debugging
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/debugging/SKILL.md
+  chars: description=985, rendered_line=1100
+  current: MUST USE for any real runtime debugging across ANY language or binary — crashes, silent failures, wrong responses, stuck processes, memory leaks, async misbehavior, unexplained timing, reverse engineering. Runs a hypothesis-driven loop: form ≥3 hypotheses, investigate in parallel, after 2 failed rounds spawn Oracles from orthogonal angles, confirm root cause, lock with a failing test, fix minimally, QA by actually USING the system, scrub artifacts. The actual HOW lives in `references/` — READ THEM. Triggers: 'debug this', 'why is X not working', 'hanging', 'attach a debugger', 'reverse engineer', 'pwndbg', 'gdb', 'lldb', 'node inspect', 'tsx debug', 'pdb', 'dlv', 'delve', 'rust-gdb', 'set a breakpoint', 'context window exploded', 'why is the response empty', 'attach the debugger', 'debug it', 'why is this happening', 'trace this bug', 'reproduce and fix', 'silent failure', 'HTTP 200 but empty', 'why did it stop', 'inspect the binary', 'reverse engineering', 'playwright'.
+  suggested: debug: debug, inspect, fix.
+- ego-browser
+  path: /Users/thinhkhuat/.codex/skills/ego-browser/SKILL.md
+  chars: description=977, rendered_line=1054
+  current: ego-browser (ego-lite) is a Chromium-based browser designed from the ground up to be friendly to both human users and AI Agents. AI Agents work in their own isolated space, reusing the user's login state without competing for the browser. Use this skill whenever the user needs to interact with a website opening pages, filling forms, clicking buttons, taking screenshots, extracting page data, testing web apps, logging into sites, automating browser operations, or any other browser automation task. Triggers include requests to "open a website", "visit a URL", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "extract content from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction. Also used for exploratory testing, dogfooding, QA, bug hunting, or reviewing app quality. Prefer ego-browser over any built-in browser automation, web fetch, or other web tools.
+  suggested: ego browser: audit, clean, verify.
+- impeccable
+  path: /Users/thinhkhuat/.codex/skills/impeccable/SKILL.md
+  chars: description=977, rendered_line=1052
+  current: Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, forms, settings, onboarding, and empty states. Handles UX review, visual hierarchy, information architecture, cognitive load, accessibility, performance, responsive behavior, theming, anti-patterns, typography, fonts, spacing, layout, alignment, color, motion, micro-interactions, UX copy, error states, edge cases, i18n, and reusable design systems or tokens. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, live browser iteration on UI elements, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks. — impeccable by Paul Bakaus (https://impeccable.style), bundled under Apache-2.0.
+  suggested: docs: triage, review, proof.
+- transcript-miner
+  path: /Users/thinhkhuat/.codex/skills/transcript-miner/SKILL.md
+  chars: description=972, rendered_line=1059
+  current: Deterministically search Claude Code's past-session transcript store (~/.claude/projects/**/*.jsonl) for ANYTHING that ever surfaced — a decision, a discussion, an idea, a command that worked, a proof, a plan, a piece of evidence, a prior answer — and get back only the matching snippets with provenance (session, timestamp, role, project). Use whenever you or the user need to recall, locate, or re-ground something from earlier sessions: "what did we decide about X", "did we ever try Y", "find where that command worked", "search my history/transcripts for Z", "when did we discuss W", "pull real examples of P from past sessions". Pure regex, no LLM, no index — cheap, repeatable, and built so any agent can call it to answer from history instead of reading raw transcripts into context. Triggers: search transcripts, grep history, find in past sessions, recall from transcripts, mine the transcript store, "have we discussed", "where did we", "what did we say about".
+  suggested: search: search, sync, summarize.
+- omo:ultimate-browsing
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultimate-browsing/SKILL.md
+  chars: description=971, rendered_line=1102
+  current: Escalation skill for blocked or hard-to-reach web access — load it when a normal browse/fetch is blocked (WAF, 403, Cloudflare, JS-only render, login-gated, or a platform a generic fetcher cannot read). Tiered router: TIER 1 insane-search (headless extraction + WAF bypass via curl_cffi TLS impersonation, yt-dlp, Jina Reader, public APIs, Playwright real-Chrome fallback); TIER 1.5 agent-reach (platform-native readers for Chinese and social platforms: Xiaohongshu, Douyin, Weibo, Bilibili, V2EX, WeChat, plus Twitter/Reddit/LinkedIn/GitHub); TIER 2 Chrome stealth (CloakBrowser stealth Chromium + agent-browser CDP for clicks, forms, screenshots, video, cookie login). Triggers: blocked site, bypass bot detection, cloudflare/WAF bypass, scrape, stealth browser, import cookies, fill form, screenshot, play youtube, xiaohongshu, douyin, weibo, bilibili, v2ex, wechat article, podcast transcript. NOT for simple searches (use web-search) or plain fetches (use webfetch).
+  suggested: GitHub, Cloudflare, search: search, sync, summarize.
+- omo:ultimate-browsing
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ultimate-browsing/SKILL.md
+  chars: description=971, rendered_line=1102
+  current: Escalation skill for blocked or hard-to-reach web access — load it when a normal browse/fetch is blocked (WAF, 403, Cloudflare, JS-only render, login-gated, or a platform a generic fetcher cannot read). Tiered router: TIER 1 insane-search (headless extraction + WAF bypass via curl_cffi TLS impersonation, yt-dlp, Jina Reader, public APIs, Playwright real-Chrome fallback); TIER 1.5 agent-reach (platform-native readers for Chinese and social platforms: Xiaohongshu, Douyin, Weibo, Bilibili, V2EX, WeChat, plus Twitter/Reddit/LinkedIn/GitHub); TIER 2 Chrome stealth (CloakBrowser stealth Chromium + agent-browser CDP for clicks, forms, screenshots, video, cookie login). Triggers: blocked site, bypass bot detection, cloudflare/WAF bypass, scrape, stealth browser, import cookies, fill form, screenshot, play youtube, xiaohongshu, douyin, weibo, bilibili, v2ex, wechat article, podcast transcript. NOT for simple searches (use web-search) or plain fetches (use webfetch).
+  suggested: GitHub, Cloudflare, search: search, sync, summarize.
+- omo:lsp-setup
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp-setup/SKILL.md
+  chars: description=951, rendered_line=1066
+  current: Configure a Language Server (LSP) for a specific language so editor/agent tooling — diagnostics, go-to-definition, find-references, rename — works. Use when you need to: configure LSP, lsp setup, set up or install a language server, fix 'no LSP server configured' / 'server not installed', choose between servers (basedpyright vs pyright vs ty vs ruff), or wire .codex/lsp-client.json / .opencode/lsp.json. 언어서버 설정. Routes by file extension to references/<language>/README.md for the exact builtin server, per-OS install commands (macOS/Linux/Windows), config snippets for both config files, initialization options, alternatives, and troubleshooting. Ships scripts: detect-lsp.ts (scan a project for languages + each server's install/config status) and verify-lsp.ts (run a real diagnostics roundtrip). Covers typescript, python, go, rust, c/c++, java, kotlin, c#/razor, swift, ruby, php, dart, elixir, zig, lua, bash, yaml, terraform, haskell, julia.
+  suggested: release, debug, deploy: debug, inspect, fix.
+- omo:lsp-setup
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lsp-setup/SKILL.md
+  chars: description=951, rendered_line=1066
+  current: Configure a Language Server (LSP) for a specific language so editor/agent tooling — diagnostics, go-to-definition, find-references, rename — works. Use when you need to: configure LSP, lsp setup, set up or install a language server, fix 'no LSP server configured' / 'server not installed', choose between servers (basedpyright vs pyright vs ty vs ruff), or wire .codex/lsp-client.json / .opencode/lsp.json. 언어서버 설정. Routes by file extension to references/<language>/README.md for the exact builtin server, per-OS install commands (macOS/Linux/Windows), config snippets for both config files, initialization options, alternatives, and troubleshooting. Ships scripts: detect-lsp.ts (scan a project for languages + each server's install/config status) and verify-lsp.ts (run a real diagnostics roundtrip). Covers typescript, python, go, rust, c/c++, java, kotlin, c#/razor, swift, ruby, php, dart, elixir, zig, lua, bash, yaml, terraform, haskell, julia.
+  suggested: release, debug, deploy: debug, inspect, fix.
+- tk-html-deck-design-01
+  path: /Users/thinhkhuat/.codex/skills/tk-html-deck-design-01/SKILL.md
+  chars: description=946, rendered_line=1045
+  current: Build a self-contained HTML slide-deck SPA in the "paper editorial" style (Vietnamese print aesthetic: paper/ink/son-red/muc-blue, Newsreader + Be Vietnam Pro + IBM Plex Mono, fixed 1600x900 stage, hairline-row components) with its full verification kit — plus mode B, the B-roll cinematic scroll page (dark warm ground, bone text, amber accent, mono film chrome: REC/timecode/slates, reveal-on-scroll scenes, quoted primary material, light-theme deck replicas inside the dark page). Use whenever the user asks for an HTML deck, slide deck, presentation SPA, "7-dam style", "paper style deck", "editorial slides", a showcase that replicates that aesthetic, OR a behind-the-scenes / making-of / B-roll / cinematic scrollytelling page companion to a deck, or asks to verify/harden an existing artifact of either family. Covers design canon, stage engine, responsive behavior down to 320px, line-break discipline, and machine-verified quality gates.
+  suggested: Google: create, build, validate.
+- vn-bctt-concise
+  path: /Users/thinhkhuat/.codex/skills/vn-bctt-concise/SKILL.md
+  chars: description=946, rendered_line=1031
+  current: Compress a finished vn-bctt-report Vietnamese government briefing into a shorter version of the SAME briefing — same title, same 6-section spine (§I–§VI Nhận định / Dư luận / Mạng xã hội / Chỉ đạo điều hành / Đối ngoại / Dự báo tác động), same topics, actors, văn bản số hiệu, đầu mối, thời hạn, footnotes, numeric anchors, tham-mưu register. Only PROSE shortens via Strunk method (filler stripped, nominalizations to verbs, qualifiers dropped) inside tham-mưu cấp dưới register. NOT a format change, NOT a reshape, NOT a fact-check. Triggers — rút gọn BCTT, BCTT concise, BCTT cô đọng, BCTT ngắn gọn, compress BCTT, shorten BCTT, vn-bctt-concise, báo cáo thông tin cô đọng, làm BCTT ngắn lại. Use when user has a finished vn-bctt-report .md and wants it materially shorter without losing any topic, actor, chỉ đạo, recommendation, đầu mối, thời hạn, footnote, or numeric anchor. Refuses non-BCTT inputs (deep-dive, ARES, B3) with explicit error.
+  suggested: vn bctt concise: audit, clean, verify.
+- omo:coding-agent-sessions
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/coding-agent-sessions/SKILL.md
+  chars: description=940, rendered_line=1079
+  current: MUST USE when asked to find, read, list, search, inspect, fetch, export, or reconstruct coding-agent sessions across Codex, Claude Code/Desktop, OpenCode, Senpi/pi, oh-my-pi (omp), gajae-code (gjc), OpenClaw, Factory Droid, Amp, Gemini/Kimi/Qwen CLIs, Codebuff, Roo/Kilo/Cline, Kodu, Cursor CLI, Aider, or unknown local agent logs. Covers transcripts, session IDs, rollout JSONL, state SQLite, Claude projects/pre-compact histories, OpenCode messages/parts, child/subagent linkage, cwd/model/time/token filters, archives, and cost clues. Expands fuzzy recall into parallel query lanes and first probes known stores so absent platforms are skipped cheaply. Triggers: coding agent sessions, Codex/Claude/OpenCode/Senpi/pi/oh-my-pi/omp/gajae-code/gjc/OpenClaw/Droid/Amp/Kodu/Cursor/Aider sessions, transcript search, session history, session ID, read transcript, token usage, subagent sessions, what did I do yesterday, did we already do this.
+  suggested: OpenClaw, debug, search: debug, inspect, fix.
+- skill-concierge:flywheel
+  path: /Users/thinhkhuat/.codex/plugins/cache/skill-concierge/skill-concierge/0.43.1/skills/flywheel/SKILL.md
+  chars: description=928, rendered_line=1068
+  current: See the retrieval-flywheel status and trigger an incremental utterance-generation run. Use this skill when the user asks about the flywheel, "how many skills have utterances / triggers", "flywheel coverage", "which skills are missing utterances", "is the LLM endpoint configured/reachable", or wants to "generate triggers", "run the flywheel", "refresh utterances", or "index the new skills' utterances". The flywheel is the utterance layer (ADR-0026) that teaches the retriever how users actually ask for a skill (EN+VN), lifting recall. Runs scripts/flywheel.py — status mode (default, read-only) prints endpoint config + reachability and per-skill utterance coverage (N/M covered, and the missing skills by name); --generate runs the incremental generator (only new/changed skills hit the LLM) then reindexes so the new points go live, printing before/after coverage. Generation fails loud if the LLM endpoint is unreachable.
+  suggested: flywheel: audit, clean, verify.
+- brief-me
+  path: /Users/thinhkhuat/.codex/skills/brief-me/SKILL.md
+  chars: description=921, rendered_line=992
+  current: Re-orient a returning human OR distill a long, rich artifact into a high-level brief they can actually hold in their head. Two modes. RECALL mode (returning after a break): reconstruct the story, timeline, ideas, decisions, and the WHY behind them — more pedagogical and more extensive than whereami's status card, but still easy to grasp. DIGEST mode (a long document): take a comprehensive technical report, plan, or thread — especially one Claude itself produced — and compress it to the core idea, the mental model, the approach, and the right context at a higher altitude. Use when the user says 'brief me', 'teach me where we are', 'catch me up properly', 'I've been away', 'remind me of the approach', 'what's the big idea here', 'distill this', 'give me the gist of this report', 'TL;DR but I want to actually understand it', or hands over a long artifact and wants the essence rather than a line-by-line summary.
+  suggested: brief me: audit, clean, verify.
+- omo:programming
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/programming/SKILL.md
+  chars: description=919, rendered_line=1038
+  current: MUST USE for ANY work on .py .pyi .rs .ts .tsx .mts .cts .go files. One philosophy: strict types, modern stacks (Pydantic v2 / serde+thiserror / Zod / gin+sqlc+pgx+slog), modern toolchains (uv+basedpyright+ruff / cargo+clippy+miri / Bun+Biome+tsc / gofumpt+golangci-lint v2+nilaway+go-race), parse-don't-validate, exhaustive match, typed errors, no any/unwrap/panic, 250 LOC ceiling, TDD, consumer-routed logging. Routes to references/{python,rust,typescript,rust-ub,go}/ + references/logging.md. Triggers: write/edit Python/Rust/TypeScript/Go code, new project, gin server, bubbletea TUI, CJK IME, connect-go RPC, sqlc pgx, branded ids, exhaustive match, unsafe Rust, miri, oversized file, refactor, TDD, e2e test, logging, log levels, structured logging, observability, arena, allocator, bumpalo, const fn, const generics, comptime, zero-alloc, bitfield, repr, scopeguard, errdefer, Zig-like, zerocopy, packed struct.
+  suggested: deploy, docs: audit, clean, verify.
+- omo:programming
+  path: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/programming/SKILL.md
+  chars: description=919, rendered_line=1038
+  current: MUST USE for ANY work on .py .pyi .rs .ts .tsx .mts .cts .go files. One philosophy: strict types, modern stacks (Pydantic v2 / serde+thiserror / Zod / gin+sqlc+pgx+slog), modern toolchains (uv+basedpyright+ruff / cargo+clippy+miri / Bun+Biome+tsc / gofumpt+golangci-lint v2+nilaway+go-race), parse-don't-validate, exhaustive match, typed errors, no any/unwrap/panic, 250 LOC ceiling, TDD, consumer-routed logging. Routes to references/{python,rust,typescript,rust-ub,go}/ + references/logging.md. Triggers: write/edit Python/Rust/TypeScript/Go code, new project, gin server, bubbletea TUI, CJK IME, connect-go RPC, sqlc pgx, branded ids, exhaustive match, unsafe Rust, miri, oversized file, refactor, TDD, e2e test, logging, log levels, structured logging, observability, arena, allocator, bumpalo, const fn, const generics, comptime, zero-alloc, bitfield, repr, scopeguard, errdefer, Zig-like, zerocopy, packed struct.
+  suggested: deploy, docs: audit, clean, verify.
+
+## Duplicates By Name
+
+- test-driven-development
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/agent-skills/agent-skills/0.6.7/skills/test-driven-development/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/agent-skills/agent-skills/0.6.7/skills/test-driven-development/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/test-driven-development/SKILL.md (body=23%, description=18%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/test-driven-development/SKILL.md (body=23%, description=18%)
+- goal-prep
+  keep-default: codex: /Users/thinhkhuat/.codex/skills/goal-prep/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/goalbuddy/goalbuddy/0.4.3/skills/goal-prep/SKILL.md (body=100%, description=100%)
+  - codex: /Users/thinhkhuat/.codex/skills/goal-prep/SKILL.md (body=100%, description=100%)
+- i-have-adhd
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/skills/i-have-adhd/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/.cursor/skills/i-have-adhd/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/skills/i-have-adhd/SKILL.md (body=100%, description=100%)
+- supabase-postgres-best-practices
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/build-web-apps/c6ea566d/skills/supabase-best-practices/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/build-web-apps/c6ea566d/skills/supabase-best-practices/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/supabase/c6ea566d/skills/supabase-postgres-best-practices/SKILL.md (body=100%, description=100%)
+- agents-sdk
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/agents-sdk/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/agents-sdk/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/agents-sdk/SKILL.md (body=100%, description=100%)
+- building-ai-agent-on-cloudflare
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-ai-agent-on-cloudflare/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-ai-agent-on-cloudflare/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/building-ai-agent-on-cloudflare/SKILL.md (body=100%, description=100%)
+- building-mcp-server-on-cloudflare
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-mcp-server-on-cloudflare/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-mcp-server-on-cloudflare/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/building-mcp-server-on-cloudflare/SKILL.md (body=100%, description=100%)
+- durable-objects
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/durable-objects/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/durable-objects/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/durable-objects/SKILL.md (body=100%, description=100%)
+- wrangler
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/wrangler/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/wrangler/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/wrangler/SKILL.md (body=100%, description=100%)
+- systematic-debugging
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/systematic-debugging/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/systematic-debugging/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/systematic-debugging/SKILL.md (body=100%, description=100%)
+- using-git-worktrees
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/using-git-worktrees/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/using-git-worktrees/SKILL.md (body=49%, description=51%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/using-git-worktrees/SKILL.md (body=100%, description=100%)
+- using-superpowers
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/using-superpowers/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/using-superpowers/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/using-superpowers/SKILL.md (body=100%, description=100%)
+- writing-plans
+  keep-default: codex: /Users/thinhkhuat/.codex/skills/writing-plans/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/writing-plans/SKILL.md (body=52%, description=100%)
+  - codex: /Users/thinhkhuat/.codex/skills/writing-plans/SKILL.md (body=100%, description=100%)
+- comment-checker
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/comment-checker/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/comment-checker/skills/comment-checker/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/comment-checker/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/comment-checker/skills/comment-checker/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/comment-checker/SKILL.md (body=100%, description=100%)
+- lsp
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/lsp/skills/lsp/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lsp/skills/lsp/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lsp/SKILL.md (body=100%, description=100%)
+- rules
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/rules/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/rules/skills/rules/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/rules/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/rules/skills/rules/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/rules/SKILL.md (body=100%, description=100%)
+- teammode
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/teammode/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/teammode/skills/teammode/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/teammode/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/teammode/skills/teammode/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/teammode/SKILL.md (body=100%, description=100%)
+- ultrawork
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultrawork/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ultrawork/skills/ultrawork/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultrawork/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/ultrawork/skills/ultrawork/SKILL.md (body=90%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ultrawork/SKILL.md (body=90%, description=100%)
+- ulw-plan
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-plan/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ultrawork/skills/ulw-plan/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-plan/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/ultrawork/skills/ulw-plan/SKILL.md (body=79%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ulw-plan/SKILL.md (body=79%, description=100%)
+- ulw-loop
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-loop/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ulw-loop/skills/ulw-loop/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-loop/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/ulw-loop/skills/ulw-loop/SKILL.md (body=95%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ulw-loop/SKILL.md (body=95%, description=100%)
+- ast-grep
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ast-grep/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ast-grep/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ast-grep/SKILL.md (body=100%, description=100%)
+- coding-agent-sessions
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/coding-agent-sessions/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/coding-agent-sessions/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/coding-agent-sessions/SKILL.md (body=99%, description=95%)
+- debugging
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/debugging/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/debugging/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/debugging/SKILL.md (body=98%, description=94%)
+- frontend
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/frontend/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/frontend/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/frontend/SKILL.md (body=100%, description=100%)
+- git-master
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/git-master/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/git-master/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/git-master/SKILL.md (body=100%, description=100%)
+- init-deep
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/init-deep/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/init-deep/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/init-deep/SKILL.md (body=100%, description=100%)
+- lcx-contribute-bug-fix
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-contribute-bug-fix/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-contribute-bug-fix/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-contribute-bug-fix/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-contribute-bug-fix/SKILL.md (body=100%, description=100%)
+- lcx-doctor
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-doctor/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-doctor/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-doctor/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-doctor/SKILL.md (body=100%, description=100%)
+- lcx-report-bug
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-report-bug/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-report-bug/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-report-bug/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-report-bug/SKILL.md (body=100%, description=100%)
+- lsp-setup
+  keep-default: codex: /Users/thinhkhuat/.codex/skills/lsp-setup/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp-setup/SKILL.md (body=17%, description=20%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lsp-setup/SKILL.md (body=17%, description=20%)
+  - codex: /Users/thinhkhuat/.codex/skills/lsp-setup/SKILL.md (body=100%, description=100%)
+- programming
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/programming/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/programming/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/programming/SKILL.md (body=95%, description=100%)
+- refactor
+  keep-default: codex: /Users/thinhkhuat/.codex/skills/refactor/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/refactor/SKILL.md (body=11%, description=6%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/refactor/SKILL.md (body=11%, description=6%)
+  - codex: /Users/thinhkhuat/.codex/skills/refactor/SKILL.md (body=100%, description=100%)
+- remove-ai-slops
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/remove-ai-slops/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/remove-ai-slops/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/remove-ai-slops/SKILL.md (body=100%, description=100%)
+- review-work
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/review-work/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/review-work/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/review-work/SKILL.md (body=99%, description=100%)
+- start-work
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/start-work/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/start-work/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/start-work/SKILL.md (body=93%, description=100%)
+- ultimate-browsing
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultimate-browsing/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultimate-browsing/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ultimate-browsing/SKILL.md (body=100%, description=100%)
+- ulw-research
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-research/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-research/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ulw-research/SKILL.md (body=100%, description=100%)
+- visual-qa
+  keep-default: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/visual-qa/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/visual-qa/SKILL.md (body=100%, description=100%)
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/visual-qa/SKILL.md (body=100%, description=100%)
+- come-clean
+  keep-default: codex: /Users/thinhkhuat/.codex/skills/come-clean/SKILL.md
+  - codex: /Users/thinhkhuat/.codex/skills/.archive/come-clean.pre-symlink-260812-210008/SKILL.md (body=82%, description=100%)
+  - codex: /Users/thinhkhuat/.codex/skills/come-clean/SKILL.md (body=100%, description=100%)
+- llm-wiki
+  keep-default: codex: /Users/thinhkhuat/.codex/skills/llm-wiki/SKILL.md
+  - codex: /Users/thinhkhuat/.codex/skills/.archive/research/llm-wiki/SKILL.md (body=100%, description=100%)
+  - codex: /Users/thinhkhuat/.codex/skills/llm-wiki/SKILL.md (body=100%, description=100%)
+
+## Duplicate Delete Suggestions
+
+- goal-prep
+  keep: codex: /Users/thinhkhuat/.codex/skills/goal-prep/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/goalbuddy/goalbuddy/0.4.3/skills/goal-prep/SKILL.md (similarity body=100%, description=100%)
+- i-have-adhd
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/skills/i-have-adhd/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/.cursor/skills/i-have-adhd/SKILL.md (similarity body=100%, description=100%)
+- supabase-postgres-best-practices
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/build-web-apps/c6ea566d/skills/supabase-best-practices/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/supabase/c6ea566d/skills/supabase-postgres-best-practices/SKILL.md (similarity body=100%, description=100%)
+- agents-sdk
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/agents-sdk/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/agents-sdk/SKILL.md (similarity body=100%, description=100%)
+- building-ai-agent-on-cloudflare
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-ai-agent-on-cloudflare/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/building-ai-agent-on-cloudflare/SKILL.md (similarity body=100%, description=100%)
+- building-mcp-server-on-cloudflare
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-mcp-server-on-cloudflare/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/building-mcp-server-on-cloudflare/SKILL.md (similarity body=100%, description=100%)
+- durable-objects
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/durable-objects/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/durable-objects/SKILL.md (similarity body=100%, description=100%)
+- wrangler
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/wrangler/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/wrangler/SKILL.md (similarity body=100%, description=100%)
+- systematic-debugging
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/systematic-debugging/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/systematic-debugging/SKILL.md (similarity body=100%, description=100%)
+- using-superpowers
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/using-superpowers/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/using-superpowers/SKILL.md (similarity body=100%, description=100%)
+- comment-checker
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/comment-checker/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/comment-checker/skills/comment-checker/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/comment-checker/skills/comment-checker/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/comment-checker/SKILL.md (similarity body=100%, description=100%)
+- lsp
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/lsp/skills/lsp/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lsp/skills/lsp/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lsp/SKILL.md (similarity body=100%, description=100%)
+- rules
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/rules/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/rules/skills/rules/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/rules/skills/rules/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/rules/SKILL.md (similarity body=100%, description=100%)
+- teammode
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/teammode/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/teammode/skills/teammode/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/teammode/skills/teammode/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/teammode/SKILL.md (similarity body=100%, description=100%)
+- ultrawork
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultrawork/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ultrawork/skills/ultrawork/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/ultrawork/skills/ultrawork/SKILL.md (similarity body=90%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ultrawork/SKILL.md (similarity body=90%, description=100%)
+- ulw-plan
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-plan/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ultrawork/skills/ulw-plan/SKILL.md (similarity body=100%, description=100%)
+- ulw-loop
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-loop/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ulw-loop/skills/ulw-loop/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/ulw-loop/skills/ulw-loop/SKILL.md (similarity body=95%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ulw-loop/SKILL.md (similarity body=95%, description=100%)
+- ast-grep
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ast-grep/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ast-grep/SKILL.md (similarity body=100%, description=100%)
+- coding-agent-sessions
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/coding-agent-sessions/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/coding-agent-sessions/SKILL.md (similarity body=99%, description=95%)
+- debugging
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/debugging/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/debugging/SKILL.md (similarity body=98%, description=94%)
+- frontend
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/frontend/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/frontend/SKILL.md (similarity body=100%, description=100%)
+- git-master
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/git-master/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/git-master/SKILL.md (similarity body=100%, description=100%)
+- init-deep
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/init-deep/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/init-deep/SKILL.md (similarity body=100%, description=100%)
+- lcx-contribute-bug-fix
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-contribute-bug-fix/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-contribute-bug-fix/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-contribute-bug-fix/SKILL.md (similarity body=100%, description=100%)
+- lcx-doctor
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-doctor/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-doctor/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-doctor/SKILL.md (similarity body=100%, description=100%)
+- lcx-report-bug
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-report-bug/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-report-bug/SKILL.md (similarity body=100%, description=100%)
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-report-bug/SKILL.md (similarity body=100%, description=100%)
+- programming
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/programming/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/programming/SKILL.md (similarity body=95%, description=100%)
+- remove-ai-slops
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/remove-ai-slops/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/remove-ai-slops/SKILL.md (similarity body=100%, description=100%)
+- review-work
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/review-work/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/review-work/SKILL.md (similarity body=99%, description=100%)
+- start-work
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/start-work/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/start-work/SKILL.md (similarity body=93%, description=100%)
+- ultimate-browsing
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultimate-browsing/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ultimate-browsing/SKILL.md (similarity body=100%, description=100%)
+- ulw-research
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-research/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ulw-research/SKILL.md (similarity body=100%, description=100%)
+- visual-qa
+  keep: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/visual-qa/SKILL.md
+  delete: codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/visual-qa/SKILL.md (similarity body=100%, description=100%)
+- llm-wiki
+  keep: codex: /Users/thinhkhuat/.codex/skills/llm-wiki/SKILL.md
+  delete: codex: /Users/thinhkhuat/.codex/skills/.archive/research/llm-wiki/SKILL.md (similarity body=100%, description=100%)
+- vn-ares-research-report
+  keep: codex: /Users/thinhkhuat/.codex/skills/vn-ares-research-report/SKILL.md
+  delete: codex: /Users/thinhkhuat/.codex/skills/vn-ares-research-report/.backup-item6-20260803-025300/SKILL.md (similarity body=100%, description=100%)
+  delete: codex: /Users/thinhkhuat/.codex/skills/vn-ares-research-report/.backup-control3-20260803-020348/SKILL.md (similarity body=92%, description=100%)
+- vn-deep-dive-report
+  keep: codex: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/SKILL.md
+  delete: codex: /Users/thinhkhuat/.codex/skills/vn-deep-dive-report/.backup-item6-20260803-025300/SKILL.md (similarity body=92%, description=100%)
+
+## Duplicates By Body Hash
+
+- i-have-adhd:i-have-adhd, i-have-adhd:i-have-adhd
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/.cursor/skills/i-have-adhd/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/i-have-adhd/i-have-adhd/0.2.0/skills/i-have-adhd/SKILL.md
+- browser:control-in-app-browser, chrome:control-chrome
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-bundled/browser/26.707.91948/skills/control-in-app-browser/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-bundled/chrome/26.707.91948/skills/control-chrome/SKILL.md
+- cloudflare:agents-sdk, plugin-install-HbUjsf:agents-sdk
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/agents-sdk/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/agents-sdk/SKILL.md
+- cloudflare:building-ai-agent-on-cloudflare, plugin-install-HbUjsf:building-ai-agent-on-cloudflare
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-ai-agent-on-cloudflare/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/building-ai-agent-on-cloudflare/SKILL.md
+- cloudflare:building-mcp-server-on-cloudflare, plugin-install-HbUjsf:building-mcp-server-on-cloudflare
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/building-mcp-server-on-cloudflare/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/building-mcp-server-on-cloudflare/SKILL.md
+- cloudflare:durable-objects, plugin-install-HbUjsf:durable-objects
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/durable-objects/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/durable-objects/SKILL.md
+- cloudflare:wrangler, plugin-install-HbUjsf:wrangler
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/cloudflare/c6ea566d/skills/wrangler/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-HbUjsf/cloudflare/f2a0a2c3/skills/wrangler/SKILL.md
+- plugin-install-7MG22c:systematic-debugging, superpowers:systematic-debugging
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/systematic-debugging/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/systematic-debugging/SKILL.md
+- plugin-install-7MG22c:test-driven-development, superpowers:test-driven-development
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/test-driven-development/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/test-driven-development/SKILL.md
+- plugin-install-7MG22c:using-superpowers, superpowers:using-superpowers
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/plugin-install-7MG22c/superpowers/b066e4a0/skills/using-superpowers/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/using-superpowers/SKILL.md
+- superpowers:verification-before-completion, Verification Before Completion
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/openai-curated/superpowers/c6ea566d/skills/verification-before-completion/SKILL.md
+  - codex: /Users/thinhkhuat/.codex/skills/verification-before-completion/SKILL.md
+- omo:comment-checker, omo:comment-checker, omo:comment-checker, omo:comment-checker
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/comment-checker/skills/comment-checker/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/comment-checker/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/comment-checker/skills/comment-checker/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/comment-checker/SKILL.md
+- omo:lsp, omo:lsp, omo:lsp, omo:lsp
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/lsp/skills/lsp/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lsp/skills/lsp/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lsp/SKILL.md
+- omo:rules, omo:rules, omo:rules, omo:rules
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/rules/skills/rules/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/rules/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/rules/skills/rules/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/rules/SKILL.md
+- omo:teammode, omo:teammode, omo:teammode, omo:teammode
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/teammode/skills/teammode/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/teammode/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/teammode/skills/teammode/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/teammode/SKILL.md
+- omo:ultrawork, omo:ultrawork
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ultrawork/skills/ultrawork/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultrawork/SKILL.md
+- omo:ulw-plan, omo:ulw-plan
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ultrawork/skills/ulw-plan/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-plan/SKILL.md
+- omo:ulw-loop, omo:ulw-loop
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/components/ulw-loop/skills/ulw-loop/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-loop/SKILL.md
+- omo:ast-grep, omo:ast-grep
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ast-grep/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ast-grep/SKILL.md
+- omo:frontend, omo:frontend
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/frontend/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/frontend/SKILL.md
+- omo:git-master, omo:git-master
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/git-master/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/git-master/SKILL.md
+- omo:init-deep, omo:init-deep
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/init-deep/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/init-deep/SKILL.md
+- omo:lcx-contribute-bug-fix, omo:lcx-contribute-bug-fix, omo:lcx-contribute-bug-fix
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-contribute-bug-fix/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-contribute-bug-fix/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-contribute-bug-fix/SKILL.md
+- omo:lcx-doctor, omo:lcx-doctor, omo:lcx-doctor
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-doctor/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-doctor/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-doctor/SKILL.md
+- omo:lcx-report-bug, omo:lcx-report-bug, omo:lcx-report-bug
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lcx-report-bug/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/components/lcx/skills/lcx-report-bug/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lcx-report-bug/SKILL.md
+- omo:lsp-setup, omo:lsp-setup
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/lsp-setup/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/lsp-setup/SKILL.md
+- omo:refactor, omo:refactor
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/refactor/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/refactor/SKILL.md
+- omo:remove-ai-slops, omo:remove-ai-slops
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/remove-ai-slops/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/remove-ai-slops/SKILL.md
+- omo:ultimate-browsing, omo:ultimate-browsing
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ultimate-browsing/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ultimate-browsing/SKILL.md
+- omo:ulw-research, omo:ulw-research
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.18.1/skills/ulw-research/SKILL.md
+  - codex-plugin: /Users/thinhkhuat/.codex/plugins/cache/sisyphuslabs/omo/4.19.2/skills/ulw-research/SKILL.md
+
+## Unused Candidates
+
+- none
+
+## Root Summary
+
+- /Users/thinhkhuat/.codex/skills: 403 skills
+- /Users/thinhkhuat/.codex/plugins/cache: 302 skills, 105 disabled

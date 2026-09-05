@@ -503,10 +503,12 @@ def _invocable_plugin_ids():
     what `_plugin_gate_ok` subtracts). Under OMP the
     claude-plugins provider reads the SAME claude registry PLUS the OMP registry
     (`~/.omp/plugins/installed_plugins.json`) — OMP entries are authoritative for their plugin id
-    (OMP source discovery/helpers.ts:1030-1078) — and the OMP registry's per-entry `enabled`
-    field gates each plugin (`enabled === false` hides it, helpers.ts:1061; absent = enabled).
-    The OMP loop applies NO settings-layer enabledPlugins override, so OMP-side disablement is
-    the per-entry field alone.
+    (OMP source discovery/helpers.ts:1030-1078) — and BOTH registries' keys pass through the
+    SAME merged settings-layer `enabledPlugins` view plus the per-entry `enabled` field
+    (`enabled === false` hides the plugin; absent = enabled), mirroring OMP's provider, which
+    honors claude enabledPlugins overrides AND entry.enabled === false (helpers.ts:1088-1118,
+    1186, 1191-1192). This set is what `_plugin_gate_ok` subtracts under BOTH harnesses
+    (ADR-0052 + ADR-0053).
 
     Installation is checked, not just enablement: a plugin switched on in settings whose cache is
     absent is not invocable, and treating it as a twin would keep a genuinely dead row in the
@@ -650,22 +652,32 @@ def _invocable_twin(name: str) -> bool:
 
 
 def _plugin_gate_ok(name: str) -> bool:
-    """ADR-0052: True when THIS Claude session may act on `name`.
+    """ADR-0052 + ADR-0053: True when THIS session may act on `name`.
 
     Discovery indexes the machine-wide UNION of enablement layers, so a
     `plugin:skill` row can name a plugin this session's merged layers have switched
-    off (live case: ponytail project-disabled while user-default-on). Claude
-    sessions therefore demand membership in INVOCABLE_PLUGIN_IDS — already the
-    merged per-cwd view — for namespaced rows. Non-namespaced rows (personal/
-    project) are session-native by construction and pass; INVOCABLE_PLUGIN_IDS None
+    off (live case: ponytail project-disabled while user-default-on). Claude and OMP
+    sessions therefore demand membership in INVOCABLE_PLUGIN_IDS for namespaced
+    rows — under OMP that set already unions the claude registry (settings-layer
+    merged) with the OMP registry (per-entry `enabled`), mirroring what OMP's own
+    provider loads, so the offer can never claim invocability the harness refuses.
+    DSH and Cline have NO skill-plugin registry (ADR-0050/ADR-0051): a namespaced
+    plugin row is never invocable there and drops; plain rows pass. Codex, Command
+    Code and ZCode keep their lane semantics — the foreign-scope/twin filter in
+    _retrieve already settles their rows, and ZCode's twin resolves from its own
+    enablement-filtered registry. Non-namespaced rows (personal/project) are
+    session-native by construction and pass everywhere; INVOCABLE_PLUGIN_IDS None
     (unreadable manifest = UNKNOWN) filters nothing, the ADR-0034 contract;
-    ENFORCER_PLUGIN_GATE=0 restores the ungated behaviour; every other harness
-    keeps its own lane semantics untouched."""
-    if not PLUGIN_GATE or RUNNING_HARNESS != "claude":
+    ENFORCER_PLUGIN_GATE=0 restores the ungated behaviour everywhere."""
+    if not PLUGIN_GATE:
         return True
-    if INVOCABLE_PLUGIN_IDS is None or ":" not in name:
-        return True
-    return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
+    if RUNNING_HARNESS in ("claude", "omp"):
+        if INVOCABLE_PLUGIN_IDS is None or ":" not in name:
+            return True
+        return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
+    if RUNNING_HARNESS in ("dsh", "cline"):
+        return ":" not in name
+    return True
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
@@ -2988,26 +3000,43 @@ def _selftest() -> int:
     if not CONSULT_ROUTE:
         bad.append("consult gate: default must be ON (SKILL_CONSULT_ROUTE unset = on)")
 
-    # Plugin-enablement gate (ADR-0052): Claude sessions gate plugin rows and
-    # chain-successors on the merged INVOCABLE_PLUGIN_IDS; None filters nothing;
-    # the flag filters nothing; non-namespaced rows pass.
+    # Plugin-enablement gate (ADR-0052 + ADR-0053): Claude AND OMP sessions gate plugin
+    # rows and chain-successors on the merged INVOCABLE_PLUGIN_IDS (OMP's set unions the
+    # claude registry + OMP registry enablement); DSH/Cline have no plugin registry, so
+    # namespaced rows drop and plain rows pass; codex/commandcode/zcode keep their
+    # foreign/twin lane semantics (pass); None filters nothing; the flag filters nothing;
+    # non-namespaced rows pass.
     _saved_pg = (RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE)
     try:
-        RUNNING_HARNESS, PLUGIN_GATE = "claude", True
-        INVOCABLE_PLUGIN_IDS = {"onplugin"}
-        if not _plugin_gate_ok("onplugin:skill"):
-            bad.append("plugin-enablement gate: invocable plugin row must survive")
-        if _plugin_gate_ok("offplugin:skill"):
-            bad.append("plugin-enablement gate: session-disabled plugin row must drop")
-        if not _plugin_gate_ok("plain-skill"):
-            bad.append("plugin-enablement gate: non-namespaced row must pass")
-        INVOCABLE_PLUGIN_IDS = None
-        if not _plugin_gate_ok("offplugin:skill"):
-            bad.append("plugin-enablement gate: UNKNOWN manifest must filter nothing")
-        INVOCABLE_PLUGIN_IDS = {"onplugin"}
+        for lane in ("claude", "omp"):
+            RUNNING_HARNESS, PLUGIN_GATE = lane, True
+            INVOCABLE_PLUGIN_IDS = {"onplugin"}
+            if not _plugin_gate_ok("onplugin:skill"):
+                bad.append(f"plugin-enablement gate: {lane} invocable plugin row must survive")
+            if _plugin_gate_ok("offplugin:skill"):
+                bad.append(f"plugin-enablement gate: {lane} session-disabled plugin row must drop")
+            if not _plugin_gate_ok("plain-skill"):
+                bad.append(f"plugin-enablement gate: {lane} non-namespaced row must pass")
+            INVOCABLE_PLUGIN_IDS = None
+            if not _plugin_gate_ok("offplugin:skill"):
+                bad.append(f"plugin-enablement gate: {lane} UNKNOWN manifest must filter nothing")
+            INVOCABLE_PLUGIN_IDS = {"onplugin"}
         PLUGIN_GATE = False
-        if not _plugin_gate_ok("offplugin:skill"):
-            bad.append("plugin-enablement gate: flag off must filter nothing")
+        for lane in ("claude", "omp"):
+            RUNNING_HARNESS = lane
+            if not _plugin_gate_ok("offplugin:skill"):
+                bad.append(f"plugin-enablement gate: {lane} flag off must filter nothing")
+        PLUGIN_GATE = True
+        for lane in ("dsh", "cline"):
+            RUNNING_HARNESS = lane
+            if _plugin_gate_ok("onplugin:skill"):
+                bad.append(f"plugin-enablement gate: {lane} namespaced plugin row must drop (no registry)")
+            if not _plugin_gate_ok("plain-skill"):
+                bad.append(f"plugin-enablement gate: {lane} plain row must pass")
+        for lane in ("codex", "commandcode", "zcode"):
+            RUNNING_HARNESS = lane
+            if not _plugin_gate_ok("offplugin:skill"):
+                bad.append(f"plugin-enablement gate: {lane} must keep lane semantics (foreign/twin owns it)")
     finally:
         RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE = _saved_pg
 

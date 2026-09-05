@@ -5,6 +5,32 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.46.0] — 2026-09-06
+### Added — ADR-0053: cross-harness plugin-offer gates (strict installed+enabled everywhere)
+- **OMP joins the Claude plugin gate** (`hooks/scripts/enforcer.py::_plugin_gate_ok`):
+  namespaced plugin rows (`plugin:`/`omp-plugin:` scopes) now demand membership in
+  `INVOCABLE_PLUGIN_IDS` under omp too — the set already computed from the claude registry
+  (merged settings layers) UNION the OMP registry (per-entry `enabled`), mirroring what
+  OMP's own provider loads. Closes two live-proven v0.45.0 violations: repo-local-disabled
+  `ponytail:*` offered at 0.886 top-of-menu in a real omp session; OMP-registry
+  `enabled:false` plugins still offered. `None` (unreadable registries) still filters
+  nothing.
+- **DSH + Cline drop namespaced plugin rows** from offers and chain-hint/ROUTE
+  successors: no skill-plugin registry exists in either harness (ADR-0050/0051), so such
+  rows were never invocable there; the foreign annex remains their labeled NOT-invocable
+  surface. Previously the ADR-0034 foreign filter was inert (INVOCABLE None) and indexed
+  plugin rows of any provenance entered the main offer.
+- **Codex/Command Code/ZCode keep lane semantics** (the foreign/twin filter already
+  settles their rows; ZCode's twin resolves from its own enablement-filtered registry).
+  Codex's own `codex-plugin` scope stays ungated (TOML enablement not stdlib-parseable
+  on the dependency-free enforcer floor) — standing caveat, deliberate non-goal.
+- Stale docstring fixed in `_invocable_plugin_ids` (the OMP loop DOES apply the merged
+  settings-layer view — code was right, doc wrong; matches OMP provider behavior).
+- Enforcer selftest §plugin-enablement gate extended (omp survive/drop/UNKNOWN/flag-off,
+  dsh+cline namespaced-drop/plain-pass, lane-pass for codex/commandcode/zcode).
+  EPOCH v0.46.0 — never pool offer-composition metrics across it. Kill-switch
+  `ENFORCER_PLUGIN_GATE=0` reverts all harnesses byte-identically.
+
 ## [0.45.0] — 2026-09-05
 ### Fixed — ADR-0052: plugin skills correctly first-class (layered enablement + root-relative scan + session gate)
 - **Layered enablement at index time** (`vendor/skill-search/skill_search/skills_discovery.py`):
