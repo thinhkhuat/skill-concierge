@@ -1,6 +1,6 @@
 {
   "name": "skill-concierge",
-  "version": "0.44.1",
+  "version": "0.45.0",
   "description": "A skill-governance layer: semantic retrieval (which skill) + use-enforcement (whether an agent uses one) + a compounding invocation ledger. Works with Claude Code, Codex, Command Code, Oh My Pi, ZCode, and DeepSeek Harness (DSH).",
   "author": {
     "name": "thinhkhuat"

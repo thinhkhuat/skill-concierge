@@ -176,6 +176,12 @@ def _annex_floor(pool_floor: float, top_installed: float) -> float:
 # therefore over-fetches and the decision is made per row, where the twin test is available.
 # Bonus: it keeps an unindexed keyword filter off the installed query's hot path.
 CROSS_HARNESS = os.environ.get("ENFORCER_CROSS_HARNESS", "1") != "0"
+# ADR-0052 per-session enablement gate: in Claude sessions a `plugin`-scoped row is
+# offerable only when its plugin id sits in INVOCABLE_PLUGIN_IDS (the merged
+# user+project+local enabledPlugins view computed below). Discovery indexes the
+# machine-wide UNION (skills_discovery._layered_plugin_exclusions), so the session
+# layer owns the subtraction; this flag is that subtraction's one-var revert.
+PLUGIN_GATE = os.environ.get("ENFORCER_PLUGIN_GATE", "1") != "0"
 # Over-fetch, post-filter, trim to TOP_K. The multiplier is HEADROOM, not a guarantee: in a
 # domain the other harness dominates, more than RETRIEVE_LIMIT-TOP_K of the top groups can be
 # foreign and the menu comes back short. Measured on the live index: x3 left two of
@@ -492,7 +498,9 @@ def _invocable_plugin_ids():
 
     Under Claude the manifest is `~/.claude/plugins/installed_plugins.json` and a plugin is
     disabled by an explicit `false` in the merged settings `enabledPlugins` layers (absent key =
-    enabled, matching Claude Code and `skills_discovery._installed_plugin_roots`). Under OMP the
+    enabled, matching Claude Code; the INDEX side computes the machine-wide union via
+    `skills_discovery._layered_plugin_exclusions`, ADR-0052 — this merged per-cwd view is
+    what `_plugin_gate_ok` subtracts). Under OMP the
     claude-plugins provider reads the SAME claude registry PLUS the OMP registry
     (`~/.omp/plugins/installed_plugins.json`) — OMP entries are authoritative for their plugin id
     (OMP source discovery/helpers.ts:1030-1078) — and the OMP registry's per-entry `enabled`
@@ -638,6 +646,25 @@ def _invocable_twin(name: str) -> bool:
             return True
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
+    return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
+
+
+def _plugin_gate_ok(name: str) -> bool:
+    """ADR-0052: True when THIS Claude session may act on `name`.
+
+    Discovery indexes the machine-wide UNION of enablement layers, so a
+    `plugin:skill` row can name a plugin this session's merged layers have switched
+    off (live case: ponytail project-disabled while user-default-on). Claude
+    sessions therefore demand membership in INVOCABLE_PLUGIN_IDS — already the
+    merged per-cwd view — for namespaced rows. Non-namespaced rows (personal/
+    project) are session-native by construction and pass; INVOCABLE_PLUGIN_IDS None
+    (unreadable manifest = UNKNOWN) filters nothing, the ADR-0034 contract;
+    ENFORCER_PLUGIN_GATE=0 restores the ungated behaviour; every other harness
+    keeps its own lane semantics untouched."""
+    if not PLUGIN_GATE or RUNNING_HARNESS != "claude":
+        return True
+    if INVOCABLE_PLUGIN_IDS is None or ":" not in name:
+        return True
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
@@ -1007,7 +1034,7 @@ def _chain_hint_data(sid: str) -> list:
         return []
     shown = [n for n in succ
              if isinstance(n, str) and n and n in names_map and n not in KEEPOFF
-             and not _blocked(n)]
+             and not _blocked(n) and _plugin_gate_ok(n)]
     return [seed] + shown if shown else []
 
 
@@ -1302,6 +1329,8 @@ def _retrieve(vector: list) -> list:
         if (CROSS_HARNESS and INVOCABLE_PLUGIN_IDS is not None
                 and pl.get("scope") in FOREIGN_SCOPES and not _invocable_twin(name)):
             continue
+        if not _plugin_gate_ok(name):   # ADR-0052: plugin disabled in THIS session's merged layers
+            continue
         out.append((name, pl.get("description", ""), float(hits[0].get("score", 0.0))))
         if len(out) >= TOP_K:
             break
@@ -1549,7 +1578,7 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
             break
         nxt = next((s for s in succ
                     if isinstance(s, str) and s and s not in seen and s in names_map
-                    and not _blocked(s)), None)
+                    and not _blocked(s) and _plugin_gate_ok(s)), None)
         if not nxt:
             break
         route.append(nxt)
@@ -1921,6 +1950,9 @@ def _selftest() -> int:
     stays silent on affirmations + bug-report negations; (2) _ranked_mandate renders
     %-share + a disambiguation note for 2+ candidates, and neither for a lone one.
     Run: python3 enforcer.py --selftest"""
+    # Declared up-front: section (9) rebinds these BEFORE the section-(10+)
+    # consolidated global line — a use-prior-to-global-declaration is a SyntaxError.
+    global INVOCABLE_PLUGIN_IDS, PLUGIN_GATE
     must_fire = [
         "do not use the <skill> here",
         "please don't invoke that skill",
@@ -2176,7 +2208,7 @@ def _selftest() -> int:
     global CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES
     global MINED_CHAINS, _MINED_CHAINS_PATH
     _saved_chain = (CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES,
-                    MINED_CHAINS, _MINED_CHAINS_PATH)
+                    MINED_CHAINS, _MINED_CHAINS_PATH, INVOCABLE_PLUGIN_IDS)
     with tempfile.TemporaryDirectory() as _td:
         _tdp = Path(_td)
         try:
@@ -2190,6 +2222,10 @@ def _selftest() -> int:
             _led = _tdp / "ledger.log"
             _SIDECAR_PATH, LEDGER, KEEPOFF = _sidecar, _led, frozenset({"succ-c"})
             CHAIN_HINT, CHAIN_TTL_S = True, 900.0
+            # the fixture's `pk` plugin id is not a real install — admit it so the
+            # ADR-0052 gate ( exercising the SAME successor filters) stays inert here
+            INVOCABLE_PLUGIN_IDS = (INVOCABLE_PLUGIN_IDS if isinstance(INVOCABLE_PLUGIN_IDS, set)
+                                    else set()) | {"pk"}
             _now = time.time()
             _led.write_text("\n".join([
                 json.dumps({"t": _now - 400, "sid": "s1", "ev": "auto", "name": "seed-a"}),
@@ -2322,7 +2358,7 @@ def _selftest() -> int:
             _MINED_CHAINS_PATH = _tdp / "nope-mined.json"
         finally:
             CHAIN_HINT, CHAIN_TTL_S, _SIDECAR_PATH, LEDGER, KEEPOFF, _NEXT_SKILLS_OVERRIDES, \
-                MINED_CHAINS, _MINED_CHAINS_PATH = _saved_chain
+                MINED_CHAINS, _MINED_CHAINS_PATH, INVOCABLE_PLUGIN_IDS = _saved_chain
 
     # (10) ADR-0031 installed query: _retrieve ALWAYS carries must_not tier=external
     # (byte-identical whether or not the ADR-0032 annex is on — externals cannot displace
@@ -2334,7 +2370,7 @@ def _selftest() -> int:
     # per-case made a later case silently depend on an earlier one's declaration, so deleting
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
-    global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
+    global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES
     global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS, FOREIGN_HARNESS
     global _zcode_readable_skill, _zcode_shares_personal_shelf
     _saved_dyn12 = ANNEX_DYNAMIC
@@ -2952,6 +2988,29 @@ def _selftest() -> int:
     if not CONSULT_ROUTE:
         bad.append("consult gate: default must be ON (SKILL_CONSULT_ROUTE unset = on)")
 
+    # Plugin-enablement gate (ADR-0052): Claude sessions gate plugin rows and
+    # chain-successors on the merged INVOCABLE_PLUGIN_IDS; None filters nothing;
+    # the flag filters nothing; non-namespaced rows pass.
+    _saved_pg = (RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE)
+    try:
+        RUNNING_HARNESS, PLUGIN_GATE = "claude", True
+        INVOCABLE_PLUGIN_IDS = {"onplugin"}
+        if not _plugin_gate_ok("onplugin:skill"):
+            bad.append("plugin-enablement gate: invocable plugin row must survive")
+        if _plugin_gate_ok("offplugin:skill"):
+            bad.append("plugin-enablement gate: session-disabled plugin row must drop")
+        if not _plugin_gate_ok("plain-skill"):
+            bad.append("plugin-enablement gate: non-namespaced row must pass")
+        INVOCABLE_PLUGIN_IDS = None
+        if not _plugin_gate_ok("offplugin:skill"):
+            bad.append("plugin-enablement gate: UNKNOWN manifest must filter nothing")
+        INVOCABLE_PLUGIN_IDS = {"onplugin"}
+        PLUGIN_GATE = False
+        if not _plugin_gate_ok("offplugin:skill"):
+            bad.append("plugin-enablement gate: flag off must filter nothing")
+    finally:
+        RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE = _saved_pg
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
@@ -2966,6 +3025,7 @@ def _selftest() -> int:
           f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
           f"{len(selfref_off)} off) "
           "+ cross-harness annex "
+          "+ plugin-enablement gate (ADR-0052) "
           "+ CJK word-count (pre-gate no longer swallows no-space scripts)")
     return 0
 

@@ -5,6 +5,41 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.45.0] — 2026-09-05
+### Fixed — ADR-0052: plugin skills correctly first-class (layered enablement + root-relative scan + session gate)
+- **Layered enablement at index time** (`vendor/skill-search/skill_search/skills_discovery.py`):
+  plugin enablement is now the machine-wide UNION across the user settings file AND
+  every registered project's `.claude/settings{.local,}.json` (`~/.claude.json`
+  `projects` registry). A plugin is excluded only when the USER file says false AND no
+  layer anywhere re-enables it. Live bug closed: `agent-skills@addy-agent-skills`
+  (user-false, project-re-enabled) had 25 invocable skills indexed nowhere. A readable
+  registry that yields zero kept plugins is a POSITIVE empty — no fallback resurrection.
+  Kill-switches: `SKILL_PLUGIN_LAYERED_ENABLEMENT=0`, `SKILL_CLAUDE_PROJECTS_FILE`.
+- **Root-relative plugin scan, registry-derived ids** (same file): Claude plugin
+  skills enumerate per `installPath` (`skills/*/` + one nested depth, phantom-guarded)
+  and are named from the REGISTRY KEY. Structurally unreachable: retained old versions,
+  plugin payload trees (live phantom `examples:workflow`), `temp_git_*` marketplace
+  clones. The whole-cache glob + `sub[si-2]` heuristic survives only as the
+  manifest-unreadable fallback and under `SKILL_PLUGIN_FILTER=0`.
+- **Per-session enablement gate** (`hooks/scripts/enforcer.py`): `ENFORCER_PLUGIN_GATE`
+  (default ON) — Claude sessions demand membership in the (already layer-merged)
+  `INVOCABLE_PLUGIN_IDS` for `plugin`-scope offer rows and chain-hint/ROUTE
+  successors; `None` filters nothing (ADR-0034 contract); other harnesses untouched.
+  Live bug closed: `ponytail:*` offered in the project that disabled it. Epoch note:
+  offer-composition metrics change epoch at v0.45.0 — never pool across it.
+- **Test-isolation repair** (`vendor/skill-search/tests/conftest.py`): the hermetic
+  fixture now pins the ZCode/DSH/Cline harness seams (fixture drift from
+  ADR-0042/0050/0051 leaked the live `~/.zcode` cache into discovery and
+  disk-signature tests — 12 pre-existing suite failures, all one class). Full engine
+  suite green: 77 passed.
+- New discovery tests: layered-enablement union (re-enable beats user-disable;
+  false-everywhere excluded; project-disable alone never excludes; unreadable
+  projects file degrades), root-relative scan (examples tree, registry naming,
+  temp clones), scope/scope-parity preserved. Enforcer selftest gains the
+  plugin-enablement gate section. Verified: full engine suite 90 green, root tests
+  green, enforcer selftest OK with the new marker, driftcheck 0, dev-engine live
+  probe, independent blind validator (plans/reports/).
+
 ## [0.44.1] — 2026-09-01
 ### Fixed — ADR-0051 §4 caveat closed: Cline MCP tool naming live-verified
 - **Live verification** (2026-09-01, Cline CLI 3.0.60): MCP tools surface **flattened**

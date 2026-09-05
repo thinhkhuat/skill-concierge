@@ -55,3 +55,29 @@ def _isolate_harness_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(skills_discovery, "OMP_MANAGED_ROOT", tmp_path / "omp-managed")
     monkeypatch.setattr(skills_discovery, "OMP_PLUGIN_GLOB",
                         str(tmp_path / "omp-cache" / "none" / "**" / "SKILL.md"))
+    # ADR-0042/0050/0051 harness seams (ZCode/DSH/Cline) read the LIVE machine when
+    # unpinned — ~/.zcode/cli/plugins/cache/** is registry-enumerated and bypasses
+    # PLUGIN_GLOB entirely, so 12 discovery/indexing tests pulled real ZCode skills
+    # into their fixtures (2026-09-05 baseline: 12 failed). Pin every remaining
+    # harness seam; tests that want a seam monkeypatch it explicitly.
+    monkeypatch.setattr(skills_discovery, "ZCODE_PERSONAL_ROOT", tmp_path / "zcode-personal")
+    monkeypatch.setattr(skills_discovery, "ZCODE_PROJECT_ROOT", tmp_path / "zcode-project")
+    monkeypatch.setattr(skills_discovery, "ZCODE_AGENTS_PROJECT_ROOT", tmp_path / "agents-project")
+    monkeypatch.setattr(skills_discovery, "ZCODE_PLUGIN_CACHE", tmp_path / "zcode-cache")
+    monkeypatch.setattr(skills_discovery, "ZCODE_INSTALLED_PLUGINS_JSON",
+                        tmp_path / "zcode-cache" / "installed_plugins.json")
+    monkeypatch.setattr(skills_discovery, "ZCODE_CONFIG_JSON", tmp_path / "zcode-cache" / "config.json")
+    monkeypatch.setattr(skills_discovery, "DSH_PERSONAL_ROOT", tmp_path / "dsh-personal")
+    monkeypatch.setattr(skills_discovery, "DSH_PROJECT_ROOT", tmp_path / "dsh-project")
+    monkeypatch.setattr(skills_discovery, "CLINE_PERSONAL_ROOT", tmp_path / "cline-personal")
+    monkeypatch.setattr(skills_discovery, "CLINE_PROJECT_ROOT", tmp_path / "cline-project")
+    # ADR-0052 enablement seams: root-relative plugin enumeration reads the Claude
+    # manifests + layer files directly (no PLUGIN_GLOB funnel), so unpinned tests
+    # would pull the operator's real installed plugins and project layer files into
+    # discovery. Tests that want them monkeypatch these explicitly.
+    monkeypatch.setattr(skills_discovery, "INSTALLED_PLUGINS_JSON",
+                        tmp_path / "claude-plugins" / "installed_plugins.json")
+    monkeypatch.setattr(skills_discovery, "CLAUDE_SETTINGS_JSON",
+                        tmp_path / "claude-settings" / "settings.json")
+    monkeypatch.setattr(skills_discovery, "CLAUDE_PROJECTS_FILE",
+                        tmp_path / "claude-settings" / ".claude.json")

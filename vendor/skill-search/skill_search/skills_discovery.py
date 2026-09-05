@@ -169,6 +169,22 @@ CLAUDE_SETTINGS_JSON = Path(os.environ.get(
 # Escape hatch: `=0` restores the pre-filter behaviour (index the whole cache).
 SKILL_PLUGIN_FILTER = os.environ.get("SKILL_PLUGIN_FILTER", "1") != "0"
 
+# Layered enablement (ADR-0052): Claude Code layers `enabledPlugins` across the USER
+# settings file AND every project's .claude/settings.json / settings.local.json
+# (last writer wins PER SESSION). The Qdrant index is machine-global (ADR-0028: no
+# cwd-scoped view may be baked into it), so discovery indexes the UNION of all
+# readable layers — a plugin is excluded only when the USER file says false AND no
+# layer anywhere re-enables it — and per-session precision is the enforcer's gate
+# (ENFORCER_PLUGIN_GATE, hooks/scripts/enforcer.py). Live bug this closes: a plugin
+# disabled at user scope but re-enabled by one project (agent-skills) was indexed
+# NOWHERE, leaving 25 invocable skills unretrievable in that project.
+# The union's project enumeration reads Claude Code's own project registry
+# (~/.claude.json "projects" keys; env-overridable so tests stay hermetic). `=0`
+# restores user-file-only enablement (byte-identical exclusions).
+SKILL_PLUGIN_LAYERED_ENABLEMENT = os.environ.get("SKILL_PLUGIN_LAYERED_ENABLEMENT", "1") != "0"
+CLAUDE_PROJECTS_FILE = Path(os.environ.get(
+    "SKILL_CLAUDE_PROJECTS_FILE", Path.home() / ".claude.json"))
+
 # ── external catalog roots (ADR-0031) ────────────────────────────────────────
 # Operator-owned config of EXTRA skill collections indexed for retrieval WITHOUT
 # being installed into any Claude Code root — search-only citizens, consumed by
@@ -250,31 +266,68 @@ def _read_json(path: Path):
         return None
 
 
-def _installed_plugin_roots() -> set[str] | None:
-    """Install directories of the currently installed AND enabled plugins.
+def _layered_plugin_exclusions() -> set[str]:
+    """Registry keys EXCLUDED under the machine-wide union rule (ADR-0052): the USER
+    file says false AND no readable layer anywhere says true. A project-layer
+    `false` alone never excludes — the index is machine-global, and the session's
+    enforcer gate (ENFORCER_PLUGIN_GATE) subtracts per cwd. Every read fails open:
+    an unreadable file contributes no signal, and no signal can never exclude.
+    `SKILL_PLUGIN_LAYERED_ENABLEMENT=0` degrades to user-file-only exclusions
+    (byte-identical to the pre-layering behavior)."""
+    settings = _read_json(CLAUDE_SETTINGS_JSON) or {}
+    user_enabled = settings.get("enabledPlugins")
+    user_enabled = user_enabled if isinstance(user_enabled, dict) else {}
+    user_false = {str(k) for k, v in user_enabled.items() if v is False}
+    if not SKILL_PLUGIN_LAYERED_ENABLEMENT:
+        return user_false
+    any_true = {str(k) for k, v in user_enabled.items() if v is True}
+    projects = _read_json(CLAUDE_PROJECTS_FILE)
+    if isinstance(projects, dict) and isinstance(projects.get("projects"), dict):
+        for proj in projects["projects"]:
+            for layer in (Path(proj) / ".claude" / "settings.json",
+                          Path(proj) / ".claude" / "settings.local.json"):
+                data = _read_json(layer)
+                if not isinstance(data, dict):
+                    continue
+                ep = data.get("enabledPlugins")
+                if not isinstance(ep, dict):
+                    continue
+                any_true.update(str(k) for k, v in ep.items() if v is True)
+    return user_false - any_true
 
-    Returns None when the manifests cannot be read, which callers treat as
-    "don't filter" — an index missing every plugin skill is far worse than one
-    carrying a few stale entries.
-    """
+
+def _installed_plugin_entries() -> dict[str, str] | None:
+    """Registry key -> installPath for installed plugins surviving the union rule.
+
+    Replaces the old roots view so the scan can be ROOT-RELATIVE and the plugin id
+    can come from the REGISTRY KEY (both ADR-0052). None ONLY when the registry
+    cannot be read — callers fall back to the whole cache (blind-spot-beats-stale).
+    A readable registry that yields zero kept plugins returns {} — a POSITIVE
+    empty: the layers just said every plugin is off, and resurrecting them through
+    the fallback would undo the exclusion (the enforcer applies the identical
+    principle to INVOCABLE_PLUGIN_IDS).
+
+    Per key only the FIRST registry entry's installPath is scanned: Claude Code's
+    registry lists the ACTIVE version dir first (validated live 2026-09-05 —
+    agent-skills carries a user 0.6.9 entry followed by a project-local 0.6.8, and
+    only 0.6.9 is walked; both ship identical skill sets, so the assumption is
+    load-bearing but unexercised). If a future Claude Code ever demotes the active
+    entry, the symptom is a missing-version skill set, not a wrong name."""
     installed = _read_json(INSTALLED_PLUGINS_JSON)
     if not isinstance(installed, dict) or "plugins" not in installed:
         return None
-    settings = _read_json(CLAUDE_SETTINGS_JSON) or {}
-    enabled = settings.get("enabledPlugins")
-    if not isinstance(enabled, dict):
-        enabled = {}
-
-    roots: set[str] = set()
-    for key, entries in installed["plugins"].items():
-        # A plugin absent from enabledPlugins is enabled by default.
-        if not enabled.get(key, True):
+    excluded = _layered_plugin_exclusions()
+    entries: dict[str, str] = {}
+    for key, per_entries in installed["plugins"].items():
+        key = str(key)
+        if key in excluded:
             continue
-        for entry in entries or []:
+        for entry in per_entries or []:
             p = entry.get("installPath")
             if p:
-                roots.add(str(p).rstrip("/"))
-    return roots or None
+                entries[key] = str(p).rstrip("/")
+                break
+    return entries
 
 
 def _namespaced_name(path: Path, base_name: str) -> str:
@@ -487,6 +540,11 @@ def parse_skill(path: Path) -> dict | None:
     # Plugin skills are referenced namespaced (plugin:skill) — apply that here so
     # search results, get_skill lookups, and budget overrides all use one id.
     name = _namespaced_name(path, name)
+    # ADR-0052: under the root-relative scan the id is the REGISTRY key's, not path
+    # arithmetic. _FORCED_PLUGIN_NAMES is populated by _plugin_paths before any
+    # parse in a discovery pass (see the global's contract note).
+    if _FORCED_PLUGIN_NAMES:
+        name = _FORCED_PLUGIN_NAMES.get(str(path), name)
 
     # description + optional when_to_use (both feed the semantic index).
     # The value runs until the NEXT frontmatter key. That terminator must admit
@@ -605,7 +663,7 @@ def _zcode_plugin_roots() -> set[str] | None:
 
     Returns None when nothing is positively known (no cache tree / nothing readable)
     — the caller then falls back to the whole cache, the same blind-spot-beats-stale
-    trade _installed_plugin_roots makes for Claude.
+    trade _installed_plugin_entries makes for Claude.
     """
     if not ZCODE_PLUGIN_CACHE.is_dir():
         return None
@@ -663,7 +721,7 @@ def _zcode_plugin_paths() -> list[Path]:
 
     Registry-enumerated rather than a wholesale cache glob. Unreadable-everything
     degrades to the whole-cache glob with a warning — a few stale entries beat a
-    blind spot over an entire harness's plugin universe (the _installed_plugin_roots
+    blind spot over an entire harness's plugin universe (the _installed_plugin_entries
     trade). Returns [] when SKILL_ZCODE_ROOTS=0 or no cache exists."""
     if not ZCODE_ROOTS or not ZCODE_PLUGIN_CACHE.is_dir():
         return []
@@ -683,48 +741,85 @@ def _zcode_plugin_paths() -> list[Path]:
     return [Path(p) for p in dict.fromkeys(out)]
 
 
+# {SKILL.md path: "plugin:skill"} for registry-rooted Claude plugin skills, set by
+# _claude_plugin_skill_paths() on every discovery pass. parse_skill reads it AFTER
+# _plugin_paths has run — the population-precedes-parse ordering holds in every
+# discovery pass. A parse outside a discovery pass (server-side incremental
+# re-embed of one changed file) sees the previous pass's map: for exact cache
+# layouts the heuristic fallback names identically, and interposed-dir layouts are
+# payload trees that root-relative enumeration excludes anyway.
+_FORCED_PLUGIN_NAMES: dict[str, str] = {}
+
+
+def _claude_plugin_skill_paths(entries: dict[str, str]) -> list[Path]:
+    """SKILL.md paths under each install root, both depths, registry-named (ADR-0052).
+
+    Root-relative enumeration makes whole pollution classes structurally
+    unreachable: retained old versions (only installPath is walked), the plugin's
+    own payload trees (examples/, docs/ — anything outside <root>/skills/; the live
+    phantom was `examples:workflow` minted by the sub[si-2] heuristic), and
+    marketplace temp_git_* clones (no installPath). Nested category hits keep the
+    whole-cache phantom guard: a directory that IS a skill (flat hit) owns
+    everything below it."""
+    global _FORCED_PLUGIN_NAMES
+    out: list[Path] = []
+    forced: dict[str, str] = {}
+    for key in sorted(entries):
+        root = Path(entries[key])
+        pid = key.split("@", 1)[0]
+        flat = glob.glob(str(root / "skills" / "*" / "SKILL.md"))
+        skill_dirs = {os.path.dirname(f) for f in flat}
+        hits = list(flat)
+        for n in glob.glob(str(root / "skills" / "*" / "*" / "SKILL.md")):
+            if os.path.dirname(os.path.dirname(n)) in skill_dirs:
+                continue          # phantom guard: payload inside a real skill dir
+            hits.append(n)
+        for h in hits:
+            forced[h] = f"{pid}:{Path(h).parent.name}"
+            out.append(Path(h))
+    _FORCED_PLUGIN_NAMES = forced
+    return out
+
+
 def _plugin_paths() -> list[Path]:
-    """Cache SKILL.md paths from the harness plugin caches (ADR-0033/0038/0042).
+    """Cache SKILL.md paths from the harness plugin caches (ADR-0033/0038/0042/0052).
 
-    Claude hits are narrowed to installed+enabled via installed_plugins.json.
-    Codex and OMP hits are unfiltered: Codex tracks enablement in config.toml
-    (TOML, not stdlib-parseable on the 3.10 floor), and OMP ships no manifest
-    seam either — a few stale entries beat a blind spot over an entire harness's
-    skill universe, the same trade the unreadable-manifest fallback already
-    makes for Claude. OMP's cache/plugins/ holds only INSTALLED plugins by
-    construction (node_modules/ is a symlink farm back into it), so the stale
-    risk there is limited to retained old versions. ZCode hits are
-    registry-enumerated (installed_plugins.json installPaths + newest builtin
-    version dirs, enablement-filtered) — pre-filtered by construction.
+    Claude hits are enumerated ROOT-RELATIVELY from installed_plugins.json
+    installPaths (registry ids, union enablement — see _installed_plugin_entries),
+    narrowed to installed+enabled. Codex and OMP hits are unfiltered whole-cache
+    globs: Codex tracks enablement in config.toml (TOML, not stdlib-parseable on
+    the 3.10 floor), and OMP ships no manifest seam either — a few stale entries
+    beat a blind spot over an entire harness's skill universe. OMP's cache holds
+    only INSTALLED plugins by construction (node_modules/ is a symlink farm back
+    into it). ZCode hits are registry-enumerated (ADR-0042) — pre-filtered by
+    construction. Every non-Claude cache is globbed at two depths (see
+    _nested_glob) so category-grouped plugins are not silently invisible.
 
-    Every cache is globbed at two depths (see _nested_glob) so category-grouped
-    plugins are not silently invisible across harnesses.
-    """
-    hits = _glob_both_depths(PLUGIN_GLOB)
-    codex_hits = _glob_both_depths(CODEX_PLUGIN_GLOB) if CODEX_ROOTS else []
-    omp_hits = _glob_both_depths(OMP_PLUGIN_GLOB) if OMP_ROOTS else []
+    SKILL_PLUGIN_FILTER=0 restores the pre-filter whole-cache Claude behaviour
+    (naming falls back to the _namespaced_name heuristic)."""
+    # _glob_both_depths yields raw glob STRINGS; every path leaving this function
+    # must be a Path — discover_skill_paths concatenates them and parse_skill calls
+    # .read_text on each (a stray str crashes every hit of that harness, swallowed
+    # by parse_skill's read guard as a silent drop).
+    codex_hits = [Path(p) for p in _glob_both_depths(CODEX_PLUGIN_GLOB)] if CODEX_ROOTS else []
+    omp_hits = [Path(p) for p in _glob_both_depths(OMP_PLUGIN_GLOB)] if OMP_ROOTS else []
     zcode_hits = _zcode_plugin_paths()
+
     if not SKILL_PLUGIN_FILTER:
-        return [Path(p) for p in hits + codex_hits + omp_hits + zcode_hits]
+        claude_hits = [Path(p) for p in _glob_both_depths(PLUGIN_GLOB)]
+        return claude_hits + codex_hits + omp_hits + zcode_hits
 
-    roots = _installed_plugin_roots()
-    if roots is None:
-        log.warning("plugin manifests unreadable — indexing the whole cache "
-                    "(stale versions and disabled plugins included)")
-        return [Path(p) for p in hits + codex_hits + omp_hits + zcode_hits]
+    entries = _installed_plugin_entries()
+    if entries is not None:
+        # Positive-empty ({}) is respected: the readable layers just said every
+        # plugin is off, and a whole-cache fallback here would resurrect exactly
+        # what the exclusion rule removed.
+        return _claude_plugin_skill_paths(entries) + codex_hits + omp_hits + zcode_hits
 
-    kept = [p for p in hits if any(p.startswith(r + os.sep) for r in roots)]
-    kept += codex_hits
-    kept += omp_hits
-    kept += zcode_hits
-    if not kept:
-        log.warning("installed/enabled filter matched no cache skills — "
-                    "falling back to the unfiltered cache")
-        return [Path(p) for p in hits + codex_hits + omp_hits + zcode_hits]
-    if len(kept) < len(hits) + len(codex_hits) + len(omp_hits) + len(zcode_hits):
-        log.info("plugin cache: kept %d of %d SKILL.md (Claude installed+enabled; all Codex/OMP; ZCode registry-enumerated)",
-                 len(kept), len(hits) + len(codex_hits) + len(omp_hits) + len(zcode_hits))
-    return [Path(p) for p in kept]
+    log.warning("plugin manifests unreadable — indexing the whole cache "
+                "(stale versions and disabled plugins included)")
+    claude_hits = [Path(p) for p in _glob_both_depths(PLUGIN_GLOB)]
+    return claude_hits + codex_hits + omp_hits + zcode_hits
 
 
 def discover_skill_paths() -> list[Path]:

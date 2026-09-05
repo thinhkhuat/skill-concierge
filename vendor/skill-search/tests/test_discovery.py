@@ -2,6 +2,7 @@
 indexer and the override generator depend on. Bugs here desync the two halves,
 so this is the most important thing to pin."""
 
+import json
 from pathlib import Path
 
 from skill_search import skills_discovery as sd
@@ -464,7 +465,8 @@ def test_only_the_installed_version_is_indexed(tmp_path, monkeypatch):
     _make_plugin(tmp_path, "mkt", "myplugin", "0.3.0", "sk", "ANCIENT")
     cur = _make_plugin(tmp_path, "mkt", "myplugin", "0.18.1", "sk", "CURRENT")
     _plugin_only(monkeypatch, tmp_path)
-    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: {str(cur)})
+    monkeypatch.setattr(sd, "_installed_plugin_entries",
+                        lambda: {"myplugin@mkt": str(cur)})
 
     found = {s["name"]: s for s in sd.discover_skills()}
     assert "CURRENT" in found["myplugin:sk"]["description"]
@@ -476,7 +478,8 @@ def test_disabled_plugins_are_not_indexed(tmp_path, monkeypatch):
     keep = _make_plugin(tmp_path, "mkt", "kept", "1.0.0", "yes", "d")
     _make_plugin(tmp_path, "mkt", "dropped", "1.0.0", "no", "d")
     _plugin_only(monkeypatch, tmp_path)
-    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: {str(keep)})
+    monkeypatch.setattr(sd, "_installed_plugin_entries",
+                        lambda: {"kept@mkt": str(keep)})
 
     names = {s["name"] for s in sd.discover_skills()}
     assert "kept:yes" in names
@@ -488,7 +491,7 @@ def test_unreadable_manifest_fails_open(tmp_path, monkeypatch):
     silently emptying the index. A retriever with no skills is worse than a stale one."""
     _make_plugin(tmp_path, "mkt", "myplugin", "1.0.0", "sk", "d")
     _plugin_only(monkeypatch, tmp_path)
-    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: None)
+    monkeypatch.setattr(sd, "_installed_plugin_entries", lambda: None)
 
     assert {s["name"] for s in sd.discover_skills()} == {"myplugin:sk"}
 
@@ -515,9 +518,143 @@ def test_discover_tags_scope_for_each_source(tmp_path, monkeypatch):
 def test_plugin_skills_get_plugin_scope(tmp_path, monkeypatch):
     root = _make_plugin(tmp_path, "mkt", "myplugin", "1.0.0", "sk", "d")
     _plugin_only(monkeypatch, tmp_path)
-    monkeypatch.setattr(sd, "_installed_plugin_roots", lambda: {str(root)})
+    monkeypatch.setattr(sd, "_installed_plugin_entries",
+                        lambda: {"myplugin@mkt": str(root)})
     found = {s["name"]: s for s in sd.discover_skills()}
     assert found["myplugin:sk"]["scope"] == "plugin"
+
+
+# --- layered enablement (ADR-0052): machine-wide union across settings layers ---
+# Claude Code layers enabledPlugins user -> project -> project-local (last writer
+# wins PER SESSION). The Qdrant index is machine-global (ADR-0028), so discovery
+# indexes the UNION: a plugin is excluded only when the USER file says false AND no
+# readable layer anywhere re-enables it. Per-session precision is the enforcer's
+# gate (ENFORCER_PLUGIN_GATE), never the index's.
+
+def _write_json(p: Path, data) -> Path:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data))
+    return p
+
+
+def _enablement_world(monkeypatch, tmp_path, user=None, projects=None, installed=None):
+    """Pin the enablement seams + registry to crafted fixtures."""
+    user_f = _write_json(tmp_path / "home" / ".claude" / "settings.json", user or {})
+    projects_f = _write_json(tmp_path / "home" / ".claude.json", {"projects": projects or {}})
+    installed_f = _write_json(
+        tmp_path / "home" / ".claude" / "plugins" / "installed_plugins.json",
+        {"plugins": installed or {}})
+    monkeypatch.setattr(sd, "CLAUDE_SETTINGS_JSON", user_f)
+    monkeypatch.setattr(sd, "CLAUDE_PROJECTS_FILE", projects_f)
+    monkeypatch.setattr(sd, "INSTALLED_PLUGINS_JSON", installed_f)
+
+
+def test_project_reenable_beats_user_disable(tmp_path, monkeypatch):
+    """user=false + any project layer=true -> indexed (the agent-skills bug class)."""
+    root = _make_plugin(tmp_path, "mkt", "agent-skills", "0.6.8", "build", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    proj = str(tmp_path / "proj")
+    _enablement_world(
+        monkeypatch, tmp_path,
+        user={"enabledPlugins": {"agent-skills@addy-agent-skills": False}},
+        projects={proj: {}},
+        installed={"agent-skills@addy-agent-skills": [{"installPath": str(root)}]})
+    _write_json(Path(proj) / ".claude" / "settings.local.json",
+                {"enabledPlugins": {"agent-skills@addy-agent-skills": True}})
+    assert "agent-skills:build" in {s["name"] for s in sd.discover_skills()}
+
+
+def test_user_disable_without_reenable_excluded(tmp_path, monkeypatch):
+    """user=false and no layer re-enables -> excluded (unchanged global-off)."""
+    root = _make_plugin(tmp_path, "mkt", "gone", "1.0.0", "sk", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    _enablement_world(
+        monkeypatch, tmp_path,
+        user={"enabledPlugins": {"gone@mkt": False}},
+        projects={str(tmp_path / "proj"): {}},
+        installed={"gone@mkt": [{"installPath": str(root)}]})
+    assert "gone:sk" not in {s["name"] for s in sd.discover_skills()}
+
+
+def test_project_disable_without_user_entry_still_indexed(tmp_path, monkeypatch):
+    """user absent (default-on) + one project disables -> indexed; that project's
+    session subtracts via the enforcer gate, not the machine-global index."""
+    root = _make_plugin(tmp_path, "mkt", "ponytail", "1.0.0", "pony", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    proj = str(tmp_path / "proj")
+    _enablement_world(
+        monkeypatch, tmp_path,
+        user={},
+        projects={proj: {}},
+        installed={"ponytail@ponytail": [{"installPath": str(root)}]})
+    _write_json(Path(proj) / ".claude" / "settings.local.json",
+                {"enabledPlugins": {"ponytail@ponytail": False}})
+    assert "ponytail:pony" in {s["name"] for s in sd.discover_skills()}
+
+
+def test_unreadable_projects_file_degrades_to_user_file(tmp_path, monkeypatch):
+    """No readable projects registry -> user-file-only semantics (fail-open)."""
+    root = _make_plugin(tmp_path, "mkt", "gone", "1.0.0", "sk", "d")
+    _plugin_only(monkeypatch, tmp_path)
+    _enablement_world(
+        monkeypatch, tmp_path,
+        user={"enabledPlugins": {"gone@mkt": False}},
+        installed={"gone@mkt": [{"installPath": str(root)}]})
+    monkeypatch.setattr(sd, "CLAUDE_PROJECTS_FILE", tmp_path / "nonexistent.json")
+    assert "gone:sk" not in {s["name"] for s in sd.discover_skills()}
+
+
+# --- root-relative plugin scan (ADR-0052): registry roots + registry-derived ids ---
+
+def test_examples_payload_tree_not_indexed(tmp_path, monkeypatch):
+    """A plugin's own examples/<name>/skills/<skill> tree is payload, not a skill —
+    the live phantom was `examples:workflow` (2026-09-05). Root-relative enumeration
+    makes it structurally unreachable, and no `examples` id is minted."""
+    root = _make_plugin(tmp_path, "mkt", "superpowers-dev", "0.3.1", "real-skill", "d")
+    ex = tmp_path / "plugins" / "cache" / "mkt" / "superpowers-dev" / "0.3.1" \
+        / "examples" / "full-featured-plugin" / "skills" / "workflow"
+    ex.mkdir(parents=True)
+    (ex / "SKILL.md").write_text("---\nname: workflow\ndescription: demo\n---\nbody")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(sd, "_installed_plugin_entries",
+                        lambda: {"superpowers-dev@superpowers-marketplace": str(root)})
+    names = {s["name"] for s in sd.discover_skills()}
+    assert "superpowers-dev:real-skill" in names
+    assert not any(n.startswith("examples:") for n in names)
+    assert "superpowers-dev:workflow" not in names
+
+
+def test_registry_key_names_the_skill_not_path_arithmetic(tmp_path, monkeypatch):
+    """The plugin id comes from the registry key; a cache layout that would fool the
+    sub[si-2] heuristic cannot rename the skill."""
+    root = _make_plugin(tmp_path, "mkt", "myplug", "1.0.0", "sk", "d")
+    odd = tmp_path / "plugins" / "cache" / "mkt" / "myplug" / "1.0.0" / "docs" \
+        / "samples" / "skills" / "sample"
+    odd.mkdir(parents=True)
+    (odd / "SKILL.md").write_text("---\nname: sample\ndescription: d\n---\nbody")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(sd, "_installed_plugin_entries",
+                        lambda: {"myplug@the-marketplace": str(root)})
+    names = {s["name"] for s in sd.discover_skills()}
+    assert "myplug:sk" in names
+    assert not any(n.startswith(("docs:", "samples:")) for n in names)
+
+
+def test_paths_outside_install_roots_not_indexed(tmp_path, monkeypatch):
+    """temp_git_* marketplace clones inside the cache hold no installPath — they are
+    structurally unreachable under root-relative enumeration."""
+    _make_plugin(tmp_path, "mkt", "myplugin", "1.0.0", "sk", "d")
+    clone = tmp_path / "plugins" / "cache" / "temp_git_123" / "whatever" / "1.0.0" \
+        / "skills" / "cloneskill"
+    clone.mkdir(parents=True)
+    (clone / "SKILL.md").write_text("---\nname: cloneskill\ndescription: d\n---\nbody")
+    _plugin_only(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sd, "_installed_plugin_entries",
+        lambda: {"myplugin@mkt": str(tmp_path / "plugins" / "cache" / "mkt"
+                                     / "myplugin" / "1.0.0")})
+    assert "myplugin:sk" in {s["name"] for s in sd.discover_skills()}
+    assert "temp_git_123:cloneskill" not in {s["name"] for s in sd.discover_skills()}
 
 
 def test_visible_scopes_covers_this_session_only(tmp_path, monkeypatch):
