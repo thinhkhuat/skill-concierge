@@ -3054,7 +3054,7 @@ def _selftest() -> int:
           f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
           f"{len(selfref_off)} off) "
           "+ cross-harness annex "
-          "+ plugin-enablement gate (ADR-0052) "
+          "+ plugin-enablement gate (ADR-0052+0053) "
           "+ CJK word-count (pre-gate no longer swallows no-space scripts)")
     return 0
 
