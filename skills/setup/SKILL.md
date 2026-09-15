@@ -30,9 +30,10 @@ If either is missing, tell the user and stop — `setup.sh` cannot proceed witho
 
    (When working from a git clone instead, `cd` into the repo and run `./setup.sh`.)
    It performs four idempotent steps: stable venv + deps → Qdrant container → build/refresh
-   the index (discovers skills from BOTH Claude Code and Codex directories, ADR-0033) → apply
-   curated overrides to `~/.claude/settings.json` (backed up first; Claude Code only — a
-   harmless no-op when run from Codex).
+   the index (discovers skills from BOTH Claude Code and Codex directories, ADR-0033), the
+   actionability-gate corpus and the keep-off offer-suppression map (durable home, inert while
+   the ledger window is thin — ADR-0054) → apply curated overrides to `~/.claude/settings.json`
+   (backed up first; Claude Code only — a harmless no-op when run from Codex).
 
 2. **De-duplicate** any prior user-scope MCP so only the bundled one runs:
 

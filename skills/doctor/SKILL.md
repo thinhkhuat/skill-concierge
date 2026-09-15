@@ -52,8 +52,10 @@ the engine's own `skill-search --health`, so the two never drift.
    ```
 
    `--fix` applies only fast, safe repairs, then re-checks: start a stopped Qdrant
-   container, `--reindex` a stale/dark index, re-apply the settings overrides, and purge
-   junk utterance layers.
+   container, `--reindex` a stale/dark index, re-apply the settings overrides, purge
+   junk utterance layers, and regenerate the keep-off offer-suppression map into
+   `~/.claude/skill-concierge/keep-off.json` (re-run on every `--fix` pass; inert while the
+   ledger window is thin — ADR-0054).
 
    > **Heads-up:** the overrides fix writes `~/.claude/settings.json` (backed up first) via
    > `scripts/apply-overrides.py`. The user invoking doctor is consent for that; mention it
@@ -79,6 +81,10 @@ the engine's own `skill-search --health`, so the two never drift.
   is stale (copied engine, not refreshed by `/plugin update`). Fix: rerun setup.sh, then restart.
 - **search returns nothing or stale** → `Qdrant` / `Retrieval health`. Fix: `--fix` (reindex)
   — note the SessionStart `auto_reindex` hook now self-heals index staleness in the background.
+- **`Keep-off` row is WARN ("no generated map yet")** → the ledger-derived suppression map has not
+  been built on this machine. Fix: `--fix` (regenerates every pass; stays inert until ≥40 clean
+  offered turns exist — ADR-0011/0054). A skill you take inline that gets dropped → add it to
+  keep-on (exempt).
 - **skills you expect aren't offered / a new skill leaks its full description** → `Settings overrides`
   (now flags override **drift**). Fix: `--fix` (re-apply) — or nothing: the SessionStart
   `auto_overrides` hook self-heals the budget on drift (ADR-0025).

@@ -7,7 +7,7 @@ operating); this page maps the tooling and flags and points into it.
 ## Bootstrap — `setup.sh`
 
 [`setup.sh`](../setup.sh) is idempotent and safe to re-run; the **`skill-concierge:setup`** skill
-runs the same thing and verifies it. Four steps:
+runs the same thing and verifies it. Four numbered steps (with sub-steps):
 
 1. **[1/4] Stable venv.** Build a venv at `~/.claude/skill-concierge/venv` (outside the
    wipe-on-reinstall plugin cache — [ADR-0004](../docs/adr/0004-bundled-mcp-launcher-stable-venv.md)),
@@ -20,6 +20,9 @@ runs the same thing and verifies it. Four steps:
    (`skill-concierge-embed-shim`, bound `127.0.0.1:6363`; skipped if already listening).
 3. **[3/4] Index.** `skill-search --reindex` (multi-vector built by the reindex itself).
    **[3b/4]** Build the actionability-gate `prompt_intent` corpus (fail-soft).
+   **[3c/4]** Build the keep-off offer-suppression map into `~/.claude/skill-concierge/keep-off.json`
+   (fail-soft; inert while the ledger window is thin —
+   [ADR-0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md)).
 4. **[4/4] Overrides.** `apply-overrides.py` writes the curated always-on policy to
    `~/.claude/settings.json` (Claude Code's `skillOverrides`). In Codex this step is a harmless
    no-op — Codex doesn't use `skillOverrides`; governance works via the hooks alone.
@@ -34,17 +37,21 @@ the built index can never diverge from the model the live MCP server uses.
 ## Health — `doctor.py`
 
 [`scripts/doctor.py`](../scripts/doctor.py) (or the **`skill-concierge:doctor`** skill) is the
-read-only deployment health check; a green `status: OK` is the bar to claim "done". It runs **14
-checks** (`check_python` returns N/A once the venv exists, so a healthy deploy shows 13) and
-delegates the retrieval diagnostic to `skill-search --health` (DRY): Python, venv, **engine
-freshness**, MCP wiring, Qdrant, engine health (stale-but-serving = WARN, not FAIL), enrichment,
-multi-vector layer, prompt-intent corpus, corpus health (reads `eval/thresholds.json`), **retrieval
-flywheel** (configured? / reachable? / utterance coverage), overrides, ledger dir, and
-duplicate-MCP. Exit 0 unless a check FAILs.
+read-only deployment health check; a green `status: OK` is the bar to claim "done". The check
+list is owned by `CHECKS` in [`scripts/doctor.py`](../scripts/doctor.py) (`check_python` returns
+N/A once the venv exists) and delegates the retrieval diagnostic to `skill-search --health` (DRY):
+Python, venv, **engine freshness**, running engine, MCP wiring, Qdrant, engine health
+(stale-but-serving = WARN, not FAIL), enrichment, multi-vector layer, prompt-intent corpus,
+corpus health (reads `eval/thresholds.json`), **retrieval flywheel** (configured? / reachable? /
+utterance coverage), trigger hygiene, overrides, blocklist, **keep-off** (durable map present /
+inert / populated), external catalogs, one row per harness integration, ledger dir,
+duplicate-MCP, and MCP reachability. Exit 0 unless a check FAILs.
 
 `--fix` performs only **fast, safe** repairs (`AUTO_FIXERS`): start a stopped Qdrant, reindex,
-re-apply the enrichment overlay, re-apply overrides, rebuild the prompt-intent corpus. It **never**
-rebuilds the venv or the container — heavy bootstrap is handed off to `setup.sh`.
+re-apply the enrichment overlay, re-apply overrides, rebuild the prompt-intent corpus, purge junk
+utterances, and regenerate the keep-off map (this one re-runs on **every** `--fix` pass —
+`REFRESH_FIXERS` — so the ledger-derived map keeps up with the window). It **never** rebuilds the
+venv or the container — heavy bootstrap is handed off to `setup.sh`.
 [ADR-0007](../docs/adr/0007-maintenance-skills-setup-doctor.md), [ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md).
 
 ## Telemetry — `analyze.py`

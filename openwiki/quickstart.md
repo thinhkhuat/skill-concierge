@@ -31,7 +31,7 @@ skill-concierge separates three failure modes the default conflates:
 | Organ | Question | Mechanism | Deep page |
 |-------|----------|-----------|-----------|
 | **Retrieve** | *Which* skill fits? | semantic search over the catalogue (Qdrant + multilingual embeddings), a MAX-pool trigger layer mined from each skill's description, its body's labeled decision-sections, **and** offline flywheel-generated natural-utterance phrases (EN+VN) | [architecture/retrieval-engine.md](architecture/retrieval-engine.md) |
-| **Enforce** | *Whether* the model uses a skill at all | a per-turn `UserPromptSubmit` hook that hands over ranked candidates under a use-mandate; on its two silent verdicts it emits a `SKILL-CHECK:` authorization | [architecture/enforcement-gate.md](architecture/enforcement-gate.md) |
+| **Enforce** | *Whether* the model uses a skill at all | a per-turn `UserPromptSubmit` hook that hands over ranked candidates under a use-mandate; on its silent verdicts (getaway, conversational, self-recap, harness-generated prompt) it emits a `SKILL-CHECK:` authorization instead | [architecture/enforcement-gate.md](architecture/enforcement-gate.md) |
 | **Ledger** | *What actually got used* | a compounding, append-only skill-invocation log → data-backed always-on curation | [architecture/enforcement-gate.md](architecture/enforcement-gate.md#the-ledger--what-actually-got-used) |
 
 The conceptual spine — how the three organs fit together and how a single request flows
