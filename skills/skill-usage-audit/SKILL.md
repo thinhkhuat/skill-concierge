@@ -28,7 +28,7 @@ invocations" is the exact failure this skill exists to stop.
 | skill-usage-tracker | transcripts → `~/.claude/audits/skill-usage-stats/` | usage frequency (Skill tool + `/slash`) | how often each skill actually ran |
 | **SKILL-FIRST trail** | assistant text in `~/.claude/projects/**/*.jsonl` | agent KNEW + chose a skill (`USING`/`SEARCH`/`SKIPPING` declarations) | **the operator's metric** |
 
-Inline SKILL-FIRST use (declare `USING <skill>` → read its `SKILL.md` → execute) fires **no Skill
+Inline SKILL-FIRST use (declare `USING: <skill>` → read its `SKILL.md` → execute) fires **no Skill
 tool**, so the ledger AND the usage-tracker both miss it. The declaration trail is the proxy that
 catches it; subagent/`Task` skill use is missed by all three.
 
