@@ -127,6 +127,8 @@ the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdic
 - **Getaway leg** keeps the burden of proof on SKIP — it authorizes `SKIPPING: none` *only if the
   turn is genuinely trivial*, else it tells the agent to escalate to `find-skills` / `get_skill`.
 - **Intent leg** flatly pre-authorizes the skip (the turn was classified conversational).
+- **Self-referential leg** (3rd, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)) pre-authorizes a pure recap of the agent's own prior message.
+- **Harness-message leg** (4th, [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md), `ENFORCER_HARNESS_SKIP`): a prompt whose head is harness-generated (task notification, monitor event, cross-session/teammate message, idle reminder, OMP summarizer wrapper) is pre-authorized **before any I/O** — no embed, no Qdrant, no chain hint; ledger band `harness_skip`. The heading above keeps its original title so existing anchors hold.
 
 `SKILL-CHECK:` is a **cross-file literal contract**: the string is emitted here, honored by the
 doctrine (`skill-first.md`), and **joined on** by the usage audit

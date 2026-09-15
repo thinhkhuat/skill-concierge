@@ -45,7 +45,9 @@ back-rationalizing the skip — the commitment is the whole point.
    lawful ONLY when nothing returned is even loosely adaptable to the task — and you show the query.
 
 4. **SKIPPING: none is lawful in ONE class only — a turn that carries no task to skill:**
-   - a harness / system notification, or an await-only ping with no task content;
+   - a harness / system notification, or an await-only ping with no task content
+     (the enforcer pre-authorizes these with a `SKILL-CHECK:` line — ADR-0054; if the
+     notification's content itself hands you work, that IS a task: route it through 2);
    - an inbound agent/harness message that hands YOU no work to do.
    (Dispatching work TO another agent is itself a task — that routes through 2 (SEARCH), not here.)
 

@@ -16,10 +16,11 @@ Design contract (mirrors the sibling ledger hook):
   • STDLIB-ONLY + lazy — no heavy imports; the trivial-getaway path does no I/O.
 
 Resilience / budget (Phase 3). The embed POST has a HARD client-side socket
-timeout (see EMBED_TIMEOUT_S for the calibration history; live default 350ms). Every
-network leg is separately capped, so the worst case is the sum of the caps, not an
-unbounded wait: 350ms embed + 100ms installed query + up to 2x100ms actionability gate
-+ 100ms external annex + 100ms cross-harness annex ~= 850ms, against a 5s hook timeout.
+timeout (see EMBED_TIMEOUT_S for the calibration history; live default 500ms since
+ADR-0054). Every network leg is separately capped, so the worst case is the sum of the
+caps, not an unbounded wait: 500ms embed + 250ms installed query + up to 2x250ms
+actionability gate + 250ms external annex + 250ms cross-harness annex ~= 1.75s, against
+a 5s hook timeout.
 The happy path is ~100ms; the annex legs run only on turns that actually carry an offer. On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
 embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
 never crashing — and stays within the per-turn budget regardless of shim health.
@@ -63,8 +64,13 @@ QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 # ~18ms idle. Fix (owner-approved): threaded shim (embed_server.py) + relax the
 # budget to ≲300ms total → 200ms embed cap (widened 0.20→0.35 in 0.22 to cut 65% fallback; hook budget is 5s, so the extra 150ms is cheap). Worst slow-path ≈ 50ms cold-start +
 # 200ms cap ≈ 250ms ≲ 300ms; happy path stays ~100ms. Raise/lower via env.
-EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.35"))
-QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.1"))
+# 2026-09-15 (ADR-0054, owner-ordered from the v0.46.0 epoch audit): 0.35→0.5 s embed and
+# 0.10→0.25 s Qdrant. Every one of the epoch's 21 embed timeouts landed at 359-381 ms and
+# every one of its 53 "qdrant_down" rows at 101-106 ms — censoring at the cap, not outages
+# (successful p90: embed 257 ms, Qdrant 87 ms). Worst path ≈ 0.5 + 5×0.25 ≈ 1.75 s (installed
+# query + 2× gate + external + foreign annex) inside the 5 s hook budget. Revert: ENFORCER_EMBED_TIMEOUT=0.35 ENFORCER_QDRANT_TIMEOUT=0.1.
+EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.5"))
+QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.25"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "8"))   # offer-menu breadth (was 5; owner-widened 2026-07-05). Wider = more push-noise, against ADR-0009's noise-reduction intent — env-overridable, revert default 5.
 GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.45"))  # top<this → silent. OPERATOR-SET 0.45 (2026-06-29, ADR-0009) raised from 0.40 on perceived behaviour; the ledger/corpus analysis argued AGAINST it (taken offers score LOWER than dodged, so a higher floor cuts the better-converting offers first). Do NOT change without re-opening ADR-0009 (data-backed alternative: 0.40 / env ENFORCER_GETAWAY_FLOOR).
 ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-candidate cutoff
@@ -289,30 +295,32 @@ _CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"
 
 
 def _foreign_harness_label() -> str:
+    # ADR-0054: DSH and Cline personal roots are foreign to every other harness, so each
+    # label names them too — the annex header says "installed under <label>".
     if RUNNING_HARNESS == "codex":
-        return "claude"
+        return "claude/dsh/cline"
     if RUNNING_HARNESS == "commandcode":
-        return "claude/codex"
+        return "claude/codex/dsh/cline"
     if RUNNING_HARNESS == "omp":
         # OMP's native provider union (claude + claude-plugins + codex + native) reads the
         # claude/codex/omp scopes, so the cross-harness annex for an OMP session points at the
         # one harness it does NOT read: Command Code. The label drives the `[Commandcode]`
         # marker in the annex render.
-        return "commandcode"
+        return "commandcode/dsh/cline"
     if RUNNING_HARNESS == "zcode":
         # ZCode reads only its own roots (~/.zcode/skills, ~/.agents/skills, its plugin
         # cache) — every OTHER harness's scopes are foreign here, so the residual pool is
         # compound (Command Code's label precedent).
-        return "claude/codex/omp"
+        return "claude/codex/omp/dsh/cline"
     if RUNNING_HARNESS == "dsh":
         # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the ~/.agents/skills
         # convention root — every other harness's scopes are foreign.
-        return "claude/codex/omp/zcode/commandcode"
+        return "claude/codex/omp/zcode/commandcode/cline"
     if RUNNING_HARNESS == "cline":
         # Cline (ADR-0051) reads only its own two skill roots — every other harness's
         # scopes are foreign (the DSH residual pool, plus DSH itself now in the set).
         return "claude/codex/omp/zcode/commandcode/dsh"
-    return "codex"
+    return "codex/dsh/cline"
 
 
 FOREIGN_HARNESS = _foreign_harness_label()
@@ -354,18 +362,26 @@ def _foreign_scopes() -> tuple:
     `_invocable_twin` filesystem check instead.
 
     `project:` scopes are cwd-derived and shared by construction. Never foreign.
+
+    ADR-0054: `dsh-personal` and `cline-personal` (the DSH_HOME/skills and Cline skill
+    roots) are foreign to EVERY other harness. Before this they were missing from the
+    Claude tuple, so re-rooted copies of the plugin's own skills under ~/.ohdsh/skills
+    entered Claude offers as bare twins (`doctor` beside `skill-concierge:doctor`, 27 of
+    581 offers in the v0.46.0 epoch) instead of meeting the `_invocable_twin` test.
     """
     if RUNNING_HARNESS == "commandcode":
         return ("plugin", "codex-plugin", "codex-personal", "personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin")
+                "zcode-personal", "zcode-plugin",
+                "dsh-personal", "cline-personal")
     if RUNNING_HARNESS == "codex":
-        return ("plugin", "commandcode-personal")
+        return ("plugin", "commandcode-personal", "dsh-personal", "cline-personal")
     if RUNNING_HARNESS == "omp":
-        return ("codex-plugin", "commandcode-personal")
+        return ("codex-plugin", "commandcode-personal", "dsh-personal", "cline-personal")
     if RUNNING_HARNESS == "zcode":
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
-                "omp-personal", "omp-managed", "omp-plugin")
+                "omp-personal", "omp-managed", "omp-plugin",
+                "dsh-personal", "cline-personal")
         return base if _zcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "dsh":
         # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the shared
@@ -375,7 +391,7 @@ def _foreign_scopes() -> tuple:
         return ("plugin", "personal", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin")
+                "zcode-personal", "zcode-plugin", "cline-personal")
     if RUNNING_HARNESS == "cline":
         # Cline (ADR-0051) reads only its own two roots — ~/.cline/data/settings/skills
         # and <cwd>/.cline/skills. It reads NO plugin cache and NO other harness's
@@ -383,8 +399,9 @@ def _foreign_scopes() -> tuple:
         return ("plugin", "personal", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin")
-    return ("codex-plugin", "codex-personal", "commandcode-personal")
+                "zcode-personal", "zcode-plugin", "dsh-personal")
+    return ("codex-plugin", "codex-personal", "commandcode-personal",
+            "dsh-personal", "cline-personal")
 
 FOREIGN_SCOPES = _foreign_scopes()
 
@@ -777,11 +794,27 @@ LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 
 # ── offer-suppression keep-off map (ADR-0011) ────────────────────────────
 # Hard-drop chronic never-take skills from the OFFER MENU only (still catalogue-reachable
-# via search_skills). Generated by scripts/build_keep_off.py from a post-enrichment clean
-# window. FAIL-OPEN: missing/empty/bad file -> empty set -> no suppression.
-_KEEPOFF_PATH = Path(os.environ.get(
-    "SKILL_CONCIERGE_KEEPOFF",
-    Path(__file__).resolve().parents[2] / "config" / "keep-off.json"))
+# via search_skills). Generated by scripts/build_keep_off.py from a clean window. FAIL-OPEN:
+# missing/empty/bad file -> empty set -> no suppression. ADR-0054: the generated map lives in
+# the canonical durable home (~/.claude/skill-concierge/keep-off.json — the keep-on/blocklist
+# pattern) so a plugin update cannot wipe it; the shipped config/keep-off.json is the empty
+# seed read only when no durable copy exists.
+_KEEPOFF_DURABLE = Path.home() / ".claude" / "skill-concierge" / "keep-off.json"
+
+
+def _keepoff_path() -> Path:
+    override = os.environ.get("SKILL_CONCIERGE_KEEPOFF")
+    if override:
+        return Path(override)
+    try:
+        if _KEEPOFF_DURABLE.exists():
+            return _KEEPOFF_DURABLE
+    except OSError:
+        pass
+    return Path(__file__).resolve().parents[2] / "config" / "keep-off.json"
+
+
+_KEEPOFF_PATH = _keepoff_path()
 
 
 def _load_keepoff() -> frozenset:
@@ -1104,22 +1137,26 @@ def _floor_for(name: str) -> float:
     return _PER_SKILL_TAU.get(name, GETAWAY_FLOOR)
 
 
-# ── deterministic route overrides (default-INERT) ──────────────────────────
+# ── deterministic route overrides (config-driven, default ON since ADR-0054) ──────
 # A tiny, high-precision exact-substring -> skill map for intents where semantic ranking is
-# unreliable but the intent is unambiguous. GUARANTEES the mapped skill in the menu (prepended,
-# deduped) — additive, never blocks, and a hit bypasses getaway + the actionability gate.
-# DEFAULT OFF: loaded only when ENFORCER_DETERMINISTIC is set; missing/empty config -> no-op.
-# CURATE SPARINGLY — this system's dodge is dominated by FALSE offers, so every route must be
-# near-zero false-positive. config/deterministic-routes.json: {"routes":[{"contains":"<lower
-# substring>","skill":"<exact name>"}]}.  Opt in: export ENFORCER_DETERMINISTIC=1.
+# unreliable but the intent is unambiguous — above all a prompt that NAMES the skill
+# ("/unlazy", "cook --auto", "progress-map"): 11 such prompts in the v0.46.0 epoch were
+# missed by the preview. GUARANTEES the mapped skill leads the menu (score 1.0, retrieved
+# twin dropped) — additive, never blocks, and a hit bypasses getaway + the actionability
+# gate. Pure (no I/O), so it runs BEFORE the embed step and survives a shim/Qdrant timeout.
+# DEFAULT ON: loaded from config/deterministic-routes.json; ENFORCER_DETERMINISTIC=0
+# disables; missing/empty config -> no-op. CURATE SPARINGLY — this system's dodge is
+# dominated by FALSE offers, so every route must be near-zero false-positive: a literal
+# skill name, its slash form, or an alias replayed from a ledger miss. Format:
+# {"routes":[{"contains":"<lower substring>","skill":"<exact name>"}]}.
 _ROUTES_PATH = Path(os.environ.get(
     "SKILL_CONCIERGE_ROUTES",
     Path(__file__).resolve().parents[2] / "config" / "deterministic-routes.json"))
 
 
 def _load_routes() -> list:
-    if not os.environ.get("ENFORCER_DETERMINISTIC", "").strip():
-        return []  # default-inert
+    if os.environ.get("ENFORCER_DETERMINISTIC", "1").strip() == "0":
+        return []  # kill-switch
     try:
         data = json.loads(_ROUTES_PATH.read_text(encoding="utf-8"))
         return [(r["contains"].lower(), r["skill"]) for r in data.get("routes", [])
@@ -1132,22 +1169,41 @@ def _load_routes() -> list:
 _ROUTES = _load_routes()
 
 
-def _deterministic_hits(prompt: str, cands: list, keepoff: frozenset = frozenset()) -> list:
-    """Skills whose exact-substring route matches the prompt but retrieval missed. Returns
-    [(name, desc, score)] to PREPEND (score=1.0 so it leads + clears every floor). Order-
-    preserving, de-duped against cands, and NEVER resurfaces a keep-off'd skill — ADR-0011
-    suppression outranks a route, else a co-configured route silently bypasses it. Inert by
-    default (_ROUTES empty)."""
+def _route_hits(prompt: str, keepoff: frozenset = frozenset()) -> list:
+    """Every configured route whose substring is in the lowercased prompt, as
+    [(name, desc, 1.0)] in first-match order, de-duped. Pure (no I/O) so it runs before the
+    embed step. NEVER resurfaces a keep-off'd (ADR-0011) or blocklisted (ADR-0046) skill —
+    suppression outranks a route, else a co-configured route silently bypasses it. Inert
+    when _ROUTES is empty."""
     if not _ROUTES:
         return []
     low = prompt.lower()
-    have = {n for (n, _d, _s) in cands}
-    out = []
+    out, seen = [], set()
+    # ADR-0034 invariant: the offer holds only skills THIS harness can invoke. Every seeded
+    # route names a bare personal-root skill; where `personal` is foreign (Command Code,
+    # DSH, Cline, divergent ZCode) a route may pin only what the filesystem twin test rescues.
+    personal_foreign = "personal" in FOREIGN_SCOPES
     for sub, skill in _ROUTES:
-        if sub in low and skill not in have and skill not in keepoff and not _blocked(skill):
-            out.append((skill, "deterministic route", 1.0))
-            have.add(skill)
+        if sub not in low or skill in seen or skill in keepoff or _blocked(skill):
+            continue
+        if personal_foreign and ":" not in skill and not _invocable_twin(skill):
+            continue
+        out.append((skill, "named in the prompt — deterministic route", 1.0))
+        seen.add(skill)
     return out
+
+
+def _merge_route_hits(hits: list, cands: list) -> list:
+    """Prepend route hits to the retrieved candidates so a NAMED skill leads at score 1.0 even
+    when retrieval also found it further down (the preview shows only the top rows). A
+    retrieved twin donates its real description and is dropped from the tail, so the menu
+    never lists a skill twice. Order-preserving; a no-hit turn returns `cands` untouched."""
+    if not hits:
+        return cands
+    desc = {n: d for (n, d, _s) in cands}
+    names = {n for (n, _d, _s) in hits}
+    return ([(n, desc.get(n, d), s) for (n, d, s) in hits]
+            + [c for c in cands if c[0] not in names])
 
 
 # ── P6: runner-up-gap menu collapse (default-INERT) ──────────────────
@@ -1271,19 +1327,50 @@ SELFREF_SKIP_MSG = (
 )
 
 
-def _authorized_skip_inject(kind: str, sid: str = "", **fmt) -> None:
+# ADR-0054: the 4th AUTHORIZED-SKIP leg — harness-generated prompts. In the v0.46.0 epoch
+# 344 of 581 enforcer decisions were on text no user typed (task notifications, monitor
+# events, cross-session/teammate messages, idle reminders, OMP summarizer calls) and 168 of
+# them got a full preview; 7 incidental takes followed. Its signature phrase
+# "harness-message lane" is a LOCKED cross-file contract with the audit script
+# (_AUTHORIZED_SIGNATURES) — same rule as the selfref leg above.
+HARNESS_SKIP = os.environ.get("ENFORCER_HARNESS_SKIP", "1") != "0"
+# Shapes with LEDGER evidence at the prompt head (whole ledger, 2026-09-15): <task-notification>
+# 1,700 · OMP omp-msum 1,546 · <system-reminder> 36 · <cross-session-message 20. The remaining
+# alternations are TRANSCRIPT-evidenced only (user records in ~/.claude/projects/**/*.jsonl:
+# teammate messages, "Another Claude session sent…", interrupted/continued banners, "[SYSTEM
+# NOTIFICATION"); the hook has never seen them at the head, so they are inert until the W1
+# replay does. Slash commands reach the hook raw ("/name …", pre-gated) — no <command-name> form.
+# Mirrored in scripts/build_keep_off.py (tests/test_harness_regex_parity.py pins equality).
+_HARNESS_MSG_RE = re.compile(
+    r"^\s*(?:<task-notification>|<system-reminder>|<cross-session-message\b|<teammate-message\b"
+    r"|Another Claude session sent a message|\[Request interrupted by user"
+    r"|\[SYSTEM NOTIFICATION\b|This session is being continued from a previous conversation"
+    r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
+HARNESS_SKIP_MSG = (
+    AUTHORIZED_SKIP_MARKER + " this prompt is harness-generated (a task notification, monitor "
+    "event, cross-session/teammate message, idle reminder, or summarizer call), not a user task "
+    "— the harness-message lane. SKIPPING: none is pre-authorized; no search_skills needed. If "
+    "the message itself hands you work to do, treat THAT as the task and route it normally "
+    "(SEARCH/USING)."
+)
+
+
+def _authorized_skip_inject(kind: str, sid: str = "", hint: bool = True, **fmt) -> None:
     """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip" |
-    "selfref") when the kill-switch is on; no-op when off. ADR-0029: the CHAIN-HINT line
-    (when one is due) rides these legs too — the vague ≥4-word continuations hints exist
-    for land HERE, not on the ranked mandate. Wrapped so a bad format kwarg or a
-    stdout error can never escape — this hook is additive-only and must never block a turn."""
+    "selfref" | "harness") when the kill-switch is on; no-op when off. ADR-0029: the CHAIN-HINT
+    line (when one is due) rides these legs too — the vague ≥4-word continuations hints exist
+    for land HERE, not on the ranked mandate — except the harness leg (`hint=False`): a
+    notification is not the user's continuation, and 14 of the 19 ROUTE projections in the
+    v0.46.0 epoch fired on exactly such text with zero follow. Wrapped so a bad format kwarg or
+    a stdout error can never escape — this hook is additive-only and must never block a turn."""
     if not AUTHORIZED_SKIP:
         return
     try:
         msg = {"getaway": GETAWAY_SKIP_MSG,
                "intent_skip": INTENT_SKIP_MSG,
-               "selfref": SELFREF_SKIP_MSG}[kind]
-        _inject(msg.format(**fmt) + _chain_hint(sid))
+               "selfref": SELFREF_SKIP_MSG,
+               "harness": HARNESS_SKIP_MSG}[kind]
+        _inject(msg.format(**fmt) + (_chain_hint(sid) if hint else ""))
     except (OSError, UnicodeError, ValueError, KeyError):
         return
 
@@ -1395,9 +1482,16 @@ def _retrieve_external(vector: list, top_installed: float = 0.0) -> list:
     return out[:EXTERNAL_SLOTS]
 
 
-def _retrieve_foreign(vector: list, top_installed: float = 0.0) -> list:
+def _retrieve_foreign(vector: list, top_installed: float = 0.0,
+                      installed_bare: frozenset = frozenset()) -> list:
     """ADR-0034 cross-harness annex: the top skills in the OTHER harness's scopes scoring
     >= FOREIGN_FLOOR, from a SEPARATE query. Returns [(name, desc, score)].
+
+    ADR-0054: `installed_bare` is the set of bare names (scope prefix stripped) already in
+    the installed offer. A foreign row whose bare name is in it is the same skill re-rooted
+    for another harness (`doctor` under ~/.ohdsh/skills beside the invocable
+    `skill-concierge:doctor`) — listing it here as "NOT invocable" would state the opposite
+    of the truth, so it is skipped like an invocable twin.
 
     Same hard invariant as the ADR-0032 external annex: a dedicated query, never a partition of
     a widened installed query, so a foreign skill can NEVER displace an installed offer slot.
@@ -1431,6 +1525,8 @@ def _retrieve_foreign(vector: list, top_installed: float = 0.0) -> list:
         pl = hits[0].get("payload", {}) or {}
         name = pl.get("name", g.get("id", "?"))
         if _invocable_twin(name) or _blocked(name):   # ADR-0046: blocked = no annex row
+            continue
+        if name.split(":", 1)[-1] in installed_bare:   # ADR-0054: re-rooted twin of an offered skill
             continue
         out.append((name, pl.get("description", ""), score))
         if len(out) >= FOREIGN_SLOTS:
@@ -1814,6 +1910,16 @@ def main() -> int:
         if _word_count(prompt) <= MAX_SHORT_WORDS:
             return 0
 
+        # ADR-0054 harness-message lane (no I/O): text the harness generated — task
+        # notifications, monitor events, cross-session/teammate messages, idle reminders,
+        # OMP summarizer calls — is not a user task. Authorize the skip and stop before the
+        # refusal guard, consult route, embed and every Qdrant round-trip. Anchored at the
+        # prompt head so a user who PASTES such a block mid-prompt is still routed normally.
+        if HARNESS_SKIP and _HARNESS_MSG_RE.match(prompt):
+            _append_offer(sid, "harness_skip", [], "harness_message", prompt)
+            _authorized_skip_inject("harness", sid, hint=False)
+            return 0
+
         # Explicit skill-refusal -> MANDATE-ONLY (never surface the skill the user
         # just refused; keep the SKILL-FIRST discipline live). See _REFUSAL_RE.
         if _REFUSAL_RE.search(prompt):
@@ -1840,7 +1946,13 @@ def main() -> int:
             _authorized_skip_inject("selfref", sid)
             return 0
 
-        # Embed (HARD timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow.
+        # ADR-0054: deterministic routes run BEFORE the embed step (pure, no I/O) so a skill
+        # the user NAMED still leads the menu when the shim or Qdrant times out — 4 of the 11
+        # named-and-missed prompts in the v0.46.0 epoch were lost on exactly that path.
+        _hits = _route_hits(prompt, KEEPOFF)
+        _hits_offered = [[n, 1.0] for (n, _d, _s) in _hits]
+
+        # Embed (HARD timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow (named hits survive).
         embed_ms = None
         t0 = time.time()
         try:
@@ -1848,13 +1960,13 @@ def main() -> int:
             embed_ms = (time.time() - t0) * 1000
         except TimeoutError:
             embed_ms = (time.time() - t0) * 1000
-            _inject(MANDATE + _chain_hint(sid))
-            _append_offer(sid, "fallback", [], "embed_timeout", prompt, embed_ms=embed_ms)
+            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
+            _append_offer(sid, "fallback", _hits_offered, "embed_timeout", prompt, embed_ms=embed_ms)
             return 0
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
             embed_ms = (time.time() - t0) * 1000
-            _inject(MANDATE + _chain_hint(sid))
-            _append_offer(sid, "fallback", [], "embed_down", prompt, embed_ms=embed_ms)
+            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
+            _append_offer(sid, "fallback", _hits_offered, "embed_down", prompt, embed_ms=embed_ms)
             return 0
         # Retrieve → mandate-only fallback if Qdrant is unreachable.
         qdrant_ms = None
@@ -1864,8 +1976,8 @@ def main() -> int:
             qdrant_ms = (time.time() - t1) * 1000
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             qdrant_ms = (time.time() - t1) * 1000
-            _inject(MANDATE + _chain_hint(sid))
-            _append_offer(sid, "fallback", [], "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
+            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
+            _append_offer(sid, "fallback", _hits_offered, "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             return 0
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
@@ -1876,12 +1988,13 @@ def main() -> int:
         cands, _bl_dropped = _drop_blocklisted(cands)
         _dropped = _dropped + _bl_dropped
 
-        # Deterministic routes (default-inert): guarantee an unambiguously-intended skill in
-        # the menu even when semantic ranking missed it. A hit leads (score 1.0) and bypasses
-        # both the getaway and the actionability gate (the intent is explicit).
-        det = _deterministic_hits(prompt, cands, KEEPOFF)
+        # Deterministic routes (ADR-0054 — config-driven, default ON): a skill the prompt
+        # NAMES leads the menu at score 1.0 whether or not retrieval found it (the preview
+        # shows only the top rows), and bypasses both the getaway and the actionability gate
+        # (the intent is explicit). Computed above, before the embed step.
+        det = _hits
         if det:
-            cands = det + cands
+            cands = _merge_route_hits(det, cands)
 
         top = cands[0][2] if cands else 0.0
         offered = [[n, round(s, 4)] for (n, _d, s) in cands]
@@ -1928,7 +2041,8 @@ def main() -> int:
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _external = []
         try:
-            _foreign = _retrieve_foreign(vector, _atop)
+            _foreign = _retrieve_foreign(
+                vector, _atop, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in cands))
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _foreign = []
 
@@ -2098,12 +2212,13 @@ def _selftest() -> int:
     if "%" in lone_collapsed or "RELATIVE rank" in lone_collapsed:
         bad.append("collapsed render must be lone (no %-share / note)")
 
-    # (6) per-skill tau + deterministic routes — BOTH default-INERT (no env set in this test).
+    # (6) per-skill tau (default-INERT) + deterministic routes (ADR-0054: config-driven,
+    # default ON; ENFORCER_DETERMINISTIC=0 empties them). Routes are pure and run before embed.
     global _PER_SKILL_TAU, _ROUTES
     if _PER_SKILL_TAU != {}:
         bad.append("per-skill tau must be empty/inert by default (ENFORCER_PER_SKILL_TAU unset)")
-    if _ROUTES != []:
-        bad.append("deterministic routes must be empty/inert by default (ENFORCER_DETERMINISTIC unset)")
+    if os.environ.get("ENFORCER_DETERMINISTIC", "1").strip() == "0" and _ROUTES:
+        bad.append("deterministic routes must be empty when ENFORCER_DETERMINISTIC=0")
     if _floor_for("whatever") != GETAWAY_FLOOR:
         bad.append("floor_for must return the global floor when inert")
     _saved_tau, _saved_routes = _PER_SKILL_TAU, _ROUTES
@@ -2114,13 +2229,22 @@ def _selftest() -> int:
         if _floor_for("uncalibrated") != GETAWAY_FLOOR:
             bad.append("floor_for must fall back to the global floor for an uncalibrated skill")
         _ROUTES = [("open a pull request", "ck:git")]
-        hit = [n for n, _d, _s in _deterministic_hits("please open a pull request now", [("o", "", 0.3)])]
+        hit = [n for n, _d, _s in _route_hits("please open a pull request now")]
         if hit != ["ck:git"]:
             bad.append(f"deterministic route must fire on a substring match: {hit}")
-        if _deterministic_hits("an unrelated prompt", [("o", "", 0.3)]) != []:
+        if _route_hits("an unrelated prompt") != []:
             bad.append("deterministic route must not fire without a match")
-        if _deterministic_hits("open a pull request", [("ck:git", "", 0.3)]) != []:
-            bad.append("deterministic route must not duplicate an already-present skill")
+        merged = _merge_route_hits(_route_hits("open a pull request"),
+                                   [("other", "o", 0.5), ("ck:git", "real desc", 0.3)])
+        if [n for n, _d, _s in merged] != ["ck:git", "other"]:
+            bad.append(f"a named skill must lead once and its retrieved copy must drop: {merged}")
+        if merged[0][1] != "real desc" or merged[0][2] != 1.0:
+            bad.append("a promoted route hit must keep the retrieved description at score 1.0")
+        if _merge_route_hits([], [("other", "o", 0.5)]) != [("other", "o", 0.5)]:
+            bad.append("a no-hit turn must leave the retrieved candidates untouched")
+        _ROUTES = []
+        if _route_hits("open a pull request") != []:
+            bad.append("deterministic routes must be inert when the config is empty")
     finally:
         _PER_SKILL_TAU, _ROUTES = _saved_tau, _saved_routes
 
@@ -2132,11 +2256,12 @@ def _selftest() -> int:
         _ROUTES = [("deploy the app", "chronic")]
         keepoff = frozenset({"chronic"})
         surv, _drp = _drop_keepoff([("chronic", "", 0.2), ("other", "", 0.15)], keepoff)
-        det = _deterministic_hits("please deploy the app now", surv, keepoff)
+        det = _merge_route_hits(_route_hits("please deploy the app now", keepoff), surv)
         if any(n == "chronic" for n, _d, _s in det):
             bad.append("keep-off skill resurfaced via a deterministic route (ADR-0011 bypass)")
     finally:
         _ROUTES = _saved_routes2
+
 
     # (7) AUTHORIZED-SKIP tier: both legs inject the marker + required content when the
     # kill-switch is on, and stay fully silent (no inject call at all) when it's off.
@@ -2154,9 +2279,18 @@ def _selftest() -> int:
         _authorized_skip_inject("getaway", top=0.30, floor=0.45)
         _authorized_skip_inject("intent_skip")
         _authorized_skip_inject("selfref")
-        if len(_captured) != 3:
-            bad.append(f"authorized-skip: expected 3 injects when flag ON, got {len(_captured)}")
+        _authorized_skip_inject("harness", hint=False)
+        if len(_captured) != 4:
+            bad.append(f"authorized-skip: expected 4 injects when flag ON, got {len(_captured)}")
         else:
+            # ADR-0054 [xcut]: the harness leg carries its own LOCKED signature (the audit's
+            # _AUTHORIZED_SIGNATURES), unique to it, and rides no chain hint.
+            if "harness-message lane" not in _captured[3]:
+                bad.append("authorized-skip: harness message missing the locked signature phrase")
+            if any("harness-message lane" in c for c in _captured[:3]):
+                bad.append("authorized-skip: harness signature must NOT appear in the other legs")
+            if "CHAIN-HINT" in _captured[3]:
+                bad.append("authorized-skip: harness leg must not carry a chain hint")
             if not all(c.startswith(AUTHORIZED_SKIP_MARKER) for c in _captured):
                 bad.append("authorized-skip: injected text must start with the marker")
             if "find-skills" not in _captured[0] or "get_skill(" not in _captured[0]:
@@ -2180,6 +2314,7 @@ def _selftest() -> int:
         _authorized_skip_inject("getaway", top=0.30, floor=0.45)
         _authorized_skip_inject("intent_skip")
         _authorized_skip_inject("selfref")
+        _authorized_skip_inject("harness", hint=False)
         if _captured:
             bad.append("authorized-skip: must stay silent when the kill-switch is off")
     finally:
@@ -2565,13 +2700,19 @@ def _selftest() -> int:
     _saved_rh = RUNNING_HARNESS
     _saved_fh = FOREIGN_HARNESS
     try:
-        if FOREIGN_HARNESS not in ("codex", "claude", "claude/codex", "commandcode",
-                                   "claude/codex/omp",
-                                   "claude/codex/omp/zcode/commandcode",
+        if FOREIGN_HARNESS not in ("codex/dsh/cline", "claude/dsh/cline", "claude/codex/dsh/cline",
+                                   "commandcode/dsh/cline",
+                                   "claude/codex/omp/dsh/cline",
+                                   "claude/codex/omp/zcode/commandcode/cline",
                                    "claude/codex/omp/zcode/commandcode/dsh") or not FOREIGN_SCOPES:
             bad.append(f"cross-harness: harness label / foreign scopes unset: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
-        if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-")) for x in FOREIGN_SCOPES):
+        if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-", "dsh-", "cline-")) for x in FOREIGN_SCOPES):
             bad.append(f"cross-harness: claude harness label disagrees with the foreign scope set: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
+        # ADR-0054: the DSH/Cline personal roots must be foreign to every harness but their own.
+        if RUNNING_HARNESS != "dsh" and "dsh-personal" not in FOREIGN_SCOPES:
+            bad.append(f"cross-harness: dsh-personal missing from the {RUNNING_HARNESS} foreign scope set")
+        if RUNNING_HARNESS != "cline" and "cline-personal" not in FOREIGN_SCOPES:
+            bad.append(f"cross-harness: cline-personal missing from the {RUNNING_HARNESS} foreign scope set")
         # Nothing at module scope may touch the filesystem unguarded: `Path.cwd()` raises when
         # the working directory has been deleted (a worktree removed under a live session), and
         # an import-time raise turns a fail-silent hook into a traceback on every turn.
@@ -2699,10 +2840,11 @@ def _selftest() -> int:
             if _running_harness() != "codex":
                 bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=codex must stay codex")
             RUNNING_HARNESS = "omp"
-            if _foreign_harness_label() != "commandcode":
-                bad.append("cross-harness: omp foreign label must be commandcode: "
+            if _foreign_harness_label() != "commandcode/dsh/cline":
+                bad.append("cross-harness: omp foreign label must be commandcode/dsh/cline: "
                            f"{_foreign_harness_label()!r}")
-            if _foreign_scopes() != ("codex-plugin", "commandcode-personal"):
+            if _foreign_scopes() != ("codex-plugin", "commandcode-personal",
+                                     "dsh-personal", "cline-personal"):
                 bad.append("cross-harness: omp foreign scopes wrong: "
                            f"{_foreign_scopes()!r}")
             # twin test is active under omp (plugin ids invocable via the claude/omp union)
@@ -2752,12 +2894,13 @@ def _selftest() -> int:
             os.environ.pop("ZCODE_PLUGIN_ROOT", None)
 
             RUNNING_HARNESS = "zcode"
-            if _foreign_harness_label() != "claude/codex/omp":
+            if _foreign_harness_label() != "claude/codex/omp/dsh/cline":
                 bad.append(f"cross-harness: zcode foreign label wrong: {_foreign_harness_label()!r}")
             _zcode_shares_personal_shelf = lambda: True
             _fs = _foreign_scopes()
             if "personal" in _fs or "zcode-personal" in _fs or \
-                    not {"plugin", "codex-plugin", "commandcode-personal", "omp-managed"} <= set(_fs):
+                    not {"plugin", "codex-plugin", "commandcode-personal", "omp-managed",
+                         "dsh-personal", "cline-personal"} <= set(_fs):
                 bad.append(f"cross-harness: zcode shared-shelf foreign scopes wrong: {_fs!r}")
             _zcode_shares_personal_shelf = lambda: False
             if "personal" not in _foreign_scopes():
@@ -2818,7 +2961,7 @@ def _selftest() -> int:
             if "personal" not in _fs or "plugin" not in _fs or \
                     not {"codex-personal", "codex-plugin", "commandcode-personal",
                          "omp-personal", "omp-managed", "omp-plugin",
-                         "zcode-personal", "zcode-plugin"} <= set(_fs):
+                         "zcode-personal", "zcode-plugin", "dsh-personal"} <= set(_fs):
                 bad.append(f"cross-harness: cline foreign scopes wrong: {_fs!r}")
             if "cline-personal" in _fs:
                 bad.append("cross-harness: cline must never foreign its own scopes")
@@ -3040,6 +3183,58 @@ def _selftest() -> int:
     finally:
         RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE = _saved_pg
 
+    # (14) ADR-0054 harness-message lane: every harness-generated prompt shape is caught at the
+    # prompt head; human prompts, OMP worker briefs, consult asks and a PASTED block
+    # mid-prompt are not. Lane is ON by default.
+    harness_fire = [
+        "<task-notification>\n<task-id>b1</task-id>\n<summary>Monitor event: \"x\"</summary>",
+        "<system-reminder> Last turn had no tool call → session idle. Reminder 1 of 3.",
+        "<cross-session-message from=\"uds:/tmp/x.sock\" from-name=\"hoivu\"> FYI",
+        "<teammate-message teammate_id=\"v7-planner\" color=\"blue\">{\"type\":\"idle\"}",
+        "Another Claude session sent a message: <teammate-message teammate_id=\"t\">",
+        "[Request interrupted by user for tool use]",
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event",
+        "This session is being continued from a previous conversation that ran out of context.",
+        "<file name=\"/var/folders/vz/T/omp-msum-o650bgz2.txt\">\nSummarize the following agent turn",
+        "  <task-notification> leading whitespace still matches",
+    ]
+    harness_off = [
+        "please give a /progress-map of the build and track our implementation progress",
+        "Complete assignment thoroughly:\n\n# Target\nUpdate plans/reports/x.md (EN) and its VN twin",
+        "look at this <task-notification> I pasted from another session and tell me what it means",
+        "commit & push pls and ensure a clean worktree afterwards",
+        "which set of skills should we be using for this docx export task",
+        "<file name=\"/Users/me/notes.txt\">\nsummarize my own notes file for me please",
+    ]
+    for p in harness_fire:
+        if not _HARNESS_MSG_RE.match(p):
+            bad.append(f"harness-message lane must fire on: {p[:50]!r}")
+    for p in harness_off:
+        if _HARNESS_MSG_RE.match(p):
+            bad.append(f"harness-message lane must NOT fire on: {p[:50]!r}")
+    if not HARNESS_SKIP:
+        bad.append("harness-message lane must be ON by default (ENFORCER_HARNESS_SKIP unset)")
+
+    # (6c) ADR-0054: a route can never resurface a BLOCKLISTED skill (ADR-0046 outranks it),
+    # and under a harness where `personal` is foreign a bare route target must pass the
+    # invocable-twin test (ADR-0034 invariant) — Command Code has no rescue, so routes go inert.
+    _saved_6c = (_ROUTES, BLOCKLIST, RUNNING_HARNESS, FOREIGN_SCOPES)
+    try:
+        _ROUTES = [("deploy", "victim")]
+        BLOCKLIST = frozenset({"victim"})
+        if _route_hits("please deploy now") != []:
+            bad.append("blocklisted skill resurfaced via a deterministic route (ADR-0046 bypass)")
+        BLOCKLIST = frozenset()
+        if [n for n, _d, _s in _route_hits("please deploy now")] != ["victim"]:
+            bad.append("route must fire once the blocklist no longer names its skill")
+        RUNNING_HARNESS = "commandcode"
+        FOREIGN_SCOPES = _foreign_scopes()
+        _ROUTES = [("commit and push", "ak-git")]
+        if _route_hits("commit and push please") != []:
+            bad.append("route pinned a personal-root skill Command Code cannot invoke (ADR-0034)")
+    finally:
+        _ROUTES, BLOCKLIST, RUNNING_HARNESS, FOREIGN_SCOPES = _saved_6c
+
     if bad:
         print("enforcer --selftest FAIL:")
         for b in bad:
@@ -3050,9 +3245,10 @@ def _selftest() -> int:
           f"+ actionability imperative-veto ({len(imp_fire)} fire / {len(imp_off)} off) "
           "+ consult-intent routing (ADR-0049) "
           "+ keepoff-drop + blocklist-drop (ADR-0046) + gap-collapse "
-          "+ per-skill-tau/deterministic-routes (default-inert) + authorized-skip tier "
-          f"(3 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
+          "+ per-skill-tau (inert) / deterministic-routes (ADR-0054 config, ON) + authorized-skip tier "
+          f"(4 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
           f"{len(selfref_off)} off) "
+          f"+ harness-message lane ({len(harness_fire)} fire / {len(harness_off)} off) "
           "+ cross-harness annex "
           "+ plugin-enablement gate (ADR-0052+0053) "
           "+ CJK word-count (pre-gate no longer swallows no-space scripts)")

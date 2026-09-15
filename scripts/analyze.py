@@ -38,6 +38,12 @@ from collections import Counter, defaultdict, deque
 from itertools import pairwise
 from pathlib import Path
 
+# The `fallback` field is set on EVERY non-offer verdict leg (intent_skip -> "conversational",
+# negation -> "skill_refusal", harness_skip -> "harness_message"); only these three values
+# mean the shim/Qdrant leg actually degraded the turn to mandate-only. Counting the field
+# truthy inflated the v0.46.0-epoch "fallback rate" from 13% to 39% (audit F10, ADR-0054).
+OUTAGE_FALLBACKS = ("embed_timeout", "embed_down", "qdrant_down")
+
 LEDGER = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs")
 ) / "skill-invocation-ledger.log"
@@ -532,7 +538,7 @@ def main():
             return f"n={n} avg={avg:.0f}ms p50={pct(50)} p90={pct(90)} p99={pct(99)} max={max(vals)}"
         embed_vals = [e["embed_ms"] for e in offers if isinstance(e.get("embed_ms"), (int, float))]
         qdr_vals = [e["qdrant_ms"] for e in offers if isinstance(e.get("qdrant_ms"), (int, float))]
-        fb = sum(1 for e in offers if e.get("fallback"))
+        fb = sum(1 for e in offers if e.get("fallback") in OUTAGE_FALLBACKS)
         print(f"ledger        : {path}")
         if since is not None or until is not None:
             print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
@@ -592,9 +598,11 @@ def main():
     # the used skill was in the offered set (the retriever's precision payoff).
     eligible = [w for w in windows if w["offered"] and w["autos"]]
     hits = sum(1 for w in eligible if any(a in w["offered"] for a in w["autos"]))
-    # fallback rate — offers that degraded to mandate-only (embed/qdrant down/slow).
+    # fallback rate — offers that degraded to mandate-only (embed/qdrant down/slow). Outage
+    # values ONLY (OUTAGE_FALLBACKS): the conversational / refusal / harness legs also stamp
+    # `fallback` and are reported through the band histogram instead.
     all_offers = [w for w in turns if w["band"] is not None]
-    fb = sum(1 for w in all_offers if w["fallback"])
+    fb = sum(1 for w in all_offers if w["fallback"] in OUTAGE_FALLBACKS)
     band_freq = Counter(w["band"] for w in all_offers)
     n_off_turns, took_off, offered_by_skill, took_by_skill = _offer_conversion(windows)
 

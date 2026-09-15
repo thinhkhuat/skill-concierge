@@ -1603,11 +1603,52 @@ def check_cline():
             "fix": None}
 
 
+KEEPOFF_DURABLE = Path(os.environ.get(
+    "SKILL_CONCIERGE_KEEPOFF", Path.home() / ".claude" / "skill-concierge" / "keep-off.json"))
+
+
+def check_keepoff():
+    """ADR-0011 offer-suppression map, activated by ADR-0054. The generated map lives in the
+    durable home (a plugin update cannot wipe it); the shipped config/keep-off.json is only
+    the empty seed. A missing durable map is WARN + auto-fixable: `--fix` runs the generator,
+    whose own data-sufficiency guard emits an empty (inert) map while the post-epoch window
+    is still thin, so the fix is always safe to apply."""
+    path = KEEPOFF_DURABLE
+    if not path.exists():
+        return {"id": "keepoff", "label": "Keep-off", "status": WARN,
+                "detail": "no generated map yet (empty seed in use) — doctor --fix builds it "
+                          "from the ledger; inert until the window is data-sufficient",
+                "fix": "keepoff"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
+        return {"id": "keepoff", "label": "Keep-off", "status": FAIL,
+                "detail": f"{path} invalid JSON — enforcer fails open, nothing suppressed",
+                "fix": "keepoff"}
+    names = data.get("keep_off") if isinstance(data, dict) else None
+    if not isinstance(names, list):
+        return {"id": "keepoff", "label": "Keep-off", "status": FAIL,
+                "detail": f"{path} has no \"keep_off\" list", "fix": "keepoff"}
+    gen = data.get("generated_at", "?")
+    if not data.get("data_sufficient"):
+        # OK but REFRESHABLE: `--fix` re-runs this fixer even on an OK row (REFRESH_FIXERS) so
+        # the map populates once the window is data-sufficient without a manual generator run.
+        return {"id": "keepoff", "label": "Keep-off", "status": OK,
+                "detail": f"inert — window too thin ({data.get('window_offered_turns', '?')} offered "
+                          f"turns < {data.get('min_window_offered_turns', '?')}; generated {gen}); "
+                          "regenerates on doctor --fix",
+                "fix": "keepoff"}
+    return {"id": "keepoff", "label": "Keep-off", "status": OK,
+            "detail": f"{len(names)} chronic never-take skill(s) dropped from the menu "
+                      f"(window {data.get('window', '?')}, generated {gen}; doctor --fix refreshes) — {path}",
+            "fix": "keepoff"}
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_blocklist,
+          check_blocklist, check_keepoff,
           check_catalogs, check_omp, check_codex, check_commandcode, check_zcode, check_dsh,
           check_cline,
           check_ledger, check_dup_mcp, check_mcp_enabled]
@@ -1715,9 +1756,24 @@ def fix_purge_junk():
     return True, msg + ("; reindexed" if r.returncode == 0 else "; reindex FAILED — rerun doctor --fix")
 
 
+def fix_keepoff():
+    """Regenerate the keep-off map into the durable home (ADR-0054). Safe: the generator's
+    data-sufficiency guard writes an empty map when the post-epoch window is thin, and the
+    enforcer fails open on anything malformed."""
+    py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
+    KEEPOFF_DURABLE.parent.mkdir(parents=True, exist_ok=True)
+    r = _run([str(py), str(ROOT / "scripts" / "build_keep_off.py"), "--out", str(KEEPOFF_DURABLE)])
+    if r.returncode != 0:
+        return False, (r.stderr.strip() or "build_keep_off failed")
+    first = (r.stdout.strip().splitlines() or ["generated"])[0]
+    return True, f"{first} → {KEEPOFF_DURABLE}"
+
+
 AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
                "reapply": fix_reapply, "overrides": fix_overrides,
-               "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk}
+               "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk,
+               "keepoff": fix_keepoff}
+REFRESH_FIXERS = {"keepoff"}   # re-run on --fix even when the row is OK (ledger-derived artifact)
 
 
 # ---------- run + report ----------
@@ -2097,7 +2153,10 @@ def main():
     report(results)
 
     if args.fix:
-        todo = [r for r in results if r["status"] in (FAIL, WARN) and r.get("fix") in AUTO_FIXERS]
+        # REFRESH_FIXERS run on every --fix pass even when their row is OK: the keep-off map is
+        # a ledger-derived artifact that must be re-derived as the window grows (ADR-0054).
+        todo = [r for r in results if r.get("fix") in AUTO_FIXERS
+                and (r["status"] in (FAIL, WARN) or r.get("fix") in REFRESH_FIXERS)]
         manual = [r for r in results if r["status"] in (FAIL, WARN)
                   and r.get("fix") and r.get("fix") not in AUTO_FIXERS]
         if todo:

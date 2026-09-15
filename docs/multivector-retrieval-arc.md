@@ -15,8 +15,10 @@ proven** (needs a traffic window).
 - **Live in both paths**: enforcer (`_retrieve`, per-prompt subprocess) + MCP `search_skills` — both use
   Qdrant `/points/query/groups` (group_size=1 = MAX-pool). De-dup confirmed.
 - `GETAWAY_FLOOR=0.45` unchanged (floor sweep: 0.20 "flood" was an artifact; 0.45 = crowd-median 11).
-- **Default-INERT** (off): per-skill τ (`ENFORCER_PER_SKILL_TAU`), deterministic routes
-  (`ENFORCER_DETERMINISTIC`), runner-up collapse (`DOMINANCE_RATIO`), keep-off (`keep_off:[]`).
+- **Default-INERT** (off): per-skill τ (`ENFORCER_PER_SKILL_TAU`), runner-up collapse
+  (`DOMINANCE_RATIO`). *(Historical note: deterministic routes and keep-off were inert here;
+  since v0.47.0 / ADR-0054 routes are config-driven and ON, and keep-off regenerates from the
+  durable home via `doctor --fix`.)*
 
 ## Mechanism (the one idea)
 A single description vector sits in mpnet's compressed 0.18–0.40 cosine band → "measures topic, not

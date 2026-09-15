@@ -5,6 +5,52 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ## [Unreleased]
 
+## [0.47.0] — 2026-09-15
+### Added — ADR-0054: harness-message lane + the v0.46.0 usage-audit fixes
+Evidence: `plans/reports/audit-260914-2325-concierge-usage-strengthen.md` (first epoch-scoped
+audit of daily use; adversarial + over-engineering reviews recorded in the report).
+- **Harness-message lane** (`hooks/scripts/enforcer.py`, `ENFORCER_HARNESS_SKIP`, default ON):
+  prompts whose head is `<task-notification>`, `<system-reminder>`, cross-session/teammate
+  messages, "[Request interrupted…", "This session is being continued…",
+  or an OMP `omp-msum` summarizer wrapper are authorized to skip BEFORE the refusal guard,
+  consult route, embed and every Qdrant round-trip — 344/581 decisions in the v0.46.0 epoch
+  were such text and 168 got a full preview. Ledger band `harness_skip`; a fourth
+  `SKILL-CHECK:` leg (locked signature "harness-message lane", mirrored in the audit
+  script); no chain hint on this leg. Selftest section (14) pins 10 firing shapes and 6
+  human/worker/pasted non-fires.
+- **Deterministic routes: config-driven, default ON, before embed** (`ENFORCER_DETERMINISTIC=0`
+  disables). `_route_hits` (pure) replaces `_deterministic_hits`; a named skill leads at
+  1.0 even when retrieval found it lower (retrieved twin dropped, real description kept),
+  and survives an embed/Qdrant timeout via the fallback mandate.
+  `config/deterministic-routes.json` seeded with the epoch's 11 named-and-missed prompts
+  (`unlazy`, `ak-cook`, `progress-map`, `vn-gov-docx`, `ego-browser`, `session-handoff`,
+  `commit & push` → `ak-git`).
+- **Keep-off activated** (ADR-0011): map lives in `~/.claude/skill-concierge/keep-off.json`
+  (durable home; `config/keep-off.json` is the empty seed); `build_keep_off.py` excludes
+  harness-shaped offers, exempts keep-on members (inline USING takes are invisible to the
+  ledger) and defaults its window to the v0.47.0 epoch; `doctor` gains a `Keep-off` check
+  and `--fix` regenerates on every pass (`REFRESH_FIXERS`); `setup.sh` builds the map at
+  install (inert until ≥40 clean offered turns).
+- **Routes honour the ADR-0034 invocability invariant**: where `personal` is foreign
+  (Command Code, DSH, Cline, divergent ZCode) a bare route target must pass the
+  invocable-twin test or the route stays inert (selftest 6c, from code review).
+  `tests/test_harness_regex_parity.py` pins the generator's regex mirror byte-identical.
+- **`dsh-personal` / `cline-personal` foreign everywhere**: added to every harness's
+  `_foreign_scopes` tuple + compound labels; the foreign annex skips a row whose bare name
+  is already in the installed offer (re-rooted twins such as `doctor` beside
+  `skill-concierge:doctor`, 27/581 offers).
+### Changed
+- **Timeout defaults** `ENFORCER_EMBED_TIMEOUT` 0.35 → **0.5 s**, `ENFORCER_QDRANT_TIMEOUT`
+  0.10 → **0.25 s** (all 53 `qdrant_down` rows at 101-106 ms, all 21 embed timeouts at
+  359-381 ms — censoring at the cap; successful p90 257/87 ms). Revert via the env vars.
+- **`analyze.py` fallback line counts outage values only** (`OUTAGE_FALLBACKS`); the
+  conversational/refusal/harness legs report through the band histogram (the old truthy
+  test read 39 % where the outage share was 13 %).
+- Operator config (not code): 7 daily-used name-only skills added to always-on
+  (`progress-map`, `vn-gov-docx`, `vn-editor`, `officecli-xlsx`, `skill-concierge:consult`,
+  `tk-research`, `session-handoff`); `ENFORCER_ANNEX_MARGIN=0.0` Claude-side trial.
+- Epoch watch v0.47.0 section; ADR index; version mirrored to 0.47.0. EPOCH v0.47.0.
+
 ## [0.46.0] — 2026-09-06
 ### Added — ADR-0053: cross-harness plugin-offer gates (strict installed+enabled everywhere)
 - **OMP joins the Claude plugin gate** (`hooks/scripts/enforcer.py::_plugin_gate_ok`):

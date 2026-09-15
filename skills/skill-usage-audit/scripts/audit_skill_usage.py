@@ -87,7 +87,7 @@ _DISPATCH_MARKERS = ("You are a Team Member", "You have been spawned as a teamma
 # refute the excuse the enforcer just authorized, Red-Team F4/F8). Keep in sync with
 # GETAWAY_SKIP_MSG / INTENT_SKIP_MSG / SELFREF_SKIP_MSG in hooks/scripts/enforcer.py.
 _AUTHORIZED_SIGNATURES = ("full-catalogue retrieval ran", "intent-margin classifier",
-                          "self-referential recap lane")
+                          "self-referential recap lane", "harness-message lane")
 
 
 def _is_authorized_skip_line(line):

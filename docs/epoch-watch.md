@@ -13,6 +13,24 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.47.0 — harness-message lane + audit fixes (ADR-0054; deployed 2026-09-15)
+
+Live epoch. Offer composition resets hard: harness-generated prompts no longer receive a
+preview (band `harness_skip`), named skills lead via deterministic routes, both timeouts
+widened, and the keep-off map can now populate. Segment `harness_skip` rows out of every
+rate; the v0.46.0 baselines for chronic-zero, ROUTE follow and fallback are void here.
+Tuning orders in force: `ENFORCER_ANNEX_MARGIN=0.0` (Claude `settings.json` env; revert =
+delete the line) and the code defaults `EMBED 0.5 s / QDRANT 0.25 s` (revert = the two env vars).
+
+| # | Watch | Trigger | Action |
+|---|-------|---------|--------|
+| W1 | **Harness-lane precision.** Replay every `harness_skip` row's `q`; each must be harness text. Conversely, human prompts must never land in the band. | ≥1 human-typed prompt in `harness_skip`, or a recurring harness shape still reaching `band=offer` (grep the ledger for `<task-notification>` / `omp-msum` under `offer`). | Tighten/add the shape in `_HARNESS_MSG_RE` from replayed evidence only; re-pin selftest (14). Never widen from vibes. |
+| W2 | **Route hits vs false pins.** Every `offered[0]` at score `1.0` on a `fallback`/`offer` row is a route hit; replay its `q`. | A route fires on a prompt that did not name the skill (e.g. "/cook" inside a URL), or a named skill is still missed. | False pin → narrow the `contains` string; miss → add the replayed phrase to `config/deterministic-routes.json`. `ENFORCER_DETERMINISTIC=0` is the kill-switch. |
+| W3 | **Outage share after the wider caps.** `analyze.py --since <deploy>` fallback line (outage-only since R6). | Still ≥5 % of decisions after ≥200 decisions, or `embed_ms` clustering at 490-500 / `qdrant_ms` at 240-250 (censoring again). | Look at the shim/Qdrant load first (flywheel/reindex windows); only then widen further. Revert path unchanged. |
+| W4 | **First keep-off generation.** `doctor` `Keep-off` row; the map populates once ≥40 clean offered turns exist. | The map drops a skill you actually take inline (USING without the Skill tool) — the ledger cannot see those. | Add the name to `keep-on.json` (keep-on outranks nothing here — verify in `_drop_keepoff`) or blocklist the genuine junk instead; re-run `doctor --fix`. |
+| W5 | **Annex-margin trial.** `xh` annex volume and `get_skill` pulls on foreign names, Claude sessions only. | Volume collapses with no pulls lost = trial working; a foreign skill you then search for manually ≥3× = starvation. | Starvation → `ENFORCER_ANNEX_MARGIN=0.02`; still starved → delete the line (0.08). Record before changing. |
+| W6 | **R9 decision data.** `analyze.py --continuation --since <deploy>`: route-follow and multi-intent on human prompts only. | ≥30 human-prompt projections with 0 follow → decide; <30 → wait. | Set `ENFORCER_CHAIN_PROJECTION=0` / `ENFORCER_MULTI_INTENT=0` env-first; ADR if it sticks. Chain hints stay ON (8/16 follow in v0.46.0). |
+
 ## v0.46.0 — cross-harness plugin-offer gates (ADR-0053; deployed 2026-09-06)
 
 Live epoch. Offer composition changes mechanically in three harnesses (omp gates namespaced

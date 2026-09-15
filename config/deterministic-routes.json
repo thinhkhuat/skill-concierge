@@ -1,4 +1,19 @@
 {
-  "_note": "Deterministic route overrides for the enforcer (ADR-pending). DEFAULT-INERT: read ONLY when ENFORCER_DETERMINISTIC=1 is set in the hook env; with the flag unset OR routes empty this file is a no-op. Each route GUARANTEES its skill in the offer menu when the lowercased prompt contains `contains` (leads at score 1.0, bypasses getaway + actionability gate). CURATE SPARINGLY: this system's dodge is dominated by FALSE offers, so every route must be near-zero false-positive — prefer leaving this empty until a concrete, unambiguous intent the semantic layer reliably misses appears. Format per route: {\"contains\": \"<lowercased substring>\", \"skill\": \"<exact skill name>\"}.",
-  "routes": []
+  "_note": "Deterministic route overrides for the enforcer (ADR-0054, default ON since v0.47.0; ENFORCER_DETERMINISTIC=0 disables; empty routes = no-op). Each route GUARANTEES its skill LEADS the offer menu when the lowercased prompt contains `contains` (score 1.0, retrieved twin dropped, bypasses getaway + actionability gate), and it runs BEFORE the embed step so a shim/Qdrant timeout cannot lose it. CURATE SPARINGLY: this system's dodge is dominated by FALSE offers, so every `contains` must be near-zero false-positive — a literal skill name, its slash form, or an alias replayed from a ledger miss (never a generic verb). Seed = the 11 named-and-missed prompts of the v0.46.0 epoch audit (plans/reports/audit-260914-2325-concierge-usage-strengthen.md F4). Format per route: {\"contains\": \"<lowercased substring>\", \"skill\": \"<exact skill name>\"}.",
+  "routes": [
+    {"contains": "unlazy", "skill": "unlazy"},
+    {"contains": "ak-cook", "skill": "ak-cook"},
+    {"contains": "/cook", "skill": "ak-cook"},
+    {"contains": "cook --auto", "skill": "ak-cook"},
+    {"contains": "cook it in full", "skill": "ak-cook"},
+    {"contains": "progress-map", "skill": "progress-map"},
+    {"contains": "vn-gov-docx", "skill": "vn-gov-docx"},
+    {"contains": "ego-browser", "skill": "ego-browser"},
+    {"contains": "ego lite browser", "skill": "ego-browser"},
+    {"contains": "ego browser", "skill": "ego-browser"},
+    {"contains": "session-handoff", "skill": "session-handoff"},
+    {"contains": "session handoff", "skill": "session-handoff"},
+    {"contains": "commit & push", "skill": "ak-git"},
+    {"contains": "commit and push", "skill": "ak-git"}
+  ]
 }
