@@ -4,6 +4,13 @@ All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
 ## [Unreleased]
+### Changed — ADR-0055: multi-intent offers off (Claude trial), ROUTE projection pending
+- Operator config, no code change: `ENFORCER_MULTI_INTENT=0` set in Claude `settings.json` env
+  after the human-prompt backtest of the v0.46.0 epoch showed no lift (84 multi-intent offers →
+  5 with ≥2 takes, 6 %, vs single-intent control 7/98, 7 %) at ~245 chars on about half of all
+  offers, with live false positives on one-intent prompts. Other harnesses keep the code default.
+  ROUTE projection stays ON until epoch-watch v0.47.0 W6 has ≥30 clean human-prompt projections.
+  Revert = delete the env line. [ADR-0055](docs/adr/0055-multi-intent-off-projection-pending.md).
 
 ## [0.47.0] — 2026-09-15
 ### Added — ADR-0054: harness-message lane + the v0.46.0 usage-audit fixes
