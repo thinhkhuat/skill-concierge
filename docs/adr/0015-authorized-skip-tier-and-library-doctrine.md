@@ -1,6 +1,6 @@
 # ADR-0015 — AUTHORIZED-SKIP tier + the library doctrine
 
-Status: Accepted (2026-07-04)
+Status: Accepted (2026-07-04) — the `find-skills` escalation clause is superseded by [ADR-0056](0056-doctrine-rewrite-writing-for-agents.md) (2026-09-15)
 Relates to: ADR-0009 (operator gate floor / score↔adoption anti-correlation), ADR-0010 (word floor),
 ADR-0002 (semantic which+whether). Source: `plans/reports/proposal-260704-0244-retrieval-body-signal-and-protocol-gating-report.md`
 (Opus-validated: `plans/reports/opus-validation-260704-0320-…`). Implementation plan: `plans/260704-0415-usefulness-rate-upgrades/`.

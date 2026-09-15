@@ -87,6 +87,14 @@ except Exception:
 PY
 }
 
+# _deployed_ver PATH — the version the cache CONTENT carries (its own manifest), falling back
+# to the registry's record only when the manifest is unreadable. The registry can record a
+# version whose content came from a stale remote (marketplace update before the push), so the
+# manifest, not the record, decides "already current".
+_deployed_ver() {
+  python3 -c "import json,sys;print(json.load(open(sys.argv[1]+'/.claude-plugin/plugin.json'))['version'])" "$1" 2>/dev/null
+}
+
 MARKETPLACE=0
 if [ -f "$OMP_PLUGINS_JSON" ] && grep -q '"skill-concierge@skill-concierge"' "$OMP_PLUGINS_JSON"; then
   MARKETPLACE=1
@@ -100,13 +108,14 @@ if [ "$MARKETPLACE" = "1" ]; then
   # ── (a) Marketplace plugin: refresh, verify the outcome, sync as fallback. ──
   IFS=$'\t' read -r INSTALLED INSTALLED_PATH <<<"$(_omp_record)"
   PINNED="$OMP_PLUGIN_CACHE/skill-concierge___skill-concierge___$VERSION"
+  DEPLOYED="$(_deployed_ver "$INSTALLED_PATH")"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
 
-  if [ "$INSTALLED" = "$VERSION" ] && [ -d "$INSTALLED_PATH" ] \
+  if [ "$INSTALLED" = "$VERSION" ] && [ "$DEPLOYED" = "$VERSION" ] && [ -d "$INSTALLED_PATH" ] \
      && [ -f "$INSTALLED_PATH/adapters/omp/skill-concierge.ext.ts" ]; then
-    echo "  [✓] Already current: OMP deploy v$INSTALLED == SSOT v$VERSION"
+    echo "  [✓] Already current: OMP deploy v$INSTALLED (content v$DEPLOYED) == SSOT v$VERSION"
     DEST="$INSTALLED_PATH"
   else
-    echo "  [•] OMP deploy v${INSTALLED:-none} != SSOT v$VERSION -> refreshing via omp CLI"
+    echo "  [•] OMP deploy v${INSTALLED:-none} (content v${DEPLOYED:-none}) != SSOT v$VERSION -> refreshing via omp CLI"
     if omp plugin marketplace update skill-concierge; then :; else
       echo "    [!] 'omp plugin marketplace update' failed (offline? marketplace down?)" >&2
     fi
@@ -114,11 +123,12 @@ if [ "$MARKETPLACE" = "1" ]; then
       echo "    [!] 'omp plugin upgrade' failed — falling back to checkout sync" >&2
     fi
     IFS=$'\t' read -r INSTALLED INSTALLED_PATH <<<"$(_omp_record)"
+    DEPLOYED="$(_deployed_ver "$INSTALLED_PATH")"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
 
-    if [ "$INSTALLED" != "$VERSION" ]; then
+    if [ "$INSTALLED" != "$VERSION" ] || [ "$DEPLOYED" != "$VERSION" ]; then
       # ── Manual sync fallback (ZCode §2-4 parity): export HEAD → cache dir. ──
-      if [ -n "$INSTALLED" ] && ! _ver_ge "$VERSION" "$INSTALLED"; then
-        echo "!! refusing to downgrade: deployed OMP copy v$INSTALLED is NEWER than" >&2
+      if [ -n "$DEPLOYED" ] && ! _ver_ge "$VERSION" "$DEPLOYED"; then
+        echo "!! refusing to downgrade: deployed OMP copy v$DEPLOYED is NEWER than" >&2
         echo "   this checkout v$VERSION. Update the checkout (git pull) or keep the" >&2
         echo "   newer deployed copy — a stale checkout never downgrades (ADR-0042)." >&2
         exit 1

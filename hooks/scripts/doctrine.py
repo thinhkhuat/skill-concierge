@@ -74,6 +74,20 @@ def _is_subagent(raw: str) -> bool:
         return False
 
 
+def _drop_duplicate_or_line(text: str) -> str:
+    """Harnesses with no slash-command form rewrite BOTH search bullets to the same tool
+    name; keep the `tool:` bullet and drop the now-identical `or:` bullet."""
+    out, seen = [], None
+    for line in text.splitlines(keepends=True):
+        s = line.strip()
+        if s.startswith("- tool: "):
+            seen = s[len("- tool: "):].strip()
+        elif s.startswith("- or:") and seen and s[len("- or:"):].strip() == seen:
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 def _harness_adapt(doctrine: str) -> str:
     """Adapt tool and slash-command names to the executing harness.
 
@@ -160,7 +174,7 @@ def _harness_adapt(doctrine: str) -> str:
         # DSH's MCP client bridges as `mcp__<serverName>__<rawName>` — same naming
         # as Command Code. No slash-commands in DSH; rewrite to reference the skill
         # tool and the MCP-bridged get_skill form.
-        return doctrine.replace(
+        return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
             "mcp__skill-search__search_skills"
         ).replace(
@@ -169,7 +183,7 @@ def _harness_adapt(doctrine: str) -> str:
         ).replace(
             "/skill-search",
             "mcp__skill-search__search_skills"
-        )
+        ))
     if harness == "cline":
         # Cline (ADR-0051): the MCP server rides the plain global mcpServers map (no
         # plugin namespace). LIVE-VERIFIED 2026-09-01 on Cline CLI 3.0.60: the CLI is
@@ -178,7 +192,7 @@ def _harness_adapt(doctrine: str) -> str:
         # there is no `use_mcp_tool` in the model-facing tool surface. No
         # slash-commands hint form either.
         _cline_tool = "skill-search__search_skills"
-        return doctrine.replace(
+        return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
             _cline_tool
         ).replace(
@@ -187,18 +201,18 @@ def _harness_adapt(doctrine: str) -> str:
         ).replace(
             "/skill-search",
             _cline_tool
-        )
+        ))
     if harness == "omp":
-        return doctrine.replace(
+        return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
             "skill-concierge:skill-search/search_skills"
         ).replace(
             "/skill-concierge:skill-search",
             "skill-concierge:skill-search/search_skills"
         ).replace(
-            "get_skill(\"<alias>:<skill>\")",
-            "read(\"skill://<alias>:<skill>\")"
-        )
+            "get_skill(\"<name>\")",
+            "read(\"skill://<name>\")"
+        ))
     if harness in ("commandcode", "cmd", "command-code"):
         return doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
@@ -294,8 +308,14 @@ def _selftest() -> int:
     # claude tool + slash hint, and the external get_skill consumption hint becomes a
     # read(skill://...) call (OMP has no slash-command form and consumes skills via the read
     # tool on skill:// URLs — mirrors ledger.py's skill:// activation branch).
-    _sample = "`mcp__plugin_skill-concierge_skill-search__search_skills`" \
-              " or `/skill-concierge:skill-search` then `get_skill(\"<alias>:<skill>\")`"
+    # The sample is the LIVE doctrine body, not a fixture: a fixture kept passing while the
+    # doctrine's own get_skill hint had drifted away from the rewrite target (2026-09-15).
+    try:
+        _sample = _body(DOCTRINE_PATH.read_text(encoding="utf-8"))
+    except OSError:
+        _sample = ""
+    if "get_skill(\"<name>\")" not in _sample or "mcp__plugin_skill-concierge_skill-search__search_skills" not in _sample:
+        bad.append("doctrine body must carry the claude-form search tool and the get_skill(\"<name>\") hint the harness rewrites target")
     _saved_env = os.environ.get("SKILL_CONCIERGE_HARNESS")
     os.environ["SKILL_CONCIERGE_HARNESS"] = "omp"
     try:
@@ -311,8 +331,10 @@ def _selftest() -> int:
         bad.append("omp adapt: no slash-command form under omp")
     if "get_skill(" in _adapted:
         bad.append("omp adapt: external consumption must be read(skill://...) not get_skill()")
-    if 'read("skill://<alias>:<skill>")' not in _adapted:
-        bad.append("omp adapt: external consumption hint must read skill://<alias>:<skill>")
+    if 'read("skill://<name>")' not in _adapted:
+        bad.append("omp adapt: external consumption hint must read skill://<name>")
+    if _adapted.count("skill-concierge:skill-search/search_skills") != 1:
+        bad.append("omp adapt: the search tool must be named once (duplicate `or:` bullet dropped)")
 
     # Command Code (ADR-0038): rewrites the plugin-namespaced MCP + slash to the
     # bare `mcp__skill-search__search_skills` / `/skill-search` Command Code

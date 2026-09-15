@@ -28,29 +28,37 @@ Per-harness subagent doctrine scope — whether a delegated subagent receives th
 
 The standing order it injects — the **SKILL-FIRST doctrine**:
 
-- **Line-1 token protocol.** Every task-bearing reply must open with one of
-  `USING: <skill>` | `SEARCH: <query>` | `SKIPPING: none`, written *before* anything else. The
-  forced pre-commitment is the mechanism: having written the token, the model is far likelier to
-  actually follow it (self-coherence) than to drift into improvising and back-rationalize.
-- **The shown skills are a top-few PREVIEW of ~500**, nearly all hidden. "The previewed few don't
-  fit" is therefore the trigger to **SEARCH the full index**, never grounds to skip. A `SEARCH:`
-  token is a promise to call `search_skills` **this reply**; narrating an un-run search is a
-  forbidden FALSE REPORT.
-- **The take-bar equals the skip-bar.** A loosely-adaptable fit is a `USING:`; closest-fit-adapted
-  is the standard, perfect is not the bar. Naming an unfit skill just to pass the gate is a FALSE
-  REPORT.
-- **`SKIPPING` is lawful in one class only** — a genuine no-task turn (a harness/system
-  notification, an await-only ping, an inbound message handing you no work). If the per-turn
-  preview arrived *with* candidates, a task is present and this class does not apply.
-- **The library doctrine** (the burden-of-proof clause): a skip is a *reasoning-based intent
-  classification* (trivial vs real, unambiguous vs ambiguous), **not** a score threshold. Costs
-  are asymmetric — a needless search is cheap; declaring "nothing fits" on real/ambiguous work
-  while a ~500-skill catalogue and the `find-skills` meta-skill sit unused is the top-severity
-  failure. **Burden of proof is on SKIP.**
+- **Line-1 token protocol.** Every task-bearing reply opens with one of
+  `USING: <skill>` | `SEARCH: <query>` | `SKIPPING: none`, written *before* anything else.
+- **The preview is not the shelf.** The shown skills are the top few of a shelf of hundreds;
+  "the previewed few don't fit" triggers **SEARCH of the full index**, queried by intent + domain
+  terms (2–3 phrasings via `extra_queries`), never by the raw user sentence. A `SEARCH:` token is a
+  promise that the `search_skills` call appears **this reply**; narrating an un-run search is a
+  FALSE REPORT.
+- **Rule on the hits — the take-bar equals the skip-bar.** A loosely-adaptable fit is a `USING:`;
+  `SKIPPING: none` after a search is lawful only when the agent can state, for the top hit, what it
+  does and why the task lies outside it. Naming an unfit skill just to pass the gate is the mirror
+  failure — a FALSE REPORT.
+- **A lawful skip has exactly two sources** (rule 4, the single definition every other line points
+  at): a shown search whose hits are not even loosely adaptable, or an enforcer `SKILL-CHECK:` line
+  that itself states the turn is non-task / conversational / harness-generated / a self-recap. The
+  line authorizes the ruling it states; when it says the turn may be real work it is an order to
+  SEARCH. Anything that hands the agent work is a task: a notification's content, a message's
+  content, work dispatched to another agent, a preview that arrived with candidates.
+- **Not-invocable hits still count.** An external-catalog or other-harness hit is taken via
+  `get_skill` + following its SKILL.md inline — same take-bar.
+- **Red Flags** — seven symptom → refutation rows for the standing rationalizations, and the
+  **library doctrine**: a skip is a *ruling on what kind of turn this is*, never a score; declaring
+  "nothing fits" with the shelf unsearched is the top-severity failure; **burden of proof is on SKIP.**
+
+[ADR-0056](../../docs/adr/0056-doctrine-rewrite-writing-for-agents.md) (v0.47.1) rewrote the body
+under the writing-for-agents levers: it resolved the contradiction where the library section let the
+agent's own "trivial" judgment earn a no-search skip that rule 4 forbade, retired the phantom
+`find-skills` escalation target, and halved the injected body.
 
 > EFFORT (the "work to done-and-proven" doctrine) was **decoupled in v0.4.0** into the standalone
-> [`effort-gate`](https://github.com/thinhkhuat/effort-gate) plugin. skill-first now governs
-> *which / whether a skill* only.
+> [`effort-gate`](https://github.com/thinhkhuat/effort-gate) plugin; the note no longer rides in
+> the injected body. skill-first governs *which / whether a skill* only.
 
 ## The per-turn gate — `enforcer.py`
 
@@ -144,7 +152,8 @@ the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdic
 **`SKILL-CHECK:`** authorization instead of nothing ([ADR-0015](../../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md)):
 
 - **Getaway leg** keeps the burden of proof on SKIP — it authorizes `SKIPPING: none` *only if the
-  turn is genuinely trivial*, else it tells the agent to escalate to `find-skills` / `get_skill`.
+  turn is genuinely trivial*, else it orders a term-rich `search_skills` call (the raw prompt is
+  what just scored below the floor) and a `get_skill` read when a hit's fit is unclear.
 - **Intent leg** flatly pre-authorizes the skip (the turn was classified conversational).
 - **Self-referential leg** (3rd, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)) pre-authorizes a pure recap of the agent's own prior message.
 - **Harness-message leg** (4th, [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md), `ENFORCER_HARNESS_SKIP`): a prompt whose head is harness-generated (task notification, monitor event, cross-session/teammate message, idle reminder, OMP summarizer wrapper) is pre-authorized **before any I/O** — no embed, no Qdrant, no chain hint; ledger band `harness_skip`. The heading above keeps its original title so existing anchors hold.

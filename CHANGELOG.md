@@ -3,7 +3,56 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
-## [Unreleased]
+## [0.47.1] — 2026-09-15
+### Changed — ADR-0056: SKILL-FIRST doctrine + enforcer strings rewritten (writing-for-agents audit)
+Evidence: `plans/reports/audit-260915-1125-doctrine-writing-audit.md` (line-by-line findings) and
+`plans/reports/review-260915-doctrine-writing-for-agents.md` (independent review, two passes).
+- **One definition of a lawful skip** (`hooks/doctrine/skill-first.md` rule 4): exactly two
+  sources — a `search_skills` call shown in the reply whose hits are not even loosely adaptable,
+  or an enforcer `SKILL-CHECK:` line that itself states the turn is non-task / conversational /
+  harness-generated / a self-recap (it authorizes the ruling it states; "may be real work" is an
+  order to SEARCH). Before, the token line, rule 4, Red-Flags row 7 and the library section gave
+  three different answers, and the getaway leg pre-authorized "trivial" turns the doctrine
+  refuted — the gap an agent escapes through. "Trivial" is gone from the getaway leg; the
+  skip criterion after a search is now checkable ("state, for the top hit, what it does and why
+  this task lies outside it").
+- **Phantom pointer retired**: `find-skills` is not an installed skill on any harness; the doctrine,
+  `MANDATE` and the getaway leg escalate to a term-rich `search_skills` re-query (2–3 intent+domain
+  phrasings — the raw prompt is what just scored below the floor), `get_skill` when a hit's fit is
+  unclear. Selftest pin updated.
+- **Rule 5 generalised** to every hit marked external or other-harness (the enforcer already
+  rendered a foreign block with the same `get_skill` path); harness-specific "Skill tool" wording
+  replaced by "cannot be invoked by name here" in doctrine and annex/foreign blocks.
+- **Pruned from the injected body** (8,074 → 4,238 chars, about 1,000 tokens per session on every
+  harness): the stale `~500` catalogue cache (live index 2,714 points), the ADR-0054 label, the
+  EFFORT v0.4.0 history note (kept in the file header outside the markers), the rule-6 grouping
+  parenthetical written for a 7-row table, rule 4's preview of that table, the CHAIN-HINT row the
+  per-turn line already states, the three Not/Yes pairs that spelled the banned outputs, and the
+  no-op sentences ("Obey…", "Execute.", "match the symptom…", the token rationale).
+- **Enforcer strings** (`hooks/scripts/enforcer.py`): token syntax unified with colons
+  (`USING: <skill> | SEARCH: <query> | SKIPPING: none`) in `MANDATE` and the ranked header;
+  `MANDATE` no longer claims "shown skills" on the two paths that show none (refusal guard,
+  retrieval fallback); intent and selfref legs gain "if the turn hands you work, route it
+  (SEARCH/USING)" (parity with the harness leg); harness leg drops its maintainer taxonomy;
+  `CONSULT_MANDATE` drops the ADR label, the funnel exposition and the operator kill-switch footer
+  (documented in README/quickstart; selftest inverted to keep it out). The four locked audit
+  signatures are unchanged and remain absent from the doctrine — pinned durably by the new
+  `tests/test_doctrine_text.py` (signature absence, no phantom pointer, no cached count).
+- **`hooks/scripts/doctrine.py`**: the OMP rewrite of the consumption hint targets
+  `get_skill("<name>")` (the reworded rule 5) and its selftest now adapts the LIVE doctrine body —
+  the old fixture kept passing while the real body had drifted off the rewrite target. Harnesses
+  with no slash-command form (OMP, DSH, Cline) no longer render the search tool twice: the
+  now-identical `or:` bullet is dropped after the rewrite.
+- **Selftest hermetic**: case 0041 (multi-intent render) pins `MULTI_INTENT`/`CHAIN_PROJECTION` ON
+  locally — under the ADR-0055 env trial `--selftest` had started failing on HEAD.
+- **`adapters/omp/install.sh`**: "already current" now requires the cache **manifest** to carry the
+  SSOT version, not only the registry record — `omp plugin upgrade` can record the new version
+  while pulling old content from a not-yet-pushed remote, which the verify step then caught too
+  late.
+- Docs: openwiki `enforcement-gate.md` doctrine summary, epoch-watch v0.47.1 (trail-side epoch:
+  ledger watches W1–W6 continue, trail metrics re-baseline; W7 getaway follow-through, W8
+  not-invocable takes), ADR-0015 status note, ADR index, AGENTS.md pointer, audit-script docstring.
+
 ### Changed — ADR-0055: multi-intent offers off (Claude trial), ROUTE projection pending
 - Operator config, no code change: `ENFORCER_MULTI_INTENT=0` set in Claude `settings.json` env
   after the human-prompt backtest of the v0.46.0 epoch showed no lift (84 multi-intent offers →

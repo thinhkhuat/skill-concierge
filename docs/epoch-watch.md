@@ -13,6 +13,21 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.47.1 — doctrine + enforcer-string rewrite (ADR-0056; deployed 2026-09-15 ~11:50 local)
+
+Live epoch — **trail-side only**. `hooks/doctrine/skill-first.md` and five injected enforcer
+strings (MANDATE, ranked-mandate header, getaway / intent / selfref legs, CONSULT_MANDATE) were
+rewritten under the writing-for-agents levers; retrieval, gates, bands and the ledger schema are
+unchanged, so the v0.47.0 ledger watches W1–W6 below continue uninterrupted. What resets is the
+transcript trail: USING / SEARCH / false-SKIPPING shares and the `authorized_skip` tally
+(`skill-usage-audit --since "2026-09-15 11:50"`) re-baseline here. Tuning orders carried over:
+`ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=0` (both Claude `settings.json` env).
+
+| # | Watch | Trigger | Action |
+|---|-------|---------|--------|
+| W7 | **Doctrine effect on the trail.** After ≥100 human-prompt turns: false-SKIPPING share, SEARCH share, and — new — the *getaway follow-through*: on a `getaway` ledger row whose `q` is real work, does the same turn's transcript show a `search_skills` call? | False-SKIPPING above the v0.47.0 baseline (8 %), or getaway follow-through below 50 % on real-work rows. | Re-read the getaway line and rule 2 for the escape the agent took; sharpen wording from the replayed transcript only. Never widen the closed list. |
+| W8 | **Not-invocable takes.** `get_skill` pulls on `[external:*]` / other-harness names after rule 5 was generalised beyond the external alias. | Foreign rows shown ≥20× with 0 pulls in a harness where they are legitimately unusable. | That is annex-margin territory (W5), not doctrine — leave the doctrine alone. |
+
 ## v0.47.0 — harness-message lane + audit fixes (ADR-0054; deployed 2026-09-15)
 
 Live epoch. Offer composition resets hard: harness-generated prompts no longer receive a

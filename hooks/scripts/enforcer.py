@@ -1225,11 +1225,10 @@ except ValueError:
 # (EFFORT was decoupled to the standalone effort-gate plugin in v0.4.0; this hook
 # now governs which/whether a skill only.)
 MANDATE = (
-    "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
-    "Shown skills are a PREVIEW of ~500, not all. \"Few don't fit\" / \"I'm confident\" / "
-    "\"you named a tool\" are NOT skips — run search_skills THIS reply before any SKIPPING (show the "
-    "query). SKIPPING is lawful only on a no-task turn, or after a search finds nothing adaptable. "
-    "USING never takes \"none\". [full order: session start]"
+    "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | SKIPPING: none.\n"
+    "No preview this turn. A task turn → run search_skills THIS reply with 2–3 intent+domain "
+    "phrasings, then USING the fit, or SKIPPING none only when that search finds nothing "
+    "adaptable (query shown). [full order: session start]"
 )
 
 
@@ -1302,19 +1301,21 @@ def _inject(text: str) -> None:
     }))
 
 
-# Authorization lines for the two silent verdict legs (see AUTHORIZED_SKIP above). Burden of
+# Authorization lines for the silent verdict legs (see AUTHORIZED_SKIP above). Burden of
 # proof stays on SKIP: the getaway leg can't tell trivial from real-but-low-scoring, so it
-# pushes ambiguous/real work back to find-skills rather than blessing the skip outright.
+# pushes ambiguous/real work back to a term-rich search_skills call rather than blessing the
+# skip outright (the raw prompt is what just scored below the floor).
 GETAWAY_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " full-catalogue retrieval ran (top {top:.2f} < floor {floor:.2f}); "
     "nothing cleared the floor. SKIPPING: none is pre-authorized ONLY if this turn is genuinely "
-    "trivial/non-task — if it's real or ambiguous work, do NOT skip: escalate to find-skills "
-    "instead (burden of proof is on SKIP). If a surfaced candidate's fit is unclear from its "
-    "short description, call get_skill(<name>) first."
+    "non-task or conversational. Real or ambiguous work → SEARCH: run search_skills with 2–3 intent+domain "
+    "phrasings (the raw prompt is what scored below the floor); burden of proof is on SKIP. If a "
+    "hit's fit is unclear from its description, get_skill(<name>) before ruling."
 )
 INTENT_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " the intent-margin classifier judged this turn conversational/"
-    "non-task. SKIPPING: none is pre-authorized — no further search_skills needed."
+    "non-task. SKIPPING: none is pre-authorized; no search_skills needed. If the turn does hand "
+    "you work, that is the task: route it (SEARCH/USING)."
 )
 # H5 (ADR-0019): the 3rd AUTHORIZED-SKIP leg. Its signature phrase "self-referential recap lane" is
 # a LOCKED cross-file contract — the audit (audit_skill_usage.py `_is_authorized_skip_line` at :93, called :289) matches this exact
@@ -1323,7 +1324,8 @@ INTENT_SKIP_MSG = (
 SELFREF_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " this turn only asks you to explain/rephrase your own "
     "immediately-prior message — the self-referential recap lane — with no external task, so no "
-    "skill applies. SKIPPING: none is pre-authorized; no further search_skills needed."
+    "skill applies. SKIPPING: none is pre-authorized; no search_skills needed. Any task tail "
+    "beyond the recap is a task: route it (SEARCH/USING)."
 )
 
 
@@ -1347,11 +1349,9 @@ _HARNESS_MSG_RE = re.compile(
     r"|\[SYSTEM NOTIFICATION\b|This session is being continued from a previous conversation"
     r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
 HARNESS_SKIP_MSG = (
-    AUTHORIZED_SKIP_MARKER + " this prompt is harness-generated (a task notification, monitor "
-    "event, cross-session/teammate message, idle reminder, or summarizer call), not a user task "
-    "— the harness-message lane. SKIPPING: none is pre-authorized; no search_skills needed. If "
-    "the message itself hands you work to do, treat THAT as the task and route it normally "
-    "(SEARCH/USING)."
+    AUTHORIZED_SKIP_MARKER + " this prompt is harness-generated, not a user task — the "
+    "harness-message lane. SKIPPING: none is pre-authorized; no search_skills needed. If the "
+    "message itself hands you work to do, that is the task: route it (SEARCH/USING)."
 )
 
 
@@ -1759,8 +1759,8 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
         alines = [f"  • {name} [external:{alias}{'' if not takes.get(name) else f', used {takes[name]}×'}] — {_blurb(desc)}"
                   for (name, desc, _s, alias) in annex]
         annex_block = (
-            "\nExternal catalog matches (NOT installed — consume with get_skill, do not use the "
-            "Skill tool):\n" + "\n".join(alines) +
+            "\nExternal catalog matches (NOT installed here — consume via get_skill):\n"
+            + "\n".join(alines) +
             "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
     foreign_block = ""
     if foreign:
@@ -1768,12 +1768,12 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
                   for (name, desc, _s) in foreign]
         foreign_block = (
             f"\nOther-harness matches (installed under {FOREIGN_HARNESS.capitalize()}, NOT "
-            "invocable here — consume with get_skill, do not use the Skill tool):\n"
+            "invocable here — consume via get_skill):\n"
             + "\n".join(flines) +
             "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
     return (
-        "SKILL-FIRST · reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.\n"
-        "Preview for this task (NOT the full ~500 shelf):\n"
+        "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | SKIPPING: none.\n"
+        "Preview for this task (the top few of a shelf of hundreds, not the shelf):\n"
         + "\n".join(lines) + note + route_line + annex_block + foreign_block + "\n"
         "None fit → run search_skills THIS reply before any SKIPPING; show the query. "
         "A loosely-adaptable fit is a USING. [full order: session start]"
@@ -1884,14 +1884,14 @@ _CONSULT_NEG_RE = re.compile(
     r"|\bskills? gap\b",
     re.IGNORECASE)
 CONSULT_MANDATE = (
-    "CONSULT-ROUTE · this turn asks for a deliberated skill curation (ADR-0049).\n"
+    "CONSULT-ROUTE · this turn asks for a deliberated skill curation.\n"
     "reply line 1 = USING: skill-concierge:consult\n"
-    "Invoke the consult skill NOW with the user's task as its argument; it runs the "
-    "deliberation funnel (sieve → analyst deep-read → RUN/⚠/ALSO verdict) and composes "
-    "the chain — including any follow-on work named in the task. Answer the "
-    "\"which skills\" question from its verdict card, never from a per-turn preview "
-    "alone. Routed consults default to --fast unless the user asks to go deep.\n"
-    "[consult routing: SKILL_CONSULT_ROUTE=0 disables]")
+    "Invoke the consult skill NOW with the user's task as its argument; it composes the "
+    "chain, including any follow-on work the task names. Answer the \"which skills\" "
+    "question from its verdict card, never from a per-turn preview alone. Routed consults "
+    "default to --fast unless the user asks to go deep.")
+# The SKILL_CONSULT_ROUTE=0 kill-switch is documented for the operator (README / CLAUDE.md /
+# quickstart); it no longer rides in the agent-facing line, which the agent cannot act on.
 
 
 def main() -> int:
@@ -2293,8 +2293,8 @@ def _selftest() -> int:
                 bad.append("authorized-skip: harness leg must not carry a chain hint")
             if not all(c.startswith(AUTHORIZED_SKIP_MARKER) for c in _captured):
                 bad.append("authorized-skip: injected text must start with the marker")
-            if "find-skills" not in _captured[0] or "get_skill(" not in _captured[0]:
-                bad.append("authorized-skip: getaway message missing find-skills escalation or get_skill nudge")
+            if "search_skills" not in _captured[0] or "get_skill(" not in _captured[0]:
+                bad.append("authorized-skip: getaway message missing search_skills escalation or get_skill nudge")
             if "0.30" not in _captured[0] or "0.45" not in _captured[0]:
                 bad.append("authorized-skip: getaway message did not interpolate top/floor")
             if "conversational" not in _captured[1]:
@@ -3008,6 +3008,11 @@ def _selftest() -> int:
     global MULTI_INTENT, CHAIN_PROJECTION
     _saved_41 = (MULTI_INTENT, CHAIN_PROJECTION, _MINED_CHAINS_PATH)
     try:
+        # Pin both layers ON for these cases: the operator may run the selftest under an
+        # env that turns a layer off (ENFORCER_MULTI_INTENT=0 is a live tuning order), and
+        # the render pins below describe the ON behaviour; the flag-off cases re-set them.
+        MULTI_INTENT = True
+        CHAIN_PROJECTION = True
         _plan = ("plan", "scope a feature into a phased implementation roadmap with acceptance criteria", 0.40)
         _road = ("roadmap", "phased implementation roadmap milestones deliverables sequencing", 0.30)
         _test = ("test", "run the unit and integration suites, coverage gaps, failing checks", 0.36)
@@ -3138,8 +3143,8 @@ def _selftest() -> int:
             bad.append("consult FALSE-FIRE (should stay silent): " + repr(t))
     if "USING: skill-concierge:consult" not in CONSULT_MANDATE:
         bad.append("consult mandate: must name the USING line")
-    if "SKILL_CONSULT_ROUTE=0" not in CONSULT_MANDATE:
-        bad.append("consult mandate: must carry the kill-switch note")
+    if "SKILL_CONSULT_ROUTE" in CONSULT_MANDATE:
+        bad.append("consult mandate: operator kill-switch note must not ride in the agent-facing line")
     if not CONSULT_ROUTE:
         bad.append("consult gate: default must be ON (SKILL_CONSULT_ROUTE unset = on)")
 

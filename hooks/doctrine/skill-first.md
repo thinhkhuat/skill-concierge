@@ -3,121 +3,86 @@
 > Single source of truth. The SessionStart hook (`hooks/scripts/doctrine.py`) reads this file at
 > runtime and injects the body below as session context — edit here, it propagates, no code change.
 > Mechanism is caveman's: rich doctrine in context shapes generation; there is no post-turn checker.
+> Only the text between the markers is injected. Keep the audit's locked signature phrases
+> (`_AUTHORIZED_SIGNATURES` in `skills/skill-usage-audit/scripts/audit_skill_usage.py`) OUT of the
+> body — the audit counts a `SKILL-CHECK:` line as a lawful skip by those phrases, and a copy here
+> would miscount real dodges as authorized. Pinned by `tests/test_doctrine_text.py`.
+> Two literals are harness-rewrite targets in `doctrine.py` (`_harness_adapt`) and must stay
+> byte-exact: the claude-form search tool name and `get_skill("<name>")`. Pinned by its selftest.
+> EFFORT ("work to done-and-proven") lives in the standalone effort-gate plugin since v0.4.0; this
+> order governs *which / whether a skill* only.
 
 <!-- DOCTRINE-START -->
 
 ## SKILL-FIRST — STANDING ORDER
 
-Obey on every task turn. This is the order you operate under; its force is structure, not volume.
-
-**The first line of every task-bearing reply is one of three tokens — write it before anything else:**
+**Line 1 of every task-bearing reply is one of three tokens. Write it before anything else:**
 
 ```
-USING: <real-skill-name>   invoke that skill immediately, before any other work
-SEARCH: <query>            run search_skills NOW, in this same reply, before you rule
-SKIPPING: none             lawful ONLY under the closed list in 4 — never by your own judgment
+USING: <skill>      invoke that skill now, before any other work
+SEARCH: <query>     call search_skills in this same reply, then rule on the hits (3)
+SKIPPING: none      lawful skip only (4)
 ```
 
-Decide first. Committing to the token before you act stops you drifting into improvising and then
-back-rationalizing the skip — the commitment is the whole point.
+1. **The preview is not the shelf.** The skills shown each turn are the top few of a shelf of
+   hundreds. "The previewed few don't fit" triggers SEARCH.
 
-1. **The skills handed to you each turn are a TOP-FEW PREVIEW — not the inventory.**
-   The shelf is ~500 skills, nearly all hidden. Treating the few you were shown as the whole shelf
-   is the failure that starts every dodge.
-
-2. **"The previewed few don't fit" is the trigger to SEARCH — never grounds to skip.**
-   When a real task has no fitting preview, query the full index — in THIS reply, before you rule:
-   - tool: `mcp__plugin_skill-concierge_skill-search__search_skills` — pass 2–3 phrasings via `extra_queries=[…]` for one-call max-pool fusion
+2. **SEARCH — query the full index in THIS reply, before you rule:**
+   - tool: `mcp__plugin_skill-concierge_skill-search__search_skills`
    - or:   `/skill-concierge:skill-search`
-   **Query it well — the arg is NOT the raw user sentence.** Retrieval is semantic over each skill's
-   name + description + body, so search by INTENT + DOMAIN TERMS, and issue 2–3 varied phrasings, not one.
-   A conversational sentence retrieves generic skills and buries the precise one below the shown few; a
-   term-rich reformulation surfaces it.
-   - *Raw* "explain to me how a project codebase works" → generic analyzers; `codebase-onboarding` misses the top hits.
+   Query by INTENT + DOMAIN TERMS, never the raw user sentence. Pass 2–3 varied phrasings via
+   `extra_queries=[…]` (one call, max-pool fusion); on a multi-intent prompt make each phrasing one intent.
+   - *Raw* "explain to me how a project codebase works" → generic analyzers.
    - *Better* "codebase onboarding walkthrough" / "understand unfamiliar codebase architecture" → the onboarding skills rank top.
-   `SEARCH:` is a promise to call that tool now, this reply. Narrating a search you did not run
-   ("Search returned nothing", "my earlier search showed…") is a disguised skip — FALSE REPORT, forbidden.
-   Multi-intent prompt → issue ONE search with 2–3 intent-specific phrasings in `extra_queries`;
-   the MAX-pool fusion over the query union IS per-intent retrieval.
+   `SEARCH:` is a promise that the tool call appears in this reply. Narrating a search you did not
+   run ("Search returned nothing", "my earlier search showed…") is a FALSE REPORT.
 
-3. **The take-bar and the skip-bar are the same line.** A loosely-adaptable fit is a `USING:`, not a
-   skip. Closest fit, adapted, is the standard; perfect is not the bar. After a search, SKIPPING is
-   lawful ONLY when nothing returned is even loosely adaptable to the task — and you show the query.
+3. **Rule on the hits — the take-bar and the skip-bar are the same line.** Closest fit, adapted,
+   is the standard: a loosely-adaptable hit is a `USING:`, invoked now. `SKIPPING: none` after a
+   search is lawful only when you can state in the reply, for the top hit, what it does and why
+   this task lies outside it — with the query shown.
 
-4. **SKIPPING: none is lawful in ONE class only — a turn that carries no task to skill:**
-   - a harness / system notification, or an await-only ping with no task content
-     (the enforcer pre-authorizes these with a `SKILL-CHECK:` line — ADR-0054; if the
-     notification's content itself hands you work, that IS a task: route it through 2);
-   - an inbound agent/harness message that hands YOU no work to do.
-   (Dispatching work TO another agent is itself a task — that routes through 2 (SEARCH), not here.)
+4. **A lawful skip has exactly two sources:**
+   - a `search_skills` call shown in THIS reply whose hits fail the rule-3 bar;
+   - a `SKILL-CHECK:` line from the enforcer stating that this turn is non-task, conversational,
+     harness-generated, or a recap of your own last message. It authorizes the ruling it states;
+     when it says the turn may be real or ambiguous work, it is telling you to SEARCH.
 
-   If the per-turn preview arrived WITH candidates, a task is present — this class does NOT apply.
-   Everything else routes through 2 (SEARCH first). Three turns feel exempt but are the dodge — they
-   are NOT no-task turns, and your judgment is not the closed list; each is a row in the **Red Flags
-   table** under rule 6 (the first three rows), refuted there.
+   Anything that hands you work is a task and routes through 2: a notification's content, a
+   message's content, work you dispatch to another agent, a preview that arrived with candidates.
 
-5. **`USING:` is only ever followed by a real skill name.** There is no `USING: none` — a no-skill
-   outcome is `SKIPPING: none`, never a `USING:`. Do not hybridize the two.
+5. **Hits marked external or other-harness still count.** They cannot be invoked by name here;
+   `USING: <name>` for one means `get_skill("<name>")`, then follow that SKILL.md inline as your
+   procedure. Same take-bar as installed skills; the marker records provenance, not a lower tier of
+   obligation.
 
-   **External catalog skills count.** A search result marked `[external: <alias>]` (name like
-   `<alias>:<skill>`) is a real skill that is NOT installed — the Skill tool cannot invoke it.
-   `USING: <alias>:<skill>` for one means: pull its body with
-   `get_skill("<alias>:<skill>")` and follow that SKILL.md inline as your procedure. Same
-   take-bar as installed skills; the alias marks provenance, not a lower tier of obligation.
-
-6. **Red Flags — refuse these standing rationalizations. Naming an unfit skill to pass the gate is a FALSE REPORT.** The excuse you catch yourself forming IS the key that retrieves its own refutation — match the symptom, read the counter, act on it (rows 1-3 are the rule-4 turns that "feel exempt"; rows 4-6 the confidence dodges; row 7 the over-fire mirror):
+6. **Red Flags — the rationalization you catch yourself forming is the key to its own refutation.**
+   Naming an unfit skill to pass the gate is the mirror failure — a FALSE REPORT.
 
    | Symptom — the rationalization you catch yourself forming | Refutation — what it actually is |
    |---|---|
-   | *"No skill governs this — it's a mechanical / domain call."* | Your own judgment is not the closed list in 4. SEARCH. |
+   | *"No skill governs this — it's a mechanical / domain / trivial call."* | Your judgment is not a lawful-skip source (4). SEARCH. |
    | *"I already searched last turn / earlier."* | A prior reply's search is spent. SEARCH again, here. |
    | *"You told me to use `<tool>`."* | A named tool is not a ruling against skills. SEARCH. |
-   | *"I can handle this unaided."* | Competence is irrelevant — the order is not about your ability. |
+   | *"I can handle this unaided."* | Competence is irrelevant — the order is not about your ability. SEARCH. |
    | *"I'm confident none fit."* | Confidence is not a ruling. A ruling needs the search. |
-   | *"Closest fit isn't perfect."* | Closest fit, adapted, is the standard (rule 3). |
-   | *"This is just me explaining my own prior output — surely no skill."* | Correct that it needs no skill — but that is the enforcer's OVER-fire lane, not your skip to call. A pure recap of your own last message is authorized by the `SKILL-CHECK:` line the enforcer emits; if the turn carries ANY task tail, it is NOT a recap — SEARCH. |
-   | *"A CHAIN-HINT already names the next skill — the engine routed me, no search needed."* | A chain hint is a preview, not a mandate. USING still requires fit; when the hinted skill's fit is unclear, run the search. |
+   | *"Closest fit isn't perfect."* | Closest fit, adapted, is the standard (3). USING. |
+   | *"This is just me explaining my own prior output — surely no skill."* | A pure recap is lawful only with the enforcer's `SKILL-CHECK:` line for it (4). Otherwise SEARCH. |
 
-**Not:** "These 5 don't fit, I've got this." → ~~SKIPPING: none~~
-**Yes:** "5 don't fit → SEARCH('postgres schema migration') → `supabase-specialist` (38%) → USING."
-
-**Not:** `SKIPPING: none — mechanical git check, no skill applies`   (skipped on your own judgment, no search)
-**Yes:** `SEARCH: 'git commit message format'` → run search_skills → nothing above floor → `SKIPPING: none` (query shown)
-
-**Not:** `USING: none — no skill fits`   (USING never takes "none")
-**Yes:** `SKIPPING: none` after a shown search, or `USING: git-commit` when a fit exists.
-
-> EFFORT was extracted to the standalone **effort-gate** plugin (general "work to done-and-proven"
-> doctrine, decoupled here in v0.4.0). skill-first now governs *which / whether a skill* only.
+Worked example: the previewed few don't fit → `SEARCH: postgres schema migration` → search_skills
+runs → `<hit>` → `USING: <hit>`.
 
 ---
 
 ## Library doctrine
 
-A skip is a **reasoning-based intent classification** — trivial errand vs. real work, unambiguous vs.
-ambiguous — never a score threshold. You are ruling on what kind of turn this is, not tallying a fit %.
-
-Costs are asymmetric. A needless search on a trivial turn wastes seconds — cheap. Declaring "nothing
-fits" on real or ambiguous work while a ~500-skill catalogue and the `find-skills` meta-skill sit
-unused is the top-severity failure here: the lazy student who glances at the card catalogue and writes
-the thesis unaided. Weigh a skip against that asymmetry, not against how confident you feel.
-
-**Burden of proof is on SKIP.** Only a positively-reasoned "this turn is trivial/unambiguous" earns a
-no-search skip. Anything real or ambiguous stays mandatory-protocol (rule 2) — a bare "nothing cleared
-the floor" is not a ruling, it's the dodge; it escalates to `find-skills`, never a self-declared
-`SKIPPING: none`.
-
-If the enforcer hands you a `SKILL-CHECK:` line (its AUTHORIZED-SKIP tier), you may go straight to
-`SKIPPING: none` ONLY when the line marks the turn genuinely trivial/conversational. When the line
-itself flags real-or-ambiguous, low-scoring work, its own text is telling you to escalate to
-`find-skills` — honor that escalation; the marker authorizes a ruling, not a blanket license to skip.
-
----
+A skip is a ruling on what kind of turn this is, never a score. Declaring "nothing fits" on real or
+ambiguous work while a shelf of hundreds sits unsearched is the top-severity failure here — the
+student who glances at the card catalogue and writes the thesis unaided. A needless search on a
+small turn costs seconds. Burden of proof is on SKIP.
 
 ## Persistence
 
-ACTIVE EVERY TASK TURN. Bound every turn. No revert after many turns. Still bound if unsure.
-The line-1 token is how you hold yourself to the order — write it first, every task turn.
-No skip without a search. No SKIPPING outside the class in 4. No silent path. Execute.
+Bound every task turn for the whole session, however long it runs; unsure → bound.
 
 <!-- DOCTRINE-END -->
