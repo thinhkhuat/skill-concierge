@@ -84,6 +84,7 @@ class OwnerProc:
 
 # Forced, not setdefault: a shell carrying the live SKILL_QDRANT_URL must never
 # point the suite (which force-rebuilds its collection) at the live store.
+_OWNER = None
 if os.environ.get("SKILL_TEST_QDRANT_URL"):
     os.environ["SKILL_QDRANT_URL"] = os.environ["SKILL_TEST_QDRANT_URL"]
 else:
@@ -91,6 +92,10 @@ else:
     atexit.register(_OWNER.stop)   # registered after rmtree, so it runs first (LIFO)
     os.environ["SKILL_QDRANT_URL"] = _OWNER.url
 os.environ["SKILL_COLLECTION"] = f"skillsearch_test_{os.getpid()}"
+# Query embeds try the owner's /embed first: point them at the model-less test owner
+# (or a refused port), never at a live embed service on 6363.
+os.environ["EMBED_SHIM_HOST"] = "127.0.0.1"
+os.environ["EMBED_SHIM_PORT"] = str(_OWNER.eport) if _OWNER is not None else "1"
 # setdefault so an explicit env (e.g. CI choosing the Ollama tier) still wins.
 os.environ.setdefault("SKILL_META_PATH", os.path.join(_TMP, "meta.json"))
 os.environ.setdefault("SKILL_EMBED_BACKEND", "fastembed")

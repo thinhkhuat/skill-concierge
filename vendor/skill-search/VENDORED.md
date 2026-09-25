@@ -388,8 +388,8 @@ plugin-level customization layer and these engine patches.
   `create_payload_index` call is dropped (the owner searches exactly without indexes; an existing
   Qdrant collection keeps its indexes). The embedded on-disk mode (`SKILL_QDRANT_PATH`,
   `QdrantClient(path=…)`) is deleted: `SKILL_QDRANT_URL` defaults to `http://localhost:6333`.
-  `qdrant-client` leaves `pyproject.toml`. The engine tests pin `SKILL_QDRANT_URL` to a test store
-  (`SKILL_TEST_QDRANT_URL`, default staging `127.0.0.1:6433`) with a per-run scratch collection.
+  `qdrant-client` leaves `pyproject.toml`. The engine tests pin `SKILL_QDRANT_URL` to their own
+  ephemeral index owner (or to `SKILL_TEST_QDRANT_URL` when set) with a per-run scratch collection.
   Re-vendoring from upstream must re-apply this, or `server.py` regains the qdrant-client import.
 - **Index owner (`skill_search/index_owner.py`, vector-store Track B):** a new engine module,
   run as `python -m skill_search.index_owner` from the shared venv. One process serves the
@@ -399,8 +399,9 @@ plugin-level customization layer and these engine patches.
   `~/.cache/skill-search/index.sqlite`) guarded by an exclusive `fcntl` lock on `<db>.lock`,
   and searches exactly with numpy over normalized float32 vectors (group_by best point, score
   desc then group value asc; points score desc then id asc; filters must/must_not/should,
-  match.value/any, is_null present-and-null). Writes commit, then swap the collection
-  snapshot, before replying (read-your-write). Host-header (403) and JSON content-type (415)
+  match.value/any, is_null present-and-null). Writes commit before replying and mark the
+  collection's snapshot stale; the next read rebuilds it under the write lock (read-your-write
+  without a full-matrix rebuild per write, which peaked at several GB during a reindex). Host-header (403) and JSON content-type (415)
   guards on every request; bodies capped at 16 MB. A rewritten venv stamp at an equal or higher
   version makes it drain and exit; a lower one is logged and ignored. `SKILL_OWNER_NO_MODEL=1`
   serves without a model (test seam); `SKILL_OWNER_LOG`, `SKILL_OWNER_STAMP`,
@@ -410,3 +411,23 @@ plugin-level customization layer and these engine patches.
   `tests/fixtures/qdrant_exact_groups.json` exported from live Qdrant exact search. `_Store`
   sends `Content-Type: application/json` on every non-GET request. Not upstream: re-apply on
   re-vendor.
+
+- **Owner normalize rule matches Qdrant's (vector-store Track B):** `Store._normalize` keeps a zero
+  or already-unit vector (|‖v‖² − 1| ≤ 1e-6) exactly as sent and divides the rest by a float32
+  norm, following Qdrant's cosine preprocess (`is_length_zero_or_normalized`). Vectors copied out
+  of Qdrant therefore land bit-for-bit (`tests/test_index_owner.py::test_unit_vectors_are_stored_bit_for_bit`).
+  Not upstream: re-apply on re-vendor.
+- **Query vectors from the owner's `/embed` (vector-store Track B):** `server.py`
+  adds `embed_queries()`, used by `search_skills`, `consult_candidates`, `health` and the
+  `vector_size` probe. It asks `http://$EMBED_SHIM_HOST:$EMBED_SHIM_PORT` (default
+  `127.0.0.1:6363`) for query vectors when that service's `/health` names the engine's own
+  `SKILL_EMBED_MODEL`, and falls back to the in-process model otherwise (other model, not
+  answering, or any error) as long as the store still answers; with the store down too it raises
+  instead, since loading a 1.4 GB model for a search that cannot run helps nobody. A search
+  process then never loads the model: measured 54 MB vs 1,483 MB, identical results. Before the
+  switch to the owner, port 6363 is the Docker embed shim, which names the same model, so
+  searches embed there (vectors within 2.5e-7 of in-process, cosine 0.99999994). Reindex keeps
+  `embed_batch` in-process. The engine tests point `EMBED_SHIM_*` at their model-less test owner;
+  `tests/test_query_embed.py` covers each path. The owner also answers
+  `GET /collections/{c}/exists`, which engines older than the owner call on every reindex.
+  Not upstream: re-apply on re-vendor.

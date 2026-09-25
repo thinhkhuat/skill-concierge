@@ -544,6 +544,54 @@ def embed(text: str) -> list[float]:
     return embed_batch([text])[0]
 
 
+# Query vectors come from the index owner's warm model when it serves THIS model, so the
+# machine holds one model copy instead of one per MCP server; otherwise the in-process
+# model, as before. Reindex keeps embedding in-process (tens of thousands of texts).
+EMBED_BASE = (f"http://{os.environ.get('EMBED_SHIM_HOST', '127.0.0.1')}:"
+              f"{os.environ.get('EMBED_SHIM_PORT', '6363')}")
+_owner_ok = False            # set once the embed service has named this engine's model
+
+
+def _owner_serves_model() -> bool:
+    global _owner_ok
+    if not _owner_ok:
+        try:
+            with urllib.request.urlopen(EMBED_BASE + "/health", timeout=1.0) as r:
+                _owner_ok = json.loads(r.read()).get("model") == EMBED_MODEL
+        except Exception:
+            pass
+    return _owner_ok
+
+
+def _owner_embed(text: str) -> list[float]:
+    req = urllib.request.Request(EMBED_BASE + "/embed", data=json.dumps({"text": text}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=5.0) as r:
+        return json.loads(r.read())["vector"]
+
+
+def _store_answers() -> bool:
+    try:
+        with urllib.request.urlopen(QDRANT_URL.rstrip("/") + "/", timeout=1.0):
+            return True
+    except Exception:            # refused, or 503 while an index owner loads
+        return False
+
+
+def embed_queries(texts: list[str]) -> list[list[float]]:
+    """Query vectors: the owner's /embed when it serves this model, else in-process.
+    When the store is down as well there is nothing to search, so no model is loaded."""
+    if EMBED_BACKEND == "fastembed":
+        if _owner_serves_model():
+            try:
+                return [_owner_embed(t) for t in texts]
+            except Exception:
+                pass
+        if not _store_answers():
+            raise RuntimeError(f"vector store at {QDRANT_URL} is not answering")
+    return embed_batch(texts)
+
+
 _vsize = None
 
 
@@ -554,7 +602,7 @@ def vector_size() -> int:
     global _vsize
     if _vsize is None:
         env = os.environ.get("SKILL_VECTOR_SIZE")
-        _vsize = int(env) if env else len(embed("dimension probe"))
+        _vsize = int(env) if env else len(embed_queries(["dimension probe"])[0])
     return _vsize
 
 
@@ -1007,7 +1055,7 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     scope_filter = _scope_filter()
     group_lists = [
         _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=TOP_K, filter=scope_filter)
-        for qv in embed_batch(queries)
+        for qv in embed_queries(queries)
     ]
     rows = [r for r in _fuse_ranked(group_lists, TOP_K) if not _blocked(r.get("name", ""))]
     out = {"query": query, "results": rows}
@@ -1052,7 +1100,7 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
     scope_filter = _scope_filter()
     group_lists = [
         _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=top_n, filter=scope_filter)
-        for qv in embed_batch(qs)
+        for qv in embed_queries(qs)
     ]
     rows = [r for r in _fuse_ranked(group_lists, top_n, with_paths=True)
             if not _blocked(r.get("name", ""))]
@@ -1131,7 +1179,7 @@ def _health() -> dict:
     # Dependency: embedding backend — probe a real embed (the true signal, and
     # backend-agnostic: works for ollama and fastembed alike).
     try:
-        dim = len(embed("health probe"))
+        dim = len(embed_queries(["health probe"])[0])
         report["embedder"] = {"backend": EMBED_BACKEND, "model": EMBED_MODEL,
                               "reachable": True, "dim": dim}
     except Exception as e:
