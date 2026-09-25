@@ -91,7 +91,7 @@ cd skill-concierge
 
 1. **Stable venv** — installs the vendored engine + deps into `~/.claude/skill-concierge/venv`
    (outside the plugin cache, so it survives reinstalls — [ADR-0004](docs/adr/0004-bundled-mcp-launcher-stable-venv.md)).
-2. **Qdrant** — starts a `skill-search-qdrant` Docker container on ports `6333/6334`.
+2. **Qdrant** — starts a `skill-search-qdrant` Docker container on `127.0.0.1:6333` (loopback only; gRPC 6334 is not published).
 3. **Index** — builds/refreshes the multilingual index, then runs a health check.
 4. **Overrides** — applies the curated always-on policy to `~/.claude/settings.json` (backed up first).
 
@@ -198,7 +198,7 @@ the built index can't diverge from the model the server uses):
 | `SKILL_PYTHON` | first of `python3.12/3.11/3.10` on `PATH` |
 | `SKILL_CONCIERGE_VENV` | `~/.claude/skill-concierge/venv` |
 | `SKILL_QDRANT_CONTAINER` | `skill-search-qdrant` |
-| `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:1.18.2` |
+| `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:v1.18.2` |
 | `SKILL_CONCIERGE_LOG` | `~/.claude/skill-concierge/logs` (ledger directory) |
 
 ### Flywheel LLM config (utterance generation — ADR-0027)
@@ -581,7 +581,7 @@ Created by [`setup.sh`](setup.sh):
 |-----------|-----------------|----------|
 | Stable venv | `~/.claude/skill-concierge/venv/` — vendored engine + Python deps (`setup.sh:18`, step 1) | `rm -rf ~/.claude/skill-concierge/venv/` |
 | Durable home | `~/.claude/skill-concierge/` — logs, keep-on policy (`keep-on.json`), telemetry ledger, utterance triggers (`triggers.json`), per-skill thresholds (`thresholds.json`), flywheel manifest, chain overrides (`next-skills-overrides.json`) | `rm -rf ~/.claude/skill-concierge/` |
-| Qdrant container | Docker container `skill-search-qdrant` (`setup.sh:19`, step 2), image `qdrant/qdrant:1.18.2`, volume at `~/.cache/skill-search/qdrant-server/` | `docker rm -f skill-search-qdrant && docker rmi qdrant/qdrant:1.18.2 && rm -rf ~/.cache/skill-search/qdrant-server/` |
+| Qdrant container | Docker container `skill-search-qdrant` (`setup.sh:19`, step 2), image `qdrant/qdrant:v1.18.2`, volume at `~/.cache/skill-search/qdrant-server/` | `docker rm -f skill-search-qdrant && docker rmi qdrant/qdrant:v1.18.2 && rm -rf ~/.cache/skill-search/qdrant-server/` |
 | Embed shim | Docker container `skill-concierge-embed-shim` (`setup.sh:21`, step 2b), image `skill-concierge-embed-shim:latest` | `docker rm -f skill-concierge-embed-shim && docker rmi skill-concierge-embed-shim:latest` |
 | Old ledger migration | If the old path `~/.local/share/skill-concierge/` or `~/.claude/skill-telemetry/` exists from a pre-0.13 install, it is orphaned after setup. | `rm -rf ~/.local/share/skill-concierge/ ~/.claude/skill-telemetry/` |
 | MCP launcher records (if enabled) | `~/.cache/skill-search/servers/<pid>.json` — per-launch build-id record | `rm -rf ~/.cache/skill-search/` |

@@ -15,8 +15,8 @@ runs the same thing and verifies it. Four numbered steps (with sub-steps):
    vendored version is a static `0.1.0`, so plain pip would see "already satisfied" and skip
    copying changed code — this is the stale-engine trap; see below). Stamps
    `$VENV/.engine-plugin-version` so the launcher can auto-resync after a `/plugin update`.
-2. **[2/4] Qdrant.** Start the `skill-search-qdrant` Docker container (image `qdrant/qdrant:1.18.2`,
-   `localhost:6333`). **[2b/4]** Build + run the warm embed shim as a Docker sidecar
+2. **[2/4] Qdrant.** Start the `skill-search-qdrant` Docker container (image `qdrant/qdrant:v1.18.2`,
+   published on `127.0.0.1:6333` only). **[2b/4]** Build + run the warm embed shim as a Docker sidecar
    (`skill-concierge-embed-shim`, bound `127.0.0.1:6363`; skipped if already listening).
 3. **[3/4] Index.** `skill-search --reindex` (multi-vector built by the reindex itself).
    **[3b/4]** Build the actionability-gate `prompt_intent` corpus (fail-soft).
