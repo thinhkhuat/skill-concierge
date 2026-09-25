@@ -13,6 +13,19 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.50.0 — the Jev needs-a-skill gate (ADR-0060; committed 2026-09-26)
+
+**Starts per harness** when its plugin cache reaches `0.50.0` (`doctor` lists cache versions); ledger
+rows carry no version. The gate removes offers from turns Jev judges skill-free, so offer-level rates
+(take, hit@k, fallback) reset — never pool them with v0.49.0. Tuning orders carried over:
+`ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=0`.
+
+| # | Watch | Command | Trigger | Action |
+|---|-------|---------|---------|--------|
+| W18 | False NO: a `jev_skip` turn that needed a skill | ledger `offer` rows with band `jev_skip` since the cache reached 0.50.0; replay each prompt's session for a later `Skill`/`search_skills` use or a user correction | any confirmed false NO on a substantial task, or 2+ on Vietnamese prompts | lower `ENFORCER_JEV_SKIP_BELOW` (env), and add the prompt to the tuning set before any question rewrite |
+| W19 | Missed skips: conversation still getting a menu | ledger `offer` rows whose `jev.p` sits in 0.25-0.45 on turns that ended with a lawful SKIPPING | a steady share of go-aheads/questions in that band | raise `ENFORCER_JEV_SKIP_BELOW` in 0.05 steps, env only |
+| W20 | Latency and failures | `jev.ms` and `jev.err` on ledger rows | p90 `ms` > 1000, or `err` on > 5 % of rows | raise `ENFORCER_JEV_TIMEOUT` or set `ENFORCER_JEV_GATE=0` while TypeSafe is degraded |
+
 ## v0.49.0 — harness-complete offer isolation, project isolation, echo on every harness (ADR-0059; committed 2026-09-26 00:05 local)
 
 **When the epoch starts is per harness.** Ledger rows carry no plugin version, and each harness runs

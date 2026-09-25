@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.50.0] — 2026-09-26
+### Added — ADR-0060: the Jev needs-a-skill gate (fifth AUTHORIZED-SKIP leg)
+- **One TypeSafe Jev call decides whether a turn needs the skill procedure at all**
+  (`hooks/scripts/enforcer.py`, `_jev_needs_skill`). After every no-I/O lane and before the embed
+  step, a single Noul question asks whether the agent should load a specialized playbook. p < 0.25
+  authorizes the skip (ledger band `jev_skip`, `SKILL-CHECK:` signature "Jev needs-a-skill gate");
+  anything else falls through to the normal menu. Motivation: the mpnet floor no longer separates
+  conversation from work — on 2026-09-26 a pure broadcast turn was offered eight irrelevant skills at
+  0.60-0.64 over the 0.45 floor, each costing the agent a mandated search round trip.
+- **Fail-open.** No `TYPESAFE_API_KEY`, a timeout (`ENFORCER_JEV_TIMEOUT`, 1.2 s), an HTTP error or a
+  malformed answer routes normally; a named deterministic route never asks Jev. Model pinned
+  (`ENFORCER_JEV_MODEL=jev-1.13.0`); threshold `ENFORCER_JEV_SKIP_BELOW`. `ENFORCER_JEV_GATE=0`
+  reverts byte-identically.
+- **Ledger:** every offer row after an attempted call carries `jev` (`{p, ms}` or `{err, ms}`); no call
+  (gate off, no key, named route) → no field.
+- **Audit:** `skill-usage-audit` counts the new leg as an authorized skip (`_AUTHORIZED_SIGNATURES`
+  now five).
+- **Tests:** `tests/test_jev_gate.py` (offline: skip, fall-through, fail-open ×4, no-key/kill-switch,
+  named route); the chain-hint e2e runs with the gate off.
+
 ## [0.49.0] — 2026-09-25
 ### Fixed — ADR-0059: harness-complete offer isolation, project isolation, the exclusion echo on every harness
 - **Offers hold only invocable skills, under every harness** (`hooks/scripts/enforcer.py`). A

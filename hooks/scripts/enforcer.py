@@ -18,9 +18,9 @@ Design contract (mirrors the sibling ledger hook):
 Resilience / budget (Phase 3). The embed POST has a HARD client-side socket
 timeout (see EMBED_TIMEOUT_S for the calibration history; live default 500ms since
 ADR-0054). Every network leg is separately capped, so the worst case is the sum of the
-caps, not an unbounded wait: 500ms embed + 250ms installed query + up to 2x250ms
-actionability gate + 250ms external annex + 250ms cross-harness annex ~= 1.75s, against
-a 5s hook timeout.
+caps, not an unbounded wait: 1.2s Jev gate (ADR-0060, before embed) + 500ms embed + 250ms
+installed query + up to 2x250ms actionability gate + 250ms external annex + 250ms
+cross-harness annex ~= 2.95s, against a 5s hook timeout.
 The happy path is ~100ms; the annex legs run only on turns that actually carry an offer. On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
 embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
 never crashing — and stays within the per-turn budget regardless of shim health.
@@ -31,6 +31,7 @@ Telemetry. Emits an `offer` event to the shared invocation ledger so analyze.py
 can compute hit@k and fallback rate:
   {t, sid, ev:"offer", band, offered:[[name,score]...], fallback, q:<≤120c>}
 """
+import http.client
 import json
 import os
 import re
@@ -1354,6 +1355,8 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
             ev["embed_ms"] = int(embed_ms)
         if qdrant_ms is not None:
             ev["qdrant_ms"] = int(qdrant_ms)
+        if _JEV_EVENT:
+            ev["jev"] = _JEV_EVENT    # ADR-0060: p (or error) + latency, on every row after an attempted call
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
     except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
@@ -1423,6 +1426,73 @@ HARNESS_SKIP_MSG = (
 )
 
 
+# ADR-0060: the 5th AUTHORIZED-SKIP leg — the Jev needs-a-skill gate. One TypeSafe Jev Noul
+# call asks whether the turn needs a specialized skill at all, BEFORE the embed + Qdrant path.
+# mpnet cosines cannot answer that (a RANK signal, see the tuning note above; 2026-09-26
+# ledger line 11970 offered 8 irrelevant skills at 0.60-0.64 over the 0.45 floor). Errors are
+# lopsided: a wrong YES is today's behaviour, only a wrong NO costs — so the gate fails OPEN
+# (no key, timeout, HTTP/parse error -> None -> normal routing) and a named deterministic
+# route always bypasses it. Question wording tuned 2026-09-26 on 22 labelled EN+VN prompts:
+# every NO scored <= 0.12 and every YES >= 0.45; the skip floor sits between. Its signature
+# phrase "Jev needs-a-skill gate" is a LOCKED cross-file contract with the audit script
+# (_AUTHORIZED_SIGNATURES) — same rule as the selfref leg. `=0` restores the 4-leg ladder.
+JEV_GATE = os.environ.get("ENFORCER_JEV_GATE", "1") != "0"
+JEV_URL = os.environ.get("ENFORCER_JEV_URL", "https://api.typesafe.ai/v1/systemone")
+JEV_MODEL = os.environ.get("ENFORCER_JEV_MODEL", "jev-1.13.0")   # pinned: jev-latest drifts
+JEV_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_TIMEOUT", "1.2"))   # measured 0.58-0.88 s
+JEV_SKIP_BELOW = float(os.environ.get("ENFORCER_JEV_SKIP_BELOW", "0.25"))
+JEV_MAX_CHARS = 4000
+JEV_QUESTION = {
+    "type": "noul",
+    "instructions": (
+        "An AI coding agent has built-in abilities: chat, answer questions, explain, read and edit "
+        "files, run shell commands, search the web, and message other sessions. It also has a large "
+        "library of specialized skills (step-by-step playbooks for things like writing, editing, "
+        "translating or de-AI-polishing Vietnamese or English text, Vietnamese government reports, "
+        "rendering Word/PDF documents, deploying services, research briefings, debugging and fixing "
+        "failing code or tests, code review, building UIs, managing plugins). Should the agent load "
+        "one of those specialized playbooks to handle the user's request well, rather than handle it "
+        "directly with its built-in abilities?"),
+    "criteria": {
+        "true": ("The request is a substantial task in a domain where a documented playbook adds real "
+                 "value: producing or editing a deliverable, fixing a bug or failing test, a multi-step "
+                 "workflow, a domain procedure — in any language."),
+        "false": ("The request is conversation, a question about the agent's own prior answer, an "
+                  "acknowledgement, a go-ahead to continue, a short direct action the agent can do with "
+                  "built-in tools, or a request whose method the user already dictated."),
+    },
+}
+JEV_SKIP_MSG = (
+    AUTHORIZED_SKIP_MARKER + " the Jev needs-a-skill gate judged this turn to need no specialized "
+    "skill (p={p:.2f} < {floor:.2f}). SKIPPING: none is pre-authorized; no search_skills needed. If "
+    "the turn does hand you a substantial task in a skill's domain, route it (SEARCH/USING)."
+)
+_JEV_EVENT = None   # {"p", "ms"} or {"err", "ms"} for this turn's ledger row; one hook process = one turn
+
+
+def _jev_needs_skill(prompt: str):
+    """P(this turn needs a specialized skill) from one Jev Noul call, or None to fall through.
+    None (no network call) when the gate is off or TYPESAFE_API_KEY is absent; None on any
+    timeout/HTTP/parse error. Records the outcome in _JEV_EVENT for the ledger row."""
+    global _JEV_EVENT
+    key = os.environ.get("TYPESAFE_API_KEY", "")
+    if not (JEV_GATE and key):
+        return None
+    body = {"model": JEV_MODEL, "state": {"request": prompt[:JEV_MAX_CHARS]},
+            "questions": {"needs_playbook": JEV_QUESTION}}
+    t0 = time.time()
+    try:
+        ans = _post_json(JEV_URL, body, JEV_TIMEOUT_S, {"Authorization": "Bearer " + key})
+        p = float(ans["answers"]["needs_playbook"]["noul"])
+        if not 0.0 <= p <= 1.0:
+            raise ValueError("noul out of range")
+        _JEV_EVENT = {"p": round(p, 3), "ms": int((time.time() - t0) * 1000)}
+        return p
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, http.client.HTTPException) as e:
+        _JEV_EVENT = {"err": type(e).__name__, "ms": int((time.time() - t0) * 1000)}
+        return None
+
+
 def _authorized_skip_inject(kind: str, sid: str = "", hint: bool = True, **fmt) -> None:
     """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip" |
     "selfref" | "harness") when the kill-switch is on; no-op when off. ADR-0029: the CHAIN-HINT
@@ -1437,16 +1507,17 @@ def _authorized_skip_inject(kind: str, sid: str = "", hint: bool = True, **fmt) 
         msg = {"getaway": GETAWAY_SKIP_MSG,
                "intent_skip": INTENT_SKIP_MSG,
                "selfref": SELFREF_SKIP_MSG,
-               "harness": HARNESS_SKIP_MSG}[kind]
+               "harness": HARNESS_SKIP_MSG,
+               "jev": JEV_SKIP_MSG}[kind]
         _inject(msg.format(**fmt) + (_chain_hint(sid) if hint else ""))
     except (OSError, UnicodeError, ValueError, KeyError):
         return
 
 
-def _post_json(url: str, payload: dict, timeout: float) -> dict:
+def _post_json(url: str, payload: dict, timeout: float, headers: dict = None) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
@@ -2081,6 +2152,15 @@ def main() -> int:
         # named-and-missed prompts in the v0.46.0 epoch were lost on exactly that path.
         _hits = _route_hits(prompt, KEEPOFF)
         _hits_offered = [[n, 1.0] for (n, _d, _s) in _hits]
+
+        # ADR-0060 Jev needs-a-skill gate: after every no-I/O lane, before embed. A NAMED skill
+        # (deterministic hit) is explicit intent and never asks Jev. None = fall through.
+        if not _hits:
+            _p = _jev_needs_skill(prompt)
+            if _p is not None and _p < JEV_SKIP_BELOW:
+                _append_offer(sid, "jev_skip", [], "jev_no_skill", prompt)
+                _authorized_skip_inject("jev", sid, p=_p, floor=JEV_SKIP_BELOW)
+                return 0
 
         # Embed (HARD timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow (named hits survive).
         embed_ms = None

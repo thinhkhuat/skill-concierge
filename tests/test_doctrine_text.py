@@ -1,7 +1,7 @@
 """Pins on the SKILL-FIRST doctrine body and the enforcer's injected strings.
 
 The doctrine body is injected into every agent session; the audit script counts a
-`SKILL-CHECK:` line as a lawful skip by four locked signature phrases that live ONLY in the
+`SKILL-CHECK:` line as a lawful skip by five locked signature phrases that live ONLY in the
 enforcer's leg messages. A copy of a signature inside the doctrine would miscount real dodges
 as authorized, so the body must never carry one. The body must also point only at things that
 exist (no phantom skill names) and cache nothing the environment can answer (no catalogue count).
@@ -29,7 +29,7 @@ def _signatures() -> tuple[str, ...]:
 
 def test_locked_signatures_live_in_enforcer_not_doctrine():
     sigs = _signatures()
-    assert len(sigs) == 4, sigs
+    assert len(sigs) == 5, sigs
     enforcer = ENFORCER.read_text(encoding="utf-8")
     body = _body()
     for s in sigs:

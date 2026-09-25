@@ -89,20 +89,21 @@ _DISPATCH_MARKERS = ("You are a Team Member", "You have been spawned as a teamma
 # The enforcer's AUTHORIZED-skip signature substrings. A captured SKIPPING clause echoing one of
 # these is a LAWFUL, hook-authorized skip — NEVER a rationalization to harvest (else H2 would
 # refute the excuse the enforcer just authorized, Red-Team F4/F8). Keep in sync with
-# GETAWAY_SKIP_MSG / INTENT_SKIP_MSG / SELFREF_SKIP_MSG / HARNESS_SKIP_MSG in hooks/scripts/enforcer.py.
+# GETAWAY_SKIP_MSG / INTENT_SKIP_MSG / SELFREF_SKIP_MSG / HARNESS_SKIP_MSG / JEV_SKIP_MSG in hooks/scripts/enforcer.py.
 _AUTHORIZED_SIGNATURES = ("full-catalogue retrieval ran", "intent-margin classifier",
-                          "self-referential recap lane", "harness-message lane")
+                          "self-referential recap lane", "harness-message lane",
+                          "Jev needs-a-skill gate")
 
 
 def _is_authorized_skip_line(line):
     """True iff `line` is the enforcer's OWN SKILL-CHECK authorization line — anchored on its
-    four message signatures (_AUTHORIZED_SIGNATURES), NOT the bare marker. The marker literal
+    five message signatures (_AUTHORIZED_SIGNATURES), NOT the bare marker. The marker literal
     also appears in the skill-first.md doctrine and in any prose/tool-result that discusses the
     feature; matching those would over-count authorized_skip and mask false-skips. Fails SAFE:
     if the enforcer wording drifts from these signatures we under-count authorized (over-flag
     false), never the reverse. Single source of truth for count-side (saw_marker) AND harvest-side
     (H1 exclusion) so the two legs can never drift. Keep _AUTHORIZED_SIGNATURES in sync with
-    GETAWAY_SKIP_MSG / INTENT_SKIP_MSG / SELFREF_SKIP_MSG / HARNESS_SKIP_MSG in hooks/scripts/enforcer.py."""
+    GETAWAY_SKIP_MSG / INTENT_SKIP_MSG / SELFREF_SKIP_MSG / HARNESS_SKIP_MSG / JEV_SKIP_MSG in hooks/scripts/enforcer.py."""
     return AUTHORIZED_SKIP_MARKER in line and any(s in line for s in _AUTHORIZED_SIGNATURES)
 
 # Default harvest sink — gitignored scratch under logs/ (never committed; see ADR-0021 + .gitignore).

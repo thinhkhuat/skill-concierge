@@ -30,7 +30,8 @@ def run_hook(prompt: str, sid: str, ledger_lines: list, sidecar: dict) -> str:
         env = dict(os.environ,
                    SKILL_CONCIERGE_LOG=str(td),
                    SKILL_CONCIERGE_NEXT_SKILLS=str(sc),
-                   ENFORCER_CHAIN_HINT="1")
+                   ENFORCER_CHAIN_HINT="1",
+                   ENFORCER_JEV_GATE="0")   # ADR-0060: keep the e2e offline and deterministic
         p = subprocess.run(
             [sys.executable, str(ENFORCER)],
             input=json.dumps({"prompt": prompt, "session_id": sid}).encode(),
