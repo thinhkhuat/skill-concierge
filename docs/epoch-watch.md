@@ -13,7 +13,13 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
-## v0.49.0 — harness-complete offer isolation, project isolation, echo on every harness (ADR-0059; deployed 2026-09-25 23:15 local)
+## v0.49.0 — harness-complete offer isolation, project isolation, echo on every harness (ADR-0059; committed 2026-09-26 00:05 local)
+
+**When the epoch starts is per harness.** Ledger rows carry no plugin version, and each harness runs
+the hooks from its own plugin cache: at commit time Claude Code's cache was still `0.48.0`, while the
+venv, the Command Code mod and the DSH profiles took `0.49.0` on 2026-09-25 between 23:15 and 23:59.
+Start each harness's window at the moment its cache (or adapter) reaches `0.49.0` — `doctor` lists
+every cache version — never at the commit time alone.
 
 **Offer composition resets under every harness** — rows that were never invocable (other harnesses'
 exclusive roots, other projects' skills, and everything under DSH/Cline, whose filter was off) leave the
