@@ -21,11 +21,13 @@
  *   stateless processes): doctrine.py + detached auto_reindex/auto_overrides/
  *   auto_flywheel/auto_promote; (b) ledger UserPromptSubmit turn row;
  *   (c) enforcer.py mandate + ranked preview wrapped in <hook_context>.
- *   tool_result   — ledger capture only: `use_skill`/`skills` -> the Skill-tool `auto`
+ *   tool_result   — ledger capture: `use_skill`/`skills` -> the Skill-tool `auto`
  *   lane; the flattened `skill-search__search_skills`/`skill-search__get_skill` MCP
  *   names -> the `search`/`get_skill` lanes (live-verified 2026-09-01, Cline 3.0.60
  *   Claude Agent SDK runtime; `use_mcp_tool` kept for the classical surface).
- *   ADR-0051 §4.
+ *   ADR-0051 §4. On a skill load the SAME payload also goes to skill_exclusions.py;
+ *   its echo of the skill's own "not for" lines returns as `contextModification`,
+ *   which Cline queues as PostToolUse hook context for the model (ADR-0059).
  *
  * Fail-open everywhere: any throw returns {cancel:false} — a dead bridge
  * degrades to a plain Cline session, never a blocked turn.
@@ -57,6 +59,7 @@ const PLUGIN_ROOT = resolvePluginRoot();
 const ENFORCER = path.join(PLUGIN_ROOT, "hooks", "scripts", "enforcer.py");
 const DOCTRINE = path.join(PLUGIN_ROOT, "hooks", "scripts", "doctrine.py");
 const LEDGER = path.join(PLUGIN_ROOT, "hooks", "scripts", "ledger.py");
+const EXCLUSIONS = path.join(PLUGIN_ROOT, "hooks", "scripts", "skill_exclusions.py");
 const AUTO_SCRIPTS = ["auto_reindex.py", "auto_overrides.py", "auto_flywheel.py", "auto_promote.py"]
   .map((n) => path.join(PLUGIN_ROOT, "hooks", "scripts", n));
 const CLINE_ENV = { ...process.env, SKILL_CONCIERGE_HARNESS: "cline" };
@@ -151,37 +154,38 @@ function toolResult(payload) {
   const params = (ptu.parameters && typeof ptu.parameters === "object") ? ptu.parameters : {};
   const sid = String(payload.taskId || "cline-hook");
 
-  const isSkillLane = toolName === "use_skill" || toolName === "skills";
-  if (isSkillLane) {
+  let load = null;
+  if (toolName === "use_skill" || toolName === "skills") {
     // Ledger's Skill-tool lane matches tool_name "Skill"/"activate_skill" and reads
     // the name from the _NAME_KEYS set over tool_input — forward the raw parameters.
     // `skills` is the live Cline 3.0.60 name (verified 2026-09-01); `use_skill` is
     // kept for the classical Cline surface.
-    runScript(LEDGER, {
-      hook_event_name: "PostToolUse", session_id: sid, harness: "cline",
-      tool_name: "Skill", tool_input: params,
-    }, 5000);
+    load = { tool_name: "Skill", tool_input: params };
   } else if (toolName === "skill-search__search_skills" || toolName === "skill-search__get_skill") {
     // LIVE-VERIFIED 2026-09-01 (Cline 3.0.60, Claude Agent SDK runtime): MCP tools
     // arrive FLATTENED as `<server>__<tool>` with the tool args directly in the
     // parameters (no {tool_name, arguments} wrapper) — ADR-0051 §4 caveat closed.
     // Payload shape `postToolUse:{toolName, parameters,...}` confirmed from the
     // shipped binary's own hook-contract construction.
-    runScript(LEDGER, {
-      hook_event_name: "PostToolUse", session_id: sid, harness: "cline",
-      tool_name: toolName,
-      tool_input: params,
-    }, 5000);
+    load = { tool_name: toolName, tool_input: params };
   } else if (toolName === "use_mcp_tool") {
     // Classical Cline surface (VS Code extension runs): the server/tool pair
     // arrives in parameters. Map onto the ledger's suffix-matched MCP lanes.
     const tname = String(params.tool_name || "");
     if (tname.endsWith("search_skills") || tname.endsWith("get_skill")) {
-      runScript(LEDGER, {
-        hook_event_name: "PostToolUse", session_id: sid, harness: "cline",
+      load = {
         tool_name: tname.includes("get_skill") ? "skill-search__get_skill" : "skill-search__search_skills",
         tool_input: params.arguments && typeof params.arguments === "object" ? params.arguments : {},
-      }, 5000);
+      };
+    }
+  }
+  if (load) {
+    load = { hook_event_name: "PostToolUse", session_id: sid, harness: "cline", ...load };
+    runScript(LEDGER, load, 5000);
+    // Skill-exclusion echo: a load (Skill lane or get_skill), never a search.
+    if (ptu.success !== false && load.tool_name !== "skill-search__search_skills") {
+      const echo = additionalContext(runScript(EXCLUSIONS, { ...load, tool_response: ptu.result }, 3000));
+      if (echo.trim()) return out({ cancel: false, contextModification: echo.trim() });
     }
   }
   // Anything else is not skill-concierge traffic — silent pass-through.

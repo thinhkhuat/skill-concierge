@@ -18,7 +18,12 @@
  *    message (UserPromptSubmit parity); logs the turn boundary to the ledger.
  * 3. `tool_result`: observes skill activation (`read` with a `skill://` path)
  *    and retriever usage (`skill-search__search_skills` / `get_skill`) and
- *    records them in the shared invocation ledger (PostToolUse parity).
+ *    records them in the shared invocation ledger (PostToolUse parity). On a
+ *    skill load it also runs skill_exclusions.py on the same payload and, when
+ *    the skill's own SKILL.md says what it is NOT for, appends that echo to the
+ *    tool result the model reads (ADR-0059; Claude Code's PostToolUse
+ *    additionalContext parity — OMP `tool_result` handlers may return
+ *    replacement `content`, shared-events.d.ts ToolResultEventResult).
  *
  * Fail-open design: every handler catches exceptions and degrades to no-op —
  * an OMP extension must NEVER throw from a handler (tool_call is fail-closed;
@@ -53,6 +58,7 @@ const PLUGIN_ROOT = resolvePluginRoot();
 const ENFORCER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/enforcer.py");
 const LEDGER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/ledger.py");
 const DOCTRINE_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/doctrine.py");
+const EXCLUSIONS_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/skill_exclusions.py");
 // SessionStart self-heal batch (hooks/hooks.json parity). Each script is
 // fail-silent, throttled and spawns its own detached work; we fire them
 // detached too so session start never waits on engine maintenance.
@@ -78,6 +84,7 @@ function runLedger(payload: Record<string, unknown>): void {
       stdio: ["pipe", "ignore", "ignore"],
       detached: true,
     });
+    child.stdin.on("error", () => { /* child gone: telemetry only */ });
     child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
     child.unref();
@@ -129,6 +136,41 @@ function runDoctrine(sessionId: string): string | null {
     // fail-open
   }
   return null;
+}
+
+/**
+ * Run skill_exclusions.py on a ledger-shaped PostToolUse payload and return the
+ * SKILL-EXCLUDES echo, or null (skill excludes nothing, timeout, any error).
+ * Fires only on a skill ROOT load, never per tool call.
+ */
+function runExclusions(payload: Record<string, unknown>): Promise<string | null> {
+  // Async on purpose: the host awaits the handler, and a spawnSync here froze its event loop
+  // for the whole Python run (~270 ms median per skill load, blind-measured). Bounded to 3 s.
+  return new Promise((done) => {
+    try {
+      if (!existsSync(EXCLUSIONS_SCRIPT)) return done(null);
+      const child = spawn("python3", [EXCLUSIONS_SCRIPT], {
+        env: { ...process.env, SKILL_CONCIERGE_HARNESS: "omp" },
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      let out = "";
+      const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } done(null); }, 3000);
+      child.stdout.on("data", (b: Buffer) => { out += b.toString("utf-8"); });
+      child.on("error", () => { clearTimeout(timer); done(null); });
+      child.on("close", (code: number | null) => {
+        clearTimeout(timer);
+        try {
+          done(code === 0 && out ? JSON.parse(out)?.hookSpecificOutput?.additionalContext || null : null);
+        } catch {
+          done(null);
+        }
+      });
+      child.stdin.on("error", () => { /* child exited before reading: never crash the host */ });
+      child.stdin.end(JSON.stringify(payload));
+    } catch {
+      done(null);
+    }
+  });
 }
 
 /** Fire one detached self-heal script; never blocks, never throws. */
@@ -241,13 +283,19 @@ export default function (pi: any): void {
         // activation would be silently dropped from the ledger.
         const path = String(input?.path ?? "");
         if (path.startsWith("skill://")) {
-          runLedger({
+          const payload = {
             hook_event_name: "PostToolUse",
             session_id: sessionId,
             tool_name: "read",
             tool_input: { path },
             harness: "omp",
-          });
+          };
+          runLedger(payload);
+          // Echo only on a skill ROOT load — a sub-resource read (skill://x/references/y.md)
+          // is not a load, so no Python spawn for it.
+          const [name, ...tail] = path.slice("skill://".length).split("/");
+          const rest = tail.join("/");
+          return name && (rest === "" || rest === "SKILL.md") ? withExclusions(event, payload) : undefined;
         }
       } else if (toolName.endsWith("skill-search/search_skills") || toolName.endsWith("skill_search_search_skills")) {
         // Retriever usage — ledger classifies by suffix; input is empty. The single-underscore
@@ -263,17 +311,35 @@ export default function (pi: any): void {
       } else if (toolName.endsWith("skill-search/get_skill") || toolName.endsWith("skill_search_get_skill")) {
         // Deep pull (ADR-0031 external-take leg) — record the pulled name. Single-underscore
         // form: OMP's flattened mangled name, same class as the search matcher above.
-        runLedger({
+        const payload = {
           hook_event_name: "PostToolUse",
           session_id: sessionId,
           tool_name: toolName,
           tool_input: { name: input?.name },
           harness: "omp",
-        });
+        };
+        runLedger(payload);
+        return withExclusions(event, payload);
       }
       // Everything else is intentionally skipped — no ledger noise.
     } catch {
       // fail-silent telemetry
     }
+    return undefined;
   });
+}
+
+/**
+ * The tool result with the skill's own exclusion echo appended as one more text
+ * block — the original content is kept whole — or undefined (no change) when the
+ * loaded skill excludes nothing or the result was an error.
+ */
+async function withExclusions(event: any, payload: Record<string, unknown>): Promise<{ content: any[] } | undefined> {
+  if (event?.isError || !Array.isArray(event?.content)) return undefined;   // never replace what we cannot keep
+  const content = event.content;
+  // The loaded text rides along: when it is the SKILL.md itself the echo quotes exactly that copy;
+  // otherwise skill_exclusions.py resolves the skill by name.
+  const echo = await runExclusions({ ...payload, tool_response: content });
+  if (!echo) return undefined;
+  return { content: [...content, { type: "text", text: echo }] };
 }

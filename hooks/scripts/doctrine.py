@@ -100,9 +100,15 @@ def _harness_adapt(doctrine: str) -> str:
       slash: `/skill-search`
 
     Under OMP:
-      tool: `skill-concierge:skill-search/search_skills` (namespaced plugin:server/tool)
-      slash: none — OMP consumes skills via the read tool on `skill://<name>` URLs, so the
-      slash-command hint and the get_skill consumption hint are both rewritten to that form.
+      tool: `mcp__skill_concierge_skill_search_search_skills` — OMP mints every MCP tool name as
+      `mcp__<server>_<tool>` with each run of non-alphanumerics folded to one `_` (OMP
+      src/mcp/tool-bridge.ts mintMCPToolName; observed live 2026-08-26, see the OMP adapter).
+      slash: none — the slash hint is rewritten to the same tool name.
+      The rule-5 `get_skill("<name>")` hint is NOT rewritten: `read("skill://<name>")` resolves only
+      skills OMP itself loaded (src/internal-urls/skill-protocol.ts: `getActiveSkills()`, else
+      "Unknown skill"), and rule 5 governs exactly the hits OMP did not load — the skill-search
+      get_skill tool reads any indexed skill. (Before v0.49.0 both hints pointed at names OMP
+      could not serve.)
 
     Under ZCode (ADR-0042): NO rewrite — ZCode flattens plugin MCP ids exactly like Claude
     Code (`mcp__plugin_skill-concierge_skill-search__search_skills`, verified live
@@ -205,13 +211,10 @@ def _harness_adapt(doctrine: str) -> str:
     if harness == "omp":
         return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
-            "skill-concierge:skill-search/search_skills"
+            "mcp__skill_concierge_skill_search_search_skills"
         ).replace(
             "/skill-concierge:skill-search",
-            "skill-concierge:skill-search/search_skills"
-        ).replace(
-            "get_skill(\"<name>\")",
-            "read(\"skill://<name>\")"
+            "mcp__skill_concierge_skill_search_search_skills"
         ))
     if harness in ("commandcode", "cmd", "command-code"):
         return doctrine.replace(
@@ -304,10 +307,9 @@ def _selftest() -> int:
     if _run_capture(top, True) != off_top:
         bad.append("flag-on top-level injection must be byte-identical to flag-off")
 
-    # OMP harness adaptation: the namespaced plugin:server/tool search name replaces both the
-    # claude tool + slash hint, and the external get_skill consumption hint becomes a
-    # read(skill://...) call (OMP has no slash-command form and consumes skills via the read
-    # tool on skill:// URLs — mirrors ledger.py's skill:// activation branch).
+    # OMP harness adaptation: OMP's minted MCP tool name replaces both the claude tool + slash
+    # hint; the rule-5 get_skill hint stays — read(skill://...) cannot load a skill OMP did not
+    # discover, which is every hit rule 5 governs.
     # The sample is the LIVE doctrine body, not a fixture: a fixture kept passing while the
     # doctrine's own get_skill hint had drifted away from the rewrite target (2026-09-15).
     try:
@@ -325,15 +327,13 @@ def _selftest() -> int:
             os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
         else:
             os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_env
-    if "skill-concierge:skill-search/search_skills" not in _adapted:
-        bad.append("omp adapt: search tool must be the namespaced skill-concierge:skill-search/search_skills")
+    if "mcp__skill_concierge_skill_search_search_skills" not in _adapted:
+        bad.append("omp adapt: search tool must be OMP's minted mcp__skill_concierge_skill_search_search_skills")
     if "/skill-concierge:skill-search" in _adapted or "/skill-search" in _adapted:
         bad.append("omp adapt: no slash-command form under omp")
-    if "get_skill(" in _adapted:
-        bad.append("omp adapt: external consumption must be read(skill://...) not get_skill()")
-    if 'read("skill://<name>")' not in _adapted:
-        bad.append("omp adapt: external consumption hint must read skill://<name>")
-    if _adapted.count("skill-concierge:skill-search/search_skills") != 1:
+    if 'get_skill("<name>")' not in _adapted or "skill://" in _adapted:
+        bad.append("omp adapt: rule 5 must keep get_skill(\"<name>\") — skill:// reads only skills OMP loaded")
+    if _adapted.count("mcp__skill_concierge_skill_search_search_skills") != 1:
         bad.append("omp adapt: the search tool must be named once (duplicate `or:` bullet dropped)")
 
     # Command Code (ADR-0038): rewrites the plugin-namespaced MCP + slash to the

@@ -13,6 +13,21 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.49.0 — harness-complete offer isolation, project isolation, echo on every harness (ADR-0059; deployed 2026-09-25 23:15 local)
+
+**Offer composition resets under every harness** — rows that were never invocable (other harnesses'
+exclusive roots, other projects' skills, and everything under DSH/Cline, whose filter was off) leave the
+installed offer. Offer-level rates (hit@k, take, fallback) start a new epoch here; never pool them with
+v0.48.0. The v0.48.0 doctrine/row-contract watches (W10, W12, W13) continue. Tuning orders carried over:
+`ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=0`.
+
+| # | Watch | Command | Trigger | Action |
+|---|-------|---------|---------|--------|
+| W14 | Under-filled offers: the post-filter now drops more rows, and `RETRIEVE_LIMIT` (`TOP_K*5`) is headroom, not a guarantee | ledger `offer` rows since the deploy time with fewer than `TOP_K` names, by harness (exclude subagent + self-session traffic) | a harness whose short-offer share clearly exceeds its v0.48.0 level on comparable traffic | raise the `RETRIEVE_LIMIT` multiplier in `hooks/scripts/enforcer.py` (a code constant, not an env var) only with evidence; never loosen the filter |
+| W15 | Project isolation false drops: a session's own project skill missing from its offers | user report, or a `Skill` invocation (ledger `auto`) of a project skill that no offer in that session listed | any confirmed case | `ENFORCER_PROJECT_ISOLATION=0` in that harness's env, then reproduce with `_project_row_verdict` from that cwd (worktree paths, `--add-dir`, `/cd` are the known blind spots) |
+| W16 | Exclusion echo in use: re-rules recorded by the audit | `python3 skills/skill-usage-audit/scripts/audit_skill_usage.py --since "<deploy time>"` → `re-rules:` line | zero re-rules over a window with loads of skills that carry exclusions | read replies after an echo — the marker may be ignored rather than unneeded; tighten the echo text before the doctrine |
+| W17 | DSH/Cline offers now filtered | ledger `offer` rows with `harness` dsh / cline since the deploy time | an offered row whose skill the harness cannot load, or a personal skill missing while `~/.agents/skills` is the shelf | check `_agents_shares_personal_shelf()` on that machine first (environment), then the tuples |
+
 ## v0.48.0 — off-list rule, exclusion echo, row provenance, synced default OFF (ADR-0058; deployed 2026-09-25 21:21 local)
 
 Live epoch for the search row contract, curated-trigger targets, and the doctrine trail metrics.

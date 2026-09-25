@@ -1431,6 +1431,16 @@ def check_commandcode():
     # 1. Mod presence
     if not CCMD_MOD.exists():
         findings.append("no skill-concierge mod at ~/.commandcode/mods/skill-concierge.ts")
+    else:
+        # The installer COPIES the mod, so a repo change (e.g. the 0.49.0 exclusion echo) never
+        # reaches Command Code until install.sh reruns — a stale copy is silent otherwise.
+        src = ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts"
+        try:
+            if src.exists() and CCMD_MOD.read_bytes() != src.read_bytes():
+                findings.append("installed mod differs from adapters/commandcode/skill-concierge.mod.ts "
+                                "(a stale copy) — re-run adapters/commandcode/install.sh")
+        except OSError:
+            pass
     # 2. SessionStart hooks referencing skill-concierge
     #    Check by looking for our marker string inside SettingsStart hook commands
     hook_found = False
@@ -1545,6 +1555,29 @@ def check_zcode():
             "fix": None}
 
 
+_DSH_OWN_IDS = ("skill-concierge", "unlazy-stop", "skill-concierge-enforcer")
+
+
+def _dsh_patch_defects(text: str) -> list:
+    """Shapes of a cordis.patch.yml that DSH will not load, found without a YAML parser
+    (doctor is stdlib-only). Both shipped in skill-concierge installs before 0.49.0:
+    a bare `[]` line followed by list items is not YAML (DSH refuses the whole user
+    layer and the profile does not boot), and a bare top-level `- id: <new id>` only
+    overrides an existing entry — adding a plugin takes `- insert: [ {id, ...} ]`."""
+    lines = text.splitlines()
+    defects = []
+    top_empty = any(ln[:1] not in (" ", "\t") and ln.split("#", 1)[0].strip() == "[]" for ln in lines)
+    if top_empty and any(ln.startswith("- ") for ln in lines):   # column 0 only: an indented [] is a value
+        defects.append("a bare `[]` line precedes list items (not YAML — DSH cannot load the profile)")
+    bare = [i for i in _DSH_OWN_IDS if f"- id: {i}" in lines]
+    if bare:
+        defects.append("entries not wrapped in `- insert:` (DSH skips them as unknown ids): "
+                       + ", ".join(bare))
+    if not any(ln.strip() == "- id: skill-concierge-enforcer" for ln in lines):
+        defects.append("the skill-concierge enforcement plugin is not wired (no `skill-concierge-enforcer` insert)")
+    return defects
+
+
 def check_dsh():
     """DSH (DeepSeek Harness) install state — Cordis patch presence, MCP server wiring (ADR-0050).
 
@@ -1573,7 +1606,8 @@ def check_dsh():
             try:
                 text = patch_file.read_text(encoding="utf-8")
                 if "skill-search" in text and "skill-concierge" in text:
-                    pass  # found
+                    findings += [f"{label} cordis.patch.yml: {d} — re-run adapters/dsh/install.sh"
+                                 for d in _dsh_patch_defects(text)]
                 else:
                     findings.append(f"{label} cordis.patch.yml missing skill-search entry")
             except (OSError, UnicodeError):
@@ -2161,7 +2195,8 @@ def _selftest():
             # Fully present: mod + hooks + MCP all wired.
             _g["CCMD_DIR"].mkdir(parents=True)
             (_g["CCMD_DIR"] / "mods").mkdir()
-            _g["CCMD_MOD"].write_text("export default function(cmd) { /* skill-concierge mod */ }")
+            _mod_src = ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts"
+            _g["CCMD_MOD"].write_bytes(_mod_src.read_bytes())   # an installed copy == the repo adapter
             _g["CCMD_SETTINGS"].write_text(json.dumps({
                 "hooks": {
                     "PreToolUse": [{"hooks": []}],
@@ -2174,6 +2209,11 @@ def _selftest():
             }))
             row = check_commandcode()
             assert row["status"] == OK, row
+            # Negative control: a stale copy of the mod (the installer COPIES it) -> WARN naming it.
+            _g["CCMD_MOD"].write_text("export default function(cmd) { /* an older mod */ }")
+            row = check_commandcode()
+            assert row["status"] == WARN and "stale copy" in row["detail"], row
+            _g["CCMD_MOD"].write_bytes(_mod_src.read_bytes())
             # Negative control: an event outside CC's four (PreCompact is what the palate
             # writer copies in from Claude) -> WARN naming it.
             _g["CCMD_SETTINGS"].write_text(json.dumps({
@@ -2209,6 +2249,15 @@ def _selftest():
             assert row["status"] == OK, row
     finally:
         _g.update(_saved_ccmd)
+    # DSH patch-file shapes DSH cannot load (both shipped before 0.49.0) vs the fixed shape.
+    _broken = "# header\n[]\n# skill-concierge skill-search MCP server\n- id: skill-concierge\n  name: x\n"
+    _bd = " | ".join(_dsh_patch_defects(_broken))
+    assert "bare `[]`" in _bd and "not wrapped in `- insert:`" in _bd, _bd
+    _fixed = ("# header\n# skill-concierge skill-search MCP server\n- insert:\n    - id: skill-concierge\n"
+              "      name: x\n- insert:\n    - id: skill-concierge-enforcer\n      name: y\n"
+              "- id: operator-thing\n  config:\n    args:\n      []\n")   # an indented [] is a value
+    assert _dsh_patch_defects(_fixed) == [], _dsh_patch_defects(_fixed)
+    assert any("enforcement plugin" in d for d in _dsh_patch_defects(_fixed.replace("skill-concierge-enforcer", "x")))
     assert any(getattr(fn, "__name__", "") == "check_codex" for fn in CHECKS)
     assert any(getattr(fn, "__name__", "") == "check_commandcode" for fn in CHECKS)
     assert any(getattr(fn, "__name__", "") == "check_omp" for fn in CHECKS)

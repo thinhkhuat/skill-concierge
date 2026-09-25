@@ -45,8 +45,13 @@ enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enfo
 authorized-skip legs — getaway, intent_skip, selfref, and since ADR-0054 the harness-message
 lane — see `hooks/scripts/enforcer.py`) is a **lawful, hook-pre-authorized skip**: it is
 excluded from the false-skip count and tallied separately as `authorized_skip`, reported alongside
-the false-skip figure so "false-SKIPPING" stays honestly defined. Run `--help` for flags;
-`--selftest` pins the false-SKIPPING verdict logic, including the authorized-skip case.
+the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.49.0`
+([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §5), a `USING:`
+retracted by a same-reply re-rule (the doctrine's `USING:`/`SEARCH:` line ending
+`(re-rule: <old>)`, fired after `skill_exclusions.py` echoes a loaded skill's own "not for" lines
+back) is moved out of the uptake counts into a separate `re-rules` tally, so a switched-away-from
+skill no longer inflates uptake. Run `--help` for flags; `--selftest` pins the false-SKIPPING
+verdict logic, including the authorized-skip case.
 
 ## Scope to reduce noise (post-change)
 

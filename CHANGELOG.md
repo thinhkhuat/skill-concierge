@@ -3,6 +3,63 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.49.0] — 2026-09-25
+### Fixed — ADR-0059: harness-complete offer isolation, project isolation, the exclusion echo on every harness
+- **Offers hold only invocable skills, under every harness** (`hooks/scripts/enforcer.py`). A
+  before/after probe from an unrelated directory (six queries × seven harnesses, live index) counted
+  96 offered rows the session could not invoke on 0.48.0 and 0 on 0.49.0:
+  - Claude, Codex and OMP foreign-scope tuples now include the `omp-*`/`zcode-*` scopes (42
+    `omp-managed` and 13 `zcode-plugin` skills had entered those offers as if invocable).
+  - **Project isolation** (`ENFORCER_PROJECT_ISOLATION`, default ON): a skill from another project's
+    `.claude/skills` (or any `<harness>-project` root) no longer enters the offer — unless the session
+    dir or a parent holds a same-named copy (the index keeps one point per name, so a shared kit can be
+    scoped to another project). `<project>/.agents/skills` rows stay for every harness that reads that
+    convention root (all but Claude).
+  - Under **DSH and Cline** the foreign filter was switched off entirely (their plugin registry is
+    `None` by design); it now runs, with `personal` kept whenever `~/.agents/skills` is Claude's
+    personal shelf — both harnesses read that root.
+  - Other-harness annex rows name their own harness (`[omp]`); the hand-typed per-harness label is gone.
+- **OMP doctrine tool names** (`hooks/scripts/doctrine.py`): the search tool is OMP's registered
+  `mcp__skill_concierge_skill_search_search_skills` (the old name was only OMP's display label), and
+  rule 5 keeps `get_skill("<name>")` — `read("skill://…")` resolves only skills OMP itself loaded,
+  never the hits rule 5 governs.
+- **`SKILL_CLAUDE_SETTINGS`** now moves the hook's USER settings layer too, matching the engine.
+- **DSH installer** (`adapters/dsh/install.sh`): it had never produced a loadable patch layer — list
+  items appended after a pristine `[]` line (invalid YAML: DSH refused to boot the profile) and every
+  entry a bare `- id:` (DSH skips unknown ids; adding needs `- insert:`), so the skill-search MCP row and
+  the unlazy stop-hook never loaded on DSH. Now all three entries — MCP server, unlazy stop-hook, and
+  the skill-concierge enforcement plugin (newly wired: doctrine, per-turn enforcer, exclusion echo) —
+  are insert patches. The new file is built beside the old one, parsed with DSH's own js-yaml and
+  DSH's schema (`!!js` allowed, every entry a mapping), and swapped in only when it loads — with a
+  timestamped backup; otherwise the original stays untouched and the installer exits 1. Only a
+  column-0 `[]` is dropped, so an operator's nested `[]` survives. `doctor`'s DSH row flags both
+  broken shapes and a missing enforcement insert.
+- **DSH enforcement plugin**: the pre-step handler reads only typed input (`source.kind: "user"`),
+  skips subagent sessions (DSH stamps their task prompts `kind: "user"` too — the session header's
+  `parentSession` is the signal), takes the session id from the agent's session header (the
+  `DSH_SESSION_ID` env var exists only in tool subprocesses), and injects the doctrine once per
+  session rather than once per process. Child-process pipes in the DSH, OMP and Command Code
+  adapters no longer crash the host when the child exits early (EPIPE).
+### Added
+- **Exclusion echo on OMP, Command Code, Cline and DSH**: each adapter sends
+  `skill_exclusions.py` the payload it builds for the ledger, plus the tool result, and returns the
+  skill's own "not for" lines through its host's post-tool channel (OMP `tool_result` content, Command
+  Code `afterToolCall` `additionalContext`, Cline `contextModification`, DSH `tools/post-execute`
+  `additionalContexts`). The echo now quotes the text the agent actually loaded, falls back to
+  every harness's personal skill root when the index is unreachable, and stays silent on a refused
+  load (get_skill's error reply). The DSH plugin also records skill
+  loads in the ledger. Command Code needs `adapters/commandcode/install.sh` re-run (its mod is a copy);
+  the DSH enforcement plugin is now wired (see Fixed below).
+- **Re-rule marker**: the doctrine's re-rule line ends `(re-rule: <old>)` and the echo names it;
+  `skill-usage-audit` moves the retracted `USING:` into a `re-rules` tally instead of uptake.
+- **`doctor`**: the Command Code row warns when the installed mod differs from the repo adapter
+  (the installer copies it, so a stale copy was silent).
+### Docs
+- ADR-0059; `docs/caveats.md` §24 (OQ5 resolved) and §25 (project isolation); the broken §13 link.
+- `driftcheck.json` now mirrors README's version badge too (it had drifted to 0.43.1 unnoticed);
+  README and the OpenWiki quickstart name all seven harnesses.
+- **Epoch boundary** for offer composition under every harness — see `docs/epoch-watch.md` v0.49.0.
+
 ## [0.48.0] — 2026-09-25
 ### Added — ADR-0058: off-list doctrine rule, exclusion echo, row provenance, account-synced skills (default OFF)
 Evidence: a local user session's SKILL-FIRST trail (transcript path, session id and prompt text

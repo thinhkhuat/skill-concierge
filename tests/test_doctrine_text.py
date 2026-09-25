@@ -71,13 +71,13 @@ def test_doctrine_orders_off_list_read_before_using():
     assert route == sorted(route), "off-list route must run SEARCH -> load -> quote -> USING"
     assert "excludes the task" not in off_list, "the re-rule duty must cover hits too"
     rerule = _section(rule3, "**A loaded body that excludes the task**", "\n\n")
-    for phrase in ("a hit's or not", "excluding line", "tell the user"):
+    for phrase in ("a hit's or not", "`(re-rule: <old>)`", "excluding line", "tell the user"):
         assert phrase in rerule, phrase
     rule5 = _section(body, "5. **", "6. **")
     assert "disabled_in" in rule5 and "switched off" in rule5
     assert "The name matches" in _section(body, "6. **", "Worked example")
-    # The OMP adapter rewrites exactly this literal; a second copy would be rewritten into a call
-    # that only resolves skills OMP loaded itself.
+    # One consumption literal: harness adapters rewrite the search-tool literals, and a second
+    # get_skill copy would drift from them silently.
     assert body.count('get_skill("<name>")') == 1
     assert "RETRACT" not in body
     assert len(body) <= 4217 + 900, f"doctrine body grew to {len(body)} chars"

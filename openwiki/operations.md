@@ -345,9 +345,24 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
 - **Tool state is not source:** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/`, `graphify-out/` are gitignored scratch.
 - **The vendored engine** must not diverge from upstream silently — log any customization in
   [`vendor/skill-search/VENDORED.md`](../vendor/skill-search/VENDORED.md).
+- **Non-Claude adapters are copies, not live links — a repo change needs a reinstall to reach
+  them.** Command Code's mod (`adapters/commandcode/skill-concierge.mod.ts`) is copied into
+  `~/.commandcode/…` by [`adapters/commandcode/install.sh`](../adapters/commandcode/install.sh);
+  a repo-side change — such as `0.49.0`'s exclusion echo reaching Command Code
+  ([ADR-0059](../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) — does not
+  take effect there until that installer reruns (since `0.49.0`, `doctor`'s Command Code row warns
+  when the installed mod differs from the repo copy). Cline's hook shims `require()` the repo's
+  bridge, so it picks up a change immediately; OMP loads the adapter from its plugin cache, so it
+  needs that cache refreshed. **DSH** loads everything through its profile patch layer:
+  [`adapters/dsh/install.sh`](../adapters/dsh/install.sh) writes the skill-search MCP server, the unlazy
+  stop-hook and the enforcement plugin into each profile's `cordis.patch.yml` as `- insert:` patches
+  (a bare `- id:` only overrides an existing entry and is skipped), then checks each file with DSH's own
+  YAML parser; `doctor`'s DSH row flags a patch file DSH cannot load. Re-run the installer after
+  changing it; DSH picks the plugin up at its next start
+  ([ADR-0050](../docs/adr/0050-dsh-hexa-harness-parity.md) §5, ADR-0059 §4).
 
 ## See also
 
-- [`docs/caveats.md`](../docs/caveats.md) — the full 15-item landmine list (canonical).
+- [`docs/caveats.md`](../docs/caveats.md) — the landmine list (canonical).
 - [`docs/adr/README.md`](../docs/adr/README.md) — the decisions behind these choices.
 - [`README.md` → Troubleshooting](../README.md) — the symptom→fix table.

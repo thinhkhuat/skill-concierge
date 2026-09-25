@@ -1,7 +1,7 @@
 # skill-concierge — OpenWiki quickstart
 
-**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, Oh My Pi (OMP), and ZCode that governs how the agent
-picks and uses *skills*. It is a thin **governance layer** over all five harnesses' default skill
+**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), and Cline that governs how the agent
+picks and uses *skills*. It is a thin **governance layer** over all seven harnesses' default skill
 mechanisms: where
 the default injects **every** installed skill's description into the context window on **every**
 turn and hopes the model notices the right one, skill-concierge replaces *hope* with
@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.48.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
+- **Version:** `0.49.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -58,7 +58,7 @@ These have bitten before; the ADRs and [`docs/caveats.md`](../docs/caveats.md) e
 
 | Requirement | Notes |
 |-------------|-------|
-| Claude Code, Codex, Command Code, or Oh My Pi (OMP) | host for the plugin, hooks, and MCP server |
+| Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), or Cline | host for the plugin (or its adapter), hooks, and MCP server |
 | Python 3.10–3.12 | `snake_case`; set `SKILL_PYTHON` to pin an interpreter |
 | Docker / OrbStack | runs the Qdrant vector store **and** the warm embed shim (both Docker sidecars) |
 
@@ -163,8 +163,15 @@ Since `0.25.0` the same annex shape covers the **other harness**
 ([ADR-0034](../docs/adr/0034-cross-harness-offer-isolation.md)): with both harnesses indexed into
 one collection, Codex's plugin skills were competing for Claude's installed offer slots (measured:
 18 of 48 rows over six prompts) while the Skill tool could not invoke them. The installed offer now
-holds only what the running harness can invoke, and the rest appear in a marked
-`[codex]` / `[claude]` block read inline via `get_skill`. `search_skills` still spans the union.
+holds only what the running harness can invoke, and the rest appear read inline via `get_skill`, each
+row marked with the harness whose roots actually hold it (`[omp]`, `[zcode]`, …) rather than a
+hand-typed two-way label. `search_skills` still spans the union. Since `0.49.0`
+([ADR-0059](../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) that isolation is
+harness-complete: every harness's own foreign-scope tuple is filled out (a before/after probe across
+all seven harnesses found 96 non-invocable rows in offers on the prior build, 0 on this one), DSH and
+Cline get a real filter for the first time (they have no skill-plugin registry, so "unknown" used to
+mean "drop nothing" for them), and a project-scoped row from a different project is dropped too
+(`ENFORCER_PROJECT_ISOLATION`, with an exception for a same-named copy shared across projects).
 
 ## Where to go next
 

@@ -182,6 +182,12 @@ def _annex_floor(pool_floor: float, top_installed: float) -> float:
 # therefore over-fetches and the decision is made per row, where the twin test is available.
 # Bonus: it keeps an unindexed keyword filter off the installed query's hot path.
 CROSS_HARNESS = os.environ.get("ENFORCER_CROSS_HARNESS", "1") != "0"
+# Project isolation (v0.49.0): a project-scoped row (`<family>:<skills dir>`) from ANOTHER project
+# is not invocable in this session, yet the exact-match foreign test could never catch it — the
+# scope carries a path. Live case: from an unrelated cwd the Claude offer listed skills that exist
+# only in one other project's .claude/skills. `=0` restores the pre-0.49.0 behaviour (project rows
+# pass unless their exact scope string is in FOREIGN_SCOPES, which it never is).
+PROJECT_ISOLATION = os.environ.get("ENFORCER_PROJECT_ISOLATION", "1") != "0"
 # ADR-0052 per-session enablement gate: in Claude sessions a `plugin`-scoped row is
 # offerable only when its plugin id sits in INVOCABLE_PLUGIN_IDS (the merged
 # user+project+local enabledPlugins view computed below). Discovery indexes the
@@ -294,36 +300,22 @@ _CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"
 _CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"
 
 
-def _foreign_harness_label() -> str:
-    # ADR-0054: DSH and Cline personal roots are foreign to every other harness, so each
-    # label names them too — the annex header says "installed under <label>".
-    if RUNNING_HARNESS == "codex":
-        return "claude/dsh/cline"
-    if RUNNING_HARNESS == "commandcode":
-        return "claude/codex/dsh/cline"
-    if RUNNING_HARNESS == "omp":
-        # OMP's native provider union (claude + claude-plugins + codex + native) reads the
-        # claude/codex/omp scopes, so the cross-harness annex for an OMP session points at the
-        # one harness it does NOT read: Command Code. The label drives the `[Commandcode]`
-        # marker in the annex render.
-        return "commandcode/dsh/cline"
-    if RUNNING_HARNESS == "zcode":
-        # ZCode reads only its own roots (~/.zcode/skills, ~/.agents/skills, its plugin
-        # cache) — every OTHER harness's scopes are foreign here, so the residual pool is
-        # compound (Command Code's label precedent).
-        return "claude/codex/omp/dsh/cline"
-    if RUNNING_HARNESS == "dsh":
-        # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the ~/.agents/skills
-        # convention root — every other harness's scopes are foreign.
-        return "claude/codex/omp/zcode/commandcode/cline"
-    if RUNNING_HARNESS == "cline":
-        # Cline (ADR-0051) reads only its own two skill roots — every other harness's
-        # scopes are foreign (the DSH residual pool, plus DSH itself now in the set).
-        return "claude/codex/omp/zcode/commandcode/dsh"
-    return "codex/dsh/cline"
+_HARNESS_ORDER = ("claude", "codex", "commandcode", "omp", "zcode", "dsh", "cline")
 
 
-FOREIGN_HARNESS = _foreign_harness_label()
+def _scope_harness(scope: str) -> str:
+    """The harness whose skill roots hold a row's indexed copy, from its scope family (the part
+    before any `:`): `codex-plugin` -> codex, `omp-project:<dir>` -> omp, `claude-synced` ->
+    claude; `personal`/`plugin`/`project` default to claude. The same head rule as the engine's
+    `server._origin_head`/`_ORIGIN_HEADS` (pinned by tests/test_foreign_scope_completeness.py) —
+    a stdlib duplicate because this hook must not import the engine. Each cross-harness annex row
+    is marked with ITS OWN harness from this rule; a per-harness label typed by hand drifted from
+    the scope tuples and named harnesses a row did not come from."""
+    head = (scope or "").split(":", 1)[0].split("-", 1)[0]
+    return head if head in _HARNESS_ORDER else "claude"
+
+
+
 
 
 def _resolves_to_claude_personal(root: Path) -> bool:
@@ -340,11 +332,19 @@ def _resolves_to_claude_personal(root: Path) -> bool:
         return False
 
 
+def _agents_shares_personal_shelf() -> bool:
+    """~/.agents/skills is the cross-harness convention root that ZCode, DSH and Cline all read
+    (ZCode: observed live 2026-08-28; DSH: dsh-skill-filesystem `user-agents` root; Cline: its
+    skills-dir list and marketplace install target). On this machine it links to
+    ~/.claude/skills, so every `personal` skill is invocable there too."""
+    return _resolves_to_claude_personal(Path.home() / ".agents" / "skills")
+
+
 def _zcode_shares_personal_shelf() -> bool:
     """ZCode's ~/.agents/skills is the shared shelf (observed live 2026-08-28:
     ~/.agents/skills -> ~/.claude/skills). When it is not, per-row survival moves to the
     filesystem twin check."""
-    return _resolves_to_claude_personal(Path.home() / ".agents" / "skills")
+    return _agents_shares_personal_shelf()
 
 
 def _commandcode_shares_personal_shelf() -> bool:
@@ -358,13 +358,17 @@ def _commandcode_shares_personal_shelf() -> bool:
 def _foreign_scopes() -> tuple:
     """The scopes whose skills the RUNNING harness cannot invoke.
 
-    From Claude: both Codex scopes + commandcode-personal.
-    From Codex: plugin + commandcode-personal.
+    Every tuple below lists every OTHER harness's exclusive roots (ADR-0059 completed them; a
+    test walks every scope discovery can emit and fails on a gap). Per-harness nuance:
+    From Claude: codex-*, commandcode-personal, omp-*, zcode-*, dsh-personal, cline-personal.
+    From Codex: plugin + every non-Claude, non-Codex root + claude-synced (`personal` stays
+    invocable — see below).
     From Command Code (ADR-0057): the other harnesses' exclusive roots (plugin, codex-*,
     omp-*, zcode-*, dsh-personal, cline-personal). Command Code reads ~/.commandcode/skills
     + <cwd>/.commandcode/skills, so `personal` joins the foreign set ONLY when
     ~/.commandcode/skills does NOT resolve to Claude's personal root — the ZCode rule.
-    From OMP: codex-plugin + commandcode-personal. OMP's provider union natively invokes the
+    From OMP: codex-plugin, commandcode-personal, zcode-*, dsh/cline-personal, claude-synced.
+    OMP's provider union natively invokes the
     claude (user+project .claude/skills), claude-plugin (claude-plugins registry roots) and
     codex personal (.codex/skills) scopes, but NOT the Codex plugin cache — the codex provider
     scans only `~/.codex/skills` and `<cwd>/.codex/skills` (OMP source discovery/codex.ts:238-240,
@@ -396,33 +400,41 @@ def _foreign_scopes() -> tuple:
                 "dsh-personal", "cline-personal", "claude-synced")
         return base if _commandcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "codex":
-        return ("plugin", "commandcode-personal", "dsh-personal", "cline-personal", "claude-synced")
+        return ("plugin", "commandcode-personal",
+                "omp-personal", "omp-managed", "omp-plugin",
+                "zcode-personal", "zcode-plugin",
+                "dsh-personal", "cline-personal", "claude-synced")
     if RUNNING_HARNESS == "omp":
-        return ("codex-plugin", "commandcode-personal", "dsh-personal", "cline-personal",
-                "claude-synced")
+        return ("codex-plugin", "commandcode-personal", "zcode-personal", "zcode-plugin",
+                "dsh-personal", "cline-personal", "claude-synced")
     if RUNNING_HARNESS == "zcode":
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "dsh-personal", "cline-personal", "claude-synced")
         return base if _zcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "dsh":
-        # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the shared
-        # ~/.agents/skills convention. Every other harness scope is foreign: Claude's
-        # personal/project/plugin, Codex, Command Code, OMP, ZCode — all are skills the
-        # dsh-harness session cannot invoke.
-        return ("plugin", "personal", "codex-personal", "codex-plugin",
+        # DSH reads its own roots (DSH_HOME/skills, <project>/.dsh/skills) plus the
+        # ~/.agents/skills + <project>/.agents/skills convention roots (dsh-skill-filesystem
+        # `roots()`). Every other harness scope is foreign — `personal` too, unless
+        # ~/.agents/skills IS Claude's personal shelf (then every personal skill is invocable).
+        base = ("plugin", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin", "cline-personal", "claude-synced")
+        return base if _agents_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "cline":
-        # Cline (ADR-0051) reads only its own two roots — ~/.cline/data/settings/skills
-        # and <cwd>/.cline/skills. It reads NO plugin cache and NO other harness's
-        # personal/project dirs, so every other harness scope is foreign (the DSH shape).
-        return ("plugin", "personal", "codex-personal", "codex-plugin",
+        # Cline (ADR-0051) reads ~/.cline/data/settings/skills and <cwd>/.cline/skills, and —
+        # found in the installed binary for v0.49.0 — ~/.agents/skills (its skills-dir list and
+        # marketplace install target). It reads NO plugin cache and no other harness's roots;
+        # `personal` is foreign unless ~/.agents/skills IS Claude's personal shelf.
+        base = ("plugin", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin", "dsh-personal", "claude-synced")
+        return base if _agents_shares_personal_shelf() else base + ("personal",)
     return ("codex-plugin", "codex-personal", "commandcode-personal",
+            "omp-personal", "omp-managed", "omp-plugin",
+            "zcode-personal", "zcode-plugin",
             "dsh-personal", "cline-personal")
 
 FOREIGN_SCOPES = _foreign_scopes()
@@ -445,6 +457,10 @@ FOREIGN_FLOOR = float(os.environ.get("ENFORCER_FOREIGN_FLOOR", "0.40"))
 # (the ADR-0028 hazard).
 _INSTALLED_PLUGINS_JSON = Path(os.environ.get(
     "SKILL_INSTALLED_PLUGINS", Path.home() / ".claude" / "plugins" / "installed_plugins.json"))
+# The USER settings layer, behind the same env seam the engine honours
+# (skills_discovery.CLAUDE_SETTINGS_JSON) so the hook and the server read one file.
+_CLAUDE_SETTINGS_JSON = Path(os.environ.get(
+    "SKILL_CLAUDE_SETTINGS", Path.home() / ".claude" / "settings.json"))
 
 # OMP's claude-plugins provider ALSO loads ~/.omp/plugins/installed_plugins.json, treating its
 # entries as authoritative over Claude's for the same plugin ID (OMP source discovery/helpers.ts:
@@ -603,7 +619,7 @@ def _invocable_plugin_ids():
 
     disabled_by_key = {}
     try:
-        layers = (Path.home() / ".claude" / "settings.json",
+        layers = (_CLAUDE_SETTINGS_JSON,
                   Path.cwd() / ".claude" / "settings.json",
                   Path.cwd() / ".claude" / "settings.local.json")
     except OSError:
@@ -670,10 +686,11 @@ def _invocable_twin(name: str) -> bool:
         # DSH has no plugin registry; a foreign-scoped row survives here only through a
         # filesystem twin — the name exists as a directory under DSH_HOME/skills/
         # (the DSH personal skill root). OSError -> UNKNOWN -> keep (fail-to-non-blocking).
-        if not _DSH_HOME or not _DSH_HOME.exists():
-            return False
         try:
-            return (_DSH_HOME / "skills" / name / "SKILL.md").exists()
+            roots = [Path.home() / ".agents" / "skills"]
+            if _DSH_HOME and _DSH_HOME.exists():
+                roots.insert(0, _DSH_HOME / "skills")
+            return any((r / name / "SKILL.md").exists() for r in roots)
         except (OSError, ValueError):
             return True
     if RUNNING_HARNESS == "cline":
@@ -682,7 +699,8 @@ def _invocable_twin(name: str) -> bool:
         # UNKNOWN -> keep (fail-to-non-blocking).
         try:
             return any((root / name / "SKILL.md").exists() for root in
-                       (_CLINE_PERSONAL_ROOT, _CLINE_PROJECT_ROOT))
+                       (_CLINE_PERSONAL_ROOT, _CLINE_PROJECT_ROOT,
+                        Path.home() / ".agents" / "skills"))
         except (OSError, ValueError):
             return True
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
@@ -1439,6 +1457,60 @@ def _embed(text: str) -> list:
     return _post_json(EMBED_URL, {"text": text}, EMBED_TIMEOUT_S)["vector"]
 
 
+def _project_row_verdict(scope: str, name: str) -> str:
+    """For a project-scoped row (`<family>:<skills dir>`), one of:
+    'other'   — the row belongs to a different project and this session holds no copy of it;
+    'this'    — the row belongs to this session's project (or the test cannot be made);
+    ''        — not a project-scoped row (personal/plugin/harness-personal/catalog).
+
+    Same project means the row's project root (the skills dir's grandparent) is the cwd or an
+    ancestor/descendant of it, compared on resolved paths — nested project layouts are kept,
+    never guessed at: the drop needs positive knowledge that the two projects are unrelated.
+    An 'other' row is still kept when the session dir or a parent holds a same-named copy at the
+    same relative path. Any OSError reads as 'this' (keep). Not visible to this hook: skill dirs
+    a session adds with --add-dir or /cd."""
+    fam, sep, path = (scope or "").partition(":")
+    if not sep or fam == "catalog" or not path:
+        return ""
+    try:
+        # Root and relative path come from the UNRESOLVED scope path (the engine records
+        # `<project>/.claude/skills` as found); resolving first would follow a symlinked skills dir
+        # to its target and misplace the project (drop its own rows, or leak a `../skills` link's
+        # rows into every sibling). Resolve only to compare.
+        skills_dir = Path(path)
+        raw_root = skills_dir.parent.parent
+        root = raw_root.resolve()
+        cwd = Path.cwd().resolve()
+        if root == cwd or root in cwd.parents or cwd in root.parents:
+            return "this"
+        # Shared kit: the index keeps ONE point per skill name and the last project to reindex
+        # owns its scope, so a same-named copy here (session dir or any parent — Claude Code
+        # loads .claude/skills up to the repo root) makes the row invocable in this session.
+        rel, bare = skills_dir.relative_to(raw_root), name.split(":", 1)[-1]
+        if any((d / rel / bare / "SKILL.md").exists() for d in (cwd, *cwd.parents)):
+            return "this"
+        return "other"
+    except (OSError, ValueError, RuntimeError):
+        return "this"
+
+
+def _scope_is_foreign(scope: str) -> bool:
+    """Whether this harness cannot invoke rows of `scope` (before any twin rescue). Exact
+    FOREIGN_SCOPES membership for machine-wide scopes; a same-project harness scope
+    (`codex-project:<cwd>/.codex/skills`) takes the verdict of that harness's personal scope —
+    OMP reads <cwd>/.codex/skills, Claude does not. Claude's own `project:` stays never-foreign."""
+    fam, sep, path = (scope or "").partition(":")
+    if not sep:
+        return scope in FOREIGN_SCOPES
+    if not PROJECT_ISOLATION or fam in ("project", "catalog"):
+        return False
+    if path.rstrip("/").endswith("/.agents/skills"):
+        # The .agents convention root (indexed under zcode-project) is read by ZCode, OMP, Codex,
+        # DSH and Cline; Claude Code reads only .claude/skills. Command Code: unverified -> keep.
+        return RUNNING_HARNESS == "claude"
+    return fam.rsplit("-", 1)[0] + "-personal" in FOREIGN_SCOPES
+
+
 def _retrieve(vector: list) -> list:
     """Top-k INSTALLED skills from Qdrant via raw REST (stdlib only), MAX-pooled: group_by name
     with one best point per skill (group_size=1). Returns [(name, desc, score)].
@@ -1475,8 +1547,14 @@ def _retrieve(vector: list) -> list:
         # INVOCABLE_PLUGIN_IDS is None means the manifest was unreadable, i.e. the twin test
         # cannot be made. Drop ONLY on positive knowledge — an unknown must filter nothing, or
         # an unreadable settings file silently reinstates the very mislabelling this replaced.
-        if (CROSS_HARNESS and INVOCABLE_PLUGIN_IDS is not None
-                and pl.get("scope") in FOREIGN_SCOPES and not _invocable_twin(name)):
+        if (CROSS_HARNESS and PROJECT_ISOLATION
+                and _project_row_verdict(pl.get("scope"), name) == "other"):
+            continue
+        # A None registry means "unknown" (drop nothing) — except under DSH and Cline, which
+        # have NO skill-plugin registry by design: their verdict is the scope + filesystem
+        # twin, so a None there must not switch the whole filter off (it did before v0.49.0).
+        if (CROSS_HARNESS and (INVOCABLE_PLUGIN_IDS is not None or RUNNING_HARNESS in ("dsh", "cline"))
+                and _scope_is_foreign(pl.get("scope")) and not _invocable_twin(name)):
             continue
         if not _plugin_gate_ok(name, pl.get("scope")):   # ADR-0052: plugin disabled in THIS session's merged layers
             continue
@@ -1535,7 +1613,8 @@ def _retrieve_external(vector: list, top_installed: float = 0.0) -> list:
 def _retrieve_foreign(vector: list, top_installed: float = 0.0,
                       installed_bare: frozenset = frozenset()) -> list:
     """ADR-0034 cross-harness annex: the top skills in the OTHER harness's scopes scoring
-    >= FOREIGN_FLOOR, from a SEPARATE query. Returns [(name, desc, score)].
+    >= FOREIGN_FLOOR, from a SEPARATE query. Returns [(name, desc, score, harness)] — the
+    harness whose roots hold that row's copy (`_scope_harness`), rendered per row.
 
     ADR-0054: `installed_bare` is the set of bare names (scope prefix stripped) already in
     the installed offer. A foreign row whose bare name is in it is the same skill re-rooted
@@ -1560,7 +1639,7 @@ def _retrieve_foreign(vector: list, top_installed: float = 0.0,
     floor = _annex_floor(FOREIGN_FLOOR, top_installed)
     res = _post_json(QUERY_GROUPS_URL,
                      {"query": vector, "group_by": "name", "limit": FOREIGN_SLOTS * 3,
-                      "group_size": 1, "with_payload": ["name", "description"],
+                      "group_size": 1, "with_payload": ["name", "description", "scope"],
                       "filter": {"must": [
                           {"key": "scope", "match": {"any": [
                               sc for sc in FOREIGN_SCOPES if sc != "claude-synced"]}}]}},
@@ -1579,7 +1658,7 @@ def _retrieve_foreign(vector: list, top_installed: float = 0.0,
             continue
         if name.split(":", 1)[-1] in installed_bare:   # ADR-0054: re-rooted twin of an offered skill
             continue
-        out.append((name, pl.get("description", ""), score))
+        out.append((name, pl.get("description", ""), score, _scope_harness(pl.get("scope", ""))))
         if len(out) >= FOREIGN_SLOTS:
             break
     return out
@@ -1815,10 +1894,10 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
             "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
     foreign_block = ""
     if foreign:
-        flines = [f"  • {name} [{FOREIGN_HARNESS}] — {_blurb(desc)}"
-                  for (name, desc, _s) in foreign]
+        flines = [f"  • {name} [{h}] — {_blurb(desc)}" for (name, desc, _s, h) in foreign]
+        shown_in = "/".join(h for h in _HARNESS_ORDER if any(r[3] == h for r in foreign))
         foreign_block = (
-            f"\nOther-harness matches (installed under {FOREIGN_HARNESS.capitalize()}, NOT "
+            f"\nOther-harness matches (installed under {shown_in}, NOT "
             "invocable here — consume via get_skill):\n"
             + "\n".join(flines) +
             "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
@@ -2113,7 +2192,7 @@ def main() -> int:
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
                       ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None,
-                      xh=[[n, round(s, 4)] for (n, _d, s) in _foreign] or None,
+                      xh=[[n, round(s, 4)] for (n, _d, s, _h) in _foreign] or None,
                       n_intents=_ni, route=_route_of(shown[0][0]) if shown else None,
                       hint=_chain_hint_data(sid))
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError,
@@ -2569,8 +2648,9 @@ def _selftest() -> int:
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES
-    global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS, FOREIGN_HARNESS
+    global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS
     global _zcode_readable_skill, _zcode_shares_personal_shelf, _commandcode_shares_personal_shelf
+    global _agents_shares_personal_shelf
     _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
     _reqs = []
@@ -2739,8 +2819,8 @@ def _selftest() -> int:
         flt = payload.get("filter", {})
         if flt.get("must"):                                   # the annex query
             return {"result": {"groups": [
-                _grp("1", "otherpl:hi", 0.72), _grp("2", "twinpl:dup", 0.71),
-                _grp("3", "otherpl:low", 0.31)]}}
+                _grp("1", "otherpl:hi", 0.72, "codex-plugin"), _grp("2", "twinpl:dup", 0.71, "codex-plugin"),
+                _grp("3", "otherpl:low", 0.31, "codex-plugin")]}}
         # the installed query: 2 foreign rows (one a twin), then plenty of installed filler
         return {"result": {"groups": [
             _grp("f1", "otherpl:hi", 0.9, "codex-plugin"),
@@ -2749,16 +2829,14 @@ def _selftest() -> int:
 
     _saved_uc = UNDER_CODEX
     _saved_rh = RUNNING_HARNESS
-    _saved_fh = FOREIGN_HARNESS
     try:
-        if FOREIGN_HARNESS not in ("codex/dsh/cline", "claude/dsh/cline", "claude/codex/dsh/cline",
-                                   "commandcode/dsh/cline",
-                                   "claude/codex/omp/dsh/cline",
-                                   "claude/codex/omp/zcode/commandcode/cline",
-                                   "claude/codex/omp/zcode/commandcode/dsh") or not FOREIGN_SCOPES:
-            bad.append(f"cross-harness: harness label / foreign scopes unset: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
-        if RUNNING_HARNESS == "claude" and not all(x.startswith(("codex-", "commandcode-", "dsh-", "cline-")) for x in FOREIGN_SCOPES):
-            bad.append(f"cross-harness: claude harness label disagrees with the foreign scope set: {FOREIGN_HARNESS!r}/{FOREIGN_SCOPES!r}")
+        if not FOREIGN_SCOPES:
+            bad.append(f"cross-harness: foreign scopes unset: {FOREIGN_SCOPES!r}")
+        if RUNNING_HARNESS == "claude" and (
+                not all(x.startswith(("codex-", "commandcode-", "omp-", "zcode-", "dsh-", "cline-"))
+                        for x in FOREIGN_SCOPES)
+                or not {"omp-managed", "zcode-plugin"} <= set(FOREIGN_SCOPES)):
+            bad.append(f"cross-harness: claude foreign scopes must be every other harness's roots: {FOREIGN_SCOPES!r}")
         # ADR-0054: the DSH/Cline personal roots must be foreign to every harness but their own.
         if RUNNING_HARNESS != "dsh" and "dsh-personal" not in FOREIGN_SCOPES:
             bad.append(f"cross-harness: dsh-personal missing from the {RUNNING_HARNESS} foreign scope set")
@@ -2815,7 +2893,6 @@ def _selftest() -> int:
         # (found by the first live Codex revalidation, defect D1).
         UNDER_CODEX = False
         RUNNING_HARNESS = "claude"
-        FOREIGN_HARNESS = "codex"
         FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
         _post_json = _fake_xh_post
 
@@ -2852,12 +2929,16 @@ def _selftest() -> int:
         if cond.get("key") != "scope" or set(cond.get("match", {}).get("any") or []) != \
                 set(FOREIGN_SCOPES):
             bad.append(f"cross-harness: annex query must match the foreign scope SET: {cond!r}")
-        if [n for n, _d, _s in fgn] != ["otherpl:hi"]:
+        if "scope" not in (_freqs[0].get("with_payload") or []):
+            bad.append("cross-harness: annex query must request the scope payload (per-row marker)")
+        if [n for n, _d, _s, _h in fgn] != ["otherpl:hi"]:
             bad.append("cross-harness: annex keeps only above-floor non-twins "
                        f"(0.31 below floor, twinpl:dup invocable here): {fgn!r}")
         rendered = _ranked_mandate([("inst-a", "da", 0.9)], foreign=fgn)
-        if f"[{FOREIGN_HARNESS}]" not in rendered or "get_skill" not in rendered:
-            bad.append("cross-harness: render missing harness marker or get_skill instruction")
+        if "otherpl:hi [codex]" not in rendered or "installed under codex," not in rendered \
+                or "get_skill" not in rendered:
+            bad.append("cross-harness: render must mark each row with its own harness "
+                       f"and carry the get_skill instruction: {rendered!r}")
         if "otherpl:low" in rendered or "twinpl:dup" in rendered:
             bad.append("cross-harness: below-floor or twin row must not render in the annex")
         if "%" in rendered.split("Other-harness")[0].split("inst-a")[1][:12]:
@@ -2867,7 +2948,7 @@ def _selftest() -> int:
         # Pin the OMP env forms and the natural marker + OMPCODE detection, then the
         # foreign-scope world and the union rule (plugin ids invocable here).
         _saved_omp_env = (os.environ.get("SKILL_CONCIERGE_HARNESS"), os.environ.get("OMPCODE"))
-        _saved_rh2, _saved_fh2 = RUNNING_HARNESS, FOREIGN_HARNESS
+        _saved_rh2 = RUNNING_HARNESS
         _saved_fs2, _saved_inv2 = FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
         try:
             # explicit env forms
@@ -2891,11 +2972,9 @@ def _selftest() -> int:
             if _running_harness() != "codex":
                 bad.append("cross-harness: SKILL_CONCIERGE_HARNESS=codex must stay codex")
             RUNNING_HARNESS = "omp"
-            if _foreign_harness_label() != "commandcode/dsh/cline":
-                bad.append("cross-harness: omp foreign label must be commandcode/dsh/cline: "
-                           f"{_foreign_harness_label()!r}")
-            if _foreign_scopes() != ("codex-plugin", "commandcode-personal",
-                                     "dsh-personal", "cline-personal", "claude-synced"):
+            if _foreign_scopes() != ("codex-plugin", "commandcode-personal", "zcode-personal",
+                                     "zcode-plugin", "dsh-personal", "cline-personal",
+                                     "claude-synced"):
                 bad.append("cross-harness: omp foreign scopes wrong: "
                            f"{_foreign_scopes()!r}")
             # twin test is active under omp (plugin ids invocable via the claude/omp union)
@@ -2912,7 +2991,7 @@ def _selftest() -> int:
                 os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_omp_env[0]
             if _saved_omp_env[1] is not None:
                 os.environ["OMPCODE"] = _saved_omp_env[1]
-            RUNNING_HARNESS, FOREIGN_HARNESS = _saved_rh2, _saved_fh2
+            RUNNING_HARNESS = _saved_rh2
             FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_fs2, _saved_inv2
 
         # ZCode direction (ADR-0042): detection (explicit env, ZCODE_PLUGIN_ROOT env with the
@@ -2945,8 +3024,6 @@ def _selftest() -> int:
             os.environ.pop("ZCODE_PLUGIN_ROOT", None)
 
             RUNNING_HARNESS = "zcode"
-            if _foreign_harness_label() != "claude/codex/omp/dsh/cline":
-                bad.append(f"cross-harness: zcode foreign label wrong: {_foreign_harness_label()!r}")
             _zcode_shares_personal_shelf = lambda: True
             _fs = _foreign_scopes()
             if "personal" in _fs or "zcode-personal" in _fs or \
@@ -3006,14 +3083,28 @@ def _selftest() -> int:
             os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
 
             RUNNING_HARNESS = "cline"
-            if _foreign_harness_label() != "claude/codex/omp/zcode/commandcode/dsh":
-                bad.append(f"cross-harness: cline foreign label wrong: {_foreign_harness_label()!r}")
+            _saved_agents_shelf = _agents_shares_personal_shelf
+            _agents_shares_personal_shelf = lambda: False     # divergent ~/.agents/skills
             _fs = _foreign_scopes()
             if "personal" not in _fs or "plugin" not in _fs or \
                     not {"codex-personal", "codex-plugin", "commandcode-personal",
                          "omp-personal", "omp-managed", "omp-plugin",
                          "zcode-personal", "zcode-plugin", "dsh-personal"} <= set(_fs):
                 bad.append(f"cross-harness: cline foreign scopes wrong: {_fs!r}")
+            # Cline and DSH read ~/.agents/skills: when it IS the Claude personal shelf, every
+            # personal skill is invocable there and must stay in the offer.
+            _agents_shares_personal_shelf = lambda: True
+            for _h in ("cline", "dsh"):
+                RUNNING_HARNESS = _h
+                if "personal" in _foreign_scopes():
+                    bad.append(f"cross-harness: {_h} must keep personal when ~/.agents/skills is the shelf")
+            RUNNING_HARNESS = "dsh"
+            _agents_shares_personal_shelf = lambda: False
+            if "personal" not in _foreign_scopes():
+                bad.append("cross-harness: dsh must foreign personal when ~/.agents/skills diverges")
+            RUNNING_HARNESS = "cline"
+            _agents_shares_personal_shelf = _saved_agents_shelf
+            _fs = _foreign_scopes()
             if "cline-personal" in _fs:
                 bad.append("cross-harness: cline must never foreign its own scopes")
             if _invocable_plugin_ids() is not None:
@@ -3045,7 +3136,6 @@ def _selftest() -> int:
         ANNEX_DYNAMIC = _saved_dyn12
         UNDER_CODEX = _saved_uc
         RUNNING_HARNESS = _saved_rh
-        FOREIGN_HARNESS = _saved_fh
 
     # (13) ADR-0041 multi-intent shaping + route projection. Pins: two lexically
     # disjoint, score-comparable candidate groups split into 2 intents with

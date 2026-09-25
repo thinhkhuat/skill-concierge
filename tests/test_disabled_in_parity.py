@@ -5,6 +5,7 @@ pins the two copies to each other on the same fixtures."""
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -65,6 +66,7 @@ def test_server_marks_off_exactly_what_the_enforcer_drops(case, mods, tmp_path, 
     monkeypatch.setattr(sd, "INSTALLED_PLUGINS_JSON", reg)
     monkeypatch.setattr(sd, "CLAUDE_SETTINGS_JSON", home / ".claude" / "settings.json")
     monkeypatch.setattr(enf, "_INSTALLED_PLUGINS_JSON", reg)
+    monkeypatch.setattr(enf, "_CLAUDE_SETTINGS_JSON", home / ".claude" / "settings.json")
     monkeypatch.setattr(enf, "RUNNING_HARNESS", "claude")
 
     marked_off = server._claude_disabled_plugin_ids()
@@ -74,3 +76,18 @@ def test_server_marks_off_exactly_what_the_enforcer_drops(case, mods, tmp_path, 
         installed_here = isinstance(installed, dict) and any(k.startswith(f"{pid}@") for k in installed)
         # the server may mark off only what the enforcer drops, and must mark every installed one it drops
         assert (pid in marked_off) == (enforcer_drops and installed_here), (case, pid, marked_off, invocable)
+
+
+def test_both_sides_read_the_user_settings_file_from_one_env_seam(tmp_path):
+    """SKILL_CLAUDE_SETTINGS moves the USER settings layer for the engine; the hook must follow it,
+    or the two copies of the rule read different files and `disabled_in` drifts from the offer."""
+    alt = tmp_path / "alt-settings.json"
+    code = ("import importlib.util, sys; sys.path.insert(0, sys.argv[1] + '/vendor/skill-search');"
+            "from skill_search import skills_discovery as sd;"
+            "s = importlib.util.spec_from_file_location('e', sys.argv[1] + '/hooks/scripts/enforcer.py');"
+            "e = importlib.util.module_from_spec(s); s.loader.exec_module(e);"
+            "print(sd.CLAUDE_SETTINGS_JSON == e._CLAUDE_SETTINGS_JSON == __import__('pathlib').Path(sys.argv[2]))")
+    env = dict(os.environ, SKILL_CLAUDE_SETTINGS=str(alt), SKILL_CONCIERGE_HARNESS="claude")
+    out = subprocess.run([sys.executable, "-c", code, str(ROOT), str(alt)], env=env,
+                         capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip().endswith("True"), out.stdout + out.stderr

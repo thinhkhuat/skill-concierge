@@ -14,9 +14,12 @@
  *    latest user prompt and inject the ranked mandate + top-k preview.
  * 2. Self-heal: fires the detached auto_reindex/auto_overrides/auto_flywheel/
  *    auto_promote scripts at session start (throttled internally).
- * 3. Telemetry: ledger capture is Phase 2 — the Cordis tool-call event
- *    surface for DSH is not yet pinned here (see the OMP adapter for the
- *    reference observation pattern).
+ * 3. `tools/post-execute` (ADR-0059): on a skill load — DSH's `skill` tool
+ *    (`{name}`) or the skill-search get_skill tool — records the load in the
+ *    shared ledger and runs skill_exclusions.py; the skill's own "not for" lines
+ *    return as an extra `additionalContexts` message, the shape DSH's own
+ *    Claude-hooks bridge uses for PostToolUse context
+ *    (@deepseek-ai/dsh-hooks-claude-code, tools/post-execute handler).
  *
  * Injection contract (copied from dsh-tool-skill's pre-step handler, which
  * is the verified native shape): the handler calls `next()`, then returns
@@ -35,6 +38,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 
 /**
  * Resolve the plugin root directory.
@@ -63,6 +67,7 @@ const PLUGIN_ROOT = resolvePluginRoot();
 const ENFORCER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/enforcer.py");
 const DOCTRINE_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/doctrine.py");
 const LEDGER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/ledger.py");
+const EXCLUSIONS_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/skill_exclusions.py");
 const AUTO_SCRIPTS = ["auto_reindex.py", "auto_overrides.py", "auto_flywheel.py", "auto_promote.py"].map(
   (name) => join(PLUGIN_ROOT, "hooks/scripts", name),
 );
@@ -76,6 +81,10 @@ function latestUserPrompt(messages: any[]): string {
     for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg?.role !== "user") continue;
+      // A prompt is a `source.kind: "user"` message; context other plugins (and this one) inject
+      // is `kind: "plugin"` and is never read as one. Subagent task prompts are `kind: "user"`
+      // too — the pre-step handler skips subagent sessions before it gets here.
+      if (msg?.source && msg.source.kind !== "user") continue;
       const content = msg.content;
       if (typeof content === "string" && content.trim()) return content.trim();
       if (Array.isArray(content)) {
@@ -93,11 +102,20 @@ function latestUserPrompt(messages: any[]): string {
 }
 
 /** Best-effort session id (DSH_SESSION_ID in the agent env, else an empty string). */
-function sessionIdOf(): string {
+/**
+ * The session an event belongs to, from the `agent` DSH passes to pre-step and
+ * post-execute handlers (`agent.session.header`; DSH's own dsh-hooks-claude-code
+ * bridge reads the same field). DSH sets DSH_SESSION_ID only in processes it spawns
+ * for tools, never in the host, so it is a last resort. `sub` = a subagent session
+ * (`header.parentSession` set): DSH stamps a subagent's task prompt `kind: "user"`,
+ * so the source filter alone cannot tell it from typed input.
+ */
+function sessionOf(agent: any): { id: string; sub: boolean } {
   try {
-    return process.env.DSH_SESSION_ID || "";
+    const header = agent?.session?.header;
+    return { id: String(header?.id ?? process.env.DSH_SESSION_ID ?? ""), sub: Boolean(header?.parentSession) };
   } catch {
-    return "";
+    return { id: process.env.DSH_SESSION_ID || "", sub: false };
   }
 }
 
@@ -110,6 +128,7 @@ function runLedger(payload: Record<string, unknown>): void {
       stdio: ["pipe", "ignore", "ignore"],
       detached: true,
     });
+    child.stdin.on("error", () => { /* child gone: telemetry only */ });
     child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
     child.unref();
@@ -163,6 +182,50 @@ function runDoctrine(sessionId: string): string | null {
   return null;
 }
 
+/** skill_exclusions.py on a ledger-shaped payload -> the SKILL-EXCLUDES echo, or null. */
+function runExclusions(payload: Record<string, unknown>): Promise<string | null> {
+  // Async on purpose: the host awaits the handler, and a spawnSync here froze its event loop
+  // for the whole Python run (~270 ms median per skill load, blind-measured). Bounded to 3 s.
+  return new Promise((done) => {
+    try {
+      if (!existsSync(EXCLUSIONS_SCRIPT)) return done(null);
+      const child = spawn("python3", [EXCLUSIONS_SCRIPT], {
+        env: { ...process.env, SKILL_CONCIERGE_HARNESS: "dsh" },
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      let out = "";
+      const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } done(null); }, 3000);
+      child.stdout.on("data", (b: Buffer) => { out += b.toString("utf-8"); });
+      child.on("error", () => { clearTimeout(timer); done(null); });
+      child.on("close", (code: number | null) => {
+        clearTimeout(timer);
+        try {
+          done(code === 0 && out ? JSON.parse(out)?.hookSpecificOutput?.additionalContext || null : null);
+        } catch {
+          done(null);
+        }
+      });
+      child.stdin.on("error", () => { /* child exited before reading: never crash the host */ });
+      child.stdin.end(JSON.stringify(payload));
+    } catch {
+      done(null);
+    }
+  });
+}
+
+/**
+ * The ledger-shaped payload for a DSH skill load, or null for any other tool.
+ * DSH's `skill` tool (dsh-tool-skill: parameters `{name}`) maps onto the
+ * Skill-tool lane; the get_skill MCP tool keeps its own name.
+ */
+function skillLoadPayload(exec: any): Record<string, unknown> | null {
+  const name = String(exec?.name ?? "");
+  const args = exec?.arguments && typeof exec.arguments === "object" ? exec.arguments : {};
+  if (name === "skill") return { tool_name: "Skill", tool_input: { skill: args.name } };
+  if (/skill[-_]search.*get_skill$/.test(name)) return { tool_name: name, tool_input: args };
+  return null;
+}
+
 /** Fire one detached self-heal script; never blocks, never throws. */
 function fireDetached(script: string): void {
   try {
@@ -179,8 +242,14 @@ function fireDetached(script: string): void {
 }
 
 /** Build one DSH user-message injection (as the stock tool-skill does). */
+/**
+ * A DSH user message. DSH's `Message.id` is required ("stable identity preserved across every
+ * representation boundary", dsh-llm message types) — its own Claude-hooks bridge builds context
+ * with `createUserMessage`, which assigns one; the `plugin` source kind is that bridge's shape.
+ */
 function makeInjection(text: string): any {
   return {
+    id: randomUUID(),
     role: "user",
     content: [
       {
@@ -188,27 +257,32 @@ function makeInjection(text: string): any {
         text,
       },
     ],
-    source: { kind: "skill-concierge-injection" },
+    source: { kind: "plugin", plugin: "skill-concierge" },
   };
 }
 
 export default function (ctx: any): void {
-  let doctrineInjected = false;
+  // Doctrine goes once per SESSION — desktop/web hosts run many sessions in one process.
+  const doctrineSessions = new Set<string>();
 
   ctx.on("agent/pre-step", async (event: any, next: () => Promise<any>) => {
     const decision = await next();
-    if (decision?.kind === "reject") return decision;
+    if (decision?.kind !== "enter") return decision;   // only `enter` carries messages to extend
 
     const extra: any[] = [];
-    const sid = sessionIdOf();
+    const { id: sid, sub } = sessionOf(event?.agent);
+    // A subagent session gets no doctrine, no mandate and no turn row — Claude Code parity:
+    // subagents fire no UserPromptSubmit and ADR-0020 keeps the doctrine out of them.
+    if (sub) return decision;
+    let doctrineDelivered = false;
 
     try {
       // ── (a) Doctrine: inject once per session, plus the detached self-heal ──
-      if (!doctrineInjected) {
-        doctrineInjected = true;
+      if (!doctrineSessions.has(sid)) {
         const doctrine = runDoctrine(sid);
         if (doctrine && doctrine.trim()) {
           extra.push(makeInjection(doctrine.trim()));
+          doctrineDelivered = true;
         }
         for (const script of AUTO_SCRIPTS) {
           fireDetached(script);
@@ -237,15 +311,35 @@ export default function (ctx: any): void {
     }
 
     if (extra.length === 0) return decision;
+    if (doctrineDelivered) doctrineSessions.add(sid);   // marked only once actually handed over
     return {
-      kind: "enter",
+      ...decision,
       messages: [...(decision?.messages ?? []), ...extra],
     };
   });
 
-  // ── 2. Tool telemetry (Phase 2) ──
-  // The DSH Cordis tool-call observation surface (the equivalent of OMP's
-  // `tool_result`) is not yet pinned here. Reference pattern:
-  // the OMP adapter's tool_result observer (adapters/omp/skill-concierge.ext.ts)
-  // adapted to DSH's ctx.tools / agent event names once those are verified live.
+  // ── 2. Skill loads: ledger row + exclusion echo (PostToolUse parity) ──
+  // `tools/post-execute` is DSH's post-tool event (verified in the installed
+  // @deepseek-ai/dsh-hooks-claude-code bridge: handler (exec, result, next),
+  // exec.name / exec.arguments, returns {...downstream, additionalContexts}).
+  ctx.on("tools/post-execute", async (exec: any, result: any, next: () => Promise<any>) => {
+    const downstream = await next();
+    try {
+      const load = skillLoadPayload(exec);
+      if (!load) return downstream;
+      const { id: sid, sub } = sessionOf(exec?.agent);
+      const payload = { hook_event_name: "PostToolUse", session_id: sid, harness: "dsh",
+                        ...(sub ? { agent_id: sid } : {}), ...load };   // ledger stamps subagent rows `sub`
+      runLedger(payload);
+      if (result?.isError || downstream?.kind === "block") return downstream;
+      const echo = await runExclusions({ ...payload, tool_response: result?.content });
+      if (!echo) return downstream;
+      return {
+        ...downstream,
+        additionalContexts: [makeInjection(echo), ...(downstream?.additionalContexts ?? [])],
+      };
+    } catch {
+      return downstream; // fail-open
+    }
+  });
 }

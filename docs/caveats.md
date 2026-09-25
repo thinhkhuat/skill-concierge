@@ -238,7 +238,7 @@ venv is stamped to that version in `~/.claude/skill-concierge/venv/.engine-plugi
 venv `.engine-plugin-version` stamp matches. A repo edit only reaches the cache after a push +
 `/plugin marketplace update` (+ reload/restart). Note the DISCOVERY scope is the opposite nuance
 (skills are indexed from `cache/**/skills/`, deliberately **not** `marketplaces/**` — see
-[retrieval-engine.md](retrieval-engine.md) / §5); §13 is about which PLUGIN CODE runs, §5 is about
+[retrieval-engine.md](../openwiki/architecture/retrieval-engine.md) / §5); §13 is about which PLUGIN CODE runs, §5 is about
 which SKILL files get indexed.
 
 ## §14 — A background reindex must receive the engine flags, or it silently reverts them (v0.16.1)
@@ -609,13 +609,60 @@ integration row at ≥`0.48.0`. Flipping it on is a separate, reviewed step, not
 should do on its own initiative. **To turn it back off after a flip-on**, set the flag to `0`, then
 remove the points with a Qdrant filter delete on `scope=claude-synced` and drop the `claude-synced` key from `~/.claude/skill-concierge/next-skills.json` — a plain reindex with the flag at `0` only hides them from `search_skills` (the prune step skips scopes the session cannot see), while a stale harness enforcer querying Qdrant directly would still offer them.
 
-**Second, unrelated caveat in the same release:** `disabled_in` on a search row is computed by
-reading Claude Code's own merged `enabledPlugins` settings layers from the **MCP server's own
-cwd** — because the server cannot tell which harness launched it (Claude Code, OMP, and ZCode all
-spawn the same shared server from one `.mcp.json`). So a Codex/OMP/ZCode session still sees
+**Second, unrelated caveat in the same release — RESOLVED by
+[ADR-0059](adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §6, kept as is:**
+`disabled_in` on a search row is computed by reading Claude Code's own merged `enabledPlugins`
+settings layers from the **MCP server's own cwd**. ADR-0058's framing — "the server cannot tell
+which harness launched it" — is corrected to the precise claim: the shared `.mcp.json` carries no
+harness key. Claude Code *does* pass `CLAUDECODE=1` into the server's environment (observed on
+five live servers), but that cannot distinguish Claude from a harness started inside a Claude
+shell; OMP's MCP spawn passes no OMP marker (its `OMPCODE` is set only for the bash tool's shell);
+DSH's row sets `SKILL_CONCIERGE_HARNESS=dsh` explicitly. So a Codex/OMP/ZCode session still sees
 `disabled_in: ["claude"]` on a plugin Claude has switched off, even though that fact is about
 Claude's settings, not the querying harness's own. This is not wrong — the label always says
-`claude`, never implying the querying harness disabled it — but it means `disabled_in` is a
-Claude-settings lens on every row, regardless of who asked. Whether that is the wanted scope, or
-whether it should be omitted outside Claude-launched servers, is an accepted open question — not
-resolved here.
+`claude`, never implying the querying harness disabled it — and none of the above is needed for a
+row that names its own harness: a per-harness verdict would only duplicate the enforcer's own gate
+for no new truth. `disabled_in` stays a Claude-settings lens on every row, regardless of who asked
+— this is the accepted, final answer, not an open question.
+
+## §25 — A project skill from another project never reaches the offer — and the hook cannot see `--add-dir`
+
+**Symptom (pre-`0.49.0`):** from an unrelated cwd, a search offer listed skills that exist only in
+one *other* project's `.claude/skills` — a project-scoped row's exact scope string
+(`project:<dir>/.claude/skills`) was simply never a member of `FOREIGN_SCOPES`, so the foreign-scope
+post-filter (§the cross-harness rule) let it through unconditionally.
+
+**Cause:** `_foreign_scopes()` compares scope strings for an exact match against a fixed tuple —
+fine for machine-wide scopes (`codex-plugin`, `omp-managed`, …), useless for a project scope that
+carries a *path*. Project isolation (`ENFORCER_PROJECT_ISOLATION`, default ON,
+[ADR-0059](adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §1) closes this with a
+second, path-aware test, `_project_row_verdict()`: a project-scoped row (`<family>:<skills dir>`)
+is dropped when its project root (the recorded skills dir's grandparent, resolved only for the
+comparison — never resolved first, so a symlinked `.claude/skills` still belongs to its project) is neither this session's
+cwd nor an ancestor/descendant of it — nested layouts are kept, never guessed at, so the drop needs
+positive knowledge the two projects are unrelated.
+
+**The shared-kit twin rule (load-bearing):** the index keeps ONE point per skill name, and the last
+project to reindex owns its scope — so a skill installed in two projects (live case: `graft`) can
+get scoped to whichever project reindexed last, and a naive drop would hide it from the *other*
+project's own session. The "other" verdict is therefore rescued when a same-named copy exists at
+the same relative path in the session dir or any parent it walks up to: `(d / rel / bare /
+"SKILL.md").exists()` for `d` in `(cwd, *cwd.parents)`. A same-project harness row takes the
+verdict of *that harness's own* personal scope (OMP reads `<cwd>/.codex/skills`, Claude does not).
+
+**The `.agents/skills` exception:** the `<project>/.agents/skills` convention root is indexed under
+`zcode-project` but is actually read by ZCode, OMP, Codex, DSH and Cline — so it is foreign only
+when the running harness is Claude Code, never for the harnesses that actually load it. Claude's own
+`project:<cwd>` scope stays never-foreign, as before.
+
+**Known gaps (recorded, not fixed):** `project:<cwd>` is still never-foreign under harnesses that
+do not read `.claude/skills` at all — DSH, Cline, Codex. Skill dirs a Claude session adds with
+`--add-dir` or `/cd` are invisible to the hook (it only ever resolves `Path.cwd()`), so their
+project rows can be dropped as "other" even though the session can in fact see them. Whether
+Command Code reads `<project>/.agents/skills` is unverified — the rule above keeps those rows
+rather than guessing.
+
+**Do:** leave `ENFORCER_PROJECT_ISOLATION=1` (the ship default). `=0` restores the pre-`0.49.0`
+behavior byte-identically — a project row passes unless its exact scope string happens to be in
+`FOREIGN_SCOPES`, which it never is. If a session using `--add-dir`/`/cd` is missing a project
+skill it should see, that is the recorded gap above, not a misconfiguration to chase.

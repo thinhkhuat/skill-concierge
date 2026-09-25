@@ -7,6 +7,11 @@
  * 2. Prompt telemetry: logs turn boundaries and manual `/slash` invocations to the ledger.
  * 3. Tool telemetry: observes `skill_loaded` and `tool_completed` to record skill
  *    and retriever usage in the shared invocation ledger.
+ * 4. `afterToolCall`: on a skill load (`activate_skill`, or the skill-search
+ *    get_skill tool) runs skill_exclusions.py and returns the skill's own
+ *    "not for" lines as `additionalContext`, which Command Code appends as a
+ *    separate text block to the tool result the model reads (ADR-0059; mod-builder
+ *    reference/hooks-and-events.md, afterToolCall contract).
  *
  * Fail-open design: all handlers catch exceptions and degrade to no-op.
  */
@@ -38,6 +43,7 @@ function resolvePluginRoot(): string {
 const PLUGIN_ROOT = resolvePluginRoot();
 const ENFORCER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/enforcer.py");
 const LEDGER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/ledger.py");
+const EXCLUSIONS_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/skill_exclusions.py");
 
 function sessionIdOf(cmd: any, ctx?: any): string {
   try {
@@ -59,6 +65,7 @@ function runLedger(payload: Record<string, unknown>): void {
       stdio: ["pipe", "ignore", "ignore"],
       detached: true,
     });
+    child.stdin.on("error", () => { /* child gone: telemetry only */ });
     child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
     child.unref();
@@ -75,6 +82,32 @@ function runEnforcer(promptText: string, sessionId: string): string | null {
       input: payload,
       env: { ...process.env, SKILL_CONCIERGE_HARNESS: "commandcode" },
       timeout: 2500, // 2.5s hard timeout on user input path
+      encoding: "utf-8",
+    });
+    if (res.status === 0 && res.stdout) {
+      const parsed = JSON.parse(res.stdout);
+      return parsed?.hookSpecificOutput?.additionalContext || null;
+    }
+  } catch {
+    // fail-open
+  }
+  return null;
+}
+
+/** A skill load: Command Code's own skill tool, or the skill-search get_skill tool. */
+function isSkillLoad(toolName: string): boolean {
+  return toolName === "activate_skill" || /skill[-_]search.*get_skill$/.test(toolName);
+}
+
+/** skill_exclusions.py on a ledger-shaped payload -> the SKILL-EXCLUDES echo, or null. */
+function runExclusions(toolName: string, input: unknown, result: unknown): string | null {
+  try {
+    if (!existsSync(EXCLUSIONS_SCRIPT)) return null;
+    const res = spawnSync("python3", [EXCLUSIONS_SCRIPT], {
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: toolName,
+                              tool_input: input ?? {}, tool_response: result }),
+      env: { ...process.env, SKILL_CONCIERGE_HARNESS: "commandcode" },
+      timeout: 3000,
       encoding: "utf-8",
     });
     if (res.status === 0 && res.stdout) {
@@ -132,6 +165,18 @@ export default function (cmd: any): void {
         // fail-open
       }
       return { action: "continue" };
+    },
+
+    // Skill-exclusion echo (PostToolUse parity). Fires only on a skill load;
+    // every other tool call returns undefined (no opinion) without spawning.
+    afterToolCall: ({ toolName, input, result, isError }: { toolName: string; input: unknown; result?: unknown; isError?: boolean }) => {
+      try {
+        if (isError || !isSkillLoad(String(toolName || ""))) return undefined;
+        const echo = runExclusions(String(toolName), input, result);
+        return echo ? { additionalContext: echo } : undefined;
+      } catch {
+        return undefined; // fail-open
+      }
     },
   });
 

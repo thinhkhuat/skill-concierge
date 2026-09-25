@@ -1,11 +1,11 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.43.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.49.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
 
-A **skill-governance layer** over Claude Code, Codex, Command Code, Oh My Pi (OMP), and ZCode default skill mechanisms. Where the
+A **skill-governance layer** over the default skill mechanisms of Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), and Cline. Where the
 default dumps every skill description into context every turn and hopes the model picks
 one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + measure**.
 
@@ -427,6 +427,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.49.0` — **published, ADR-0059 harness-complete offer isolation + project isolation + the exclusion echo everywhere: the ADR-0034 foreign-scope tuples were themselves incomplete on every harness (Claude, Codex and OMP offered `omp-managed`/`zcode-plugin` rows — a before/after probe over six queries and all seven harnesses counted 96 offered rows the session could not invoke on the prior build, 0 on this one) and completely OFF under DSH and Cline, whose `None` skill-plugin registry used to switch the whole foreign filter off — both now read the shared `~/.agents/skills` shelf like ZCode does. New: project isolation (`ENFORCER_PROJECT_ISOLATION`, default ON) drops a project-scoped row whose project root is neither this session's cwd nor an ancestor/descendant of it, with a same-named-copy exception for a shared kit. Each cross-harness annex row now names its own harness (`[omp]`, …) instead of a hand-typed `[codex]`/`[claude]` label — the drift-prone constant is deleted. The exclusion echo (`skill_exclusions.py`) reaches OMP, Command Code, Cline and DSH through their own adapters (each forwards the same load payload it builds for `ledger.py`), and now reads the loaded text from the tool's own response first so it quotes the copy the agent actually read. OMP's doctrine rewrite is fixed to call OMP's actually-minted MCP tool name (`mcp__skill_concierge_skill_search_search_skills`) instead of the display label. `skill-usage-audit` moves a retracted `USING:` (the doctrine's `(re-rule: <old>)` marker) out of uptake into a separate `re-rules` tally. The DSH installer is fixed: it had never produced a patch layer DSH could load (a bare `[]` before list items broke the YAML so the profile would not boot, and bare `- id:` entries are skipped as unknown ids), so the skill-search MCP row and unlazy stop-hook never loaded on DSH; all entries are now `- insert:` patches checked with DSH's own YAML parser, the skill-concierge enforcement plugin is wired too, and `doctor` flags both broken shapes. EPOCH v0.49.0.**
 
 `0.48.0` — **published, ADR-0058 off-list doctrine rule + exclusion echo + row provenance + account-synced skills (default OFF): a skill picked outside the search hits now routes through line 1 `SEARCH:` → load → quote the covering line → `USING:`, and a loaded body's own "not for" lines are echoed back deterministically after load (`skill_exclusions.py`, PostToolUse, Claude Code + ZCode) so an excluding body forces an open re-rule instead of a silent switch (injected doctrine body 4,217 → 5,011 chars); `search_skills`/`consult_candidates` rows drop `command` and gain `origin` (8 families incl. `claude-synced`) + `disabled_in` + one response note (`SKILL_ROW_ORIGIN=0` reverts); Claude account-synced skills (`anthropic-skills:<name>`, scope `claude-synced`) are indexed, gated on scope rather than the spoofable name, excluded from every other harness's offer and foreign annex — ships **default OFF** until every harness cache is ≥0.48.0; an operator-curated trigger layer (`triggers-curated.json`) takes the first trigger slots; `scripts/engine_env.py` unifies the engine-env forwarding class across all five reindex paths. EPOCH v0.48.0.**
 

@@ -243,3 +243,71 @@ def test_a_blank_line_closes_a_bold_label_list(mod, tmp_path):
     assert mod.exclusions((tmp_path / "skills" / "s" / "SKILL.md").read_text()) == ["trivial edits."]
     _install(tmp_path, "t", "---\nname: t\ndescription: d\n---\n**NOT for:**\n- a\n\n- step\n")
     assert mod.exclusions((tmp_path / "skills" / "t" / "SKILL.md").read_text()) == ["a"]
+
+
+# ── v0.49.0: the adapters (OMP / Command Code / Cline / DSH) forward the payload they build for
+# ledger.py, so every harness's load shape must echo — and only a skill ROOT counts as a load.
+@pytest.mark.parametrize("payload", [
+    {"tool_name": "activate_skill", "tool_input": {"name": "compound-to-skill"}},       # Command Code
+    {"tool_name": "Skill", "tool_input": {"skill": "compound-to-skill", "args": ""}},  # Cline / DSH, normalized
+    {"tool_name": "read", "tool_input": {"path": "skill://compound-to-skill"}},         # OMP
+    {"tool_name": "read", "tool_input": {"path": "skill://compound-to-skill/SKILL.md"}},
+    {"tool_name": "mcp__skill_concierge_skill_search_get_skill",                        # OMP-minted MCP name
+     "tool_input": {"name": "compound-to-skill"}},
+    {"tool_name": "skill-search__get_skill", "tool_input": {"name": "compound-to-skill"}},  # Cline flattened
+    {"tool_name": "mcp__skill-search__get_skill", "tool_input": {"name": "compound-to-skill"}},  # CC / DSH
+])
+def test_every_harness_load_shape_echoes(mod, tmp_path, payload):
+    _install(tmp_path, "compound-to-skill", COMPOUND_BODY)
+    out = _run(mod, payload)
+    assert out and "Editing or fixing an existing skill" in out, payload
+
+
+@pytest.mark.parametrize("path", ["skill://compound-to-skill/references/x.md", "/etc/hosts",
+                                  "skill://", "compound-to-skill"])
+def test_a_read_that_is_not_a_skill_root_is_silent(mod, tmp_path, path):
+    _install(tmp_path, "compound-to-skill", COMPOUND_BODY)
+    assert _run(mod, {"tool_name": "read", "tool_input": {"path": path}}) is None
+
+
+def test_the_echo_names_the_re_rule_marker_with_the_loaded_skill(mod, tmp_path):
+    _install(tmp_path, "compound-to-skill", COMPOUND_BODY)
+    ctx = json.loads(_run(mod, {"tool_name": "Skill", "tool_input": {"skill": "compound-to-skill"}})
+                     )["hookSpecificOutput"]["additionalContext"]
+    assert "(re-rule: compound-to-skill)" in ctx
+
+
+def test_fallback_roots_cover_every_harness_personal_root():
+    import skill_exclusions as m
+    roots = {str(r) for r in m.FALLBACK_ROOTS}
+    for rel in (".codex/skills", ".commandcode/skills", ".omp/agent/skills", ".zcode/skills",
+                ".cline/data/settings/skills", ".ohdsh/skills", ".dsh/skills"):
+        assert str(Path.home() / rel) in roots, rel
+
+
+def test_the_loaded_text_wins_over_a_same_named_copy_elsewhere(mod, tmp_path):
+    """The echo must quote what the agent read: a harness can load a different same-named copy
+    than the index path or the fallback roots would find."""
+    _install(tmp_path, "twin", "---\nname: twin\ndescription: Does x. Not for the copy on disk.\n---\n")
+    loaded = "---\nname: twin\ndescription: Does y. Not for the copy that was loaded.\n---\nbody\n"
+    for resp in (loaded, [{"type": "text", "text": loaded}], {"content": [{"type": "text", "text": loaded}]}):
+        out = _run(mod, {"tool_name": "mcp__skill-search__get_skill", "tool_input": {"name": "twin"},
+                         "tool_response": resp})
+        assert "the copy that was loaded" in out and "the copy on disk" not in out, resp
+
+
+def test_a_response_that_is_not_a_skill_body_falls_back_to_resolution(mod, tmp_path):
+    _install(tmp_path, "compound-to-skill", COMPOUND_BODY)
+    out = _run(mod, {"tool_name": "Skill", "tool_input": {"skill": "compound-to-skill"},
+                     "tool_response": {"success": True, "commandName": "compound-to-skill"}})
+    assert "Editing or fixing an existing skill" in out
+
+
+@pytest.mark.parametrize("refusal", ['{"error": "skill \'compound-to-skill\' not found"}',
+                                     '{"error": "skill \'compound-to-skill\' is on the skill-concierge blocklist"}'])
+def test_a_refused_load_echoes_nothing(mod, tmp_path, refusal):
+    """get_skill refuses with an error JSON; nothing was loaded, so nothing is echoed — even
+    though a same-named SKILL.md resolves by name."""
+    _install(tmp_path, "compound-to-skill", COMPOUND_BODY)
+    assert _run(mod, {"tool_name": "mcp__skill-search__get_skill",
+                      "tool_input": {"name": "compound-to-skill"}, "tool_response": refusal}) is None

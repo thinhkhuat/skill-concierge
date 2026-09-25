@@ -52,6 +52,10 @@ DEFAULT_META = ["skill-concierge", "enforcer", "gate floor", "getaway_floor",
 _USING = re.compile(r'(?im)^\s*USING:?\s+([a-z0-9][a-z0-9:_\-]*)')
 _SEARCH = re.compile(r'(?im)^\s*SEARCH:?\s+')
 _SKIPPING = re.compile(r'(?im)^\s*SKIPPING:?\s+')
+# Doctrine rule 3 (v0.49.0): a re-rule line — the reply switching away from a skill whose loaded
+# body excludes the task — ends `(re-rule: <old>)`. The old skill's USING is retracted, not uptake.
+_RERULE = re.compile(r'(?im)^\s*(?:USING|SEARCH):?\s+[^\n]*\(re-rule:\s*([a-z0-9][a-z0-9:_\-]*)\s*\)')
+_NOT_A_SKILL = ("the", "none", "a", "an", "it", "this", "that")
 _CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
 # The semantic-search tool, normalized — a SKIPPING is only lawful if one of these fired
 # in the same turn (an actual search_skills call, not a bare `SEARCH:` line which is itself
@@ -124,6 +128,32 @@ def norm(name):
     parts = name.split()
     name = (parts[0] if parts else name).replace(":", "-").lower()
     return name or None
+
+
+def _declared(txt):
+    """(USING names declared in an assistant text, names a re-rule line in it retracts). A second
+    USING without the marker is a multi-intent reply and retracts nothing. Pure so --selftest pins
+    the counting."""
+    used = [n for n in (norm(m) for m in _USING.findall(txt)) if n and n not in _NOT_A_SKILL]
+    return used, [n for n in (norm(m) for m in _RERULE.findall(txt)) if n]
+
+
+def _tally(used, retracted, sid, using, sess_raw, rerules):
+    """Count one assistant text's declarations. A retraction undoes only a USING the SAME session
+    declared (floor 0) — another session's USING of that skill is never touched, whatever the file
+    order. Every retraction is tallied in `rerules`. Returns the names actually undone. Pure (only
+    mutates the passed counters) so --selftest pins it."""
+    for n in used:
+        using[n] += 1
+        sess_raw[sid][n] += 1
+    undone = []
+    for n in retracted:
+        rerules[n] += 1
+        if sess_raw[sid][n] > 0:
+            sess_raw[sid][n] -= 1
+            using[n] -= 1
+            undone.append(n)
+    return undone
 
 
 def build_catalogue():
@@ -242,6 +272,8 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     skill_tool = Counter()
     slash = Counter()
     using = Counter()
+    rerules = Counter()   # retracted USING declarations, moved out of `using`
+    sess_raw = defaultdict(Counter)   # every USING per session (subagent files included) — the undo base
     n_search = n_skip = 0
     # per-session prompt text, to flag self/meta sessions
     sess_text = defaultdict(str)
@@ -343,13 +375,14 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     if role == "user":
                         sess_text[sid] += " " + txt[:400].lower()
                     if role == "assistant":
-                        for m in _USING.findall(txt):
-                            n = norm(m)
-                            # drop obvious non-skill matches from prose ('the','none','a'...)
-                            if n and n not in ("the", "none", "a", "an", "it", "this", "that"):
-                                using[n] += 1
-                                if not (subagent_stop and is_sub):  # H3: organic denominator only
-                                    sess_using[sid][n] += 1
+                        used, retracted = _declared(txt)
+                        undone = _tally(used, retracted, sid, using, sess_raw, rerules)
+                        if not (subagent_stop and is_sub):  # H3: organic denominator only
+                            for n in used:
+                                sess_using[sid][n] += 1
+                            for n in undone:   # the switched-away-from skill was not uptake
+                                if sess_using[sid][n] > 0:
+                                    sess_using[sid][n] -= 1
                         if _SEARCH.search(txt):
                             n_search += 1
                         m = _SKIPPING.search(txt)
@@ -381,7 +414,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     meta_sessions = {sid for sid, t in sess_text.items()
                      if any(kw in t for kw in meta_keywords)} | dispatch_sessions
     return {
-        "skill_tool": skill_tool, "slash": slash_skill, "using": using,
+        "skill_tool": skill_tool, "slash": slash_skill, "using": +using, "rerules": rerules,
         "n_search": n_search, "n_skip": n_skip,
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
         "sess_skill": sess_skill, "sess_using": sess_using,
@@ -452,11 +485,33 @@ def main():
             and not _is_authorized_skip_line(doctrine)              # bare doctrine marker -> NOT authorized
             and not _is_authorized_skip_line("SKIPPING: none - " + SIG)  # signature w/o marker -> NOT authorized
             and SIG not in getaway and SIG not in intent and SIG not in doctrine)  # anchor is unique
-        ok = verdict_ok and harvest_ok and revert_ok and selfref_ok
+        # Re-rule counting: the marked line retracts the old USING; an unmarked second USING
+        # (a multi-intent reply) retracts nothing; a SEARCH re-rule retracts too.
+        rerule_ok = (
+            _declared("USING: sk-a\nits body says not for this\nUSING: sk-b (re-rule: sk-a)")
+            == (["sk-a", "sk-b"], ["sk-a"])
+            and _declared("USING: sk-a\nlater, intent two\nUSING: sk-b") == (["sk-a", "sk-b"], [])
+            and _declared("SEARCH: fold lessons into skills (re-rule: sk-a)") == ([], ["sk-a"])
+            and _declared("prose mentioning (re-rule: sk-a) mid-sentence") == ([], []))
+        # A retraction is per session: session B re-ruling away from sk-a must not erase session
+        # A's legitimate USING of sk-a — in either file order.
+        for order in (("A", "B"), ("B", "A")):
+            _u, _raw, _rr = Counter(), defaultdict(Counter), Counter()
+            for _sid in order:
+                if _sid == "A":
+                    _tally(["sk-a"], [], "A", _u, _raw, _rr)
+                else:
+                    _tally(["sk-b"], ["sk-a"], "B", _u, _raw, _rr)
+            rerule_ok = rerule_ok and +_u == Counter({"sk-a": 1, "sk-b": 1}) and _rr["sk-a"] == 1
+        _u, _raw, _rr = Counter(), defaultdict(Counter), Counter()
+        _tally(["sk-a"], [], "S", _u, _raw, _rr)
+        _tally(["sk-b"], ["sk-a"], "S", _u, _raw, _rr)
+        rerule_ok = rerule_ok and +_u == Counter({"sk-b": 1})   # same session: undone
+        ok = verdict_ok and harvest_ok and revert_ok and selfref_ok and rerule_ok
         print("audit --selftest",
-              "OK: false-SKIPPING verdict + H1 harvest filter + SELFREF parity" if ok
+              "OK: false-SKIPPING verdict + H1 harvest filter + SELFREF parity + re-rule counting" if ok
               else f"FAIL verdict={verdict_ok}(fs={fs} ls={ls} az={az}) "
-                   f"harvest={harvest_ok} revert={revert_ok} selfref={selfref_ok}")
+                   f"harvest={harvest_ok} revert={revert_ok} selfref={selfref_ok} rerule={rerule_ok}")
         raise SystemExit(0 if ok else 1)
     since = parse_since(args.since)
     r = audit(since, args.meta_keyword)
@@ -488,6 +543,8 @@ def main():
     print("INLINE signal (the operator's metric — invisible to both counters):")
     print(f"  USING <skill> declarations: {sum(us.values())}  (distinct {len(us)})")
     print(f"  SEARCH declarations: {r['n_search']}   SKIPPING declarations: {r['n_skip']}")
+    print(f"  re-rules: {sum(r['rerules'].values())}  (a USING switched away from under doctrine "
+          "rule 3 — excluded from USING above)")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
 
     fs, ls, az = r["false_skip"], r["lawful_skip"], r["authorized_skip"]

@@ -47,8 +47,8 @@ SKIPPING: none      lawful skip only (4)
    hit) → quote the line that covers this task → `USING: <name>` on its own line.
 
    **A loaded body that excludes the task** — a hit's or not — is re-ruled in the same reply: a
-   new `USING:` or `SEARCH:` line, one sentence quoting the excluding line — and
-   tell the user you switched.
+   new `USING:` or `SEARCH:` line ending `(re-rule: <old>)`, one sentence quoting the
+   excluding line — and tell the user you switched.
 
 4. **A lawful skip has exactly two sources:**
    - a `search_skills` call shown in THIS reply whose hits fail the rule-3 bar;

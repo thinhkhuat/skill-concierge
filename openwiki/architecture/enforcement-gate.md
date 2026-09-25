@@ -57,7 +57,12 @@ The standing order it injects — the **SKILL-FIRST doctrine**:
   switched. A deterministic `PostToolUse(Skill|get_skill)` hook,
   [`hooks/scripts/skill_exclusions.py`](../../hooks/scripts/skill_exclusions.py), echoes a
   just-loaded skill's own "not for" lines back as `additionalContext` so this duty doesn't rely on
-  the agent noticing on its own (Claude Code + ZCode; other harnesses are a follow-up).
+  the agent noticing on its own — natively on Claude Code and ZCode, and since `0.49.0`
+  ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) reached on
+  OMP, Command Code, Cline and DSH too, each through its own adapter forwarding the same load
+  payload it builds for `ledger.py`; the hook reads the loaded text from the tool's own response
+  first, so the echo quotes the copy the agent actually read rather than a same-named copy from
+  another root.
 - **Red Flags** — seven symptom → refutation rows for the standing rationalizations, and the
   **library doctrine**: a skip is a *ruling on what kind of turn this is*, never a score; declaring
   "nothing fits" with the shelf unsearched is the top-severity failure; **burden of proof is on SKIP.**
@@ -130,6 +135,27 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    whether this harness can invoke it: a plugin enabled only for the current project is dropped
    from discovery, its sibling-harness twin wins the name, and `_invocable_twin()` is the
    per-session test that rescues it. Qdrant unreachable → mandate-only, `fallback/qdrant_down`.
+   Since `0.49.0` ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md))
+   this filter is **harness-complete**: `_foreign_scopes()` (`enforcer.py`) names every scope tuple
+   for every running harness — Claude's and OMP's own tuples had the same gap Codex's did, so
+   `omp-managed`/`zcode-plugin` rows were entering their offers as if invocable — and a new test
+   (`tests/test_foreign_scope_completeness.py`) walks every discovery scope so a forgotten root
+   fails a test instead of leaking. **DSH and Cline get a real filter for the first time**: both
+   have no skill-plugin registry (`_invocable_plugin_ids()` returns `None` there by design), and
+   the pre-`0.49.0` "unknown registry → drop nothing" rule used to switch their whole foreign
+   filter off; they now always run the scope check, reading the shared `~/.agents/skills`
+   convention root the way ZCode already did — `personal` is foreign to them only when that root
+   does *not* resolve to Claude's own `~/.claude/skills`. **Project isolation**
+   (`ENFORCER_PROJECT_ISOLATION`, default ON) drops a project-scoped row (`<family>:<skills dir>`)
+   whose project root is neither this session's cwd nor an ancestor/descendant of it, *unless* a
+   same-named copy exists at the same relative path in the session dir or a parent — the index
+   keeps one point per skill name, so a skill installed in two projects is otherwise scoped to
+   whichever reindexed last. The `<project>/.agents/skills` convention root is foreign only under
+   Claude Code; every other harness that reads it treats it as its own. The other half of the
+   isolation, `_retrieve_foreign` (the cross-harness annex query below), now marks each row with
+   the harness whose roots actually hold it (`_scope_harness`, rendered `[omp]`/`[zcode]`/…) instead
+   of a hand-typed `[codex]`/`[claude]` label — the old label constant is deleted because nothing
+   read it.
    Since `0.48.0` ([ADR-0058](../../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md))
    `claude-synced` (Claude account-synced skills) joins every non-Claude `_foreign_scopes()` tuple
    and is dropped client-side there like any foreign row, but it is deliberately EXCLUDED from
