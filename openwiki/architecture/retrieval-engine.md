@@ -222,7 +222,8 @@ CLI entrypoint `skill-search` (`server.main()`): no args → MCP stdio server; `
   CLS pooling and silently mismatches the 0.8.0-built index (retrieval degrades with no error).
 - **Never run the upstream `generate_overrides.py`** — it targets the wrong settings file with a
   2-item keep-on default and nukes the curated allowlist ([caveats §2](../../docs/caveats.md)).
-- **`enrich_index.py` is STALE for this index — do not use it.** It is single-vector-era
+- **`enrich_index.py` was retired** (archived out of the repo with `multivector_experiment.py`,
+  2026-09-26). It was single-vector-era
   (centroids trigger phrases into one vector) and cannot address the multi-vector index; the first
   utterance-layer attempt via it correctly aborted on the embed-parity gate. Utterance and body
   phrases are added as NEW MAX-pool points via the indexer instead ([ADR-0026](../../docs/adr/0026-llm-utterance-trigger-layer.md)).

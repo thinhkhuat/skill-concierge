@@ -105,11 +105,7 @@ env_run() {
 }
 env_run "$VENV/bin/skill-search" --reindex
 # Multi-vector trigger layer (ADR-0012) is built + maintained by --reindex itself (default on).
-# The LEGACY MEAN enrichment overlay is superseded and must NOT run on a multi-vector index — it
-# would mean-corrupt the base vectors. Reapply ONLY when multi-vector is explicitly off.
-if [ "${SKILL_MULTIVECTOR:-1}" = "0" ]; then
-  env_run "$VENV/bin/python" "$ROOT/scripts/enrich_index.py" --reapply
-fi
+# The legacy MEAN enrichment overlay (enrich_index.py) was retired and archived out of the repo.
 env_run "$VENV/bin/skill-search" --health
 
 echo "[3b/4] build the actionability-gate corpus (prompt_intent) from the transcript store"

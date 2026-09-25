@@ -757,38 +757,6 @@ def check_engine_health():
                 "detail": "; ".join(str(i) for i in issues)[:300], "fix": "reindex"}
 
 
-def _count_enriched(base):
-    body = json.dumps({"filter": {"must": [{"key": "enriched", "match": {"value": True}}]},
-                       "exact": True}).encode()
-    req = urllib.request.Request(base + "/points/count", data=body,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=3) as r:
-        return json.loads(r.read())["result"]["count"]
-
-
-def check_enrichment():
-    """Enrichment-overlay freshness. A reindex rewrites changed/new points BARE (no `enriched`
-    marker); until `enrich_index.py --reapply` runs, retrieval silently regresses for them.
-    Enriched-mode + some bare points -> WARN, auto-fixable. Not enriched -> N/A (OK)."""
-    if not _qdrant_reachable():
-        return None
-    base = QURL.rstrip("/") + f"/collections/{COLLECTION}"
-    try:
-        total = json.loads(urllib.request.urlopen(base, timeout=3).read())["result"]["points_count"]
-        enr = _count_enriched(base)
-    except NETWORK_READ_ERRORS:
-        return None
-    if enr == 0:
-        return {"id": "enrich", "label": "Enrichment overlay", "status": OK,
-                    "detail": "not enriched (no overlay in use)", "fix": None}
-    if enr < total:
-        return {"id": "enrich", "label": "Enrichment overlay", "status": WARN,
-                    "detail": f"{total - enr}/{total} points un-enriched (reindex/new) — run --reapply",
-                    "fix": "reapply"}
-    return {"id": "enrich", "label": "Enrichment overlay", "status": OK,
-                "detail": f"all {total} points enriched", "fix": None}
-
-
 def check_prompt_intent():
     """Actionability-gate corpus. The enforcer's gate suppresses conversational-turn offers
     using the `prompt_intent` collection; missing/empty -> the gate silently FAILS-OPEN (offers
@@ -1819,7 +1787,7 @@ def check_keepoff():
 
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_qdrant,
-          check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
+          check_engine_health, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_blocklist, check_keepoff,
           check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
@@ -1841,34 +1809,13 @@ def fix_docker_start():
     return True, f"started container {QNAME} (still booting — re-run doctor shortly)"
 
 
-def _reapply_cmd():
-    py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
-    return _run([str(py), str(ROOT / "scripts" / "enrich_index.py"), "--reapply"], env=_engine_env())
-
-
 def fix_reindex():
     if not SS_BIN.exists():
         return False, "venv missing — run ./setup.sh first"
     r = _run([str(SS_BIN), "--reindex"], env=_engine_env())
     if r.returncode != 0:
         return False, (r.stderr.strip() or "reindex failed")
-    msg = _last_line(r.stdout) or "reindexed"
-    if MULTIVECTOR:
-        # The multi-vector trigger layer is rebuilt by reindex itself (build_index), so the
-        # legacy MEAN enrichment overlay must NOT run on top — it would mean-corrupt the base
-        # vectors. Skip reapply; multi-vector supersedes the overlay.
-        return True, msg
-    # reindex rewrites changed/new points bare — re-apply the enrichment overlay so the
-    # refresh does not silently undo it (no-op when the index was never enriched).
-    rr = _reapply_cmd()
-    return (rr.returncode == 0), f"{msg}; reapply: {_last_line(rr.stdout) or rr.stderr.strip()}"
-
-
-def fix_reapply():
-    if not SS_BIN.exists():
-        return False, "venv missing — run ./setup.sh first"
-    rr = _reapply_cmd()
-    return (rr.returncode == 0), (_last_line(rr.stdout) or rr.stderr.strip() or "reapplied")
+    return True, _last_line(r.stdout) or "reindexed"
 
 
 def fix_overrides():
@@ -1943,7 +1890,7 @@ def fix_keepoff():
 
 
 AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
-               "reapply": fix_reapply, "overrides": fix_overrides,
+               "overrides": fix_overrides,
                "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk,
                "keepoff": fix_keepoff}
 REFRESH_FIXERS = {"keepoff"}   # re-run on --fix even when the row is OK (ledger-derived artifact)
@@ -1981,7 +1928,7 @@ def _selftest():
     assert overall([mk(WARN), mk(FAIL)]) == FAIL
     assert overall([]) == OK
     assert QURL.startswith("http")
-    assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides", "prompt_intent",
+    assert set(AUTO_FIXERS) <= {"docker", "reindex", "overrides", "prompt_intent",
                                 "purge_junk", "keepoff"}
     # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
     healthy_emb = {"reachable": True}
