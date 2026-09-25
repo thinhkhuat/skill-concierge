@@ -24,6 +24,7 @@ from pathlib import Path
 _TMP = tempfile.mkdtemp(prefix="skillsearch-test-")
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 _SRC = Path(__file__).resolve().parents[1]   # vendor/skill-search: test the source, not the venv copy
+sys.path.insert(0, str(_SRC))   # in-process imports too: the venv carries an installed skill_search
 
 
 def free_port() -> int:
