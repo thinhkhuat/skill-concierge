@@ -13,7 +13,7 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
-## v0.48.0 — off-list rule, exclusion echo, row provenance, synced default OFF (ADR-0058; deployed 2026-09-25)
+## v0.48.0 — off-list rule, exclusion echo, row provenance, synced default OFF (ADR-0058; deployed 2026-09-25 21:21 local)
 
 Live epoch for the search row contract, curated-trigger targets, and the doctrine trail metrics.
 Retrieval ranking and gate floors are unchanged — offer composition does **not** reset, since
@@ -23,8 +23,8 @@ Tuning orders carried over: `ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=
 
 | # | Watch | Command | Trigger | Action |
 |---|-------|---------|---------|--------|
-| W10 | Curated targets and the repaired skill: chronic offer-without-take for `ak-skill-creator`, `writing-for-agents`, `compound-to-skill` | `python3 scripts/build_keep_off.py --since "<landing time>" --out "$(mktemp)"` then read `_audit` for those names | any of them in `_audit` (≥15 offers at ≤5 % take) | drop the offending curated phrase and reindex; for `compound-to-skill`, re-measure the description (A6 probe) |
-| W12 | Epoch health of the search contract: fallback / outage rows in the v0.48.0 window | `python3 scripts/analyze.py --since "<landing time>"` (exclude subagent + self-session traffic) | outage share above the v0.47.x level | environmental first (shim/Qdrant), not the row contract |
+| W10 | Curated targets and the repaired skill: chronic offer-without-take for `ak-skill-creator`, `writing-for-agents`, `compound-to-skill` | `python3 scripts/build_keep_off.py --since "2026-09-25 21:21" --out "$(mktemp)"` then read `_audit` for those names | any of them in `_audit` (≥15 offers at ≤5 % take) | drop the offending curated phrase and reindex; for `compound-to-skill`, re-measure the description (A6 probe) |
+| W12 | Epoch health of the search contract: fallback / outage rows in the v0.48.0 window | `python3 scripts/analyze.py --since "2026-09-25 21:21"` (exclude subagent + self-session traffic) | outage share above the v0.47.x level | environmental first (shim/Qdrant), not the row contract |
 | W13 | Synced flip-on readiness | `python3 scripts/doctor.py` (harness integration rows) | every harness cache ≥ 0.48.0 | a separate, reviewed step: set `SKILL_SYNCED_ROOTS=1` in every relevant descriptor + reindex |
 
 ## v0.47.1 — doctrine + enforcer-string rewrite (ADR-0056; deployed 2026-09-15 ~11:50 local)
