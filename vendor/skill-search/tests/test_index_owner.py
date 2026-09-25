@@ -191,6 +191,21 @@ def test_scores_match_qdrant_exact_fixture_after_normalization(owner_factory):
         assert abs(s - e["score"]) < 1e-4
 
 
+def test_unit_vectors_are_stored_bit_for_bit(owner_factory):
+    """An already-normalized vector (what Qdrant hands back on scroll) is kept as sent,
+    the way Qdrant's own cosine preprocess keeps it; renormalizing would flip low bits."""
+    import numpy as np
+    rnd = np.random.default_rng(5)
+    o = owner_factory().wait_ready()
+    raw = rnd.standard_normal((50, 16)).astype(np.float32)
+    unit = raw / np.linalg.norm(raw, axis=1, keepdims=True).astype(np.float32)
+    seed(o, [pt(i, f"n{i}", [float(x) for x in v]) for i, v in enumerate(unit)], coll="u", dim=16)
+    back = ok(o, "POST", "/collections/u/points",
+              {"ids": list(range(50)), "with_vector": True})
+    got = {r["id"]: np.asarray(r["vector"], dtype=np.float32).tobytes() for r in back}
+    assert all(got[i] == unit[i].tobytes() for i in range(50))
+
+
 # -- REST shape -----------------------------------------------------------------------
 
 def test_collection_info_and_title(owner):
@@ -200,6 +215,12 @@ def test_collection_info_and_title(owner):
     status, root = api(owner, "GET", "/")
     assert status == 200 and root["title"].startswith("skill-concierge index owner")
     assert api(owner, "GET", "/collections/missing")[0] == 404
+
+
+def test_collection_exists_route(owner):
+    # qdrant-client's collection_exists(): engines older than the owner call it on every reindex
+    assert ok(owner, "GET", "/collections/t/exists") == {"exists": True}
+    assert ok(owner, "GET", "/collections/missing/exists") == {"exists": False}
 
 
 def test_with_vector_default_and_alias(owner):
@@ -246,6 +267,25 @@ def test_read_your_write(owner):
     assert count(owner, None) == 4
     assert ok(owner, "DELETE", "/collections/t") is True
     assert api(owner, "GET", "/collections/t")[0] == 404
+
+
+def test_writes_rebuild_the_search_matrix_once_at_the_next_read(tmp_path, monkeypatch):
+    # a full reindex is hundreds of writes; one fresh full-size matrix per write churned
+    # tens of GB through the allocator and peaked at several GB resident
+    from skill_search import index_owner as io_
+    built = []
+    real = io_.Snapshot
+    monkeypatch.setattr(io_, "Snapshot", lambda *a: built.append(1) or real(*a))
+    st = io_.Store(tmp_path / "t.sqlite")
+    st.create("c", {"vectors": {"size": 3, "distance": "Cosine"}})
+    for i in range(20):
+        st.upsert("c", {"points": [{"id": i, "vector": [1.0, float(i), 0.5], "payload": {"name": f"n{i}"}}]})
+    st.delete_points("c", {"points": [0]})
+    before_read = len(built)
+    assert st.count("c", {}) == {"count": 19}
+    assert st.retrieve("c", {"ids": [19]})[0]["payload"] == {"name": "n19"}
+    assert (before_read, len(built)) == (1, 2)       # the empty collection's, then one rebuild
+    st.close()
 
 
 def test_acknowledged_writes_survive_a_restart(owner_factory, tmp_path):

@@ -9,6 +9,7 @@ loopback):
       callers use, in Qdrant's JSON shape ({"result", "status", "time"}):
         GET  /  ·  GET /healthz
         GET | PUT | DELETE /collections/{c}
+        GET  /collections/{c}/exists            {"exists": bool}
         PUT  /collections/{c}/points            upsert (normalizes vectors)
         POST /collections/{c}/points            fetch by ids
         POST /collections/{c}/points/scroll     id-ordered paging
@@ -20,9 +21,10 @@ loopback):
 
 Storage: one SQLite file (SKILL_INDEX_DB, default ~/.cache/skill-search/index.sqlite).
 This process is its only writer, enforced by an exclusive fcntl lock on `<db>.lock`.
-Each write commits to SQLite, then swaps in a rebuilt immutable snapshot of that
-collection before it replies, so a write is visible to every later read
-(read-your-write). Readers never lock; they use whichever snapshot is current.
+Each write commits to SQLite before it replies and marks that collection's immutable
+snapshot stale; the next read rebuilds it under the write lock, so a write is visible
+to every later read (read-your-write). Otherwise readers never lock; they use
+whichever snapshot is current.
 
 Search is exact cosine: vectors are normalized on write, queries on read, scores
 are float32 dot products. Groups are ordered by score descending, then group value
@@ -273,10 +275,29 @@ def _with_vector(body: dict) -> bool:
 
 
 class Collection:
-    def __init__(self, np, name: str, dim: int, distance: str = "Cosine"):
+    def __init__(self, np, name: str, dim: int, distance: str = "Cosine", lock=None):
         self.name, self.dim, self.distance = name, dim, distance
         self.rows: dict = {}          # id -> (id, normalized float32 vector, payload)
-        self.snap = Snapshot(np, self.rows, dim)
+        self._np, self._lock = np, lock or threading.RLock()
+        self._snap = Snapshot(np, self.rows, dim)
+        self._stale = False
+
+    def changed(self) -> None:
+        """Rows changed (caller holds the store's write lock)."""
+        self._stale = True
+
+    @property
+    def snap(self) -> "Snapshot":
+        # Rebuilt at the first read after a write, not at every write: a full reindex is
+        # hundreds of writes, and a fresh full-size matrix per write churned tens of GB
+        # through the allocator (several GB resident at peak). Rebuilding under the write
+        # lock keeps read-your-write: a read after an acknowledged write sees it.
+        if self._stale:
+            with self._lock:
+                if self._stale:
+                    self._snap = Snapshot(self._np, self.rows, self.dim)
+                    self._stale = False
+        return self._snap
 
 
 # ---------------------------------------------------------------------------
@@ -296,10 +317,10 @@ class Store:
                         "id TEXT NOT NULL, vector BLOB NOT NULL, payload TEXT NOT NULL, "
                         "PRIMARY KEY(collection, id))")
         self.db.commit()
-        self.wlock = threading.Lock()
+        self.wlock = threading.RLock()      # re-entrant: a filtered delete reads the snapshot
         self.colls: dict[str, Collection] = {}
         for name, dim, dist in self.db.execute("SELECT name, dim, distance FROM collections"):
-            self.colls[name] = Collection(numpy, name, dim, dist)
+            self.colls[name] = Collection(numpy, name, dim, dist, self.wlock)
         for cname, pid, blob, payload in self.db.execute(
                 "SELECT collection, id, vector, payload FROM points"):
             c = self.colls.get(cname)
@@ -307,7 +328,7 @@ class Store:
                 p = json.loads(pid)
                 c.rows[p] = (p, numpy.frombuffer(blob, dtype=numpy.float32), json.loads(payload))
         for c in self.colls.values():
-            c.snap = Snapshot(numpy, c.rows, c.dim)
+            c._snap = Snapshot(numpy, c.rows, c.dim)
 
     def close(self) -> None:
         with self.wlock:
@@ -330,15 +351,20 @@ class Store:
         if v.ndim != 1 or v.shape[0] != dim:
             raise ApiError(400, f"Wrong input: Vector dimension error: expected dim: {dim}, "
                                 f"got {v.shape[0] if v.ndim == 1 else v.shape}")
-        n = float(np.linalg.norm(v))
-        return v / n if n > 0 else v
+        # Qdrant's cosine preprocess rule (lib/segment/src/spaces/tools.rs,
+        # is_length_zero_or_normalized): a zero or already-unit vector is stored as
+        # given, so vectors copied from Qdrant stay bit-for-bit identical.
+        sq = float(np.dot(v, v))
+        if sq < float(np.finfo(np.float32).eps) or abs(sq - 1.0) <= 1e-6:
+            return v
+        return v / np.float32(np.sqrt(np.float32(sq)))
 
     def query_vector(self, c: Collection, q):
         if isinstance(q, dict) and "nearest" in q:
             q = q["nearest"]
         return self._normalize(q, c.dim)
 
-    # -- writes (each commits, then swaps the snapshot, before returning) --
+    # -- writes (each commits before returning; the next read rebuilds the snapshot) --
     def create(self, name: str, body: dict) -> bool:
         if not _COLL_RE.match(name):
             raise ApiError(400, f"bad collection name: {name!r}")
@@ -353,7 +379,7 @@ class Store:
                 raise ApiError(409, f"Wrong input: Collection `{name}` already exists!")
             self.db.execute("INSERT INTO collections VALUES (?,?,?)", (name, vec["size"], "Cosine"))
             self.db.commit()
-            c = Collection(self.np, name, vec["size"])
+            c = Collection(self.np, name, vec["size"], lock=self.wlock)
             self.colls[name] = c
         return True
 
@@ -398,7 +424,7 @@ class Store:
             self.db.commit()
             for row in rows:
                 c.rows[row[0]] = row
-            c.snap = Snapshot(self.np, c.rows, c.dim)
+            c.changed()
 
     def delete_points(self, name: str, body: dict) -> None:
         c = self.get(name)
@@ -419,7 +445,7 @@ class Store:
             self.db.commit()
             for i in ids:
                 del c.rows[i]
-            c.snap = Snapshot(self.np, c.rows, c.dim)
+            c.changed()
 
     # -- reads (lock-free: one snapshot reference per request) --
     def info(self, name: str) -> dict:
@@ -671,6 +697,8 @@ class Handler(BaseHTTPRequestHandler):
             if method == "DELETE":
                 self._body()
                 return self._ok(store.drop(c), t0)
+        elif rest == "exists" and method == "GET":
+            return self._ok({"exists": c in store.colls}, t0)
         elif rest == "points" and method == "PUT":
             store.upsert(c, self._body())
             return self._ok({"operation_id": 0, "status": "completed"}, t0)
