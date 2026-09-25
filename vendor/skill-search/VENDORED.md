@@ -391,3 +391,22 @@ plugin-level customization layer and these engine patches.
   `qdrant-client` leaves `pyproject.toml`. The engine tests pin `SKILL_QDRANT_URL` to a test store
   (`SKILL_TEST_QDRANT_URL`, default staging `127.0.0.1:6433`) with a per-run scratch collection.
   Re-vendoring from upstream must re-apply this, or `server.py` regains the qdrant-client import.
+- **Index owner (`skill_search/index_owner.py`, vector-store Track B):** a new engine module,
+  run as `python -m skill_search.index_owner` from the shared venv. One process serves the
+  Qdrant REST subset listed in its docstring on `SKILL_OWNER_QUERY_PORT` (default 6333) and
+  `/embed` + `/health` on `SKILL_OWNER_EMBED_PORT` (default 6363), on `127.0.0.1` and `::1`.
+  It stores points in one SQLite file (`SKILL_INDEX_DB`, default
+  `~/.cache/skill-search/index.sqlite`) guarded by an exclusive `fcntl` lock on `<db>.lock`,
+  and searches exactly with numpy over normalized float32 vectors (group_by best point, score
+  desc then group value asc; points score desc then id asc; filters must/must_not/should,
+  match.value/any, is_null present-and-null). Writes commit, then swap the collection
+  snapshot, before replying (read-your-write). Host-header (403) and JSON content-type (415)
+  guards on every request; bodies capped at 16 MB. A rewritten venv stamp at an equal or higher
+  version makes it drain and exit; a lower one is logged and ignored. `SKILL_OWNER_NO_MODEL=1`
+  serves without a model (test seam); `SKILL_OWNER_LOG`, `SKILL_OWNER_STAMP`,
+  `SKILL_OWNER_STAMP_INTERVAL` override its log, stamp path and check interval. `numpy` is now a
+  declared dependency. The engine tests start one on free ports with a temp SQLite file
+  (`tests/conftest.py`, `owner_factory`); `tests/test_index_owner.py` covers it, with
+  `tests/fixtures/qdrant_exact_groups.json` exported from live Qdrant exact search. `_Store`
+  sends `Content-Type: application/json` on every non-GET request. Not upstream: re-apply on
+  re-vendor.

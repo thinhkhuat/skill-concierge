@@ -27,6 +27,7 @@ dependencies = [
     # silently desync query vectors from the indexed vectors. Do NOT relax to the
     # runtime warning's "0.5.1" suggestion (that IS the CLS-pooling trap).
     "requests>=2.28",
+    "numpy",             # the index owner's exact search (already pulled in by fastembed)
 ]
 
 [project.optional-dependencies]

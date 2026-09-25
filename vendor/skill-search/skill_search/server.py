@@ -178,7 +178,7 @@ class _Store:
     def _req(self, method: str, path: str, body=None, timeout: float = READ_TIMEOUT):
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(self.url + path, data=data, method=method)
-        if data is not None:
+        if method != "GET":   # the index owner refuses writes without it (415), body or not
             req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return (json.loads(r.read() or b"{}") or {}).get("result")
