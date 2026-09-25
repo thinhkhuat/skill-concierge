@@ -17,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$ROOT/vendor/skill-search"
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
 QNAME="${SKILL_QDRANT_CONTAINER:-skill-search-qdrant}"
-QIMAGE="${SKILL_QDRANT_IMAGE:-qdrant/qdrant:1.18.2}"
+QIMAGE="${SKILL_QDRANT_IMAGE:-qdrant/qdrant:v1.18.2}"
 ENAME="${SKILL_EMBED_CONTAINER:-skill-concierge-embed-shim}"
 EIMAGE="${SKILL_EMBED_IMAGE:-skill-concierge-embed-shim:latest}"
 EPORT="${EMBED_SHIM_PORT:-6363}"
@@ -70,7 +70,7 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$QNAME"; then
   docker start "$QNAME" >/dev/null 2>&1 || true
 else
   docker run -d --name "$QNAME" --restart unless-stopped \
-    -p 6333:6333 -p 6334:6334 \
+    -p 127.0.0.1:6333:6333 \
     -v "$HOME/.cache/skill-search/qdrant-server:/qdrant/storage" \
     "$QIMAGE"
 fi
