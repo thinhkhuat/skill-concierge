@@ -27,6 +27,10 @@ os.environ.setdefault("SKILL_VECTOR_SIZE", "384")  # avoids an embed probe in un
 # that has a catalog registered. The 6 catalog tests monkeypatch CATALOG_ROOTS_PATH
 # themselves, so this only neutralizes the ambient config for everyone else.
 os.environ.setdefault("SKILL_CONCIERGE_CATALOG_ROOTS", os.path.join(_TMP, "no-catalogs.json"))
+# Pin the utterance corpus (and so the operator-curated triggers file beside it) to a
+# nonexistent temp path: otherwise the operator's live ~/.claude/skill-concierge/ corpus
+# leaks into every trigger-phrase test.
+os.environ.setdefault("SKILL_TRIGGERS", os.path.join(_TMP, "no-triggers.json"))
 
 # Imported ONLY AFTER the env pinning above: skills_discovery reads several
 # seams (SKILL_CONCIERGE_CATALOG_ROOTS included) at MODULE IMPORT time, so an
@@ -71,6 +75,8 @@ def _isolate_harness_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(skills_discovery, "DSH_PROJECT_ROOT", tmp_path / "dsh-project")
     monkeypatch.setattr(skills_discovery, "CLINE_PERSONAL_ROOT", tmp_path / "cline-personal")
     monkeypatch.setattr(skills_discovery, "CLINE_PROJECT_ROOT", tmp_path / "cline-project")
+    # Claude account-synced skills (~/.claude/skills/synced/<bucket>/<name>/SKILL.md).
+    monkeypatch.setattr(skills_discovery, "SYNCED_ROOT", tmp_path / "claude-synced", raising=False)
     # ADR-0052 enablement seams: root-relative plugin enumeration reads the Claude
     # manifests + layer files directly (no PLUGIN_GLOB funnel), so unpinned tests
     # would pull the operator's real installed plugins and project layer files into

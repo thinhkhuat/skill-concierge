@@ -42,6 +42,14 @@ SKIPPING: none      lawful skip only (4)
    search is lawful only when you can state in the reply, for the top hit, what it does and why
    this task lies outside it — with the query shown.
 
+   **Picking outside the hits.** For a skill that is not among this reply's hits or this turn's
+   preview, the route is: line 1 `SEARCH:` → the search → load its body (the way rule 5 loads a
+   hit) → quote the line that covers this task → `USING: <name>` on its own line.
+
+   **A loaded body that excludes the task** — a hit's or not — is re-ruled in the same reply: a
+   new `USING:` or `SEARCH:` line, one sentence quoting the excluding line — and
+   tell the user you switched.
+
 4. **A lawful skip has exactly two sources:**
    - a `search_skills` call shown in THIS reply whose hits fail the rule-3 bar;
    - a `SKILL-CHECK:` line from the enforcer stating that this turn is non-task, conversational,
@@ -51,10 +59,11 @@ SKIPPING: none      lawful skip only (4)
    Anything that hands you work is a task and routes through 2: a notification's content, a
    message's content, work you dispatch to another agent, a preview that arrived with candidates.
 
-5. **Hits marked external or other-harness still count.** They cannot be invoked by name here;
-   `USING: <name>` for one means `get_skill("<name>")`, then follow that SKILL.md inline as your
-   procedure. Same take-bar as installed skills; the marker records provenance, not a lower tier of
-   obligation.
+5. **A hit your harness does not list still counts** — whatever its `origin` or `external`
+   marker — while it stays switched on for you: a hit whose `disabled_in` names your harness, or
+   that your harness has switched off, is off. `USING: <name>` for a counted hit means
+   `get_skill("<name>")`, then follow that SKILL.md inline as your procedure. Same take-bar as
+   installed skills; the marker records provenance, not a lower tier of obligation.
 
 6. **Red Flags — the rationalization you catch yourself forming is the key to its own refutation.**
    Naming an unfit skill to pass the gate is the mirror failure — a FALSE REPORT.
@@ -67,6 +76,7 @@ SKIPPING: none      lawful skip only (4)
    | *"I can handle this unaided."* | Competence is irrelevant — the order is not about your ability. SEARCH. |
    | *"I'm confident none fit."* | Confidence is not a ruling. A ruling needs the search. |
    | *"Closest fit isn't perfect."* | Closest fit, adapted, is the standard (3). USING. |
+   | *"The name matches — it's the exact fit even though search didn't rank it."* | A name is a label, not a fit. Load its body and quote the covering line (3). |
    | *"This is just me explaining my own prior output — surely no skill."* | A pure recap is lawful only with the enforcer's `SKILL-CHECK:` line for it (4). Otherwise SEARCH. |
 
 Worked example: the previewed few don't fit → `SEARCH: postgres schema migration` → search_skills

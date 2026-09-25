@@ -54,8 +54,11 @@ def discover_skill_names():
     from skill_search.skills_discovery import discover_skills  # vendored engine
     # catalog: scopes excluded too (ADR-0031): external skills are not registered
     # with Claude Code, so a skillOverrides entry for them is dead config bloat.
+    # claude-synced excluded: whether Claude Code's skillOverrides governs account-synced
+    # skills, and under which key form, is undocumented — writing keys for them would be
+    # a guess into the operator's global settings.
     return [s["name"] for s in discover_skills()
-            if not str(s.get("scope", "")).startswith(("project:", "catalog:"))]
+            if not str(s.get("scope", "")).startswith(("project:", "catalog:", "claude-synced"))]
 
 
 def _compute_overrides(keep_on, names):

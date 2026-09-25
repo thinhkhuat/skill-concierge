@@ -252,7 +252,14 @@ def _drift_remedy(index_build, running_build, state):
 
 
 def _engine_env():
-    return {**os.environ, "SKILL_QDRANT_URL": QURL,
+    """The query server's engine settings (scripts/engine_env.py), doctor's resolved store on top."""
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import engine_env
+        base = engine_env.engine_env(ROOT)
+    except Exception:
+        base = dict(os.environ)
+    return {**base, "SKILL_QDRANT_URL": QURL,
             "SKILL_EMBED_BACKEND": BACKEND, "SKILL_EMBED_MODEL": MODEL}
 
 

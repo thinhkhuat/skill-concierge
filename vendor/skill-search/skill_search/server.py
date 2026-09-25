@@ -561,10 +561,58 @@ def _llm_utterance_phrases(name: str) -> list:
     return _LLM_TRIG_CACHE.get(name, [])
 
 
+# Operator-curated trigger phrases: {"<skill>": ["phrase", ...]} in triggers-curated.json beside
+# the utterance corpus (no env var of its own). They take the FIRST trigger slots, because each
+# is replayed from a real routing miss, not generated. Keys starting "_" are documentation.
+# Capped and filtered like any trigger; a malformed file writes one stderr line (it lands in the
+# detached reindex log) and the layer is simply off — a broken file must never fail a reindex.
+# Read once per build_index (reset at its top), so an edit applies on the next reindex.
+_CURATED_TRIG_PATH = Path(_LLM_TRIG_PATH).parent / "triggers-curated.json"
+_CURATED_TRIG_CACHE = None
+_CURATED_MAX_CHARS = 200
+
+
+def _load_curated() -> dict:
+    out: dict = {}
+    try:
+        if not _CURATED_TRIG_PATH.exists():
+            return out
+        data = json.loads(_CURATED_TRIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("top level is not an object")
+        for name, phrases in data.items():
+            if str(name).startswith("_"):
+                continue
+            if not isinstance(phrases, list):
+                raise ValueError(f"{name}: phrases are not a list")
+            keep = []
+            for p in phrases:
+                if not isinstance(p, str):
+                    continue
+                p = _WS_RE.sub(" ", p).strip()
+                if (_TRIG_MIN_CHARS <= len(p) <= _CURATED_MAX_CHARS
+                        and len(p.split()) >= _TRIG_MIN_WORDS):
+                    keep.append(p)
+            out[str(name)] = keep[:_TRIG_MAX]
+        return out
+    except Exception as e:
+        print(f"skill-search: triggers-curated.json unreadable ({type(e).__name__}) — "
+              "curated layer off", file=sys.stderr)
+        return {}
+
+
+def _curated_phrases(name: str) -> list:
+    global _CURATED_TRIG_CACHE
+    if not isinstance(_CURATED_TRIG_CACHE, dict):
+        _CURATED_TRIG_CACHE = _load_curated()
+    return list(_CURATED_TRIG_CACHE.get(name, []))
+
+
 def _trigger_phrases(s: dict) -> list:
     """Trigger-point phrases for one skill, deduped (case-insensitive) and capped
-    COMBINED at _TRIG_MAX. Sources in QUALITY order: (if SKILL_LLM_TRIGGERS) the
-    offline-generated utterance triggers FIRST, then description-derived, then (if
+    COMBINED at _TRIG_MAX. Sources in QUALITY order: operator-curated phrases FIRST
+    (triggers-curated.json, replayed routing misses), then (if SKILL_LLM_TRIGGERS) the
+    offline-generated utterance triggers, then description-derived, then (if
     SKILL_BODY_TRIGGERS) body-derived. Utterances-first means the best phrases win
     the capped slots; the cap keeps per-skill growth bounded (raise TRIGGERS_MAX to
     add slots rather than evict). TOTAL point count still rises because most skills
@@ -579,6 +627,7 @@ def _trigger_phrases(s: dict) -> list:
                 seen.add(k)
                 phrases.append(p)
 
+    _add(_curated_phrases(s["name"]))
     if SKILL_LLM_TRIGGERS:
         _add(_llm_utterance_phrases(s["name"]))
     _add(_split_phrases(s["description"]))
@@ -680,6 +729,8 @@ def _scope_filter():
 # points for deleted skills are removed. force=True does a clean full rebuild.
 # ---------------------------------------------------------------------------
 def build_index(force: bool = False) -> dict:
+    global _CURATED_TRIG_CACHE
+    _CURATED_TRIG_CACHE = None          # re-read the operator's curated phrases every build
     skills = discover_skills()
 
     # Guard the embedder-swap footgun: a collection built at one dimension can't
@@ -713,9 +764,12 @@ def build_index(force: bool = False) -> dict:
         # enumerating aliases. On every point (base + trigger) — the enforcer's
         # group_by query scores whichever point ranks best.
         tier = {"tier": "external"} if scope.startswith("catalog:") else {}
+        # Account-synced skills carry their manifest provenance (anthropic vs user/org-authored).
+        synced = dict(s.get("synced_meta") or {}) if scope == "claude-synced" else {}
         desired[_point_id(s["name"])] = (text, h, {
             "name": s["name"], "description": s["description"],
-            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope, **tier})
+            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope, **tier,
+            **synced})
         if MULTIVECTOR:
             for i, ph in enumerate(_trigger_phrases(s)):
                 ph_h = _content_hash(ph)
@@ -773,6 +827,73 @@ def _indexed_names() -> set[str]:
 # ---------------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------------
+# Row provenance. The server cannot know which harness launched it (Claude Code, OMP and ZCode
+# spawn it from one plugin .mcp.json whose env carries no harness key), so a row states only
+# facts the server holds: `origin` = the harness family whose skill roots hold the indexed copy,
+# and `disabled_in` = harnesses whose settings positively switch the skill's plugin off. It never
+# carries a slash `command`: that would claim an invocability only the agent's own harness knows.
+# SKILL_ROW_ORIGIN=0 (read per call) restores the pre-provenance row shape exactly.
+_ORIGIN_HEADS = {"personal": "claude", "plugin": "claude", "project": "claude",
+                 "codex": "codex", "commandcode": "commandcode", "omp": "omp", "zcode": "zcode",
+                 "dsh": "dsh", "cline": "cline"}
+ROW_NOTE = ("origin = which harness's skill roots hold the indexed copy. Invoke a hit by name only "
+            "if your harness lists it; otherwise load it with get_skill(name) and follow its "
+            "SKILL.md inline — unless disabled_in names your harness or your harness has it "
+            "switched off: then it is not a hit.")
+
+
+def _row_origin_on() -> bool:
+    return os.environ.get("SKILL_ROW_ORIGIN", "1") != "0"
+
+
+def _origin_head(scope: str) -> str:
+    return scope.split(":", 1)[0].split("-", 1)[0]
+
+
+def _origin(scope: str) -> str:
+    """Harness family for a point scope. Unknown or empty -> 'claude', the scope-less legacy
+    default; the drift test keeps every visible scope mapped explicitly."""
+    if scope == "claude-synced":
+        return "claude-synced"
+    return _ORIGIN_HEADS.get(_origin_head(scope), "claude")
+
+
+def _claude_disabled_plugin_ids() -> set:
+    """Plugin ids INSTALLED for Claude Code whose every installed `<id>@<marketplace>` key is
+    switched off in the merged settings layers (user -> <cwd>/.claude/settings.json ->
+    <cwd>/.claude/settings.local.json, later wins per key). The same rule the per-turn hook uses
+    to decide invocability, so a row is never marked off for a plugin Claude can run: an id with
+    any installed key still on is on; an id with no installed key gives no signal; an unreadable
+    registry gives no signal. Never mark on missing knowledge."""
+    installed = sd._read_json(sd.INSTALLED_PLUGINS_JSON)
+    plugins = installed.get("plugins") if isinstance(installed, dict) else None
+    if not isinstance(plugins, dict):
+        return set()
+    off_by_key: dict = {}
+    try:
+        layers = (sd.CLAUDE_SETTINGS_JSON, Path.cwd() / ".claude" / "settings.json",
+                  Path.cwd() / ".claude" / "settings.local.json")
+    except OSError:
+        return set()
+    for f in layers:
+        data = sd._read_json(f)
+        ep = data.get("enabledPlugins") if isinstance(data, dict) else None
+        if isinstance(ep, dict):
+            off_by_key.update({str(k): not bool(v) for k, v in ep.items()})
+    on, off = set(), set()
+    for key, entries in plugins.items():
+        pid = str(key).split("@", 1)[0]
+        all_entries_off = (isinstance(entries, list) and entries and all(
+            isinstance(e, dict) and e.get("enabled") is False for e in entries))
+        (off if off_by_key.get(str(key), False) or all_entries_off else on).add(pid)
+    return off - on
+
+
+# Account-synced skills load only in Claude Code; every other harness is named so rule 5 and
+# the response note keep them out of harnesses that would read their bodies unsanitized.
+_SYNCED_ONLY_IN = ["codex", "commandcode", "omp", "zcode", "dsh", "cline"]
+
+
 def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> list:
     """MAX-pool skills across one or more query result sets: each skill keeps its
     single BEST score across all queries, then return the fused top-k by score.
@@ -799,6 +920,8 @@ def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> lis
                 best[name] = (h.score, pl.get("description", ""),
                               pl.get("scope") or "", pl.get("path") or "")
     ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
+    provenance = _row_origin_on()
+    disabled = _claude_disabled_plugin_ids() if provenance else set()
     out = []
     for n, (s, d, scope, path) in ranked:
         row = {"name": n, "command": f"/{n}", "description": d, "score": round(s, 4)}
@@ -807,8 +930,16 @@ def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> lis
             row["external"] = scope.split(":", 1)[1]
             row["note"] = ("external catalog skill — NOT installed; consume by "
                            f"get_skill(\"{n}\") and follow its SKILL.md inline")
-        elif with_paths and path:
-            row["path"] = path
+        else:
+            if provenance:
+                row.pop("command")
+                row["origin"] = _origin(scope)
+                if scope == "claude-synced":
+                    row["disabled_in"] = list(_SYNCED_ONLY_IN)
+                elif ":" in n and n.split(":", 1)[0] in disabled:
+                    row["disabled_in"] = ["claude"]
+            if with_paths and path:
+                row["path"] = path
         out.append(row)
     return out
 
@@ -816,8 +947,9 @@ def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> lis
 @mcp.tool()
 def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     """Find skills relevant to a task by SEMANTIC match over full descriptions.
-    Returns ranked {name, description, score}. Claude should then invoke the
-    relevant ones by name (e.g. /frontend-design).
+    Returns ranked {name, description, score, origin, disabled_in?} plus one `note`:
+    invoke a hit by the name your harness lists; a hit it does not list is loaded
+    with get_skill(name) and followed inline, unless it is switched off for you.
 
     Query by INTENT + DOMAIN TERMS, not the raw user sentence. For best recall,
     pass 2-3 varied phrasings of the same need in `extra_queries` — the server
@@ -839,6 +971,8 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     ]
     rows = [r for r in _fuse_ranked(group_lists, TOP_K) if not _blocked(r.get("name", ""))]
     out = {"query": query, "results": rows}
+    if rows and _row_origin_on():
+        out["note"] = ROW_NOTE
     if len(queries) > 1:
         out["queries"] = queries
     # Surface index drift in-band so dark/stale skills don't fail silently.
@@ -862,9 +996,9 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
     serves only one sub-goal still surfaces. top_n widens the cut (default 20,
     clamped to 40).
 
-    Returns rows {name, description, score, capsule?, path?, external?}: installed
-    rows carry `path` (deep-read the body via Read at that path); external rows
-    carry `external` (deep-read via get_skill(name) — the Skill tool cannot invoke
+    Returns rows {name, description, score, origin?, disabled_in?, capsule?, path?,
+    external?} plus one response `note` on reading origin. Installed rows carry
+    `path` (deep-read the body via Read at that path); external rows carry `external` (deep-read via get_skill(name) — the Skill tool cannot invoke
     it); `capsule` is the dossier dict (purpose/capabilities/inputs/outputs/
     avoid_when) when present — an absent capsule degrades to description-only.
     Blocklist-filtered; a staleness warning rides in-band like search_skills."""
@@ -911,6 +1045,8 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
             have += 1
     out = {"queries": qs, "results": rows,
            "capsule_coverage": {"have": have, "total": len(rows)}}
+    if rows and _row_origin_on():
+        out["note"] = ROW_NOTE
     warning = _staleness_warning()
     if warning:
         out["warning"] = warning

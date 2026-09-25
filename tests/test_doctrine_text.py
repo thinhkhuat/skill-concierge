@@ -52,3 +52,32 @@ def test_enforcer_strings_carry_no_phantom_pointer_or_stale_count():
               if ln.lstrip().startswith('"')]
     assert not [ln for ln in quoted if "find-skills" in ln]
     assert not [ln for ln in quoted if "~500" in ln]
+
+
+def _section(body: str, start: str, end: str) -> str:
+    i = body.index(start)
+    return body[i:body.index(end, i)]
+
+
+def test_doctrine_orders_off_list_read_before_using():
+    """A skill picked outside the hits is reached through line-1 SEARCH, read, and quoted
+    before `USING:`; ANY loaded body that excludes the task forces a visible re-rule; rule 5
+    keeps switched-off skills off. Pinned to the rule each sentence must live in."""
+    body = _body()
+    rule3 = _section(body, "3. **Rule on the hits", "4. **A lawful skip")
+    off_list = _section(rule3, "**Picking outside the hits.**", "\n\n")
+    route = [off_list.index(x) for x in
+             ("line 1 `SEARCH:`", "load its body", "quote the line", "`USING: <name>`")]
+    assert route == sorted(route), "off-list route must run SEARCH -> load -> quote -> USING"
+    assert "excludes the task" not in off_list, "the re-rule duty must cover hits too"
+    rerule = _section(rule3, "**A loaded body that excludes the task**", "\n\n")
+    for phrase in ("a hit's or not", "excluding line", "tell the user"):
+        assert phrase in rerule, phrase
+    rule5 = _section(body, "5. **", "6. **")
+    assert "disabled_in" in rule5 and "switched off" in rule5
+    assert "The name matches" in _section(body, "6. **", "Worked example")
+    # The OMP adapter rewrites exactly this literal; a second copy would be rewritten into a call
+    # that only resolves skills OMP loaded itself.
+    assert body.count('get_skill("<name>")') == 1
+    assert "RETRACT" not in body
+    assert len(body) <= 4217 + 900, f"doctrine body grew to {len(body)} chars"

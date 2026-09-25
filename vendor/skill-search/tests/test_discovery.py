@@ -803,3 +803,100 @@ def test_visible_scopes_include_catalogs(tmp_path, monkeypatch):
     assert "catalog:anti" in sd.visible_scopes()
     monkeypatch.setattr(sd, "CATALOG_ROOTS_PATH", tmp_path / "nope.json")
     assert not any(s.startswith("catalog:") for s in sd.visible_scopes())
+
+
+# --- Claude account-synced skills (~/.claude/skills/synced/<bucket>/<name>/SKILL.md) --------
+
+
+def _synced_world(tmp_path, monkeypatch, on=True, manifest=None, names=("skill-creator",)):
+    personal = tmp_path / "personal"
+    personal.mkdir(exist_ok=True)
+    synced = personal / "synced"
+    bucket = synced / "b1"
+    bucket.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        make_skill(bucket, n, desc=f"synced {n}")
+    if manifest is None:
+        manifest = {"skills": [{"name": n, "creatorType": "anthropic", "source": "anthropic"}
+                               for n in names]}
+    if manifest is not False:
+        (bucket / "manifest.json").write_text(
+            manifest if isinstance(manifest, str) else json.dumps(manifest))
+    monkeypatch.setattr(sd, "SKILL_DIRS", [personal])
+    monkeypatch.setattr(sd, "PERSONAL_ROOT", personal)
+    monkeypatch.setattr(sd, "SYNCED_ROOT", synced)
+    monkeypatch.setattr(sd, "SYNCED_ROOTS", on)
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "none" / "**" / "SKILL.md"))
+    return personal, synced, bucket
+
+
+def _by_name(skills):
+    return {s["name"]: s for s in skills}
+
+
+def test_synced_skill_is_namespaced_scoped_and_carries_meta(tmp_path, monkeypatch):
+    _synced_world(tmp_path, monkeypatch)
+    s = _by_name(sd.discover_skills())["anthropic-skills:skill-creator"]
+    assert s["scope"] == "claude-synced"
+    assert s["synced_meta"] == {"creatorType": "anthropic", "source": "anthropic"}
+    assert "claude-synced" in sd.visible_scopes()
+
+
+def test_synced_off_by_default_discovers_nothing_and_hides_scope(tmp_path, monkeypatch):
+    _synced_world(tmp_path, monkeypatch, on=False)
+    names = _by_name(sd.discover_skills())
+    assert not any(n.startswith("anthropic-skills:") for n in names)
+    assert "skill-creator" not in names          # never leaks in as a personal skill either
+    assert "claude-synced" not in sd.visible_scopes()
+
+
+def test_module_default_is_off(monkeypatch):
+    import importlib
+    import sys
+    monkeypatch.delenv("SKILL_SYNCED_ROOTS", raising=False)
+    try:
+        assert importlib.reload(sys.modules["skill_search.skills_discovery"]).SYNCED_ROOTS is False
+    finally:
+        monkeypatch.undo()
+        importlib.reload(sys.modules["skill_search.skills_discovery"])
+
+def test_synced_rejects_wrong_depth_unlisted_and_bad_manifest(tmp_path, monkeypatch):
+    personal, synced, bucket = _synced_world(tmp_path, monkeypatch)
+    (synced / "SKILL.md").write_text("---\nname: stray\ndescription: d\n---\nb")   # depth 1
+    make_skill(bucket / "a", "deep")                                               # depth 4
+    make_skill(bucket, "unlisted")                                                 # not in manifest
+    b2 = synced / "b2"
+    make_skill(b2, "nomanifest")
+    b3 = synced / "b3"
+    make_skill(b3, "badmanifest")
+    (b3 / "manifest.json").write_text("{not json")
+    names = set(_by_name(sd.discover_skills()))
+    assert names == {"anthropic-skills:skill-creator"}
+
+
+def test_synced_symlink_escaping_the_root_is_rejected(tmp_path, monkeypatch):
+    personal, synced, bucket = _synced_world(tmp_path, monkeypatch, names=("skill-creator", "evil"))
+    outside = make_skill(tmp_path / "outside", "evil").parent
+    import shutil
+    shutil.rmtree(bucket / "evil")
+    (bucket / "evil").symlink_to(outside, target_is_directory=True)
+    names = set(_by_name(sd.discover_skills()))
+    assert "anthropic-skills:evil" not in names and "evil" not in names
+
+
+def test_personal_and_synced_twins_coexist_under_distinct_names(tmp_path, monkeypatch):
+    personal, _synced, _b = _synced_world(tmp_path, monkeypatch)
+    make_skill(personal, "skill-creator", desc="personal one")
+    names = _by_name(sd.discover_skills())
+    assert names["skill-creator"]["scope"] == "personal"
+    assert names["anthropic-skills:skill-creator"]["scope"] == "claude-synced"
+
+
+def test_two_buckets_same_name_pick_a_stable_winner(tmp_path, monkeypatch):
+    _personal, synced, _b = _synced_world(tmp_path, monkeypatch)
+    b0 = synced / "b0"
+    make_skill(b0, "skill-creator", desc="from b0")
+    (b0 / "manifest.json").write_text(json.dumps({"skills": [{"name": "skill-creator"}]}))
+    first = _by_name(sd.discover_skills())["anthropic-skills:skill-creator"]["path"]
+    second = _by_name(sd.discover_skills())["anthropic-skills:skill-creator"]["path"]
+    assert first == second and "/b0/" in first

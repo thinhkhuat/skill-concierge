@@ -589,3 +589,33 @@ Covers the Command Code parity gaps found against the ZCode reference (`adapters
 5. **Installer verify to ZCode standard.** `adapters/commandcode/install.sh` now mirrors `adapters/zcode/install.sh` §6: mod byte-identical to repo HEAD, SessionStart hook presence, MCP launcher resolvable, plus `scripts/doctor.py` `Command Code integration` row.
 6. **Command Code accepts exactly four hook events** — `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`. Any other key in `~/.commandcode/settings.json` (Claude's `UserPromptSubmit` or `PreCompact`, typically copied in by a cross-harness hook writer) is skipped as `unknown hook event` and shows up in the TUI as a config issue. `adapters/commandcode/install.sh` strips those two; `doctor.py` warns on any unknown event.
 7. **A stray `SKILL.md` at the ROOT of a Command Code skills dir hides every skill in it.** A file at `~/.commandcode/skills/SKILL.md` (or `~/.agents/skills/SKILL.md`, the same shelf here) makes Command Code discard the whole root — observed: 0 skills listed, 647 after moving the file out. `doctor.py` warns and names the path.
+
+## §24 — Account-synced skills are Claude-Code-only, default OFF, and `disabled_in` reflects Claude's settings even outside Claude
+
+**Symptom (if `SKILL_SYNCED_ROOTS` is ever flipped on before every harness cache updates):** a
+Codex/OMP/ZCode/Command Code/DSH/Cline session offers `anthropic-skills:<name>` as though it were
+one of its own installed skills, even though only Claude Code ever loads that tree.
+
+**Cause:** `~/.claude/skills/synced/<bucket>/<name>/SKILL.md` holds skills the user's claude.ai
+account synced into Claude Code — no other harness reads that directory, ever
+([ADR-0058](adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md)). A harness
+cache built before this release has no concept of the `claude-synced` scope, so a stale cache
+treats an indexed synced row as plain-installed instead of correctly dropping it as foreign. This
+is a stale-cache problem, not a per-turn one: once every harness cache is at ≥`0.48.0`, the
+`_foreign_scopes()` / `_plugin_gate_ok(name, scope)` machinery already keeps the scope Claude-only.
+
+**Do:** leave `SKILL_SYNCED_ROOTS=0` (the ship default) until `doctor` reports every harness
+integration row at ≥`0.48.0`. Flipping it on is a separate, reviewed step, not a config a session
+should do on its own initiative. **To turn it back off after a flip-on**, set the flag to `0`, then
+remove the points with a Qdrant filter delete on `scope=claude-synced` and drop the `claude-synced` key from `~/.claude/skill-concierge/next-skills.json` — a plain reindex with the flag at `0` only hides them from `search_skills` (the prune step skips scopes the session cannot see), while a stale harness enforcer querying Qdrant directly would still offer them.
+
+**Second, unrelated caveat in the same release:** `disabled_in` on a search row is computed by
+reading Claude Code's own merged `enabledPlugins` settings layers from the **MCP server's own
+cwd** — because the server cannot tell which harness launched it (Claude Code, OMP, and ZCode all
+spawn the same shared server from one `.mcp.json`). So a Codex/OMP/ZCode session still sees
+`disabled_in: ["claude"]` on a plugin Claude has switched off, even though that fact is about
+Claude's settings, not the querying harness's own. This is not wrong — the label always says
+`claude`, never implying the querying harness disabled it — but it means `disabled_in` is a
+Claude-settings lens on every row, regardless of who asked. Whether that is the wanted scope, or
+whether it should be omitted outside Claude-launched servers, is an accepted open question — not
+resolved here.

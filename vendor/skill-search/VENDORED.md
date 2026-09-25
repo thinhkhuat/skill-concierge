@@ -328,6 +328,48 @@ upstream is re-vendored:
   servers keep executing the old bytes until restarted (ADR-0018 class). No reindex needed —
   capsules are payload enrichment, never index points.**
 
+- **Row provenance — `origin` + `disabled_in` (ADR-0058, v0.48.0):** `server.py` adds `_origin(scope)`
+  (harness family a scope belongs to — `claude`, `codex`, `commandcode`, `omp`, `zcode`, `dsh`,
+  `cline`, or `claude-synced`, 8 total), `_claude_disabled_plugin_ids()` (ids installed in Claude Code's
+  `installed_plugins.json` whose every installed key is switched off in the merged `enabledPlugins`
+  layers, user → cwd `.claude/settings.json` → `.claude/settings.local.json` — the enforcer's own
+  invocability rule; unreadable registry = no signal; synced rows list every non-Claude harness), and `ROW_NOTE`. `_fuse_ranked` drops the slash `command` field on every
+  non-catalog row and adds `origin` + (when applicable) `disabled_in`; `search_skills` and
+  `consult_candidates` each add one response-level `note` when any row carries provenance. Read
+  PER CALL via `SKILL_ROW_ORIGIN` (default `1`) — this is query-time, not index-shaping, so it is
+  **not** part of the `ENGINE_ENV_KEYS` forwarding list below. Catalog rows (`external`/`note`) are
+  byte-identical to before. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) to deploy; long-lived MCP servers
+  keep executing the old row shape until restarted (ADR-0018 class). No reindex needed — provenance
+  is computed at query time, never written to a point payload.**
+
+- **Operator-curated trigger layer (ADR-0058, v0.48.0):** `server.py` adds `_load_curated()` /
+  `_curated_phrases()`, reading `triggers-curated.json` beside `SKILL_TRIGGERS` (no env var of its
+  own — its path derives from the corpus path) into `{"<skill>": ["phrase", …]}`. `_trigger_phrases()`
+  takes curated phrases FIRST, ahead of the LLM-utterance layer, within the existing combined
+  `TRIGGERS_MAX` cap; a malformed file catches broadly and fails open with one stderr line, and the
+  cache is reset at the top of every `build_index()` so an edit lands on the next reindex. Absent
+  file = byte-identical to before. **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy.**
+
+- **Claude account-synced discovery, default OFF (ADR-0058, v0.48.0):** `skills_discovery.py` adds
+  `SYNCED_ROOT` (`~/.claude/skills/synced/`), `SYNCED_NAMESPACE` (`anthropic-skills`), and
+  `_synced_paths()` — gated on `SKILL_SYNCED_ROOTS` (default `0`), discovers
+  `<bucket>/<name>/SKILL.md` at EXACTLY that depth, only for names the bucket's own `manifest.json`
+  lists, only when the file's real path resolves inside the real synced root (a symlink escape is
+  rejected). A hit is namespaced `anthropic-skills:<name>`, scoped `claude-synced`, and carries
+  `creatorType`/`source` from the manifest as `synced_meta` payload. Folded into
+  `discover_skill_paths()` (excluded from the plain personal-root glob so a synced file is never
+  double-discovered), `_scope_for()`, `visible_scopes()`, and `discover_skills()`'s namespacing step.
+  Plugin-side companions: `enforcer.py` adds `claude-synced` to every non-Claude `_foreign_scopes()`
+  tuple, excludes it from `_retrieve_foreign`'s scope filter, and gates it in `_plugin_gate_ok` on
+  SCOPE not name; `apply-overrides.py` excludes the scope from `skillOverrides` discovery;
+  `build_triggers.py` excludes it from third-party utterance/capsule generation. Revert after a flip-on:
+  set `SKILL_SYNCED_ROOTS=0`, then remove the points with a Qdrant filter delete on `scope=claude-synced` and drop the `claude-synced` key from `~/.claude/skill-concierge/next-skills.json` — a plain reindex with the flag at `0` only hides them from `search_skills` (the prune step skips scopes the session cannot see), while a stale harness enforcer querying Qdrant directly would still offer them.
+  **Requires re-copy into the stable venv
+  (`pip install --force-reinstall --no-deps vendor/skill-search`) + a reindex to deploy — inert
+  while the flag ships OFF.**
+
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.

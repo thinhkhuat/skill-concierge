@@ -378,6 +378,11 @@ def _foreign_scopes() -> tuple:
 
     `project:` scopes are cwd-derived and shared by construction. Never foreign.
 
+    `claude-synced` (Claude account-synced skills under ~/.claude/skills/synced/<bucket>/,
+    named `anthropic-skills:<name>`) is foreign to every harness but Claude Code: only Claude
+    Code loads that tree (OMP's claude provider scans ~/.claude/skills one level deep, so the
+    nested bucket is invisible to it too).
+
     ADR-0054: `dsh-personal` and `cline-personal` (the DSH_HOME/skills and Cline skill
     roots) are foreign to EVERY other harness. Before this they were missing from the
     Claude tuple, so re-rooted copies of the plugin's own skills under ~/.ohdsh/skills
@@ -388,16 +393,17 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-plugin", "codex-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal")
+                "dsh-personal", "cline-personal", "claude-synced")
         return base if _commandcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "codex":
-        return ("plugin", "commandcode-personal", "dsh-personal", "cline-personal")
+        return ("plugin", "commandcode-personal", "dsh-personal", "cline-personal", "claude-synced")
     if RUNNING_HARNESS == "omp":
-        return ("codex-plugin", "commandcode-personal", "dsh-personal", "cline-personal")
+        return ("codex-plugin", "commandcode-personal", "dsh-personal", "cline-personal",
+                "claude-synced")
     if RUNNING_HARNESS == "zcode":
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "dsh-personal", "cline-personal")
+                "dsh-personal", "cline-personal", "claude-synced")
         return base if _zcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "dsh":
         # DSH reads only its own roots (DSH_HOME/skills, <.dsh/skills) plus the shared
@@ -407,7 +413,7 @@ def _foreign_scopes() -> tuple:
         return ("plugin", "personal", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin", "cline-personal")
+                "zcode-personal", "zcode-plugin", "cline-personal", "claude-synced")
     if RUNNING_HARNESS == "cline":
         # Cline (ADR-0051) reads only its own two roots — ~/.cline/data/settings/skills
         # and <cwd>/.cline/skills. It reads NO plugin cache and NO other harness's
@@ -415,7 +421,7 @@ def _foreign_scopes() -> tuple:
         return ("plugin", "personal", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin", "dsh-personal")
+                "zcode-personal", "zcode-plugin", "dsh-personal", "claude-synced")
     return ("codex-plugin", "codex-personal", "commandcode-personal",
             "dsh-personal", "cline-personal")
 
@@ -684,7 +690,25 @@ def _invocable_twin(name: str) -> bool:
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
 
 
-def _plugin_gate_ok(name: str) -> bool:
+_SYNCED_SIDECAR_CACHE: dict = {}
+
+
+def _synced_sidecar_names() -> set:
+    """Names in the chain sidecar's `claude-synced` bucket — how a hint or ROUTE candidate,
+    which carries no payload scope, is recognised as an account-synced skill. Read once per
+    sidecar path per hook process. Fail-open to an empty set."""
+    key = str(_SIDECAR_PATH)
+    if key not in _SYNCED_SIDECAR_CACHE:
+        try:
+            data = json.loads(_SIDECAR_PATH.read_text(encoding="utf-8"))
+            bucket = data.get("claude-synced") if isinstance(data, dict) else None
+            _SYNCED_SIDECAR_CACHE[key] = set(bucket) if isinstance(bucket, dict) else set()
+        except (OSError, UnicodeError, ValueError):
+            _SYNCED_SIDECAR_CACHE[key] = set()
+    return _SYNCED_SIDECAR_CACHE[key]
+
+
+def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
     """ADR-0052 + ADR-0053: True when THIS session may act on `name`.
 
     Discovery indexes the machine-wide UNION of enablement layers, so a
@@ -703,6 +727,13 @@ def _plugin_gate_ok(name: str) -> bool:
     (unreadable manifest = UNKNOWN) filters nothing, the ADR-0034 contract;
     ENFORCER_PLUGIN_GATE=0 restores the ungated behaviour everywhere."""
     if not PLUGIN_GATE:
+        return True
+    # Account-synced skills are not plugins: Claude Code alone loads them, and they pass on
+    # their SCOPE, never on the `anthropic-skills:` name, which any plugin could carry.
+    if scope == "claude-synced":
+        return RUNNING_HARNESS == "claude"
+    if (scope is None and RUNNING_HARNESS == "claude"
+            and name.startswith("anthropic-skills:") and name in _synced_sidecar_names()):
         return True
     if RUNNING_HARNESS in ("claude", "omp"):
         if INVOCABLE_PLUGIN_IDS is None or ":" not in name:
@@ -1007,6 +1038,8 @@ def _visible_sidecar_names() -> dict:
         scopes += ["omp-personal", "omp-managed", "omp-plugin"]
         if cwd is not None:
             scopes.append(f"omp-project:{cwd / '.omp' / 'skills'}")
+    if RUNNING_HARNESS == "claude":   # account-synced skills chain only where Claude Code loads them
+        scopes.append("claude-synced")
     for scope in scopes:
         m = data.get(scope)
         if isinstance(m, dict):
@@ -1445,7 +1478,7 @@ def _retrieve(vector: list) -> list:
         if (CROSS_HARNESS and INVOCABLE_PLUGIN_IDS is not None
                 and pl.get("scope") in FOREIGN_SCOPES and not _invocable_twin(name)):
             continue
-        if not _plugin_gate_ok(name):   # ADR-0052: plugin disabled in THIS session's merged layers
+        if not _plugin_gate_ok(name, pl.get("scope")):   # ADR-0052: plugin disabled in THIS session's merged layers
             continue
         out.append((name, pl.get("description", ""), float(hits[0].get("score", 0.0))))
         if len(out) >= TOP_K:
@@ -1529,7 +1562,8 @@ def _retrieve_foreign(vector: list, top_installed: float = 0.0,
                      {"query": vector, "group_by": "name", "limit": FOREIGN_SLOTS * 3,
                       "group_size": 1, "with_payload": ["name", "description"],
                       "filter": {"must": [
-                          {"key": "scope", "match": {"any": list(FOREIGN_SCOPES)}}]}},
+                          {"key": "scope", "match": {"any": [
+                              sc for sc in FOREIGN_SCOPES if sc != "claude-synced"]}}]}},
                      QDRANT_TIMEOUT_S)
     out = []
     for g in res.get("result", {}).get("groups", []):
@@ -2861,7 +2895,7 @@ def _selftest() -> int:
                 bad.append("cross-harness: omp foreign label must be commandcode/dsh/cline: "
                            f"{_foreign_harness_label()!r}")
             if _foreign_scopes() != ("codex-plugin", "commandcode-personal",
-                                     "dsh-personal", "cline-personal"):
+                                     "dsh-personal", "cline-personal", "claude-synced"):
                 bad.append("cross-harness: omp foreign scopes wrong: "
                            f"{_foreign_scopes()!r}")
             # twin test is active under omp (plugin ids invocable via the claude/omp union)
@@ -3204,6 +3238,54 @@ def _selftest() -> int:
                 bad.append(f"plugin-enablement gate: {lane} must keep lane semantics (foreign/twin owns it)")
     finally:
         RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE = _saved_pg
+
+    # Account-synced skills (`claude-synced`, named `anthropic-skills:<name>`): foreign in every
+    # lane but Claude; the Claude gate passes them on SCOPE, never on the spoofable name; they
+    # never enter another harness's foreign annex; their chain bucket is read only under Claude.
+    _saved_sy = (RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE, FOREIGN_SCOPES,
+                 _post_json, _SIDECAR_PATH, CROSS_HARNESS)
+    try:
+        for lane in ("codex", "commandcode", "omp", "zcode", "dsh", "cline", "claude"):
+            RUNNING_HARNESS = lane
+            if (lane == "claude") == ("claude-synced" in _foreign_scopes()):
+                bad.append(f"synced: claude-synced foreign membership wrong under {lane}")
+        PLUGIN_GATE, INVOCABLE_PLUGIN_IDS = True, {"onplugin"}
+        RUNNING_HARNESS = "claude"
+        if not _plugin_gate_ok("anthropic-skills:x", scope="claude-synced"):
+            bad.append("synced gate: claude must pass a claude-synced row")
+        for spoof in ("plugin", "zcode-plugin", "omp-plugin"):
+            if _plugin_gate_ok("anthropic-skills:x", scope=spoof):
+                bad.append(f"synced gate: a {spoof} row named anthropic-skills:x must NOT pass")
+        with tempfile.TemporaryDirectory() as _d:
+            _SIDECAR_PATH = Path(_d) / "next-skills.json"
+            _SIDECAR_PATH.write_text(json.dumps({"claude-synced": {"anthropic-skills:x": []},
+                                                 "personal": {"plain": []}}), encoding="utf-8")
+            if not _plugin_gate_ok("anthropic-skills:x"):
+                bad.append("synced gate: a hint name in the sidecar claude-synced bucket must pass")
+            if _plugin_gate_ok("anthropic-skills:y"):
+                bad.append("synced gate: a hint name absent from the claude-synced bucket must drop")
+            if "anthropic-skills:x" not in _visible_sidecar_names():
+                bad.append("synced mirror: claude must read the claude-synced chain bucket")
+            for lane in ("omp", "dsh", "cline"):
+                RUNNING_HARNESS = lane
+                if _plugin_gate_ok("anthropic-skills:x", scope="claude-synced") or \
+                        _plugin_gate_ok("anthropic-skills:x"):
+                    bad.append(f"synced gate: {lane} must never pass a synced skill")
+            for lane in ("codex", "zcode", "commandcode", "omp"):
+                RUNNING_HARNESS = lane
+                if "anthropic-skills:x" in _visible_sidecar_names():
+                    bad.append(f"synced mirror: {lane} must not read the claude-synced bucket")
+        RUNNING_HARNESS, CROSS_HARNESS = "codex", True
+        FOREIGN_SCOPES = _foreign_scopes()
+        _cap = []
+        _post_json = lambda url, payload, timeout: (_cap.append(payload) or {"result": {"groups": []}})
+        _retrieve_foreign([0.0])
+        _any = _cap[0]["filter"]["must"][0]["match"]["any"] if _cap else ["<no request>"]
+        if "claude-synced" in _any or "plugin" not in _any:
+            bad.append(f"synced annex: the foreign-annex scope list must exclude claude-synced: {_any!r}")
+    finally:
+        (RUNNING_HARNESS, INVOCABLE_PLUGIN_IDS, PLUGIN_GATE, FOREIGN_SCOPES,
+         _post_json, _SIDECAR_PATH, CROSS_HARNESS) = _saved_sy
 
     # (14) ADR-0054 harness-message lane: every harness-generated prompt shape is caught at the
     # prompt head; human prompts, OMP worker briefs, consult asks and a PASTED block

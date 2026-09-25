@@ -37,10 +37,11 @@ consult_candidates(queries=["<sub-goal A phrasing>", "<sub-goal B phrasing>", ..
 ```
 
 Phrase each query by INTENT + DOMAIN TERMS, away from the skill names you expect.
-Rows return with `description`, `score`, `capsule` (dossier: purpose / capabilities /
-inputs / outputs / avoid_when) when the corpus covers the skill, `path` on installed
-rows (deep-read via Read), `external` on catalog rows (deep-read via `get_skill(name)`).
-Externals are first-class here — rank them on fit, origin is logistics.
+Rows return with `description`, `score`, `origin` (which harness's roots hold the copy),
+`disabled_in` (harnesses where the skill is off — Claude, when every installed copy of its plugin is switched off; every non-Claude harness, for account-synced skills), `capsule` (dossier: purpose /
+capabilities / inputs / outputs / avoid_when) when the corpus covers the skill, `path` on
+installed rows (deep-read via Read), `external` on catalog rows (deep-read via
+`get_skill(name)`). Externals are first-class here — rank them on fit, origin is logistics.
 
 ### 3. Admit sieve misses
 

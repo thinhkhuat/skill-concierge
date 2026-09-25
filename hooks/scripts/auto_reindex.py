@@ -19,7 +19,6 @@ Design contract (mirrors the sibling doctrine / enforcer / ledger hooks):
 
 Disable by setting AUTO_REINDEX_THROTTLE_S to a huge value, or remove the hook entry.
 """
-import json
 import os
 import subprocess
 import sys
@@ -38,41 +37,13 @@ PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve()
 
 
 def _mcp_env():
-    """Embedder + store come from .mcp.json (single source of truth); real env wins."""
-    env = {}
+    """The query server's engine settings (scripts/engine_env.py); fail-silent to the process env."""
     try:
-        configured_env = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))[
-            "mcpServers"]["skill-search"]["env"]
-    except (OSError, ValueError, KeyError, TypeError):
-        configured_env = {}
-    if isinstance(configured_env, dict):
-        env = configured_env
-    merged = dict(os.environ)
-    # Forward the embedder/store keys AND the trigger-layer keys from .mcp.json so the
-    # DETACHED reindex builds the SAME index the query server serves. Without the trigger
-    # keys, an auto-reindex silently rebuilds at engine defaults (SKILL_LLM_TRIGGERS off,
-    # TRIGGERS_MAX 12) and prunes the utterance points — ADR-0026. real env still wins.
-    # SKILL_CONCIERGE_CATALOG_ROOTS (ADR-0031) forwarded too: if the catalog config
-    # path is ever pinned in .mcp.json (rather than the shared durable-home default),
-    # the detached reindex must see the SAME roots the query server does, or it would
-    # rebuild without the catalog scopes and prune every external point — the exact
-    # ADR-0026 env-forwarding gap class this list exists to close.
-    # SKILL_CODEX_ROOTS (ADR-0033) is the same class. It is NOT pinned in .mcp.json today,
-    # so this is defensive: if it ever were pinned to 0, a detached reindex missing it would
-    # rebuild at the engine default (ON) and re-add every codex-* point the query server was
-    # configured to drop — and pinned to 1 against an engine default of 0, it would prune them
-    # all. SKILL_OMP_ROOTS (ADR-0038) is the exact same defensive class: the engine defaults
-    # it ON, so a detached reindex that never forwards a pinned-to-0 value would silently re-add
-    # every omp-* point the query server dropped — the identical prune-war gap this tuple closes
-    # for the other harnesses. SKILL_ZCODE_ROOTS (ADR-0042) joins the same defensive class.
-    # INVARIANT: every engine-side flag readable from .mcp.json belongs in this tuple.
-    for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
-              "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS",
-              "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS",
-              "SKILL_OMP_ROOTS", "SKILL_ZCODE_ROOTS", "SKILL_DSH_ROOTS",
-              "SKILL_CLINE_ROOTS"):
-        if k in env and k not in os.environ:
-            merged[k] = env[k]
+        sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+        import engine_env
+        merged = engine_env.engine_env(PLUGIN_ROOT)
+    except Exception:
+        merged = dict(os.environ)
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")
 
 

@@ -17,7 +17,10 @@ Before tackling this task, call the `search_skills` MCP tool with a short query
 describing the user's goal. It returns ranked skills by semantic relevance.
 
 Then:
-1. Read the returned names + descriptions.
+1. Read the returned names + descriptions. Each row also carries `origin` (which harness's
+   roots hold the copy) and, when present, `disabled_in`. A row whose `disabled_in` names your
+   harness is not a hit. Otherwise: a skill your harness lists is invoked by name; one it does not
+   list is loaded with `get_skill(name)` and followed inline.
 2. Invoke the genuinely relevant ones by name (e.g. /frontend-design).
 3. Ignore low-score results — do not load skills that aren't relevant.
 4. If a result looks promising but the description is thin, call `get_skill`

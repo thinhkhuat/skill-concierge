@@ -87,6 +87,7 @@ def _disk_count():
             text=True,
             timeout=30,
             check=False,
+            env=_mcp_env()[0],   # count with the same roots the server indexes
         )
         return int(out.stdout.strip())
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -117,19 +118,13 @@ def _ping_ok() -> bool:
 
 
 def _mcp_env():
-    """Embedder + store come from .mcp.json (single source of truth); real env wins.
-    Same seam as auto_reindex.py's _mcp_env() — the detached generate+reindex must build/query
-    the SAME index the query server serves."""
+    """The query server's engine settings (scripts/engine_env.py); fail-silent to the process env."""
     try:
-        env = json.loads((PLUGIN_ROOT / ".mcp.json").read_text(encoding="utf-8"))[
-            "mcpServers"]["skill-search"]["env"]
-    except (OSError, KeyError, TypeError, ValueError):
-        env = {}
-    merged = dict(os.environ)
-    for k in ("SKILL_QDRANT_URL", "SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL",
-              "SKILL_LLM_TRIGGERS", "TRIGGERS_MAX", "SKILL_TRIGGERS", "SKILL_BODY_TRIGGERS"):
-        if k in env and k not in os.environ:
-            merged[k] = env[k]
+        sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+        import engine_env
+        merged = engine_env.engine_env(PLUGIN_ROOT)
+    except Exception:
+        merged = dict(os.environ)
     return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")
 
 

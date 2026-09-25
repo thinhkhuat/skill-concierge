@@ -112,6 +112,10 @@ def scroll_all_points(catalog=None, paths=False):
             pl = pt.get("payload", {})
             if scope is None and pl.get("tier") == "external":
                 continue
+            # Account-synced skills are the user's claude.ai content: never sent to the
+            # third-party utterance/capsule model.
+            if scope is None and pl.get("scope") == "claude-synced":
+                continue
             if paths:
                 yield pl.get("name", ""), pl.get("description", ""), pl.get("path", "")
             else:

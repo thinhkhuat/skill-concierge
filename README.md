@@ -138,6 +138,13 @@ The vendored engine exposes five tools (`vendor/skill-search/skill_search/server
 | `reindex` | rebuild the catalogue index after skills change |
 | `health` | report index status (collection, count, embedder) |
 
+Since `0.48.0` ([ADR-0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md))
+`search_skills` and `consult_candidates` rows drop the slash `command` field on every non-catalog
+row and gain `origin` (which harness's roots hold the indexed copy — `claude`, `codex`,
+`commandcode`, `omp`, `zcode`, `dsh`, `cline`, or `claude-synced`) and `disabled_in` (present when
+an installed Claude Code plugin has every installed copy switched off in its merged `enabledPlugins` layers — the per-turn hook's own rule, so a plugin Claude can run is never marked; account-synced rows list every non-Claude harness), plus one response-level `note`
+explaining both. `SKILL_ROW_ORIGIN=0` restores the pre-`0.48.0` row shape exactly.
+
 ### Inspecting the ledger
 
 Every turn and skill/search invocation is logged to an append-only JSONL ledger. Analyze
@@ -230,6 +237,8 @@ Behavior-changing kill-switches, all **default ON** except `SKILL_LLM_TRIGGERS` 
 | `SKILL_LLM_TRIGGERS` | `0` (OFF) | Layers offline flywheel-generated natural-utterance phrases (canonical corpus `~/.claude/skill-concierge/triggers.json`, EN+VN) FIRST in the MAX-pool trigger layer, ahead of description/body. `=1` + a reindex enables; needs `SKILL_TRIGGERS` pointed at the corpus (machine-local, not in this public repo). Live deploy sets this ON via `.mcp.json`. [ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md). |
 | `TRIGGERS_MAX` | `12` | Per-skill COMBINED cap on trigger points across all sources. Raise (live deploy uses `16`) so LLM-utterance phrases add slots rather than evict description/body ones. |
 | `SKILL_BLOCKLIST` | `1` (ON) | The user-ordered disable tier ([ADR-0046](docs/adr/0046-blocklist-disable-tier.md)): `~/.claude/skill-concierge/blocklist.json` entries are denied at invocation (PreToolUse(Skill) guard — catches command-files surfaced as skills too), dropped from enforcer offers/hints/routes, filtered from `search_skills`, refused by `get_skill`, and forced name-only if keep-on'd. Read live — no reindex, no restart. `=0` turns the whole feature off everywhere. |
+| `SKILL_ROW_ORIGIN` | `1` (ON) | `search_skills`/`consult_candidates` rows carry `origin` + `disabled_in` (per-call, read live — not an index-shaping flag) instead of a slash `command`. `=0` restores the pre-`0.48.0` row shape exactly. [ADR-0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md). |
+| `SKILL_SYNCED_ROOTS` | `0` (**OFF**) | Discovery indexes Claude account-synced skills (`~/.claude/skills/synced/<bucket>/<name>/SKILL.md`, exact depth, manifest-listed only) as `anthropic-skills:<name>`, scope `claude-synced`. Gated on scope, never the spoofable name; foreign to every harness but Claude, excluded from the cross-harness annex. Ships OFF until every harness cache is ≥`0.48.0`; `=1` + a reindex enables. [ADR-0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md). |
 
 ### Always-on policy (the keep-on allowlist)
 
@@ -373,7 +382,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 | Harness | Discovery roots (scopes) | Enforcement vehicle | MCP wiring |
 |---------|--------------------------|---------------------|------------|
-| Claude Code | `~/.claude/skills`, `$CWD/.claude/skills`, `~/.claude/plugins/cache/**` (`personal`/`project`/`plugin`) | `UserPromptSubmit` settings hook → `enforcer.py` + SessionStart doctrine | shared `.mcp.json` |
+| Claude Code | `~/.claude/skills`, `$CWD/.claude/skills`, `~/.claude/plugins/cache/**` (`personal`/`project`/`plugin`), `~/.claude/skills/synced/**` (`claude-synced`, default OFF) | `UserPromptSubmit` settings hook → `enforcer.py` + SessionStart doctrine | shared `.mcp.json` |
 | Codex | `~/.codex/skills`, `$CWD/.codex/skills`, `~/.codex/plugins/cache/**` (`codex-*`) | auto-discovered settings hooks (no `hooks` field; ADR-0033) | `.codex-plugin/mcp.json` (relative command; ADR-0035) |
 | Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformInput` (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038) | `adapters/commandcode/mcp.json` (absolute paths; ADR-0038) |
 | Oh My Pi (OMP) | `~/.omp/agent/skills`, `$CWD/.omp/skills`, `~/.omp/agent/managed-skills`, `~/.omp/plugins/cache/plugins/**` (`omp-*`) | extension module `before_agent_start` (`adapters/omp/skill-concierge.ext.ts` via `package.json` `omp.extensions`; ADR-0039) | plugin `.mcp.json` imported natively (`${CLAUDE_PLUGIN_ROOT}` expanded by OMP); `adapters/omp/mcp.json` manual fallback only |
@@ -383,7 +392,10 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 
 `SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` / `SKILL_ZCODE_ROOTS` /
 `SKILL_DSH_ROOTS` / `SKILL_CLINE_ROOTS`
-(all default ON) are one-var reverts that drop that harness's roots + scopes byte-identically
+(all default ON) are one-var reverts that drop that harness's roots + scopes byte-identically.
+`SKILL_SYNCED_ROOTS` is the one root flag that ships the other way — **default OFF** — because
+Claude's own account-synced skills would render as installed in a harness cache still below
+`0.48.0`; `=1` (a separate, reviewed step) + a reindex adds the `claude-synced` scope
 (see AGENTS.md → Runtime flags).
 
 ### How a request flows
@@ -400,7 +412,11 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
    indexed catalogue from Qdrant.
 4. **Invoke** — Claude reads the ranked names + descriptions and fires the relevant skills.
 5. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation
-   (matcher `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant since v0.4.1), fail-silent and additive-only.
+   (matcher `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant since v0.4.1); a
+   second matcher (`Skill|mcp__.*skill-search__get_skill`) echoes a just-loaded skill's own
+   "not for" lines back as `additionalContext` (`skill_exclusions.py`, ADR-0058) so a body that
+   excludes the task forces an open re-rule instead of a silent switch. Both fail-silent and
+   additive-only.
 6. **Curate** — `scripts/analyze.py` rolls the ledger up into offer→take / dodge / hit@k metrics.
    (Usage questions use the `skill-usage-audit` skill + the transcript SKILL-FIRST trail, **not** the
    ledger, which measures gate compliance only.)
@@ -411,6 +427,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.48.0` — **published, ADR-0058 off-list doctrine rule + exclusion echo + row provenance + account-synced skills (default OFF): a skill picked outside the search hits now routes through line 1 `SEARCH:` → load → quote the covering line → `USING:`, and a loaded body's own "not for" lines are echoed back deterministically after load (`skill_exclusions.py`, PostToolUse, Claude Code + ZCode) so an excluding body forces an open re-rule instead of a silent switch (injected doctrine body 4,217 → 5,011 chars); `search_skills`/`consult_candidates` rows drop `command` and gain `origin` (8 families incl. `claude-synced`) + `disabled_in` + one response note (`SKILL_ROW_ORIGIN=0` reverts); Claude account-synced skills (`anthropic-skills:<name>`, scope `claude-synced`) are indexed, gated on scope rather than the spoofable name, excluded from every other harness's offer and foreign annex — ships **default OFF** until every harness cache is ≥0.48.0; an operator-curated trigger layer (`triggers-curated.json`) takes the first trigger slots; `scripts/engine_env.py` unifies the engine-env forwarding class across all five reindex paths. EPOCH v0.48.0.**
 
 `0.47.3` — **published, ADR-0057 Command Code fixes: the `personal` scope follows the live shelf (invocable when `~/.commandcode/skills` resolves to `~/.claude/skills`, foreign otherwise — the ZCode rule), the installer strips `PreCompact` as well as `UserPromptSubmit`, doctor warns on unsupported hook events and on a stray root-level `SKILL.md` that hides a whole skills root, and `doctor.py --selftest` passes again.**
 

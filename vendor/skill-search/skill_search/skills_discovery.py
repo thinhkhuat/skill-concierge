@@ -129,6 +129,18 @@ CLINE_ROOTS = os.environ.get("SKILL_CLINE_ROOTS", "1") != "0"
 CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"  # Cline personal
 CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"            # Cline project-scoped, CWD-relative
 
+# Claude account-synced skills: Claude Code downloads skills from the user's claude.ai account
+# into ~/.claude/skills/synced/<bucket>/<name>/SKILL.md and lists them as
+# `anthropic-skills:<name>` (a namespace Claude Code reserves for them). Only Claude Code
+# loads them, so their scope `claude-synced` is foreign to every other harness. Default OFF:
+# harness caches older than this engine would offer them as installed. `=1` + a reindex
+# indexes them. Discovery takes exactly that depth, only names the bucket's manifest.json
+# lists, and only files whose real path stays inside the synced root.
+SYNCED_ROOTS = os.environ.get("SKILL_SYNCED_ROOTS", "0") == "1"
+SYNCED_ROOT = PERSONAL_ROOT / "synced"
+SYNCED_NAMESPACE = "anthropic-skills"
+_SYNCED_META: dict = {}
+
 SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [CODEX_PERSONAL_ROOT, CODEX_PROJECT_ROOT] if CODEX_ROOTS else []
 ) + (
@@ -822,13 +834,54 @@ def _plugin_paths() -> list[Path]:
     return claude_hits + codex_hits + omp_hits + zcode_hits
 
 
+def _under(path, root: Path) -> bool:
+    return str(path).startswith(str(root) + os.sep)
+
+
+def _synced_paths() -> list[Path]:
+    """Account-synced SKILL.md files: <SYNCED_ROOT>/<bucket>/<name>/SKILL.md, the name listed in
+    that bucket's manifest.json, the real path inside the real synced root. Records each file's
+    manifest provenance (creatorType/source) for the index payload."""
+    out: list[Path] = []
+    try:
+        buckets = sorted(b for b in SYNCED_ROOT.iterdir() if b.is_dir())
+        real_root = os.path.realpath(SYNCED_ROOT)
+    except OSError:
+        return out
+    for bucket in buckets:
+        manifest = _read_json(bucket / "manifest.json")
+        skills = manifest.get("skills") if isinstance(manifest, dict) else None
+        if not isinstance(skills, list):
+            continue
+        listed = {s["name"]: s for s in skills if isinstance(s, dict) and isinstance(s.get("name"), str)}
+        try:
+            entries = sorted(bucket.iterdir())
+        except OSError:
+            continue
+        for d in entries:
+            p = d / "SKILL.md"
+            if d.name not in listed or not p.is_file():
+                continue
+            if not os.path.realpath(p).startswith(real_root + os.sep):
+                continue
+            meta = listed[d.name]
+            _SYNCED_META[str(p)] = {k: meta[k] for k in ("creatorType", "source")
+                                    if isinstance(meta.get(k), str)}
+            out.append(p)
+    return out
+
+
 def discover_skill_paths() -> list[Path]:
-    """Every SKILL.md path across personal dirs, project dirs, and plugins."""
+    """Every SKILL.md path across personal dirs, project dirs, plugins, and (when enabled)
+    Claude account-synced skills."""
     paths: list[Path] = []
     for d in SKILL_DIRS:
         if d.exists():
-            paths += [Path(p) for p in glob.glob(str(d / "*" / "SKILL.md"))]
+            paths += [Path(p) for p in glob.glob(str(d / "*" / "SKILL.md"))
+                      if not _under(p, SYNCED_ROOT)]
     paths += _plugin_paths()
+    if SYNCED_ROOTS:
+        paths += _synced_paths()
     return paths
 
 
@@ -844,6 +897,8 @@ def _scope_for(path: Path) -> str:
     genuinely gone from disk.
     """
     p = str(path)
+    if p in _SYNCED_META:           # only paths _synced_paths vetted (depth, manifest, realpath)
+        return "claude-synced"
     if p.startswith(str(PERSONAL_ROOT) + os.sep):
         return "personal"
     if p.startswith(str(CODEX_PERSONAL_ROOT) + os.sep):
@@ -913,6 +968,8 @@ def visible_scopes() -> set[str]:
         scopes |= {"dsh-personal", f"dsh-project:{DSH_PROJECT_ROOT}"}
     if CLINE_ROOTS:
         scopes |= {"cline-personal", f"cline-project:{CLINE_PROJECT_ROOT}"}
+    if SYNCED_ROOTS:
+        scopes.add("claude-synced")
     return scopes | {f"catalog:{a}" for a in catalog_roots()}
 
 
@@ -940,6 +997,9 @@ def discover_skills() -> list[dict]:
         skill = parse_skill(p)
         if skill and skill["name"]:
             skill["scope"] = _scope_for(p)
+            if skill["scope"] == "claude-synced":
+                skill["name"] = f"{SYNCED_NAMESPACE}:{skill['name']}"
+                skill["synced_meta"] = _SYNCED_META.get(str(p), {})
             found.setdefault(skill["name"], skill)   # first writer wins
     seen_real = set()
     for s in found.values():

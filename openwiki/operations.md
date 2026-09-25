@@ -174,6 +174,8 @@ number rather than a boolean, and `SKILL_TRIGGER_PURITY` defaults to a non-boole
 | `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
 | `SKILL_TRIGGER_PURITY` | `shadow` | engine flags workflow-summary body triggers; `shadow` only logs would-drops (index unchanged), `active` drops them (**needs a full reindex**), `off` skips the check | [0023](../docs/adr/0023-trigger-purity-lint.md) |
 | `SKILL_PLUGIN_FILTER` | `1` | index **only** the installed + enabled plugin version (read from Claude Code's own `installed_plugins.json` / `enabledPlugins`) instead of every cached version — 548 → 427 skills, nothing invocable lost; `=0` reverts to the unfiltered cache. Fails open on an unreadable manifest | [0028](../docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md) |
+| `SKILL_ROW_ORIGIN` | `1` | `search_skills`/`consult_candidates` rows drop `command` and gain `origin` (which harness's roots hold the copy — 8 families incl. `claude-synced`) + `disabled_in` (when an installed Claude Code plugin has every installed copy switched off in its merged `enabledPlugins` layers — the per-turn hook's own rule, so a plugin Claude can run is never marked; account-synced rows list every non-Claude harness) + one response `note`; read per call (query-time, not index-shaping — NOT in the `ENGINE_ENV_KEYS` forward list); `=0` restores the pre-`0.48.0` row shape | [0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
+| `SKILL_SYNCED_ROOTS` | `0` | indexes Claude account-synced skills (`~/.claude/skills/synced/<bucket>/<name>/SKILL.md`, exact depth, manifest-listed only) as `anthropic-skills:<name>`, scope `claude-synced`; gated on scope, never the spoofable name; foreign to every harness but Claude, excluded from the cross-harness annex; `=1` **+ a reindex** enables — ships OFF until every harness cache is ≥`0.48.0` (a separate, reviewed step) | [0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
 
 Two enforcer levers are additionally **default-inert** and env-gated (`ENFORCER_PER_SKILL_TAU`,
 `ENFORCER_DOMINANCE_RATIO`); `ENFORCER_DETERMINISTIC` is default ON since v0.47.0 (ADR-0054,
@@ -187,12 +189,19 @@ lane — see
 > 0.37.0) regenerates only via the flywheel scripts. Its path is pinned in `.mcp.json`
 > `SKILL_TRIGGERS` (also the env-less default in every generator and in the vendored engine),
 > so a fresh clone enables the flag but degrades gracefully to desc/body triggers until a
-> flywheel run generates the corpus. **v0.16.1 fix:** the detached
-> SessionStart `auto_reindex` hook ([`hooks/scripts/auto_reindex.py`](../hooks/scripts/auto_reindex.py)
-> `_mcp_env()`) now forwards `SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/`SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS`
-> to the background reindex — before that it rebuilt at engine defaults and **pruned the utterance
-> points on every session** ([ADR-0026](../docs/adr/0026-llm-utterance-trigger-layer.md), CHANGELOG
-> [0.16.1]).
+> flywheel run generates the corpus. **v0.16.1 fix, unified in v0.48.0:** every index-shaping engine
+> setting `.mcp.json` can pin now lives in ONE list (query-time ones such as `SKILL_TOP_K` stay out), `ENGINE_ENV_KEYS` in
+> [`scripts/engine_env.py`](../scripts/engine_env.py) — `SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/
+> `SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS` plus every other index-shaping setting (store and embedder,
+> every harness-root flag, `SKILL_CONCIERGE_CATALOG_ROOTS`, `SKILL_SYNCED_ROOTS`, the plugin-enablement
+> seams, the sidecar path) — and all five reindex paths (the detached SessionStart
+> [`hooks/scripts/auto_reindex.py`](../hooks/scripts/auto_reindex.py), `auto_flywheel.py`,
+> `flywheel.py`, `doctor.py`'s repairs, and `setup.sh`'s `env_run()`) call through it instead of
+> each keeping its own copy of the key tuple. Before v0.16.1 the detached reindex rebuilt at engine
+> defaults and **pruned the utterance points on every session**
+> ([ADR-0026](../docs/adr/0026-llm-utterance-trigger-layer.md), CHANGELOG [0.16.1]); before v0.48.0
+> the five copies of that key list had already begun to drift
+> ([ADR-0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md)).
 ## The retrieval flywheel (v0.17.0+, ADR-0027)
 
 The flywheel generates **natural-utterance trigger phrases** (EN+VN) for each skill offline via a
@@ -249,6 +258,7 @@ that the catch-loop silently swallowed, costing that skill its triggers. See
 | [`config/keep-off.json`](../config/keep-off.json) | the **empty seed** for ledger-derived offer-suppression — chronic never-take skills dropped from the enforcer menu ([ADR-0011](../docs/adr/0011-ledger-derived-offer-suppression.md)); since v0.47.0 the generated map lives in `~/.claude/skill-concierge/keep-off.json` (durable home, `doctor --fix` regenerates, harness-shaped offers excluded, keep-on members exempt — [ADR-0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md)) |
 | `~/.claude/skill-concierge/blocklist.json` | the **user-ordered disable tier** ([ADR-0046](../docs/adr/0046-blocklist-disable-tier.md)) — flat `{"blocked": [...]}`, absent = no-op, **never seeded**. Enforced at four layers: PreToolUse(Skill) **deny** (`hooks/scripts/skill_guard.py`, the plugin-level gate), enforcer offers/hints/routes, engine search-filter + `get_skill` refusal (live-read, index-neutral), and an apply-overrides strip of blocked keep-on names. Bare entry blocks every qualified twin; qualified entry is exact-only. Manage with the `blocklist` skill / `scripts/blocklist.py`; kill-switch `SKILL_BLOCKLIST=0` |
 | [`config/deterministic-routes.json`](../config/deterministic-routes.json) | exact-route overrides — **default ON since v0.47.0** ([ADR-0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md)): a named skill leads the offer at 1.0, computed before embed; `ENFORCER_DETERMINISTIC=0` disables; seeded with the audited named-and-missed prompts |
+| `triggers-curated.json` (beside `SKILL_TRIGGERS`, no env var of its own) | operator-curated trigger phrases — `{"<skill>": ["phrase", …]}` replayed from real routing misses, take the FIRST trigger slots within `TRIGGERS_MAX` ([ADR-0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md)); absent file is byte-identical, a malformed one fails open with one stderr line; no doctor row (the ADR-0030 operator-owned-file precedent) |
 
 `apply-overrides.py` uses the **same** discovery module as the index, so overrides and the
 retriever never drift, and it reports any `keep_on` entry missing on the target machine (the list

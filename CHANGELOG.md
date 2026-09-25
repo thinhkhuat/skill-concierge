@@ -3,6 +3,47 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.48.0] — 2026-09-25
+### Added — ADR-0058: off-list doctrine rule, exclusion echo, row provenance, account-synced skills (default OFF)
+Evidence: a local user session's SKILL-FIRST trail (transcript path, session id and prompt text
+withheld per the privacy rule in `AGENTS.md` → *Guardrails*).
+- **Doctrine** (`hooks/doctrine/skill-first.md`): a skill picked outside the shown hits now has a
+  route — line 1 `SEARCH:` → the search → load the body → quote the covering line → `USING:
+  <name>` — and a loaded body's own exclusion (a hit's or not) forces an open re-rule in the same
+  reply: a new `USING:`/`SEARCH:` line, one sentence quoting the excluding line, and telling the
+  user the agent switched. Rule 5 drops "cannot be invoked by name here" for an origin/`disabled_in`
+  -gated definition of "counts". Injected body 4,217 → 5,011 chars, once per session, zero per turn.
+- **Exclusion echo** (`hooks/scripts/skill_exclusions.py`, new; wired `PostToolUse(Skill|get_skill)`
+  in `hooks.json`): deterministically reads a just-loaded skill's own "not for" lines (a description
+  sentence, a bold-label line, or a headed section) and echoes them back as `additionalContext` — no
+  self-report the agent could omit. Reaches Claude Code and ZCode (both run the plugin's
+  `hooks.json`); Command Code, OMP, DSH, and Cline each need their own vehicle and are a follow-up.
+- **Row provenance** (`vendor/skill-search/skill_search/server.py`): `search_skills` and
+  `consult_candidates` rows drop the slash `command` field on every non-catalog row and gain
+  `origin` (which harness's roots hold the copy — 8 families including `claude-synced`) and
+  `disabled_in` (present when an installed Claude Code plugin has every installed copy switched off in its merged `enabledPlugins` layers — the per-turn hook's own rule, so a plugin Claude can run is never marked; account-synced rows list every non-Claude harness), plus one response-level `note`. `SKILL_ROW_ORIGIN=0` restores the exact
+  pre-provenance shape.
+- **Account-synced skills** (`vendor/skill-search/skill_search/skills_discovery.py`):
+  `~/.claude/skills/synced/<bucket>/<name>/SKILL.md` — exact depth, only names the bucket's
+  `manifest.json` lists, real-path-guarded against a symlink escape — indexed as
+  `anthropic-skills:<name>`, scope `claude-synced`, carrying `creatorType`/`source`. The enforcer
+  gate keys on **scope**, never on the spoofable `anthropic-skills:` name (a plugin can be published
+  under that name and still load); the scope is foreign to every harness but Claude Code and
+  deliberately excluded from the cross-harness foreign annex and from `skillOverrides`/third-party
+  utterance and capsule generation. **Ships default OFF** (`SKILL_SYNCED_ROOTS=0`) — flipping it on
+  is a separate, reviewed step once every harness cache is at ≥0.48.0.
+- **Curated trigger layer** (`triggers-curated.json`, operator-owned, beside the utterance corpus):
+  takes the first trigger slots within the existing `TRIGGERS_MAX` cap — phrases replayed from real
+  routing misses, not generated. Fail-open with one stderr line on a malformed file; no doctor row
+  (the ADR-0030 operator-owned-file precedent).
+- **`scripts/engine_env.py`** (new): the single `ENGINE_ENV_KEYS` list every reindex path
+  (`auto_reindex.py`, `auto_flywheel.py`, `flywheel.py`, `doctor.py`, `setup.sh`) now forwards
+  from — closes the ADR-0026 env-forwarding-gap class structurally instead of one path at a time.
+
+Full rationale, the two partial ADR supersessions (ADR-0034, ADR-0056), and the accepted follow-ups
+(a pre-existing Codex/OMP foreign-scope gap; the open question on `disabled_in`'s harness scope):
+[ADR-0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md).
+
 ## [0.47.3] — 2026-09-25
 ### Fixed — Command Code: personal shelf, unsupported hook events, stray root SKILL.md (ADR-0057)
 - **Command Code's `personal` scope follows the live shelf.** ADR-0038 made `personal`
