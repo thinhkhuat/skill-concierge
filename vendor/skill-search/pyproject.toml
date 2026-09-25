@@ -17,11 +17,11 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-# Default install is SERVICE-FREE: embedded Qdrant + fastembed (no Docker, no Ollama).
+# The store is reached over HTTP (index owner / Qdrant REST subset) by a stdlib client:
+# no qdrant-client. Embeddings: fastembed (no Ollama).
 dependencies = [
     "mcp[cli]>=1.2,<2",  # PINNED below 2: mcp 2.x removed mcp.server.fastmcp (FastMCP -> MCPServer),
     # which server.py imports. A fresh install resolved 2.x on 2026-09-26 and broke the shim image build.
-    "qdrant-client>=1.12",
     "fastembed==0.8.0",  # PINNED: the version the live mpnet index was built with.
     # Pooling parity — a different fastembed can switch mean<->CLS pooling and
     # silently desync query vectors from the indexed vectors. Do NOT relax to the

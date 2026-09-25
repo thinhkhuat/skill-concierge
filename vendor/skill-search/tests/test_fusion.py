@@ -3,20 +3,17 @@
 Pure logic — no Qdrant or embedder needed. Runs under pytest OR standalone:
     python tests/test_fusion.py
 """
-from types import SimpleNamespace
-
 from skill_search.server import _fuse_ranked
 
 
 def _grp(name, score, desc="d", scope=None, path=None):
-    """Fake a Qdrant group: one best hit carrying name/description/score (+scope/path)."""
+    """Fake a query/groups group (wire JSON): one best hit carrying name/description/score (+scope/path)."""
     payload = {"name": name, "description": desc}
     if scope is not None:
         payload["scope"] = scope
     if path is not None:
         payload["path"] = path
-    hit = SimpleNamespace(score=score, payload=payload, id=name)
-    return SimpleNamespace(hits=[hit], id=name)
+    return {"id": name, "hits": [{"id": name, "score": score, "payload": payload}]}
 
 
 def test_single_query_ranks_by_score():
@@ -39,7 +36,7 @@ def test_maxpool_surfaces_buried_skill():
 
 
 def test_empty_hits_skipped():
-    empty = SimpleNamespace(hits=[], id="x")
+    empty = {"id": "x", "hits": []}
     out = _fuse_ranked([[empty, _grp("a", 0.5)]], top_k=5)
     assert [r["name"] for r in out] == ["a"]
 
@@ -168,8 +165,7 @@ def test_synced_rows_are_marked_off_in_every_other_harness(tmp_path, monkeypatch
 
 def _search(monkeypatch, groups):
     monkeypatch.setattr(_server, "embed_batch", lambda qs: [[0.0] for _ in qs])
-    monkeypatch.setattr(_server._qdrant, "query_points_groups",
-                        lambda **kw: SimpleNamespace(groups=groups))
+    monkeypatch.setattr(_server._qdrant, "query_groups", lambda *a, **kw: groups)
     monkeypatch.setattr(_server, "_staleness_warning", lambda: None)
     return _json.loads(_server.search_skills("q"))
 

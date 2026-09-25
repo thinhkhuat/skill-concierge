@@ -51,7 +51,7 @@ echo "[1/4] venv + deps at a STABLE path (survives plugin reinstalls)"
 mkdir -p "$(dirname "$VENV")"
 [ -d "$VENV" ] || "$PYTHON" -m venv "$VENV"
 "$VENV/bin/pip" -q install --upgrade pip >/dev/null
-"$VENV/bin/pip" -q install "$VENDOR" tiktoken   # deps (mcp, qdrant-client, fastembed, requests) + tiktoken into the STABLE venv
+"$VENV/bin/pip" -q install "$VENDOR" tiktoken   # deps (mcp, fastembed, requests) + tiktoken into the STABLE venv
 # Force the ENGINE copy fresh. The vendored package version is a static 0.1.0 (pyproject), so a
 # plain `pip install` sees "already satisfied" and SKIPS re-copying changed code on a re-run —
 # the exact stale-engine trap (ADR-0018). --force-reinstall --no-deps guarantees the current

@@ -379,3 +379,15 @@ plugin-level customization layer and these engine patches.
   the model-bake step. Existing venvs (1.29.0) were unaffected. Lift the cap only together with a port of
   `server.py` to the 2.x API (upstream migration guide:
   https://py.sdk.modelcontextprotocol.io/v2/migration/#fastmcp-renamed-to-mcpserver).
+- **Stdlib store client replaces `qdrant-client`; embedded mode deleted (vector-store Track B):**
+  `server.py` adds `_Store`, a small `urllib` client for the Qdrant REST subset the local index
+  owner serves (`GET/PUT/DELETE /collections/{c}`, `points/scroll`, `PUT points?wait=true`,
+  `points/delete?wait=true`, `points/query/groups`, `POST points` fetch-by-ids). It returns plain
+  dicts, so every former `qdrant-client` call site reads `payload`/`hits`/`score`/collection
+  config by key. Writes carry `wait=true` (read-your-write) and a 60 s timeout; reads 10 s. The
+  `create_payload_index` call is dropped (the owner searches exactly without indexes; an existing
+  Qdrant collection keeps its indexes). The embedded on-disk mode (`SKILL_QDRANT_PATH`,
+  `QdrantClient(path=…)`) is deleted: `SKILL_QDRANT_URL` defaults to `http://localhost:6333`.
+  `qdrant-client` leaves `pyproject.toml`. The engine tests pin `SKILL_QDRANT_URL` to a test store
+  (`SKILL_TEST_QDRANT_URL`, default staging `127.0.0.1:6433`) with a per-run scratch collection.
+  Re-vendoring from upstream must re-apply this, or `server.py` regains the qdrant-client import.

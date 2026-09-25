@@ -83,9 +83,9 @@ def test_build_index_rereads_the_curated_file(curated, tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_write_manifest", lambda n: None)
 
     def trigger_texts():
-        pts, _ = server._qdrant.scroll(collection_name="curated_reload_test", limit=100,
-                                       with_payload=True)
-        return sorted(p.payload.get("content_hash") for p in pts if p.payload.get("kind") == "trigger")
+        pts, _ = server._qdrant.scroll("curated_reload_test", limit=100)
+        return sorted(p["payload"].get("content_hash") for p in pts
+                      if p["payload"].get("kind") == "trigger")
 
     curated({"cur-x": ["first curated phrasing here"]})
     server.build_index(force=True)

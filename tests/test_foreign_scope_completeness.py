@@ -46,8 +46,8 @@ def mods(tmp_path_factory):
                  "SKILL_ZCODE_ROOTS", "SKILL_DSH_ROOTS", "SKILL_CLINE_ROOTS", "SKILL_SYNCED_ROOTS"):
         os.environ[flag] = "1"
     tmp = tmp_path_factory.mktemp("engine")
-    os.environ.pop("SKILL_QDRANT_URL", None)   # the server module opens a store at import: keep it scratch
-    os.environ.update({"SKILL_CONCIERGE_HARNESS": "claude", "SKILL_QDRANT_PATH": str(tmp / "q"),
+    os.environ.update({"SKILL_CONCIERGE_HARNESS": "claude",
+                       "SKILL_QDRANT_URL": "http://127.0.0.1:9",   # never the live store
                        "SKILL_META_PATH": str(tmp / "m.json"), "SKILL_VECTOR_SIZE": "384",
                        "SKILL_TRIGGERS": str(tmp / "none.json"),
                        "SKILL_CONCIERGE_CATALOG_ROOTS": str(tmp / "none-cat.json")})
@@ -58,7 +58,6 @@ def mods(tmp_path_factory):
         enf = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(enf)
         yield sd, enf
-        server._qdrant.close()
     finally:
         os.environ.clear()
         os.environ.update(saved)

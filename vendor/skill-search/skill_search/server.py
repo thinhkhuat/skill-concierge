@@ -22,13 +22,15 @@ Scaling notes:
   * reindex is incremental: each point stores a content hash, so a reindex only
     re-embeds skills whose text changed and deletes points whose skill is gone.
     Full rebuild stays available via force=True / `--rebuild`.
-  * Default deployment is SERVICE-FREE: embedded on-disk Qdrant + fastembed local
-    ONNX embeddings. No Docker, no Ollama, no manual model pull (the model is
-    downloaded once, then runs offline). Opt into the faster tier with
-    SKILL_QDRANT_URL (Qdrant server) and/or SKILL_EMBED_BACKEND=ollama.
+  * The store is reached over HTTP at SKILL_QDRANT_URL (default
+    http://localhost:6333): the local index owner, or a Qdrant server, both
+    speaking the same Qdrant REST subset. A small stdlib client (_Store) talks to
+    it — no qdrant-client dependency and no embedded on-disk mode.
+    Embeddings default to fastembed local ONNX (SKILL_EMBED_BACKEND=ollama opts
+    into Ollama).
 
 Deps:
-  pip install "mcp[cli]" qdrant-client fastembed requests   # default, service-free
+  pip install "mcp[cli]" fastembed requests
   #   Ollama tier instead: set SKILL_EMBED_BACKEND=ollama (uses a running Ollama)
 """
 
@@ -47,8 +49,8 @@ from pathlib import Path
 log = logging.getLogger("skill_search")
 
 from mcp.server.fastmcp import FastMCP
-from qdrant_client import QdrantClient, models
-from qdrant_client.models import Distance, VectorParams, PointStruct
+import urllib.error
+import urllib.request
 import requests
 
 # Skill discovery is shared with generate_overrides.py so both halves operate
@@ -60,11 +62,9 @@ from skill_search.skills_discovery import discover_skills
 # ---------------------------------------------------------------------------
 # Configuration (override via env vars so the same code runs on any machine)
 # ---------------------------------------------------------------------------
-# Vector store. Default is EMBEDDED (local file, no server/Docker). Set
-# SKILL_QDRANT_URL to opt into a Qdrant server; SKILL_QDRANT_PATH overrides the
-# embedded location.
-QDRANT_URL      = os.environ.get("SKILL_QDRANT_URL")          # set -> server mode
-QDRANT_PATH     = os.environ.get("SKILL_QDRANT_PATH")         # embedded location
+# Vector store: the index owner (or a Qdrant server) at SKILL_QDRANT_URL. The
+# embedded on-disk mode is gone — it locked the store to one process.
+QDRANT_URL      = os.environ.get("SKILL_QDRANT_URL") or "http://localhost:6333"
 COLLECTION      = os.environ.get("SKILL_COLLECTION", "claude_skills")
 
 # Embedding backend. Default "fastembed" = local ONNX, NO service and no manual
@@ -163,17 +163,76 @@ def _blocked(name: str) -> bool:
 
 mcp = FastMCP("skill-search")
 
-# Server Qdrant (if a URL is given) vs embedded local-file (the default). Embedded
-# needs no Docker but locks the dir to ONE process — don't run a CLI reindex while
-# the MCP server is up in that mode; use the reindex() tool instead.
-if QDRANT_URL:
-    _qdrant = QdrantClient(url=QDRANT_URL)
-    _STORE = QDRANT_URL
-else:
-    _path = os.path.expandvars(QDRANT_PATH) if QDRANT_PATH else str(Path.home() / ".cache" / "skill-search" / "qdrant")
-    Path(_path).mkdir(parents=True, exist_ok=True)
-    _qdrant = QdrantClient(path=_path)
-    _STORE = f"embedded:{_path}"
+class _Store:
+    """Stdlib HTTP client for the Qdrant REST subset the index owner serves.
+    Returns plain dicts (JSON as sent by the store). Writes carry `wait=true`, so a
+    write returns only once readers can see it (read-your-write), and a longer
+    timeout than reads; an HTTP error or unreachable store raises."""
+
+    READ_TIMEOUT = 10.0
+    WRITE_TIMEOUT = 60.0     # >= 5 s: full-rebuild upserts and collection drops
+
+    def __init__(self, url: str):
+        self.url = url.rstrip("/")
+
+    def _req(self, method: str, path: str, body=None, timeout: float = READ_TIMEOUT):
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(self.url + path, data=data, method=method)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return (json.loads(r.read() or b"{}") or {}).get("result")
+
+    def _write(self, method: str, path: str, body=None):
+        return self._req(method, path, body, timeout=self.WRITE_TIMEOUT)
+
+    def collection_info(self, c: str) -> dict | None:
+        """The collection's info dict, or None when it does not exist."""
+        try:
+            return self._req("GET", f"/collections/{c}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    def create_collection(self, c: str, size: int) -> None:
+        self._write("PUT", f"/collections/{c}", {"vectors": {"size": size, "distance": "Cosine"}})
+
+    def delete_collection(self, c: str) -> None:
+        self._write("DELETE", f"/collections/{c}")
+
+    def scroll(self, c: str, limit: int, with_payload=True, offset=None, filter=None):
+        """One scroll page: (points, next_page_offset)."""
+        body = {"limit": limit, "with_payload": with_payload, "with_vector": False}
+        if offset is not None:
+            body["offset"] = offset
+        if filter is not None:
+            body["filter"] = filter
+        res = self._req("POST", f"/collections/{c}/points/scroll", body)
+        return res.get("points", []), res.get("next_page_offset")
+
+    def upsert(self, c: str, points: list) -> None:
+        self._write("PUT", f"/collections/{c}/points?wait=true", {"points": points})
+
+    def delete_points(self, c: str, ids: list) -> None:
+        self._write("POST", f"/collections/{c}/points/delete?wait=true", {"points": ids})
+
+    def query_groups(self, c: str, vector, group_by: str, limit: int, group_size: int = 1,
+                     filter=None) -> list:
+        """Best `group_size` points per `group_by` value: [{id, hits:[{id, score, payload}]}]."""
+        body = {"query": list(vector), "group_by": group_by, "limit": limit,
+                "group_size": group_size, "with_payload": True}
+        if filter is not None:
+            body["filter"] = filter
+        return self._req("POST", f"/collections/{c}/points/query/groups", body).get("groups", [])
+
+    def retrieve(self, c: str, ids: list) -> list:
+        return self._req("POST", f"/collections/{c}/points",
+                         {"ids": ids, "with_payload": True, "with_vector": False})
+
+
+_qdrant = _Store(QDRANT_URL)
+_STORE = QDRANT_URL
 
 
 # ---------------------------------------------------------------------------
@@ -645,34 +704,21 @@ def _collection_dim() -> int | None:
     """Vector size the existing collection was created with, or None if absent.
     Used to catch an embedder swap (different dim) before it corrupts the index."""
     try:
-        vectors = _qdrant.get_collection(COLLECTION).config.params.vectors
-        if hasattr(vectors, "size"):                 # unnamed single vector
-            return vectors.size
-        if isinstance(vectors, dict) and vectors:    # named vectors
-            return getattr(next(iter(vectors.values())), "size", None)
+        vectors = _qdrant.collection_info(COLLECTION)["config"]["params"]["vectors"]
+        if isinstance(vectors.get("size"), int):     # unnamed single vector
+            return vectors["size"]
+        if vectors:                                  # named vectors
+            return next(iter(vectors.values())).get("size")
     except Exception:
         return None
     return None
 
 
 def _ensure_collection() -> None:
-    if not _qdrant.collection_exists(COLLECTION):
-        _qdrant.create_collection(
-            collection_name=COLLECTION,
-            vectors_config=VectorParams(size=vector_size(), distance=Distance.COSINE),
-        )
-    # Keyword indexes on the three fields the hot path filters or groups by. `name` drives the
-    # MAX-pool group_by; `tier` is the ADR-0031 external partition every enforcer query carries;
-    # `scope` is the ADR-0034 annex filter. Unindexed, each is a linear scan over ~25k points
-    # inside the enforcer's hard 100 ms Qdrant cap, where a timeout costs the WHOLE offer.
-    # Idempotent: a re-create raises, so swallow it per field.
-    for _field in ("name", "tier", "scope"):
-        try:
-            _qdrant.create_payload_index(
-                collection_name=COLLECTION, field_name=_field,
-                field_schema=models.PayloadSchemaType.KEYWORD)
-        except Exception:
-            pass
+    # No payload-index call: the index owner searches exactly without indexes, and an
+    # existing Qdrant collection keeps the keyword indexes it already has.
+    if _qdrant.collection_info(COLLECTION) is None:
+        _qdrant.create_collection(COLLECTION, vector_size())
 
 
 def _existing_points() -> dict[str, tuple]:
@@ -680,16 +726,15 @@ def _existing_points() -> dict[str, tuple]:
     The hash decides what needs re-embedding; the scope decides what this process
     is allowed to delete. Legacy points predating scope tagging carry scope=None."""
     existing: dict[str, tuple] = {}
-    if not _qdrant.collection_exists(COLLECTION):
+    if _qdrant.collection_info(COLLECTION) is None:
         return existing
     offset = None
     while True:
         points, offset = _qdrant.scroll(
-            collection_name=COLLECTION, limit=256,
-            with_payload=["content_hash", "scope"], with_vectors=False, offset=offset)
+            COLLECTION, limit=256, with_payload=["content_hash", "scope"], offset=offset)
         for p in points:
-            pl = p.payload or {}
-            existing[str(p.id)] = (pl.get("content_hash"), pl.get("scope"))
+            pl = p.get("payload") or {}
+            existing[str(p["id"])] = (pl.get("content_hash"), pl.get("scope"))
         if offset is None:
             break
     return existing
@@ -718,10 +763,10 @@ def _scope_filter():
     """Restrict a query to scopes this session owns. `scope is null` keeps legacy
     points searchable in the window between deploying this code and reindexing."""
     vis = sd.visible_scopes()
-    return models.Filter(should=[
-        *[models.FieldCondition(key="scope", match=models.MatchValue(value=s)) for s in sorted(vis)],
-        models.IsNullCondition(is_null=models.PayloadField(key="scope")),
-    ])
+    return {"should": [
+        *[{"key": "scope", "match": {"value": s}} for s in sorted(vis)],
+        {"is_null": {"key": "scope"}},
+    ]}
 
 
 # ---------------------------------------------------------------------------
@@ -742,7 +787,7 @@ def build_index(force: bool = False) -> dict:
                 f"embedding dimension changed ({cdim} -> {vector_size()}); the index "
                 f"was built with a different embedder. Rerun with force=True (--rebuild).")
 
-    if force and _qdrant.collection_exists(COLLECTION):
+    if force and _qdrant.collection_info(COLLECTION) is not None:
         _qdrant.delete_collection(COLLECTION)
     _ensure_collection()
 
@@ -791,12 +836,11 @@ def build_index(force: bool = False) -> dict:
     for i in range(0, len(changed), EMBED_BATCH):
         chunk = changed[i:i + EMBED_BATCH]
         vecs = embed_batch([d[0] for _, d in chunk])
-        pts = [PointStruct(id=pid, vector=vec, payload=payload)
+        pts = [{"id": pid, "vector": list(vec), "payload": payload}
                for (pid, (_text, _h, payload)), vec in zip(chunk, vecs)]
-        _qdrant.upsert(collection_name=COLLECTION, points=pts)
+        _qdrant.upsert(COLLECTION, pts)
     if removed:
-        _qdrant.delete(collection_name=COLLECTION,
-                       points_selector=models.PointIdsList(points=removed))
+        _qdrant.delete_points(COLLECTION, removed)
 
     n_skills = len({d[2]["name"] for d in desired.values()})
     _write_next_skills_sidecar(skills)   # ADR-0029: unconditional, per-scope merge
@@ -816,9 +860,8 @@ def _indexed_names() -> set[str]:
     offset = None
     while True:
         points, offset = _qdrant.scroll(
-            collection_name=COLLECTION, limit=256, scroll_filter=_scope_filter(),
-            with_payload=["name"], with_vectors=False, offset=offset)
-        names.update((p.payload or {}).get("name") for p in points)
+            COLLECTION, limit=256, with_payload=["name"], offset=offset, filter=_scope_filter())
+        names.update((p.get("payload") or {}).get("name") for p in points)
         if offset is None:
             break
     return names
@@ -911,13 +954,13 @@ def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> lis
     best: dict = {}  # name -> (score, description, scope, path)
     for groups in group_lists:
         for g in groups:
-            if not g.hits:
+            if not g.get("hits"):
                 continue
-            h = g.hits[0]
-            pl = h.payload or {}
-            name = pl.get("name", g.id)
-            if name not in best or h.score > best[name][0]:
-                best[name] = (h.score, pl.get("description", ""),
+            h = g["hits"][0]
+            pl = h.get("payload") or {}
+            name = pl.get("name", g.get("id"))
+            if name not in best or h["score"] > best[name][0]:
+                best[name] = (h["score"], pl.get("description", ""),
                               pl.get("scope") or "", pl.get("path") or "")
     ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
     provenance = _row_origin_on()
@@ -963,10 +1006,7 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     # cannot invoke them, so offering them is a dead recommendation.
     scope_filter = _scope_filter()
     group_lists = [
-        _qdrant.query_points_groups(
-            collection_name=COLLECTION, query=qv, group_by="name",
-            query_filter=scope_filter,
-            limit=TOP_K, group_size=1, with_payload=True).groups
+        _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=TOP_K, filter=scope_filter)
         for qv in embed_batch(queries)
     ]
     rows = [r for r in _fuse_ranked(group_lists, TOP_K) if not _blocked(r.get("name", ""))]
@@ -1011,10 +1051,7 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
     top_n = max(1, min(int(top_n or 20), 40))
     scope_filter = _scope_filter()
     group_lists = [
-        _qdrant.query_points_groups(
-            collection_name=COLLECTION, query=qv, group_by="name",
-            query_filter=scope_filter,
-            limit=top_n, group_size=1, with_payload=True).groups
+        _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=top_n, filter=scope_filter)
         for qv in embed_batch(qs)
     ]
     rows = [r for r in _fuse_ranked(group_lists, top_n, with_paths=True)
@@ -1025,10 +1062,8 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
     missing = [r["name"] for r in rows if not r.get("external") and not r.get("path")]
     if missing:
         try:
-            recs = _qdrant.retrieve(collection_name=COLLECTION,
-                                    ids=[_point_id(n) for n in missing],
-                                    with_payload=True)
-            by_name = {(p.payload or {}).get("name"): (p.payload or {}).get("path")
+            recs = _qdrant.retrieve(COLLECTION, [_point_id(n) for n in missing])
+            by_name = {(p.get("payload") or {}).get("name"): (p.get("payload") or {}).get("path")
                        for p in recs}
             for r in rows:
                 p = by_name.get(r["name"])
@@ -1064,10 +1099,9 @@ def get_skill(name: str) -> str:
     # Fast path: resolve the file path from the index payload — O(1) lookup,
     # no walking/parsing every SKILL.md on disk.
     try:
-        recs = _qdrant.retrieve(collection_name=COLLECTION,
-                                ids=[_point_id(name)], with_payload=True)
+        recs = _qdrant.retrieve(COLLECTION, [_point_id(name)])
         if recs:
-            path = (recs[0].payload or {}).get("path")
+            path = (recs[0].get("payload") or {}).get("path")
             if path and Path(path).exists():
                 return Path(path).read_text(encoding="utf-8")
     except Exception:

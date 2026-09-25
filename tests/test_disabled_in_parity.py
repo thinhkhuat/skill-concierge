@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def mods(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("engine")
     saved = dict(os.environ)
-    os.environ.pop("SKILL_QDRANT_URL", None)
-    os.environ.update({"SKILL_QDRANT_PATH": str(tmp / "q"), "SKILL_META_PATH": str(tmp / "m.json"),
+    os.environ.update({"SKILL_QDRANT_URL": "http://127.0.0.1:9",   # never the live store
+                       "SKILL_META_PATH": str(tmp / "m.json"),
                        "SKILL_VECTOR_SIZE": "384", "SKILL_TRIGGERS": str(tmp / "none.json"),
                        "SKILL_CONCIERGE_CATALOG_ROOTS": str(tmp / "none-cat.json"),
                        "SKILL_CONCIERGE_HARNESS": "claude"})
@@ -30,7 +30,6 @@ def mods(tmp_path_factory):
         enf = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(enf)
         yield server, skills_discovery, enf
-        server._qdrant.close()          # embedded store: close before interpreter shutdown
     finally:
         os.environ.clear()
         os.environ.update(saved)
