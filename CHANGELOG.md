@@ -3,6 +3,18 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.47.2] — 2026-09-25
+### Fixed — settings backups are capped at the newest 5
+- `scripts/apply-overrides.py` wrote a full copy of `~/.claude/settings.json` (`.bak-skillconcierge-<stamp>`)
+  on every setup / SessionStart self-heal run and never deleted one: 82 had piled up on the reference
+  machine, each carrying the `env` block's secrets in plain text. It now keeps the newest
+  `BACKUP_KEEP` (5), ordered by mtime with the name as tie-break (the pid in the stamp is not
+  fixed-width, so name order alone is not arrival order), and logs each deletion.
+- Pruning runs only after the atomic settings write and never raises: an undeletable old backup
+  prints `prune skipped` and the override write still lands. `glob.escape` guards a non-default
+  `SKILL_CONCIERGE_SETTINGS` path. Selftest covers the cap, legacy epoch stamps, and the
+  undeletable-backup case (fails with the guards removed). Independent review, two passes.
+
 ## [0.47.1] — 2026-09-15
 ### Changed — ADR-0056: SKILL-FIRST doctrine + enforcer strings rewritten (writing-for-agents audit)
 Evidence: `plans/reports/audit-260915-1125-doctrine-writing-audit.md` (line-by-line findings) and

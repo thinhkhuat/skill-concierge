@@ -19,6 +19,7 @@ Test seams (env): SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERGE_KEEPON, SKILL_CONCIE
 SKILL_CONCIERGE_SKILLS_FILE (newline-separated names → skips live discovery).
 """
 import argparse
+import glob
 import json
 import os
 import sys
@@ -31,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent          # skill-concierge/
 SETTINGS = Path(os.environ.get(
     "SKILL_CONCIERGE_SETTINGS", Path.home() / ".claude" / "settings.json"))
 VENDOR = ROOT / "vendor" / "skill-search"
+BACKUP_KEEP = 5                                         # settings backups retained per write
 
 
 def discover_skill_names():
@@ -129,7 +131,28 @@ def _write_settings(settings, overrides):
     tmp = SETTINGS.parent / (SETTINGS.name + f".tmp-{os.getpid()}")
     tmp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, SETTINGS)
+    _prune_backups()
     return sum(1 for v in overrides.values() if v == "on")
+
+
+def _prune_backups():
+    """Keep only the newest BACKUP_KEEP backups. Every setup/self-heal run adds one, and each
+    is a full copy of settings.json — env secrets included — so unbounded growth is a leak
+    surface, not just clutter. Runs AFTER the settings write and never raises: housekeeping
+    must not gate the override write. Newest = mtime, name as tie-break (pids in the stamp
+    are not fixed-width, so name order alone is not arrival order). The
+    `.bak-skillconcierge-` suffix is this tool's own namespace: anything under it is ours to prune."""
+    try:
+        baks = sorted(SETTINGS.parent.glob(glob.escape(SETTINGS.name) + ".bak-skillconcierge-*"),
+                      key=lambda p: (p.stat().st_mtime, p.name))
+        for old in baks[:-BACKUP_KEEP]:
+            try:
+                old.unlink(missing_ok=True)
+                print(f"pruned : {old.name}")
+            except OSError as e:
+                print(f"prune skipped: {old.name} ({e})", file=sys.stderr)
+    except OSError as e:
+        print(f"prune skipped: {e}", file=sys.stderr)
 
 
 def _selftest():
@@ -198,6 +221,36 @@ def _selftest():
         assert run3("--if-changed").returncode == 0
         assert json.loads(settings.read_text())["skillOverrides"]["alpha"] == "on", \
             "SKILL_BLOCKLIST=0 must restore the keep-on verdict byte-identically"
+
+        # backups are capped: seed older ones (legacy epoch + dated), write once -> exactly
+        # BACKUP_KEEP remain, and they are the newest (legacy gone, fresh backup kept)
+        pat = settings.name + ".bak-skillconcierge-*"
+        legacy = [f"{settings.name}.bak-skillconcierge-17824473{i:02d}" for i in range(3)]
+        for i, n in enumerate(legacy + [f"{settings.name}.bak-skillconcierge-19990101-000000-{i}"
+                                        for i in range(BACKUP_KEEP)]):
+            (d / n).write_text("{}", encoding="utf-8")
+            os.utime(d / n, (1_000_000 + i, 1_000_000 + i))     # older than any real backup
+        age = lambda p: (p.stat().st_mtime, p.name)
+        seeded = {p.name for p in d.glob(pat)}
+        assert len(seeded) > BACKUP_KEEP + 1, seeded   # the cap must actually have work to do
+        assert run().returncode == 0
+        baks = [p.name for p in sorted(d.glob(pat), key=age)]
+        assert len(baks) == BACKUP_KEEP, baks
+        assert not set(legacy) & set(baks), f"legacy backups survived: {baks}"
+        assert set(baks) - seeded, "the backup this run just wrote must survive"
+
+        # an undeletable old backup (a directory: unlink raises OSError) must never abort the
+        # override write — pruning is housekeeping and runs after the write
+        stuck = d / f"{settings.name}.bak-skillconcierge-19990101-000000-stuck"
+        stuck.mkdir()
+        os.utime(stuck, (999_999, 999_999))
+        (d / "keep.json").write_text(json.dumps({"keep_on": ["skill-search", "beta"]}),
+                                     encoding="utf-8")
+        r = run()
+        assert r.returncode == 0, r.stderr
+        assert json.loads(settings.read_text())["skillOverrides"]["beta"] == "on", \
+            "a failed prune must not block the settings write"
+        assert "prune skipped" in r.stderr, r.stderr
 
     print("selftest ok")
     return 0
