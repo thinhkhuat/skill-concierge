@@ -412,6 +412,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.47.3` — **published, ADR-0057 Command Code fixes: the `personal` scope follows the live shelf (invocable when `~/.commandcode/skills` resolves to `~/.claude/skills`, foreign otherwise — the ZCode rule), the installer strips `PreCompact` as well as `UserPromptSubmit`, doctor warns on unsupported hook events and on a stray root-level `SKILL.md` that hides a whole skills root, and `doctor.py --selftest` passes again.**
+
 `0.47.2` — **published, settings backups capped: `apply-overrides.py` kept every `settings.json.bak-skillconcierge-*` copy forever (82 on the reference machine, each with the env block's secrets); it now keeps the newest 5 by mtime, prunes only after the atomic write, and a failed prune never blocks the override write.**
 
 `0.47.1` — **published, ADR-0056 doctrine + enforcer-string rewrite under the writing-for-agents levers (independent two-pass review): the lawful skip is defined once — rule 4, exactly two sources: a shown search with nothing adaptable, or an enforcer `SKILL-CHECK:` line that itself states the turn's kind — where five places had given three answers and the getaway leg admitted "trivial"; the phantom `find-skills` escalation becomes a term-rich `search_skills` re-query; rule 5 covers other-harness hits; stale `~500`, ADR/version labels, EFFORT note, Not/Yes negations and restatements pruned (injected body 8,074 → 4,238 chars); token syntax unified with colons; `MANDATE` stops claiming "shown skills" on the no-preview paths; `doctrine.py` OMP rewrite re-targeted with a live-body selftest; selftest 0041 hermetic against the ADR-0055 env trial; OMP installer compares the cache manifest, not the registry record.**

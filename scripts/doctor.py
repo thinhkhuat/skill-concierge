@@ -79,6 +79,15 @@ CCMD_MOD = CCMD_DIR / "mods" / "skill-concierge.ts"
 CCMD_SETTINGS = CCMD_DIR / "settings.json"
 CCMD_MCP = CCMD_DIR / "mcp.json"
 _CCMD_SETTINGS_HOOK_MARKER = "skill-concierge"  # SessionStart commands contain this string
+# Command Code accepts exactly four hook events (its dist constant Ry). Any other key in
+# settings.json is skipped with kind "unknown_event" and surfaces in the TUI as
+# "1 hook config issue: 1 unknown event". Claude's five-event set (which adds
+# UserPromptSubmit/PreCompact) must never be copied verbatim into CC settings.
+CCMD_HOOK_EVENTS = frozenset({"PreToolUse", "PostToolUse", "Stop", "SessionStart"})
+# Skills roots Command Code reads. A stray ~/.commandcode/skills/SKILL.md — a FILE at the
+# ROOT of a skills dir — silently discards EVERY skill in that root (observed: 0 installed,
+# then 647 with only that file moved out). ~/.agents/skills is the same symlinked shelf.
+CCMD_SKILLS_ROOTS = (CCMD_DIR / "skills", Path.home() / ".agents" / "skills")
 # DSH (DeepSeek Harness) surface (ADR-0050) — skill-concierge integrates via the
 # Cordis composition patch system (cordis.patch.yml) and the dsh-mcp-client MCP bridge.
 # DSH_HOME resolves to ~/.ohdsh (Oh-DSH Desktop) or ~/.dsh (legacy dsh CLI).
@@ -1445,6 +1454,33 @@ def check_commandcode():
         findings.append(f"unreadable mcp.json at {CCMD_MCP}")
     if not mcp_found:
         findings.append("no skill-search MCP entry in Command Code mcp.json")
+    # 4. Hook events outside CC's supported four. Claude's set (which adds UserPromptSubmit
+    #    and PreCompact) copied verbatim here is skipped as "unknown event" — a silent no-op.
+    try:
+        settings = json.loads(CCMD_SETTINGS.read_text(encoding="utf-8"))
+        hooks = settings.get("hooks", {})
+        if isinstance(hooks, dict):
+            unknown = sorted(set(hooks) - CCMD_HOOK_EVENTS)
+            if unknown:
+                findings.append(
+                    "settings.json has hook event(s) Command Code does not support: "
+                    + ", ".join(f'"{e}"' for e in unknown)
+                    + " — it accepts only PreToolUse, PostToolUse, Stop, SessionStart")
+    except JSON_READ_ERRORS:
+        pass  # already reported as unreadable settings.json above
+    # 5. Stray root-level SKILL.md — a FILE at the root of a Command Code skills dir.
+    #    It carries a name that cannot match the directory, and CC responds by discarding
+    #    the whole root: every skill under it disappears from `commandcode skills list`.
+    for root in CCMD_SKILLS_ROOTS:
+        stray = root / "SKILL.md"
+        try:
+            if stray.is_file():
+                findings.append(
+                    f"stray {stray} (a FILE at the root of a Command Code skills root) — "
+                    "Command Code discards every skill in that root; move it out of the "
+                    "skills dir, e.g. to ~/.claude/_quarantine/")
+        except OSError:
+            continue
     if findings:
         return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None}
@@ -1809,7 +1845,7 @@ def _selftest():
     assert overall([]) == OK
     assert QURL.startswith("http")
     assert set(AUTO_FIXERS) <= {"docker", "reindex", "reapply", "overrides", "prompt_intent",
-                                "purge_junk"}
+                                "purge_junk", "keepoff"}
     # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
     healthy_emb = {"reachable": True}
     serving_qd = {"reachable": True, "indexed": 495}
@@ -2104,7 +2140,7 @@ def _selftest():
     # --- Command Code harness check (ADR-0038): fixture-driven, never touches the real ~/.commandcode ---
     # Two outcomes: absent CC -> WARN "not installed"; all surface present -> OK.
     _saved_ccmd = {k: _g[k] for k in ("CCMD_DIR", "CCMD_MOD", "CCMD_SETTINGS", "CCMD_MCP",
-                                       "_CCMD_SETTINGS_HOOK_MARKER")}
+                                      "_CCMD_SETTINGS_HOOK_MARKER", "CCMD_SKILLS_ROOTS")}
     try:
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -2129,6 +2165,39 @@ def _selftest():
             _g["CCMD_MCP"].write_text(json.dumps({
                 "mcpServers": {"skill-search": {"command": "/path/to/bin/skill-search-mcp"}}
             }))
+            row = check_commandcode()
+            assert row["status"] == OK, row
+            # Negative control: an event outside CC's four (PreCompact is what the palate
+            # writer copies in from Claude) -> WARN naming it.
+            _g["CCMD_SETTINGS"].write_text(json.dumps({
+                "hooks": {
+                    "PreToolUse": [{"hooks": []}],
+                    "PreCompact": [{"hooks": [{"type": "command", "command": "palate hook pre-compact"}]}],
+                    "SessionStart": [{
+                        "hooks": [{"type": "command", "command": "python3 /path/to/skill-concierge/hooks/scripts/doctrine.py"}]
+                    }]
+                }}))
+            row = check_commandcode()
+            assert row["status"] == WARN and "PreCompact" in row["detail"], row
+            _g["CCMD_SETTINGS"].write_text(json.dumps({
+                "hooks": {
+                    "PreToolUse": [{"hooks": []}],
+                    "SessionStart": [{
+                        "hooks": [{"type": "command", "command": "python3 /path/to/skill-concierge/hooks/scripts/doctrine.py"}]
+                    }]
+                }}))
+            # Negative control: a stray root-level SKILL.md under a CC-readable skills root
+            # -> WARN naming the path. Same root without it stays OK.
+            _g["CCMD_SKILLS_ROOTS"] = (_g["CCMD_DIR"] / "skills",)
+            skills_root = _g["CCMD_SKILLS_ROOTS"][0]
+            (skills_root / "session-handoff").mkdir(parents=True)
+            (skills_root / "session-handoff" / "SKILL.md").write_text("---\nname: session-handoff\n---\n")
+            row = check_commandcode()
+            assert row["status"] == OK, row
+            (skills_root / "SKILL.md").write_text("---\nname: session-handoff\n---\n")
+            row = check_commandcode()
+            assert row["status"] == WARN and "stray" in row["detail"] and "SKILL.md" in row["detail"], row
+            (skills_root / "SKILL.md").unlink()
             row = check_commandcode()
             assert row["status"] == OK, row
     finally:

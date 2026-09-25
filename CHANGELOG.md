@@ -3,6 +3,25 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.47.3] — 2026-09-25
+### Fixed — Command Code: personal shelf, unsupported hook events, stray root SKILL.md (ADR-0057)
+- **Command Code's `personal` scope follows the live shelf.** ADR-0038 made `personal`
+  (`~/.claude/skills`) always foreign under Command Code, but on the reference machine
+  `~/.commandcode/skills` is a symlink to `~/.claude/skills` (verified live), so every personal skill
+  was pushed out of the offer into the "other harness" annex. `_foreign_scopes()` now adds `personal`
+  only when `~/.commandcode/skills` does NOT resolve to `~/.claude/skills` — the ZCode rule, through a
+  shared `_resolves_to_claude_personal()`. A machine without the symlink behaves exactly as before.
+  Selftest (6c) pins both branches.
+- **Installer strips `PreCompact` too.** Command Code accepts only `PreToolUse`, `PostToolUse`, `Stop`
+  and `SessionStart`; a `PreCompact` key copied in from Claude settings showed up as
+  `unknown hook event` in the TUI. `adapters/commandcode/install.sh` now removes it alongside
+  `UserPromptSubmit`.
+- **doctor: two new Command Code warnings** — any hook event outside the supported four, and a stray
+  `SKILL.md` file at the root of `~/.commandcode/skills` or `~/.agents/skills`, which makes Command
+  Code discard every skill in that root (observed: 0 skills listed, 647 once the file moved out).
+- **doctor `--selftest` passes again.** v0.47.0 added the `keepoff` auto-fixer without updating the
+  selftest's fixer allowlist, so `doctor.py --selftest` failed with an `AssertionError`.
+
 ## [0.47.2] — 2026-09-25
 ### Fixed — settings backups are capped at the newest 5
 - `scripts/apply-overrides.py` wrote a full copy of `~/.claude/settings.json` (`.bak-skillconcierge-<stamp>`)

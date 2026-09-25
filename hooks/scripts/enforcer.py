@@ -326,20 +326,33 @@ def _foreign_harness_label() -> str:
 FOREIGN_HARNESS = _foreign_harness_label()
 
 
-def _zcode_shares_personal_shelf() -> bool:
-    """True iff ZCode's ~/.agents/skills root resolves to Claude's personal root — the
-    shared-shelf layout where every `personal`-scoped skill is ZCode-invocable through
-    the symlink (observed live 2026-08-28: ~/.agents/skills -> ~/.claude/skills). Anything
-    else — divergent directory, missing directory, OSError — is NOT positive knowledge;
-    the caller then treats `personal` as foreign and per-row survival moves to the
-    filesystem twin check. Resolved per session, never baked into the machine-global
-    index (the ADR-0028 cwd-scoped-view hazard)."""
+def _resolves_to_claude_personal(root: Path) -> bool:
+    """True iff a harness's skills `root` resolves to Claude's personal root — the
+    shared-shelf layout where every `personal`-scoped skill is invocable through the
+    symlink. Anything else — divergent directory, missing directory, OSError — is NOT
+    positive knowledge; the caller then treats `personal` as foreign. Resolved per
+    session, never baked into the machine-global index (the ADR-0028 cwd-scoped-view
+    hazard)."""
     try:
-        agents = Path.home() / ".agents" / "skills"
         claude = Path.home() / ".claude" / "skills"
-        return agents.is_dir() and claude.is_dir() and agents.resolve() == claude.resolve()
+        return root.is_dir() and claude.is_dir() and root.resolve() == claude.resolve()
     except (OSError, RuntimeError):
         return False
+
+
+def _zcode_shares_personal_shelf() -> bool:
+    """ZCode's ~/.agents/skills is the shared shelf (observed live 2026-08-28:
+    ~/.agents/skills -> ~/.claude/skills). When it is not, per-row survival moves to the
+    filesystem twin check."""
+    return _resolves_to_claude_personal(Path.home() / ".agents" / "skills")
+
+
+def _commandcode_shares_personal_shelf() -> bool:
+    """Command Code's ~/.commandcode/skills is the shared shelf (verified live 2026-09-18:
+    ~/.commandcode/skills -> ~/.claude/skills, and `commandcode -p` returned a
+    personal-scope skill's real content). When it is not, Command Code cannot see
+    ~/.claude/skills and `personal` stays foreign (ADR-0057)."""
+    return _resolves_to_claude_personal(Path.home() / ".commandcode" / "skills")
 
 
 def _foreign_scopes() -> tuple:
@@ -347,8 +360,10 @@ def _foreign_scopes() -> tuple:
 
     From Claude: both Codex scopes + commandcode-personal.
     From Codex: plugin + commandcode-personal.
-    From Command Code: plugin + codex-plugin + codex-personal + personal (Command Code
-    only loads its own personal/project roots + extra settings locations).
+    From Command Code (ADR-0057): the other harnesses' exclusive roots (plugin, codex-*,
+    omp-*, zcode-*, dsh-personal, cline-personal). Command Code reads ~/.commandcode/skills
+    + <cwd>/.commandcode/skills, so `personal` joins the foreign set ONLY when
+    ~/.commandcode/skills does NOT resolve to Claude's personal root — the ZCode rule.
     From OMP: codex-plugin + commandcode-personal. OMP's provider union natively invokes the
     claude (user+project .claude/skills), claude-plugin (claude-plugins registry roots) and
     codex personal (.codex/skills) scopes, but NOT the Codex plugin cache — the codex provider
@@ -370,10 +385,11 @@ def _foreign_scopes() -> tuple:
     581 offers in the v0.46.0 epoch) instead of meeting the `_invocable_twin` test.
     """
     if RUNNING_HARNESS == "commandcode":
-        return ("plugin", "codex-plugin", "codex-personal", "personal",
+        base = ("plugin", "codex-plugin", "codex-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin",
                 "dsh-personal", "cline-personal")
+        return base if _commandcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "codex":
         return ("plugin", "commandcode-personal", "dsh-personal", "cline-personal")
     if RUNNING_HARNESS == "omp":
@@ -1180,8 +1196,9 @@ def _route_hits(prompt: str, keepoff: frozenset = frozenset()) -> list:
     low = prompt.lower()
     out, seen = [], set()
     # ADR-0034 invariant: the offer holds only skills THIS harness can invoke. Every seeded
-    # route names a bare personal-root skill; where `personal` is foreign (Command Code,
-    # DSH, Cline, divergent ZCode) a route may pin only what the filesystem twin test rescues.
+    # route names a bare personal-root skill; where `personal` is foreign a route may pin only
+    # what the filesystem twin test rescues (DSH, Cline, divergent ZCode). Command Code has no
+    # twin rescue, so on a divergent shelf a bare personal route goes inert (ADR-0057).
     personal_foreign = "personal" in FOREIGN_SCOPES
     for sub, skill in _ROUTES:
         if sub not in low or skill in seen or skill in keepoff or _blocked(skill):
@@ -2519,7 +2536,7 @@ def _selftest() -> int:
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES
     global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS, FOREIGN_HARNESS
-    global _zcode_readable_skill, _zcode_shares_personal_shelf
+    global _zcode_readable_skill, _zcode_shares_personal_shelf, _commandcode_shares_personal_shelf
     _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
     _reqs = []
@@ -3222,8 +3239,10 @@ def _selftest() -> int:
 
     # (6c) ADR-0054: a route can never resurface a BLOCKLISTED skill (ADR-0046 outranks it),
     # and under a harness where `personal` is foreign a bare route target must pass the
-    # invocable-twin test (ADR-0034 invariant) — Command Code has no rescue, so routes go inert.
-    _saved_6c = (_ROUTES, BLOCKLIST, RUNNING_HARNESS, FOREIGN_SCOPES)
+    # invocable-twin test (ADR-0034 invariant). ADR-0057: Command Code's `personal` scope
+    # follows the live shelf, like ZCode's.
+    _saved_6c = (_ROUTES, BLOCKLIST, RUNNING_HARNESS, FOREIGN_SCOPES,
+                 _commandcode_shares_personal_shelf)
     try:
         _ROUTES = [("deploy", "victim")]
         BLOCKLIST = frozenset({"victim"})
@@ -3233,12 +3252,22 @@ def _selftest() -> int:
         if [n for n, _d, _s in _route_hits("please deploy now")] != ["victim"]:
             bad.append("route must fire once the blocklist no longer names its skill")
         RUNNING_HARNESS = "commandcode"
+        _commandcode_shares_personal_shelf = lambda: True
+        if "personal" in _foreign_scopes():
+            bad.append("commandcode on a shared shelf (~/.commandcode/skills -> ~/.claude/skills) "
+                       "must treat personal as invocable (ADR-0057)")
+        _commandcode_shares_personal_shelf = lambda: False
         FOREIGN_SCOPES = _foreign_scopes()
+        if "personal" not in FOREIGN_SCOPES:
+            bad.append("commandcode on a divergent shelf cannot see ~/.claude/skills — personal "
+                       "must stay foreign (ADR-0057)")
         _ROUTES = [("commit and push", "ak-git")]
         if _route_hits("commit and push please") != []:
-            bad.append("route pinned a personal-root skill Command Code cannot invoke (ADR-0034)")
+            bad.append("divergent shelf: a route pinned a personal-root skill Command Code "
+                       "cannot invoke (ADR-0034)")
     finally:
-        _ROUTES, BLOCKLIST, RUNNING_HARNESS, FOREIGN_SCOPES = _saved_6c
+        (_ROUTES, BLOCKLIST, RUNNING_HARNESS, FOREIGN_SCOPES,
+         _commandcode_shares_personal_shelf) = _saved_6c
 
     if bad:
         print("enforcer --selftest FAIL:")

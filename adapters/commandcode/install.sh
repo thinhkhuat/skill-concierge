@@ -67,9 +67,14 @@ if settings_path.exists():
 
 hooks = settings.setdefault("hooks", {})
 
-# Clean up UserPromptSubmit if present (not supported by cmd settings hooks; handled by mod)
-if "UserPromptSubmit" in hooks:
-    del hooks["UserPromptSubmit"]
+# Clean up events Command Code does not support. Its hook allowlist is exactly
+# PreToolUse/PostToolUse/Stop/SessionStart; a stray key is reported as
+# `unknown hook event "X" — skipped` and shows up in the TUI as a config issue.
+# UserPromptSubmit is handled by the mod (transformInput), PreCompact has no
+# equivalent at all. Idempotent: both keys are simply absent once removed.
+for unsupported in ("UserPromptSubmit", "PreCompact"):
+    if unsupported in hooks:
+        del hooks[unsupported]
 
 # Filter SessionStart: remove stale 0.20.8 or monkey-patch entries
 session_start = hooks.get("SessionStart", [])
