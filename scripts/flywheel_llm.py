@@ -251,7 +251,7 @@ def live_skills():
     """Unique {skill_name: description} from the LIVE index (claude_skills payloads)
     — same source build_triggers.py uses, NOT disk. scroll_all_points() yields one
     entry per chunked point, so many points share a name; dedupe by name (keep the
-    first non-empty description). Names match what enrich_index.py/precision_eval.py
+    first non-empty description). Names match what precision_eval.py (and the retired enrich_index.py)
     key on. Generators need the description to prompt the LLM, hence {name: desc}."""
     import build_triggers
     out = {}

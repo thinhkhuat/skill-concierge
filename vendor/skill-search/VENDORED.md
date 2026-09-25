@@ -10,8 +10,8 @@ into `skill-concierge` so the plugin is self-contained and portable.
 ## What this provides
 The semantic retriever: `skill_search/server.py` (MCP tools `search_skills`, `get_skill`,
 `reindex`, `health`), `skills_discovery.py` (single discovery source of truth),
-`generate_overrides.py` (name-only budget overrides). Deps (`mcp[cli]`, `qdrant-client`,
-`fastembed`, `requests`) are NOT vendored — `setup.sh` installs them into a **stable** venv
+`generate_overrides.py` (name-only budget overrides). Deps (`mcp[cli]`, `fastembed`, `requests`,
+`numpy`; `qdrant-client` was dropped by vector-store Track B) are NOT vendored — `setup.sh` installs them into a **stable** venv
 at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it survives reinstalls
 — see `docs/adr/0004-bundled-mcp-launcher-stable-venv.md`).
 

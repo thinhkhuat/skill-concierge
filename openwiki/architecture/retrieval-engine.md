@@ -19,7 +19,7 @@ here so the wrong default doesn't propagate:
 | Knob | Engine code default | **Deployed value** | Set by |
 |------|---------------------|--------------------|--------|
 | Embedding model | `BAAI/bge-small-en-v1.5` (384-dim, EN) | **`paraphrase-multilingual-mpnet-base-v2` (768-dim, multilingual)** | `.mcp.json`, embed-shim, setup.sh |
-| Vector store | embedded on-disk Qdrant (`~/.cache/skill-search/qdrant`) | **Qdrant server** (Docker `skill-search-qdrant` @ `localhost:6333`) | `.mcp.json` |
+| Vector store | HTTP store at `http://localhost:6333` (the embedded on-disk mode was deleted in vector-store Track B) | **Qdrant server** (Docker `skill-search-qdrant` @ `localhost:6333`) | `.mcp.json` |
 | `TOP_K` | 6 | **10** (`SKILL_TOP_K`) | `.mcp.json` |
 | `SKILL_LLM_TRIGGERS` | `0` (off) | **`1` — the utterance layer is ON here** | `.mcp.json` |
 | `TRIGGERS_MAX` | 12 | **16** (so utterances *add* slots rather than evict desc/body) | `.mcp.json` |
@@ -32,7 +32,9 @@ here so the wrong default doesn't propagate:
 > ([ADR-0026](../../docs/adr/0026-llm-utterance-trigger-layer.md)).
 
 The multilingual model was chosen to fix EN-query → VN-skill misses (`VENDORED.md`); the server
-tier replaces the embedded store so concurrent Claude sessions don't fight a single-process lock.
+tier replaced the (now deleted) embedded store so concurrent Claude sessions don't fight a single-process lock.
+Vector-store Track B adds a dormant local index owner (`skill_search/index_owner.py`) that serves the same REST
+subset from one SQLite file; it replaces the Docker Qdrant only at the owner's cutover (`VENDORED.md`).
 See [ADR-0003](../../docs/adr/0003-embedder-and-vector-store.md).
 
 ## What gets indexed — model-invocable `SKILL.md` only

@@ -5,7 +5,7 @@ build_triggers.py — derive per-skill trigger phrases for vector enrichment (Ph
 Source strategy (v1, uniform): PROSE-PHRASE. Each skill's indexed `description`
 (which already includes `when_to_use`, appended by skills_discovery.parse_skill) is
 split into intent-bearing phrases. Step-0 proved that splitting the description into
-phrases, embedding each, and centroiding them (done in enrich_index.py) flips inverted
+phrases, embedding each, and centroiding them (done in the retired enrich_index.py) flips inverted
 skills positive — it is the phrase-split-centroid MECHANISM, not new text, that extracts
 intent. Uniform prose-phrase for ALL 495 is deliberate: it removes the source-strength
 confound from precision_eval (a mixed utterance/prose shadow makes the 14 fire harder on
@@ -13,7 +13,7 @@ cross-domain negatives purely because their source is stronger, misread as canni
 Utterances (the ceiling) are layered separately later to isolate the delta.
 
 The authoritative skill set is the LIVE INDEX (claude_skills payloads), not disk — so the
-names here match exactly what enrich_index.py / precision_eval.py key on.
+names here match exactly what precision_eval.py (and the retired enrich_index.py) key on.
 
 Output: ~/.claude/skill-concierge/triggers.json  { name: {source, triggers:[...], n} }
 

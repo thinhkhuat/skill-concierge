@@ -7,7 +7,7 @@ existing prose-phrase layer build_triggers.py writes.
 
 See plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 3.
 
-Merge shape: enrich_index.py only ever reads triggers[name]["triggers"] as one
+Merge shape: the retired enrich_index.py (archived 2026-09-26) only ever reads triggers[name]["triggers"] as one
 flat list (scripts/enrich_index.py:143 `ts = triggers[n]["triggers"]`) — it has
 no notion of layers. So to be additive AND actually consumed without touching
 enrich_index.py, the prose-phrase list is kept verbatim under `prose_triggers`,

@@ -202,12 +202,11 @@ registration (`~/.claude.json` → `mcpServers.skill-search.env`).
 
 | Env var | This deployment | Meaning |
 |---|---|---|
-| `SKILL_QDRANT_URL` | `http://localhost:6333` | Set → Qdrant **server** mode (unset → embedded file) |
+| `SKILL_QDRANT_URL` | `http://localhost:6333` | Store URL (Qdrant server, or the index owner after cutover); unset → `http://localhost:6333` |
 | `SKILL_EMBED_BACKEND` | `fastembed` | `fastembed` (in-process ONNX) or `ollama` |
 | `SKILL_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | Embedding model (768-dim) |
 | `SKILL_TOP_K` | `6` (default) | Results returned by `search_skills` |
 | `SKILL_COLLECTION` | `claude_skills` (default) | Qdrant collection name |
-| `SKILL_QDRANT_PATH` | _unused_ | Embedded store location (only when URL unset) |
 
 ### Config scopes
 
@@ -266,15 +265,13 @@ new env. Multilingual alternatives in this `fastembed` build: `multilingual-e5-l
 embeddinggemma`, set `SKILL_EMBED_BACKEND=ollama SKILL_EMBED_MODEL=embeddinggemma`, and
 rebuild. Cost: a second always-on daemon.
 
-**Revert to embedded store** (drop the container dependency, lose concurrency): remove
-`SKILL_QDRANT_URL` from the MCP env, re-register, `skill-search --rebuild`.
+**Embedded store:** removed (vector-store Track B deleted the embedded on-disk mode; see
+`vendor/skill-search/VENDORED.md`). The container-free path is the local index owner.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `claude mcp list` shows `✘ Failed to connect` while a session is live (embedded mode only) | `list` spawns a 2nd probe that can't grab the embedded single-process lock | False negative; verify with `/mcp` inside a session. N/A on the server tier. |
-| `RuntimeError: Storage folder ... already accessed by another instance` | Embedded Qdrant is single-process | This is why we run the **server**; don't point CLI at the embedded store while a session MCP holds it |
 | Search returns nothing / skills invisible | Qdrant container down | `docker ps`; `orb start`; `docker start skill-search-qdrant` |
 | CLI `--reindex` wrote to the wrong store / wrong dim | Env not exported for the CLI | Export `SKILL_QDRANT_URL` + `SKILL_EMBED_MODEL`, or use the `reindex` MCP tool |
 | `embedding dimension changed (X -> Y)` | Embedder swapped under an existing collection | `skill-search --rebuild` |

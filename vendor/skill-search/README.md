@@ -219,12 +219,12 @@ relevant results by name. Keep this skill (and `skill-search` itself) in the
 ## Configuration
 
 All config is env-var overridable (`SKILL_*` prefix). Selection: set
-`SKILL_QDRANT_URL` for a Qdrant server (else embedded); `SKILL_EMBED_BACKEND`
+`SKILL_QDRANT_URL` for the store (default `http://localhost:6333`; this vendored copy has no embedded mode — see `VENDORED.md`); `SKILL_EMBED_BACKEND`
 defaults to `fastembed`.
 
 | Concern | Default (service-free) | Opt-in (faster) |
 |---|---|---|
-| Vector store | embedded on-disk Qdrant at `~/.cache/skill-search/qdrant` (`SKILL_QDRANT_PATH`) | `SKILL_QDRANT_URL` → Qdrant server |
+| Vector store | HTTP store at `http://localhost:6333` (upstream's embedded mode removed here) | `SKILL_QDRANT_URL` → Qdrant server or index owner |
 | Embedder | fastembed `BAAI/bge-small-en-v1.5` (384-dim) | `SKILL_EMBED_BACKEND=ollama`, `SKILL_EMBED_MODEL` (`embeddinggemma`, 768-dim) |
 | Results | `SKILL_TOP_K=6` | — |
 
