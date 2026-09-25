@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # skill-concierge — portable setup for the vendored skill-search engine.
-# Builds a STABLE venv (survives plugin reinstalls), the Qdrant server, the multilingual
-# index, and the curated name-only overrides. Idempotent; safe to re-run.
-# Requires: Python 3.10-3.12, Docker/OrbStack (Qdrant).
+# Builds a STABLE venv (survives plugin reinstalls), starts the local index owner (the
+# engine's Qdrant-compatible store + warm embedder, one SQLite file), builds the multilingual
+# index, and applies the curated name-only overrides. Idempotent; safe to re-run.
+# Requires: Python 3.10-3.12. No Docker.
 #
-# ponytail: Docker assumed for the Qdrant server tier. For the service-free embedded tier,
-# skip step 2 and unset SKILL_QDRANT_URL. Override SKILL_PYTHON / SKILL_CONCIERGE_VENV /
-# SKILL_QDRANT_URL / SKILL_EMBED_MODEL via env.
+# Override SKILL_PYTHON / SKILL_CONCIERGE_VENV / SKILL_QDRANT_URL / SKILL_EMBED_MODEL /
+# SKILL_INDEX_DB via env.
 #
 # Behavior flags (both DEFAULT ON; export =0 before this run / a session to revert):
 #   SKILL_BODY_TRIGGERS=0      description-only trigger layer, no body-derived points (ADR-0016)
@@ -16,11 +16,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$ROOT/vendor/skill-search"
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
-QNAME="${SKILL_QDRANT_CONTAINER:-skill-search-qdrant}"
-QIMAGE="${SKILL_QDRANT_IMAGE:-qdrant/qdrant:v1.18.2}"
-ENAME="${SKILL_EMBED_CONTAINER:-skill-concierge-embed-shim}"
-EIMAGE="${SKILL_EMBED_IMAGE:-skill-concierge-embed-shim:latest}"
 EPORT="${EMBED_SHIM_PORT:-6363}"
+OWNER_TITLE="skill-concierge index owner (Qdrant-compatible subset)"
 
 PYTHON="${SKILL_PYTHON:-}"
 if [ -z "$PYTHON" ]; then
@@ -63,36 +60,34 @@ PLUGIN_VER="$("$PYTHON" -c "import json;print(json.load(open('$ROOT/.claude-plug
 printf '%s' "$PLUGIN_VER" > "$VENV/.engine-plugin-version"
 echo "  engine forced-fresh + stamped @ plugin v$PLUGIN_VER"
 
-echo "[2/4] Qdrant server (Docker container '$QNAME')"
-command -v docker >/dev/null 2>&1 || { echo "! docker not found — install Docker/OrbStack and re-run." >&2; exit 1; }
-docker info >/dev/null 2>&1 || { echo "! docker daemon not running — start Docker/OrbStack, then re-run." >&2; exit 1; }
-if docker ps -a --format '{{.Names}}' | grep -qx "$QNAME"; then
-  docker start "$QNAME" >/dev/null 2>&1 || true
-else
-  docker run -d --name "$QNAME" --restart unless-stopped \
-    -p 127.0.0.1:6333:6333 \
-    -v "$HOME/.cache/skill-search/qdrant-server:/qdrant/storage" \
-    "$QIMAGE"
+echo "[2/4] local index owner (store @ $QURL, embed @ 127.0.0.1:$EPORT)"
+OWNER_LOG="$NEW_LOG/index-owner.log"
+mkdir -p "$NEW_LOG"
+# Stop a running owner so the code just reinstalled takes effect (its stamp watch would exit
+# it within a minute anyway; this makes a same-version code change land now). Only a process
+# whose `GET /` answers the owner title is signalled — never a container or another service.
+store_port="$(printf '%s' "$QURL" | sed -E 's#^[a-z]+://[^:/]+:?([0-9]*).*#\1#')"
+store_port="${store_port:-6333}"
+if curl -s -m 2 "http://127.0.0.1:$store_port/" 2>/dev/null | grep -qF "$OWNER_TITLE"; then
+  for pid in $(lsof -nP -t -iTCP:"$store_port" -sTCP:LISTEN 2>/dev/null); do
+    kill "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 20); do
+    curl -s -m 1 "http://127.0.0.1:$store_port/" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  echo "  stopped the running index owner (reinstalled code)"
 fi
-
-echo "[2b/4] warm embed shim (Docker sidecar '$ENAME' next to Qdrant)"
-# The per-turn enforcer hook POSTs queries here to embed in ~tens of ms instead
-# of paying a cold model load. Sidecar mirrors Qdrant's restart policy. Bound to
-# 127.0.0.1 only — never exposed off-host. A shim that is up but predates the /jev relay
-# (ADR-0061: health lists its routes) is rebuilt too, or the Jev router would stay on the
-# slow direct path forever.
-EHEALTH="$(curl -s -m 2 "http://127.0.0.1:$EPORT/health" 2>/dev/null || true)"
-if [ -z "$EHEALTH" ] || ! printf '%s' "$EHEALTH" | grep -q '"jev"'; then
-  docker build -t "$EIMAGE" "$ROOT"
-  if docker ps -a --format '{{.Names}}' | grep -qx "$ENAME"; then
-    docker rm -f "$ENAME" >/dev/null 2>&1 || true
-  fi
-  docker run -d --name "$ENAME" --restart unless-stopped \
-    -p "127.0.0.1:$EPORT:6363" \
-    "$EIMAGE"
-else
-  echo "  embed shim already listening on 127.0.0.1:$EPORT — leaving it."
-fi
+# Detached: it outlives this shell, the harness and the MCP servers. A duplicate start is
+# harmless — the second owner loses the file lock and exits.
+nohup "$VENV/bin/python" -m skill_search.index_owner </dev/null >>"$OWNER_LOG" 2>&1 &
+for _ in $(seq 1 90); do
+  curl -s -m 1 "http://127.0.0.1:$EPORT/health" 2>/dev/null | grep -q '"ok"' && break
+  sleep 1
+done
+curl -s -m 2 "http://127.0.0.1:$EPORT/health" 2>/dev/null | grep -q '"ok"' \
+  || { echo "! index owner did not come up — see $OWNER_LOG" >&2; exit 1; }
+echo "  index owner up"
 
 echo "[3/4] build/refresh the multilingual index @ $QURL"
 # The reindex must build the SAME index the query server serves: every engine setting
@@ -131,6 +126,6 @@ so it survives plugin reinstalls. To go live:
   • Restart Claude Code so the MCP + overrides take effect.
   • After a plugin UPDATE the launcher AUTO-resyncs the engine on next start (ADR-0018) —
     a manual setup.sh rerun is only needed for a dependency change or a broken venv.
-  • Qdrant + embed shim must be up each session:
-        docker start $QNAME $ENAME
+  • The index owner restarts itself on demand: the MCP launcher and the per-turn hook start
+    it when it is down (SKILL_OWNER_AUTOSTART=0 disables both). Log: $OWNER_LOG
 EOF

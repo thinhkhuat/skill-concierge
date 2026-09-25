@@ -2,24 +2,28 @@
 """
 skill-concierge doctor — deployment-layer health check + safe auto-fix.
 
-Diagnoses the things `setup.sh` provisions — the stable engine venv, the Qdrant
-container, the MCP wiring, the settings.json budget overrides, the ledger dir — and
+Diagnoses the things `setup.sh` provisions — the stable engine venv, the index
+owner, the MCP wiring, the settings.json budget overrides, the ledger dir — and
 DELEGATES the retrieval-path diagnostic (embedder reachability, indexed vs dark/stale
 skills, freshness) to the engine's own `skill-search --health`, so the two never drift.
 
 Pure stdlib. Read-only by default. With --fix it attempts ONLY fast, safe repairs:
-  • start a stopped Qdrant container         → docker start
+  • start a stopped index owner              → python -m skill_search.index_owner
+  • stop + disable a revived skill-concierge  → docker update --restart=no + docker stop,
+    container on the owner ports (6333/6363)    then start the owner (only once the owner's
+                                                SQLite index exists — the cutover latch)
   • reindex a degraded / stale index         → skill-search --reindex
     (a stale-but-serving index is WARN, not FAIL — it still matches the indexed
      skills; only newly added/removed ones are missing until the refresh)
   • re-apply the curated settings overrides  → scripts/apply-overrides.py
 
-The heavy bootstrap (building the venv, creating the container) is intentionally NOT
+The heavy bootstrap (building the venv, the first index build) is intentionally NOT
 auto-run — that is `./setup.sh` (the `skill-concierge:setup` skill). doctor points there.
 
 Usage:
   python3 scripts/doctor.py          # report only; exit 0 = healthy, 1 = degraded (FAIL)
   python3 scripts/doctor.py --fix    # attempt safe fixes, then re-check
+  python3 scripts/doctor.py --cutover  # harness-version rows FAIL below the switch-over release
 
 Env seams (mirror setup.sh): SKILL_CONCIERGE_VENV, SKILL_QDRANT_URL, SKILL_QDRANT_CONTAINER,
 SKILL_EMBED_BACKEND, SKILL_EMBED_MODEL, SKILL_CONCIERGE_SETTINGS, SKILL_CONCIERGE_LOG,
@@ -139,6 +143,20 @@ def read_mcp_env():
 QURL, BACKEND, MODEL = read_mcp_env()
 SS_BIN = VENV / "bin" / "skill-search"
 PY_BIN = VENV / "bin" / "python"
+# The local index owner (skill_search.index_owner) replaces the Qdrant + embed-shim
+# containers: Qdrant-compatible REST on the store port, /embed + /health on the embed port,
+# one SQLite file it alone writes. `GET /` on the store port answers OWNER_TITLE — the same
+# probe the owner itself uses to tell a sibling owner from a foreign answerer.
+OWNER_TITLE = "skill-concierge index owner (Qdrant-compatible subset)"
+EMBED_BASE = f"http://127.0.0.1:{os.environ.get('EMBED_SHIM_PORT', '6363')}"
+INDEX_DB = Path(os.environ.get("SKILL_INDEX_DB", Path.home() / ".cache/skill-search/index.sqlite"))
+OWNER_LOG = LOGDIR / "index-owner.log"
+ENAME = os.environ.get("SKILL_EMBED_CONTAINER", "skill-concierge-embed-shim")
+OWNER_PORTS = ("6333", "6363")
+# The embed parity probe: one English and one Vietnamese prompt, owner vs in-process.
+PARITY_TEXTS = ("find the right skill to deploy a web app",
+                "tìm kỹ năng phù hợp để triển khai ứng dụng web")
+PARITY_MIN_COSINE = 0.9999
 def read_server_records_dir():
     """Where live MCP servers publish their build id — resolved from `.mcp.json` FIRST.
 
@@ -280,24 +298,86 @@ def _qdrant_reachable(timeout=3):
     return False
 
 
-def _wait_qdrant(timeout=15):
-    """Qdrant accepts connections a beat after the container starts — poll so a fix that
-    starts it doesn't race the reindex that immediately follows (the reboot case)."""
+def _get_json(url, timeout=3):
+    """Parsed JSON body of a GET, or None on any network/parse failure."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except (*NETWORK_READ_ERRORS, urllib.error.URLError):
+        return None
+
+
+def _store_title():
+    """`GET /` title of whatever answers the store URL; None when nothing answers. A loading
+    owner answers 503 with its title, so an HTTP error body is read too."""
+    try:
+        with urllib.request.urlopen(QURL.rstrip("/") + "/", timeout=3) as resp:
+            root = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        try:
+            root = json.loads(exc.read())
+        except (*NETWORK_READ_ERRORS, urllib.error.URLError):
+            return None
+    except (*NETWORK_READ_ERRORS, urllib.error.URLError):
+        return None
+    return root.get("title") if isinstance(root, dict) else None
+
+
+def _owner_health():
+    """The owner's `/health` JSON on the embed port, or None when it does not answer."""
+    h = _get_json(EMBED_BASE + "/health")
+    return h if isinstance(h, dict) else None
+
+
+def _wait_owner(timeout=90):
+    """The owner binds first, then loads the index and the model (503 until loaded) — poll
+    /health so a fix that starts it doesn't race the reindex that follows."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _qdrant_reachable(timeout=2):
+        h = _owner_health()
+        if h and h.get("status") == "ok":
             return True
         time.sleep(1)
     return False
 
 
-def _qdrant_container_running():
-    """True/False if docker is present; None if docker is unavailable."""
+def _publishing_containers():
+    """[(name, ports)] of running containers that publish an owner port, or None when
+    docker is unavailable. Parsed from `docker ps` "Ports" (e.g. `127.0.0.1:6333->6333/tcp`)."""
     docker = shutil.which("docker")
     if not docker:
         return None
-    r = _run([docker, "ps", "--format", "{{.Names}}"])
-    return QNAME in r.stdout.split()
+    r = _run([docker, "ps", "--format", "{{.Names}}\t{{.Ports}}"])
+    if r.returncode != 0:
+        return None
+    return _parse_publishers(r.stdout)
+
+
+def _parse_publishers(text):
+    out = []
+    for line in text.splitlines():
+        name, _, ports = line.partition("\t")
+        host_ports = {seg.split("->")[0].rsplit(":", 1)[-1]
+                      for seg in ports.split(",") if "->" in seg}
+        if host_ports & set(OWNER_PORTS):
+            out.append((name.strip(), ports.strip()))
+    return out
+
+
+def start_owner():
+    """Start the index owner detached from the shared venv; never waited on here.
+
+    Always `python -m skill_search.index_owner` from the stable venv, never from a harness
+    plugin cache. A duplicate start is harmless: the second owner loses the file lock (or the
+    port bind) and exits in milliseconds. Returns (ok, message)."""
+    if not PY_BIN.exists():
+        return False, f"venv python missing at {PY_BIN} — run ./setup.sh"
+    OWNER_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(OWNER_LOG, "ab") as log:
+        subprocess.Popen([str(PY_BIN), "-m", "skill_search.index_owner"],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True)
+    return True, "started the index owner"
 
 
 def _last_line(text):
@@ -657,18 +737,158 @@ def check_mcp_wiring():
     return {"id": "mcp", "label": "MCP wiring", "status": OK, "detail": "launcher + .mcp.json present", "fix": None}
 
 
-def check_qdrant():
-    if _qdrant_reachable():
-        return {"id": "qdrant", "label": "Qdrant", "status": OK, "detail": QURL, "fix": None}
-    running = _qdrant_container_running()
-    if running is False:
-        return {"id": "qdrant", "label": "Qdrant", "status": FAIL,
-                    "detail": f"container '{QNAME}' is stopped", "fix": "docker"}
-    if running is None:
-        return {"id": "qdrant", "label": "Qdrant", "status": FAIL,
-                    "detail": f"unreachable at {QURL}; docker not found (server tier needs it)", "fix": None}
-    return {"id": "qdrant", "label": "Qdrant", "status": FAIL,
-                "detail": f"container up but {QURL} not answering yet", "fix": None}
+def _owner_row(status, detail, fix=None):
+    return {"id": "owner", "label": "Index owner", "status": status, "detail": detail, "fix": fix}
+
+
+def _sqlite_report(db):
+    """(integrity, {collection: points}) of the owner's SQLite file, opened READ-ONLY — the
+    owner is its only writer. Raises sqlite3.Error / OSError on an unreadable file."""
+    import sqlite3
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+    try:
+        integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+        counts = dict(con.execute("SELECT collection, COUNT(*) FROM points GROUP BY collection"))
+    finally:
+        con.close()
+    return integrity, counts
+
+
+def check_owner():
+    """The index owner: who answers the store port, its /health + code_version, the REST
+    point count, and the SQLite file's integrity + point counts.
+
+    FAIL when the store port answers with anything that is not the owner (a revived Qdrant
+    container wins `localhost` there) or nothing answers at all (fix: start the owner)."""
+    title = _store_title()
+    if title is None:
+        return _owner_row(FAIL, f"nothing answers {QURL} — the index owner is down", "owner")
+    if title != OWNER_TITLE:
+        return _owner_row(FAIL, f"{QURL} answers as '{title}', not the index owner — stop that "
+                                "service (doctor --fix stops a revived skill-concierge container)",
+                          "containers")
+    health = _owner_health()
+    if not health or health.get("status") != "ok":
+        return _owner_row(FAIL, f"owner answers {QURL} but {EMBED_BASE}/health is not ok "
+                                f"({health}) — still loading, or the embed port is taken")
+    notes = []
+    code = health.get("code_version")
+    stamp = None
+    try:
+        stamp = (VENV / ".engine-plugin-version").read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    status = OK
+    if stamp and code != stamp:
+        status = WARN
+        notes.append(f"owner runs code_version {code} but the venv stamp is {stamp} "
+                     "(it exits and restarts on the next stamp check)")
+    info = _get_json(f"{QURL.rstrip('/')}/collections/{COLLECTION}")
+    rest_points = ((info or {}).get("result") or {}).get("points_count")
+    if not rest_points:
+        return _owner_row(FAIL, f"owner has no points in '{COLLECTION}' — run ./setup.sh "
+                                "(reindex)", "reindex")
+    try:
+        integrity, counts = _sqlite_report(INDEX_DB)
+    except Exception as exc:   # sqlite3.Error is imported lazily; any failure is the finding
+        return _owner_row(FAIL, f"cannot read {INDEX_DB} ({type(exc).__name__}: {exc})")
+    if integrity != "ok":
+        return _owner_row(FAIL, f"{INDEX_DB} PRAGMA integrity_check: {integrity}")
+    if counts.get(COLLECTION) != rest_points:
+        status = WARN
+        notes.append(f"SQLite holds {counts.get(COLLECTION)} points, REST reports {rest_points} "
+                     "(a write landed between the two reads, or the owner serves another file)")
+    detail = (f"{QURL} + {EMBED_BASE}; code_version {code}; {rest_points} points; "
+              f"{INDEX_DB.name} integrity ok")
+    return _owner_row(status, "; ".join([detail] + notes))
+
+
+def check_owner_ports():
+    """FAIL when any container publishes an owner port: after the cutover nothing but the
+    owner may hold 6333/6363. An old harness copy's setup.sh or doctor --fix revives Docker."""
+    pubs = _publishing_containers()
+    if pubs is None:
+        return {"id": "owner_ports", "label": "Owner ports", "status": OK,
+                "detail": "docker not available — no container can hold the owner ports", "fix": None}
+    if not pubs:
+        return {"id": "owner_ports", "label": "Owner ports", "status": OK,
+                "detail": f"no container publishes {'/'.join(OWNER_PORTS)}", "fix": None}
+    ours = [n for n, _ in pubs if n in (QNAME, ENAME)]
+    return {"id": "owner_ports", "label": "Owner ports", "status": FAIL,
+            "detail": "container publishes an owner port: "
+                      + ", ".join(f"{n} ({p})" for n, p in pubs)
+                      + ("" if ours else " — not a skill-concierge container; stop it by hand"),
+            "fix": "containers" if ours else None}
+
+
+# Lines the owner writes when it refuses to take over a port or sees a downgraded venv stamp.
+_OWNER_LOG_ALARM = ("port conflict", "port-conflict", "downgrade")
+
+
+def check_owner_log():
+    """FAIL when index-owner.log holds a downgrade or port-conflict line: the owner refused a
+    port some other service answered, or an old harness copy downgraded the shared venv."""
+    try:
+        lines = OWNER_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {"id": "owner_log", "label": "Owner log", "status": OK,
+                "detail": f"no {OWNER_LOG.name} yet", "fix": None}
+    hits = [ln for ln in lines if any(k in ln.lower() for k in _OWNER_LOG_ALARM)]
+    if not hits:
+        return {"id": "owner_log", "label": "Owner log", "status": OK,
+                "detail": f"{OWNER_LOG.name}: no downgrade or port-conflict line", "fix": None}
+    return {"id": "owner_log", "label": "Owner log", "status": FAIL,
+            "detail": f"{len(hits)} alarm line(s) in {OWNER_LOG}; latest: {hits[-1].strip()[:200]} "
+                      "— resolve the cause, then truncate the log", "fix": None}
+
+
+_PARITY_SCRIPT = (
+    "import json,sys\n"
+    "from fastembed import TextEmbedding\n"
+    "m=TextEmbedding(model_name=sys.argv[1])\n"
+    "print(json.dumps([list(map(float,v)) for v in m.embed(json.loads(sys.argv[2]))]))\n")
+
+
+def _cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def check_embed_parity():
+    """The owner's /embed must match the in-process model the MCP falls back to (EN + VN,
+    cosine ≥ PARITY_MIN_COSINE) — otherwise the index and the query side disagree."""
+    health = _owner_health()
+    if not health or health.get("status") != "ok":
+        return None                      # check_owner already reports a down owner
+    model = health.get("model") or MODEL
+    owner = []
+    try:
+        for text in PARITY_TEXTS:
+            req = urllib.request.Request(
+                EMBED_BASE + "/embed", data=json.dumps({"text": text}).encode("utf-8"),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                owner.append(json.loads(resp.read())["vector"])
+    except (*NETWORK_READ_ERRORS, urllib.error.URLError) as exc:
+        return {"id": "embed_parity", "label": "Embed parity", "status": FAIL,
+                "detail": f"owner /embed failed ({type(exc).__name__}: {exc})", "fix": None}
+    if not PY_BIN.exists():
+        return {"id": "embed_parity", "label": "Embed parity", "status": WARN,
+                "detail": "venv missing — in-process side of the probe unavailable", "fix": "setup"}
+    r = _run([str(PY_BIN), "-c", _PARITY_SCRIPT, model, json.dumps(list(PARITY_TEXTS))])
+    try:
+        local = json.loads(r.stdout)
+    except ValueError:
+        return {"id": "embed_parity", "label": "Embed parity", "status": WARN,
+                "detail": f"in-process embed failed: {_last_line(r.stderr)}", "fix": None}
+    cos = [_cosine(a, b) for a, b in zip(owner, local)]
+    low = min(cos) if cos else 0.0
+    status = OK if len(cos) == len(PARITY_TEXTS) and low >= PARITY_MIN_COSINE else FAIL
+    return {"id": "embed_parity", "label": "Embed parity", "status": status,
+            "detail": f"{model}: EN {cos[0]:.6f}, VN {cos[-1]:.6f} (bar {PARITY_MIN_COSINE})",
+            "fix": None}
 
 
 def _stale_only(rep):
@@ -1239,6 +1459,34 @@ def _ver_tuple(s: str) -> tuple:
     return tuple(int(x) if x.isdigit() else 0 for x in s.split("."))
 
 
+
+
+
+
+
+
+# Harness rows whose installed copy must reach the switch-over release before the cutover.
+# Command Code, DSH and Cline launch from the dev repo path, not a versioned cache — no row.
+CUTOVER_HARNESSES = ("claude-code", "codex", "omp", "zcode")
+CUTOVER = False     # set by --cutover
+
+
+def apply_cutover(results, release=None):
+    """--cutover: every Claude/Codex/OMP/ZCode row whose installed version is below the
+    switch-over release (the SSOT version this tree ships) turns FAIL. An old copy has no
+    owner start path, and its setup.sh would restart Docker on the owner's ports."""
+    release = release or _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+    if not release:
+        return results
+    for r in results:
+        ver = r.get("version")
+        if r.get("id") in CUTOVER_HARNESSES and ver and _ver_tuple(ver) < _ver_tuple(release):
+            r["status"] = FAIL
+            r["detail"] = (f"CUTOVER: v{ver} is below the switch-over release v{release} — "
+                           f"update this harness's plugin copy first; " + r["detail"])
+    return results
+
+
 def _omp_installed_version():
     """(version, enabled) of skill-concierge@skill-concierge in OMP's install record,
     or (None, None) when OMP has no record for it. The record keys plugins by
@@ -1317,10 +1565,10 @@ def check_omp():
                             "adapters/omp/skill-concierge.ext.ts; update the plugin")
     if findings:
         return {"id": "omp", "label": "OMP integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None}
+                "detail": "; ".join(findings), "fix": None, "version": ver}
     return {"id": "omp", "label": "OMP integration", "status": OK,
             "detail": f"OMP plugin v{ver} matches SSOT v{ssot}; marketplace + extension surface in sync",
-            "fix": None}
+            "fix": None, "version": ver}
 
 _VERSION_DIRNAME = re.compile(r"^\d+(\.\d+)*$")
 
@@ -1399,11 +1647,11 @@ def check_codex():
             findings.append(f"Codex cache v{cached_ver} missing .codex-plugin/mcp.json — incomplete install")
     if findings:
         return {"id": "codex", "label": "Codex integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None}
+                "detail": "; ".join(findings), "fix": None, "version": cached_ver}
     return {"id": "codex", "label": "Codex integration", "status": OK,
             "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills, launcher and MCP "
                       "descriptor present",
-            "fix": None}
+            "fix": None, "version": cached_ver}
 
 def check_commandcode():
     """Command Code harness install state — mod + settings + MCP surface (ADR-0038).
@@ -1546,10 +1794,10 @@ def check_zcode():
                             "(cosmetic under the interpreter-form .mcp.json; repair: chmod +x)")
     if findings:
         return {"id": "zcode", "label": "ZCode integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None}
+                "detail": "; ".join(findings), "fix": None, "version": cached_ver}
     return {"id": "zcode", "label": "ZCode integration", "status": OK,
             "detail": f"ZCode cache v{cached_ver} matches SSOT v{ssot}; launcher executable",
-            "fix": None}
+            "fix": None, "version": cached_ver}
 
 
 def _claude_code_installed():
@@ -1786,7 +2034,7 @@ def check_keepoff():
 
 
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
-          check_mcp_wiring, check_qdrant,
+          check_mcp_wiring, check_owner, check_owner_ports, check_owner_log, check_embed_parity,
           check_engine_health, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_blocklist, check_keepoff,
@@ -1797,16 +2045,37 @@ CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine
 
 # ---------- auto-fixers: return (ok, message). Only the safe/fast ones. ----------
 
-def fix_docker_start():
+def fix_owner_start():
+    ok, msg = start_owner()
+    if not ok:
+        return ok, msg
+    if _wait_owner():
+        return True, msg + " (ready)"
+    return True, msg + " (still loading — re-run doctor shortly)"
+
+
+def fix_containers():
+    """Stop and disable a revived skill-concierge container on an owner port, then start the
+    owner. Only the two containers this plugin ever ran are touched; anything else holding
+    the port is reported for a human to stop.
+
+    Latched on the owner's SQLite file: before the cutover moves the staged index into place
+    there is nothing for an owner to serve, so stopping Qdrant would only take search down."""
+    if not INDEX_DB.exists():
+        return False, (f"no owner index at {INDEX_DB} — the cutover has not run; "
+                       "leaving the containers alone")
     docker = shutil.which("docker")
-    if not docker:
-        return False, "docker not found"
-    r = _run([docker, "start", QNAME])
-    if r.returncode != 0:
-        return False, (r.stderr.strip() or "docker start failed")
-    if _wait_qdrant():
-        return True, f"started container {QNAME} (ready)"
-    return True, f"started container {QNAME} (still booting — re-run doctor shortly)"
+    pubs = _publishing_containers() or []
+    ours = [n for n, _ in pubs if n in (QNAME, ENAME)]
+    if not docker or not ours:
+        return fix_owner_start()
+    for name in ours:
+        _run([docker, "update", "--restart=no", name])
+        r = _run([docker, "stop", name])
+        if r.returncode != 0:
+            return False, f"docker stop {name} failed: {r.stderr.strip()}"
+    ok, msg = fix_owner_start()
+    return ok, f"stopped + disabled {', '.join(ours)}; {msg}"
 
 
 def fix_reindex():
@@ -1889,7 +2158,7 @@ def fix_keepoff():
     return True, f"{first} → {KEEPOFF_DURABLE}"
 
 
-AUTO_FIXERS = {"docker": fix_docker_start, "reindex": fix_reindex,
+AUTO_FIXERS = {"owner": fix_owner_start, "containers": fix_containers, "reindex": fix_reindex,
                "overrides": fix_overrides,
                "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk,
                "keepoff": fix_keepoff}
@@ -1904,7 +2173,8 @@ def run_all():
     # after repairing something, and a memo carried across that boundary would re-report the
     # very failure the fix just cleared — exiting 1 on a system doctor had already repaired.
     _reset_pass_caches()
-    return [c for c in (fn() for fn in CHECKS) if c]
+    results = [c for c in (fn() for fn in CHECKS) if c]
+    return apply_cutover(results) if CUTOVER else results
 
 
 def overall(results):
@@ -1928,7 +2198,7 @@ def _selftest():
     assert overall([mk(WARN), mk(FAIL)]) == FAIL
     assert overall([]) == OK
     assert QURL.startswith("http")
-    assert set(AUTO_FIXERS) <= {"docker", "reindex", "overrides", "prompt_intent",
+    assert set(AUTO_FIXERS) <= {"owner", "containers", "reindex", "overrides", "prompt_intent",
                                 "purge_junk", "keepoff"}
     # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
     healthy_emb = {"reachable": True}
@@ -2404,12 +2674,17 @@ def _selftest():
 def main():
     ap = argparse.ArgumentParser(description="skill-concierge deployment health check")
     ap.add_argument("--fix", action="store_true", help="attempt safe auto-fixes, then re-check")
+    ap.add_argument("--cutover", action="store_true",
+                    help="cutover precondition: harness-version rows FAIL below the switch-over release")
     ap.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
     if args.selftest:
         return _selftest()
+    global CUTOVER
+    CUTOVER = args.cutover
 
-    print(f"skill-concierge doctor   (qdrant={QURL}  venv={VENV})\n")
+    print(f"skill-concierge doctor   (store={QURL}  venv={VENV}"
+          f"{'  mode=cutover' if CUTOVER else ''})\n")
     results = run_all()
     report(results)
 

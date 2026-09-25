@@ -1800,6 +1800,51 @@ def _embed(text: str) -> list:
     return _post_json(EMBED_URL, {"text": text}, EMBED_TIMEOUT_S)["vector"]
 
 
+# ── index owner autostart (replaces Docker's restart policy) ─────────────────
+# The embed call is the first to fail when the owner is down, so its `embed_down` branch
+# starts the owner — ONLY on "connection refused": a timeout or a 503 means busy or loading,
+# and a restart there would only race the live owner. Detached, never waited on, at most
+# once per OWNER_AUTOSTART_EVERY_S machine-wide (one stamp file). SKILL_OWNER_AUTOSTART=0
+# disables it (tests that run the real enforcer).
+OWNER_AUTOSTART = os.environ.get("SKILL_OWNER_AUTOSTART", "1") != "0"
+OWNER_AUTOSTART_STAMP = Path.home() / ".claude" / "skill-concierge" / "owner-autostart.stamp"
+OWNER_AUTOSTART_EVERY_S = 60
+OWNER_VENV = Path(os.environ.get(
+    "SKILL_CONCIERGE_VENV", Path.home() / ".claude" / "skill-concierge" / "venv"))
+
+
+def _connection_refused(exc: BaseException) -> bool:
+    return isinstance(exc, ConnectionRefusedError) or isinstance(
+        getattr(exc, "reason", None), ConnectionRefusedError)
+
+
+def _owner_autostart(exc: BaseException) -> bool:
+    """Start the index owner when `exc` is a refused connection. True when a start was
+    spawned. Never raises — this hook is additive-only."""
+    if not OWNER_AUTOSTART or not _connection_refused(exc):
+        return False
+    try:
+        try:
+            if time.time() - OWNER_AUTOSTART_STAMP.stat().st_mtime < OWNER_AUTOSTART_EVERY_S:
+                return False
+        except FileNotFoundError:
+            pass
+        python = OWNER_VENV / "bin" / "python"
+        if not python.exists():
+            return False
+        OWNER_AUTOSTART_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        OWNER_AUTOSTART_STAMP.write_text(str(os.getpid()), encoding="utf-8")
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        import subprocess
+        with open(LOG_DIR / "index-owner.log", "ab") as log:
+            subprocess.Popen([str(python), "-m", "skill_search.index_owner"],
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                             start_new_session=True)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _project_row_verdict(scope: str, name: str) -> str:
     """For a project-scoped row (`<family>:<skills dir>`), one of:
     'other'   — the row belongs to a different project and this session holds no copy of it;
@@ -2440,8 +2485,9 @@ def main() -> int:
             _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
             _append_offer(sid, "fallback", _hits_offered, "embed_timeout", prompt, embed_ms=embed_ms)
             return 0
-        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError) as exc:
             embed_ms = (time.time() - t0) * 1000
+            _owner_autostart(exc)
             if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "embed_down", embed_ms=embed_ms):
                 return 0
             _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))

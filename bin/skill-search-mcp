@@ -111,4 +111,15 @@ if [ -f "$PLUGIN_JSON" ] && [ -d "$VENDOR" ]; then
   fi
 fi
 
+# ── index owner autostart: the owner replaced Docker's restart policy, so every MCP start
+# checks it. Start it DETACHED when /health does not answer and never wait — a duplicate
+# start is harmless (the loser of the owner's file lock exits in milliseconds), and the MCP
+# handshake must never block on a model load. SKILL_OWNER_AUTOSTART=0 disables it.
+if [ "${SKILL_OWNER_AUTOSTART:-1}" != "0" ] \
+   && ! curl -s -m 1 "http://127.0.0.1:${EMBED_SHIM_PORT:-6363}/health" >/dev/null 2>&1; then
+  OWNER_LOG="${SKILL_CONCIERGE_LOG:-$HOME/.claude/skill-concierge/logs}/index-owner.log"
+  mkdir -p "$(dirname "$OWNER_LOG")" 2>/dev/null || true
+  nohup "$VENV/bin/python" -m skill_search.index_owner </dev/null >>"$OWNER_LOG" 2>&1 &
+fi
+
 exec "$BIN"

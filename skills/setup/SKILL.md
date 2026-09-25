@@ -1,7 +1,7 @@
 ---
 name: setup
 user-invocable: true
-description: Bootstrap or repair the skill-concierge engine from scratch. Use this skill when installing skill-concierge on a new machine, right after a plugin update, or when skill-concierge:doctor reports the engine venv is missing. Runs setup.sh to build the stable engine venv, start the Qdrant container, build the multilingual index, and apply the curated skill-budget overrides, then verifies the result with doctor.
+description: Bootstrap or repair the skill-concierge engine from scratch. Use this skill when installing skill-concierge on a new machine, right after a plugin update, or when skill-concierge:doctor reports the engine venv is missing. Runs setup.sh to build the stable engine venv, start the local index owner, build the multilingual index, and apply the curated skill-budget overrides, then verifies the result with doctor.
 license: MIT
 metadata:
   version: 0.1.1
@@ -16,9 +16,10 @@ First-time bootstrap (and post-update refresh) for the vendored skill-search eng
 ## Prerequisites
 
 - **Python 3.10–3.12** on `PATH` (or set `SKILL_PYTHON=/path/to/python3.12`).
-- **Docker / OrbStack** running (hosts the Qdrant vector store).
+No Docker: the vector store is the local index owner (`python -m skill_search.index_owner`
+from the venv, one SQLite file), which `setup.sh` starts itself.
 
-If either is missing, tell the user and stop — `setup.sh` cannot proceed without them.
+If Python is missing, tell the user and stop — `setup.sh` cannot proceed without it.
 
 ## Steps
 
@@ -29,7 +30,7 @@ If either is missing, tell the user and stop — `setup.sh` cannot proceed witho
    ```
 
    (When working from a git clone instead, `cd` into the repo and run `./setup.sh`.)
-   It performs four idempotent steps: stable venv + deps → Qdrant container → build/refresh
+   It performs four idempotent steps: stable venv + deps → (re)start the index owner → build/refresh
    the index (discovers skills from BOTH Claude Code and Codex directories, ADR-0033), the
    actionability-gate corpus and the keep-off offer-suppression map (durable home, inert while
    the ledger window is thin — ADR-0054) → apply curated overrides to `~/.claude/settings.json`
@@ -56,11 +57,11 @@ If either is missing, tell the user and stop — `setup.sh` cannot proceed witho
 
 - After **any plugin update** (`/plugin marketplace update` + reinstall) — refreshes the
   engine copy in the stable venv and rebuilds the index.
-- When the Qdrant data volume or the venv was wiped.
+- When the owner's index file (`~/.cache/skill-search/index.sqlite`) or the venv was wiped.
 
 ## Notes
 
 - The venv lives at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it
   survives reinstalls — ADR-0004). Override with `SKILL_CONCIERGE_VENV`.
-- `setup.sh` reads the embedder + Qdrant URL from `.mcp.json` so the built index can never
+- `setup.sh` reads the embedder + store URL from `.mcp.json` so the built index can never
   diverge from the model the live MCP uses.
