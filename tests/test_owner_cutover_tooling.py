@@ -27,8 +27,18 @@ def _load(name, path):
     return mod
 
 
+# doctor reads its configuration from the environment at import. The engine suite's
+# conftest sets these process-wide for its own test owner, so a shared pytest run would
+# hand doctor that owner's ports and collection: load doctor from a clean slate.
+_ENGINE_SUITE_ENV = ("EMBED_SHIM_HOST", "EMBED_SHIM_PORT", "SKILL_COLLECTION",
+                     "SKILL_CONCIERGE_CATALOG_ROOTS", "SKILL_EMBED_BACKEND", "SKILL_META_PATH",
+                     "SKILL_QDRANT_URL", "SKILL_TRIGGERS", "SKILL_VECTOR_SIZE")
+
+
 @pytest.fixture()
-def dr():
+def dr(monkeypatch):
+    for k in _ENGINE_SUITE_ENV:
+        monkeypatch.delenv(k, raising=False)
     return _load("doctor_owner_t", ROOT / "scripts" / "doctor.py")
 
 
@@ -138,6 +148,13 @@ def test_owner_ports_row(dr, monkeypatch):
     monkeypatch.setattr(dr, "_publishing_containers", lambda: [("someone-else", "6333")])
     row = dr.check_owner_ports()
     assert row["status"] == "fail" and row["fix"] is None   # never stop a stranger's container
+
+
+def test_owner_ports_follow_configured_ports(dr, monkeypatch):
+    # an owner configured on other ports (a staging run) is not blocked by containers on 6333
+    monkeypatch.setattr(dr, "OWNER_PORTS", ("6433", "6463"))
+    ps = "skill-search-qdrant\t127.0.0.1:6333->6333/tcp\nstaged\t127.0.0.1:6433->6433/tcp\n"
+    assert [n for n, _ in dr._parse_publishers(ps)] == ["staged"]
 
 
 def test_owner_log_row(dr, tmp_path, monkeypatch):

@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -152,7 +153,10 @@ EMBED_BASE = f"http://127.0.0.1:{os.environ.get('EMBED_SHIM_PORT', '6363')}"
 INDEX_DB = Path(os.environ.get("SKILL_INDEX_DB", Path.home() / ".cache/skill-search/index.sqlite"))
 OWNER_LOG = LOGDIR / "index-owner.log"
 ENAME = os.environ.get("SKILL_EMBED_CONTAINER", "skill-concierge-embed-shim")
-OWNER_PORTS = ("6333", "6363")
+# The owner's two ports as configured (store URL + embed port), 6333/6363 by default: a
+# container publishing either one is in the owner's way; one on some other port is not.
+OWNER_PORTS = (str(urllib.parse.urlsplit(QURL).port or 6333),
+               os.environ.get("EMBED_SHIM_PORT", "6363"))
 # The embed parity probe: one English and one Vietnamese prompt, owner vs in-process.
 PARITY_TEXTS = ("find the right skill to deploy a web app",
                 "tìm kỹ năng phù hợp để triển khai ứng dụng web")

@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -64,6 +65,20 @@ def search(collection, qvec, k=TOPK):
         name = (hits[0].get("payload") or {}).get("name", g.get("id"))
         out.append((name, hits[0]["score"]))
     return out
+
+
+def _exists(collection):
+    try:
+        with urllib.request.urlopen(f"{QDRANT}/collections/{collection}", timeout=10) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+
+
+METRICS = [("rank1_pct", "correct rank-1 %"), ("top5_pct", "correct top-5 %"),
+           ("floor_pct", "clears-floor %"), ("tn_fire_pct", "true-neg false-fire %")]
 
 
 def rank_of(ranked, name):
@@ -128,14 +143,23 @@ def run():
     qvec = dict(zip(prompts, vecs))
 
     live = eval_collection(LIVE, qvec, corpus)
+    if not _exists(SHADOW):
+        # the enrichment shadow was retired (exported, then dropped): report LIVE alone
+        print(f"\nfull 495-way precision_eval  ({live['n_pos']} positives / {live['n_neg']} "
+              f"negatives across {len(corpus)} skills)   floor={FLOOR}   "
+              f"(no '{SHADOW}' collection — LIVE only)")
+        for k, lab in METRICS:
+            print(f"{lab:<26}{live[k]:>10}")
+        print(f"OFFER-SET CROWDING  mean {live['offer_mean']}  median {live['offer_median']}  "
+              f"p95 {live['offer_p95']}  (of 495)")
+        return 0
     shadow = eval_collection(SHADOW, qvec, corpus)
 
     print(f"\nfull 495-way precision_eval  ({live['n_pos']} positives / {live['n_neg']} "
           f"negatives across {len(corpus)} skills)   floor={FLOOR}")
     print(f"{'metric':<26}{'LIVE':>10}{'SHADOW':>10}{'Δ':>10}")
     print("-" * 56)
-    for k, lab in [("rank1_pct", "correct rank-1 %"), ("top5_pct", "correct top-5 %"),
-                   ("floor_pct", "clears-floor %"), ("tn_fire_pct", "true-neg false-fire %")]:
+    for k, lab in METRICS:
         d = round(shadow[k] - live[k], 1)
         print(f"{lab:<26}{live[k]:>10}{shadow[k]:>10}{d:>+10}")
     print("-" * 56)
