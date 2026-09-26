@@ -76,8 +76,10 @@ def test_doctrine_orders_off_list_read_before_using():
         assert phrase in rerule, phrase
     # Continuing a skill already invoked this session: the re-read replaces the search (ADR-0063).
     cont = _section(rule3, "**Continuing a skill.**", "\n\n")
-    for phrase in ("invoked earlier this session", "`USING: <name> (continuing)`", "re-read its body",
-                   "the rule-5 call", "skill tool only when", "stands in for the search", "re-ruled"):
+    for phrase in ("invoked earlier this session", "the new work is the same task",
+                   "`USING: <name> (continuing)`", "re-read its body", "with `get_skill` (rule 5)",
+                   "skill tool only when that call is unavailable or cannot find the skill",
+                   "stands in for the search", "re-ruled"):
         assert phrase in cont, phrase
     rule5 = _section(body, "5. **", "6. **")
     assert "disabled_in" in rule5 and "switched off" in rule5

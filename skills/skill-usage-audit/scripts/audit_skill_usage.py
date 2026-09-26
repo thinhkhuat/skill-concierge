@@ -52,8 +52,13 @@ DEFAULT_META = ["skill-concierge", "enforcer", "gate floor", "getaway_floor",
 # Where a ruling may start. Bare at the line start, the old optional-colon forms still read; inside
 # markdown (`USING: x`, **SEARCH:** y, > NO SKILL: z) the colon is required, so a bold prose heading
 # ("**Search results**") is not a ruling. `{w}` is the ruling word(s).
-_LEAD = r'^(?:[ \t]*|[\s`*>]*[`*>][ \t]*(?={w}:))'
-_USING = re.compile(r'(?im)' + _LEAD.format(w='USING') + r'USING:?[*`]*\s+[`*]*([a-z0-9][a-z0-9:_\-]*)')
+_LEAD = r'^(?:[ \t]*|[ \t`*>]*[`*>][ \t]*(?={w}:))'
+# A name wrapped in markdown (`USING: `x``) reads only after the colon: "Using `rg` to …" is prose.
+_USING = re.compile(r'(?im)' + _LEAD.format(w='USING')
+                    + r'USING(?::[*`]*\s+[`*]*|\s+)([a-z0-9][a-z0-9:_\-]*)')
+# Rule 3's continuation form (ADR-0063/0064): `USING: <name> (continuing)`.
+_CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
+                         + r'USING(?::[*`]*\s+[`*]*|\s+)([a-z0-9][a-z0-9:_\-]*)[`*]*\s*\(continuing\)')
 _SEARCH = re.compile(r'(?im)' + _LEAD.format(w='SEARCH') + r'SEARCH:?[*`]*\s+')
 # The skip ruling. `NO SKILL: <why>` since v0.52.0 (ADR-0062); the old `SKIPPING: none` still
 # reads, so transcripts from before the rename stay comparable. The new form needs its colon —
@@ -76,6 +81,24 @@ _SEARCH_SLUGS = {"skill-search", "skill-concierge-skill-search"}
 # pre-authorize a skip ruling; a turn carrying it is a lawful hook-authorized skip, not a false
 # skip. Only the enforcer's own hook output may carry it (see _enforcer_output).
 AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
+
+
+def _note_used(rec, used):
+    """Add the skills an assistant record uses (Skill / get_skill calls, USING lines) to `used`."""
+    msg = rec.get("message")
+    if rec.get("type") != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("content"), list):
+        return
+    for blk in msg["content"]:
+        if not isinstance(blk, dict):
+            continue
+        if blk.get("type") == "tool_use" and ((blk.get("name") or "") == "Skill"
+                                               or (blk.get("name") or "").endswith("get_skill")):
+            inp = blk.get("input") or {}
+            n = norm(inp.get("skill") or inp.get("name"))
+            if n:
+                used.add(n)
+        elif blk.get("type") == "text":
+            used.update(_declared(blk.get("text", ""))[0])
 
 
 # How every enforcer output string begins (hooks/scripts/enforcer.py: MANDATE / _ranked_mandate,
@@ -308,6 +331,13 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     rerules = Counter()   # retracted USING declarations, moved out of `using`
     sess_raw = defaultdict(Counter)   # every USING per session (subagent files included) — the undo base
     n_search = n_skip = n_skip_new = 0
+    cont = Counter()   # continuations: total, re-read in the same turn, no earlier use this session
+
+    def _close_continuations(turn):
+        for prior, reread in turn["cont"].values():
+            cont["total"] += 1
+            cont["reread"] += reread
+            cont["no_prior"] += not prior
     # per-session prompt text, to flag self/meta sessions
     sess_text = defaultdict(str)
     sess_skill = defaultdict(Counter)
@@ -317,7 +347,8 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
 
     def _new_turn(active):
         return {"saw_search": False, "saw_skip": False, "saw_marker": False, "saw_hook": False,
-                "marker_at_skip": False, "hook_at_skip": False,
+                "marker_at_skip": False, "hook_at_skip": False, "search_at_skip": False,
+                "cont": {},
                 "active": active, "skip_text": "", "sid": None}
 
     for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
@@ -326,6 +357,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         is_sub = _SUBAGENT_PATH in fp
         file_dispatch = False   # a team/dispatched scaffolding marker seen in this file
         file_sid = None
+        used_here = set()   # skills this session already used (Skill, get_skill or a USING line)
         # Turn segmentation: a genuine user prompt (string `content`) opens a turn; a
         # tool_result user record (`content` is a LIST) does not. We accumulate, per turn,
         # whether a SKIPPING was declared and whether a real search_skills call fired in the
@@ -341,8 +373,9 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             is_user = ('"type":"user"' in line or '"type": "user"' in line)
             is_list_content = ('"content":[' in line or '"content": [' in line)
             if is_user and not is_list_content:  # genuine user prompt -> new turn
+                _close_continuations(cur)
                 if cur["active"] and cur["saw_skip"]:
-                    turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
+                    turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
                                   "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                                   "sid": cur["sid"], "sub": is_sub})
                 cur = _new_turn(True)
@@ -352,10 +385,12 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             has_marker = ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
                           or "USING" in line or "SEARCH" in line or "SKIPPING" in line
                           or "NO SKILL:" in line or AUTHORIZED_SKIP_MARKER in line
-                          # Widened only on assistant lines: a line admitted here also feeds a
-                          # user record's text to the meta classifier below. (Every enforcer output
-                          # contains USING or SKILL-CHECK:, so it passes already.)
-                          or ('"assistant"' in line and _NO_SKILL_ANY_CASE.search(line)))
+                          # Widened only on the record kinds that need it: a line admitted here
+                          # also feeds a user record's text to the meta classifier below. The
+                          # attachment clause is load-bearing: the June 2026 enforcer head
+                          # "SKILL-FIRST (standing …" carries neither USING nor SKILL-CHECK:.
+                          or ('"assistant"' in line and (_NO_SKILL_ANY_CASE.search(line) or "get_skill" in line))
+                          or ('"attachment"' in line and ("SKILL-FIRST" in line or "CONSULT-ROUTE" in line)))
             if not (has_marker or (is_user and not is_list_content)):
                 continue
             # Count ONLY the enforcer's own authorization line: from its own hook output
@@ -376,6 +411,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             if since is not None:
                 e = ts_epoch(rec)
                 if e is None or e < since:
+                    _note_used(rec, used_here)   # a continuation inside the window may lean on it
                     continue
             sid = rec.get("sessionId") or fp
             cur["sid"] = file_sid = sid  # file = one session; thread onto the turn for the sid-join
@@ -401,6 +437,13 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     continue
                 if blk.get("type") == "tool_use":
                     nm = blk.get("name") or ""
+                    if nm == "Skill" or nm.endswith("get_skill"):
+                        inp = blk.get("input") or {}
+                        n0 = norm(inp.get("skill") or inp.get("name"))
+                        if n0 in cur["cont"]:
+                            cur["cont"][n0] = (cur["cont"][n0][0], True)
+                        if n0:
+                            used_here.add(n0)
                     if nm == "Skill":
                         n = norm((blk.get("input") or {}).get("skill"))
                         if n:
@@ -419,6 +462,11 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                         sess_text[sid] += " " + txt[:400].lower()
                     if role == "assistant":
                         used, retracted = _declared(txt)
+                        if not (subagent_stop and is_sub):
+                            for c in (norm(x) for x in _CONTINUING.findall(txt)):
+                                if c and c not in cur["cont"]:
+                                    cur["cont"][c] = (c in used_here, False)
+                        used_here.update(used)
                         undone = _tally(used, retracted, sid, using, sess_raw, rerules)
                         if not (subagent_stop and is_sub):  # H3: organic denominator only
                             for n in used:
@@ -438,15 +486,17 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                 # authorize a skip already written.
                                 cur["marker_at_skip"] = cur["saw_marker"]
                                 cur["hook_at_skip"] = cur["saw_hook"]
+                                # Rule 4 backs a skip with a search shown BEFORE the ruling.
+                                cur["search_at_skip"] = cur["saw_search"]
+                                # H1: capture ONLY the judged (first) clause line WHILE `txt` is
+                                # valid (Red-Team F5). Cap to the clause for data-safety (F7).
+                                ls = txt.rfind("\n", 0, m.start()) + 1
+                                le = txt.find("\n", m.start())
+                                cur["skip_text"] = txt[ls: le if le != -1 else len(txt)].strip()
                             cur["saw_skip"] = True
-                            # H1: capture ONLY the SKIPPING clause line WHILE `txt` is valid
-                            # (Red-Team F5: `txt` is stale/unbound at flush). Cap to the clause —
-                            # not the surrounding task text — for data-safety (F7).
-                            ls = txt.rfind("\n", 0, m.start()) + 1
-                            le = txt.find("\n", m.start())
-                            cur["skip_text"] = txt[ls: le if le != -1 else len(txt)].strip()
+        _close_continuations(cur)
         if cur["active"] and cur["saw_skip"]:  # flush the file's last turn
-            turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
+            turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
                           "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                           "sid": cur["sid"], "sub": is_sub})
         if file_dispatch and file_sid:
@@ -467,6 +517,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     return {
         "skill_tool": skill_tool, "slash": slash_skill, "using": +using, "rerules": rerules,
         "n_search": n_search, "n_skip": n_skip, "n_skip_new": n_skip_new,
+        "continuations": (cont["total"], cont["reread"], cont["no_prior"]),
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
         "enforcer_verdicts": enforcer_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
@@ -636,6 +687,10 @@ def main():
               f"hook-authorized skips: {az})")
     else:
         print("  no skip-ruling turns in window")
+    ct, cr, cn = r["continuations"]
+    if ct:
+        print(f"  continuations (`USING: <x> (continuing)`, rule 3): {ct} — re-read in the same turn {cr}; "
+              f"no earlier use of that skill this session {cn}")
     efs, els, eaz = r["enforcer_verdicts"]
     if efs + els + eaz:
         print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "

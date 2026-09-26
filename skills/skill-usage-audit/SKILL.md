@@ -52,7 +52,12 @@ cannot authorize a skip (ADR-0062). The report adds an **enforcer-run turns only
 same verdict over turns where the enforcer's offer, consult route or `SKILL-CHECK:` line reached the agent
 before it ruled (Stop-hook feedback, subagent prompts, and short or slash prompts get no offer, though the
 doctrine still binds the last two). Since `0.52.1` a line that arrives after the ruling — a queued
-notification — neither authorizes the skip nor marks the turn enforcer-run (ADR-0063). Such a turn is
+notification — neither authorizes the skip nor marks the turn enforcer-run (ADR-0063). Since `0.52.2` the same holds for
+the search: a skip is search-backed only by a `search_skills` call made before the ruling (rule 4). The
+report also counts continuations (`USING: <name> (continuing)`, rule 3): how many re-read the skill in the
+same turn and how many name a skill the session had not used before (ADR-0064; epoch-watch W28). The
+`SEARCH` declaration count is display-only and includes bare title-case prose lines ("Search …"); the
+verdicts come from tool calls. Such a turn is
 excluded from the false-skip count and tallied separately as `authorized_skip`, reported alongside
 the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.49.0`
 ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §5), a `USING:`

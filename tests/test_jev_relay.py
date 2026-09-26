@@ -11,15 +11,54 @@ Covered:
 """
 
 import http.client
+import os
 import queue
 import socket
 import sys
+import types
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import embed_server as es  # noqa: E402
+
+# The shim sets the deployed embed env and imports the engine when it loads. In the shared pytest
+# process that would leave the live model in os.environ and a live-configured engine module in
+# sys.modules for every later test (the engine suite expects its own 384-dim default).
+_SHIM_ENV = ("SKILL_EMBED_BACKEND", "SKILL_EMBED_MODEL", "SKILL_QDRANT_URL")
+_ENGINE_WAS_LOADED = "skill_search.server" in sys.modules
+_ENV_BEFORE = {k: os.environ.get(k) for k in _SHIM_ENV}
+
+
+def _import_shim():
+    """Import the shim against a stub engine, then put os.environ and sys.modules back."""
+    env = {k: os.environ.get(k) for k in _SHIM_ENV}
+    before = set(sys.modules)
+    stub = types.ModuleType("skill_search.server")
+    stub.EMBED_MODEL, stub.embed = "stub", lambda text: []   # the relay tests never embed
+    real = sys.modules.get("skill_search.server")
+    sys.modules["skill_search.server"] = stub
+    try:
+        import embed_server
+    finally:
+        if real is not None:
+            sys.modules["skill_search.server"] = real
+        for name in set(sys.modules) - before:
+            if name == "skill_search" or name.startswith("skill_search."):
+                del sys.modules[name]
+        if real is None:
+            sys.modules.pop("skill_search.server", None)
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return embed_server
+
+
+es = _import_shim()
+# Recorded right after the import: later tests may load the engine or set env legitimately.
+_AFTER = ("skill_search.server" in sys.modules, {k: os.environ.get(k) for k in _SHIM_ENV})
 
 
 class FakeConn:
@@ -87,3 +126,8 @@ def test_timeout_is_never_retried(relay, err):
     with pytest.raises(OSError):
         relay._jev_relay(b"{}", "Bearer k", 2.0)
     assert FakeConn.made == []                                        # no second request was sent
+
+
+def test_importing_the_shim_leaks_nothing_into_the_test_process():
+    """Its import-time env and engine import must not reach later tests in this process."""
+    assert _AFTER == (_ENGINE_WAS_LOADED, _ENV_BEFORE)

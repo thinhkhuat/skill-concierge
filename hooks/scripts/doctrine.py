@@ -121,8 +121,8 @@ def _harness_adapt(doctrine: str) -> str:
     prefix in DSH (it rides the plain `dsh-mcp-client` entry, not a plugin manifest).
     So the tool name is `mcp__skill-search__search_skills` — same as commandcode.
     DSH has no slash-commands; the hint is rewritten to reference the skill tool
-    instead (`skill` + skill name lookup). The get_skill consumption hint is also
-    adapted: call `mcp__skill-search__get_skill` with a `name` argument.
+    instead (`skill` + skill name lookup). The rule-5 `get_skill("<name>")` hint is left as
+    written: it names the tool by its short name, which the agent resolves to the bridged form.
     """
     harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if harness in ("omp", "oh-my-pi"):

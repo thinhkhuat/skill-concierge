@@ -55,10 +55,12 @@ The standing order it injects — the **SKILL-FIRST doctrine**:
   supersedes ADR-0056's "cannot be invoked by name here" wording).
 - **A skill picked outside the shown hits routes through the search, not around it**: line 1
   `SEARCH:` → the search → load the body → quote the covering line → `USING: <name>`. A skill the
-  agent invoked earlier this session and keeps following needs no search when the offer omits it:
-  line 1 `USING: <name> (continuing)`, then a re-read of its body with `get_skill` (the harness skill
-  tool only as a fallback) before other work
-  ([ADR-0063](../../docs/adr/0063-continuing-a-skill-and-audit-reader-fixes.md)). A loaded
+  agent invoked earlier this session and keeps following for the same task needs no search when the
+  offer omits it: line 1 `USING: <name> (continuing)`, then a re-read of its body with `get_skill`
+  (the harness skill tool only when that call is unavailable or cannot find the skill) before other
+  work ([ADR-0063](../../docs/adr/0063-continuing-a-skill-and-audit-reader-fixes.md),
+  [ADR-0064](../../docs/adr/0064-continuation-scope-and-counter.md)). The usage audit counts
+  continuations, re-read or not. A loaded
   body that excludes the task — a hit's or not — forces an open re-rule in the same reply: a new
   `USING:`/`SEARCH:` line, one sentence quoting the excluding line, and telling the user the agent
   switched. A deterministic `PostToolUse(Skill|get_skill)` hook,

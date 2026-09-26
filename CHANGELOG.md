@@ -3,6 +3,31 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.2] — 2026-09-26
+
+### Changed — ADR-0064: continuations are for the same task, and the audit counts them
+- **Continuation scope** (owner-approved wording). Rule 3's continuation applies only when the new work is
+  the same task; the re-read names `get_skill` (rule 5), with the harness's skill tool as fallback when that
+  call is unavailable or cannot find the skill. Review of 0.52.1 showed a continuation could otherwise stand
+  in for the search on unrelated work, unseen. Standing order 682 → 697 words.
+- **Continuation counter.** `audit_skill_usage.py` reports continuations, how many re-read the skill in the
+  same turn, and how many name a skill with no earlier use in the session (read from the whole session,
+  before the `--since` window too) — epoch-watch W28's numbers. Since 2026-09-19: 3, all re-read.
+- **Audit reader.** A skip is search-backed only by a search made before the ruling (rule 4 read in order;
+  since 2026-07-04, 8 turns move from search-backed to false). `--harvest` keeps the judged (first) clause.
+  The pre-filter clause for enforcer attachments is restored — 0.52.1 removed it as redundant on a wrong
+  review nit, dropping 96 June 2026 enforcer outputs. A wrapped ruling no longer starts on a blank line; a
+  markdown-wrapped skill name reads only after a colon.
+- **Tests.** Engine-suite leak fixed at the source: `tests/test_jev_relay.py` imported the embed shim, which
+  set the live 768-dim model env and imported the engine for the whole pytest process; a later engine test
+  then built a 384-dim store with 768-dim vectors. It now imports the shim against a stub engine, restores
+  `sys.modules` and the env, and asserts nothing leaked. Found while rebasing the Track B branch, where the
+  engine suite runs in the same process. New parser tests: search after the ruling, harvest clause, June
+  enforcer head, prose negatives, continuation counter.
+- **Corrections.** ADR-0063 said harness adapters rewrite `get_skill("<name>")`; none does (the DSH
+  docstring was wrong too) — the single occurrence is pinned by tests. `analyze.py` deep-pull and
+  external-take counts rise from the 0.52.1 deploy (continuation re-reads are `get_skill` rows).
+
 ## [0.52.1] — 2026-09-26
 
 ### Changed — ADR-0063: continuing a skill re-reads it; audit reader fixes

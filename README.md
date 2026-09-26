@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.52.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.52.2-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -429,6 +429,7 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.52.2` — **published, ADR-0064: a continuation is for the same task only, re-reads with `get_skill` (the harness skill tool when that call is unavailable or cannot find the skill), and the usage audit counts continuations — re-read or not, and whether the skill was used earlier; a search now backs a skip only when it came before the ruling; the June 2026 enforcer head counts again; the embed-shim relay test no longer leaks its model env into the test process.** See [CHANGELOG](CHANGELOG.md).
 `0.52.1` — **published, ADR-0063: an agent continuing a skill it invoked earlier this session skips the search but re-reads the skill's body first (`USING: <name> (continuing)` + `get_skill`, the harness skill tool only as a fallback); the usage audit judges a skip by what the agent had been told when it ruled, reads bold-colon rulings but not bold prose headings, retracts wrapped re-rules, and splits `NO SKILL:` from old `SKIPPING` counts; corrections to ADR-0062's figures.** See [CHANGELOG](CHANGELOG.md).
 `0.52.0` — **published, ADR-0062: the skip ruling is `NO SKILL: <why>` (reason on line 1); router offers are headed "Whole-shelf ranking" and embedding offers "Preview", the two kinds taught once in the standing order, which drops to 614 words (−28 %) with the red-flags table kept; the usage audit and label extractor read both ruling forms, trust a hook authorization only from the enforcer's own output, and report the false-skip rate on turns where the enforcer ran.** See [CHANGELOG](CHANGELOG.md).
 

@@ -159,3 +159,56 @@ def test_the_audit_counts_each_skip_form_and_reads_bold_rulings(tmp_path, monkey
 def test_a_continuing_ruling_names_the_skill():
     """Rule 3's continuation form `USING: <name> (continuing)` counts as that skill."""
     assert A._declared("USING: study (continuing)") == (["study"], [])
+
+
+def _tool(tool, **inp):
+    return _rec("assistant", [{"type": "tool_use", "name": tool, "input": inp}])
+
+
+def test_a_search_after_the_ruling_does_not_back_it(tmp_path, monkeypatch):
+    """Rule 4: the search that backs a skip is shown before the ruling, in the same reply."""
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _say("NO SKILL: nothing fits"),
+        _tool("mcp__plugin_skill-concierge_skill-search__search_skills", query="later"),
+        _user("turn two"), _tool("mcp__plugin_skill-concierge_skill-search__search_skills", query="q"),
+        _say("NO SKILL: the hits do not fit"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"]) == (1, 1)
+
+
+def test_the_harvest_keeps_the_ruling_that_was_judged(tmp_path, monkeypatch):
+    import audit_skill_usage as A2
+    captured = []
+    real = A2._skip_verdicts
+    monkeypatch.setattr(A2, "_skip_verdicts", lambda turns: captured.append(list(turns)) or real(turns))
+    _audit(tmp_path, monkeypatch, [_user("turn one"), _say("NO SKILL: first reason"),
+                                    _say("NO SKILL: hook-cleared — a later reply in the same turn")])
+    assert captured[0][0]["skip_text"] == "NO SKILL: first reason"
+
+
+def test_the_june_enforcer_head_still_marks_an_enforcer_run_turn(tmp_path, monkeypatch):
+    """The 2026-06-25/26 offer opened "SKILL-FIRST (standing order)" with no USING in it."""
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _hook("SKILL-FIRST (standing order) — rule on the preview below"),
+        _say("NO SKILL: nothing fits"),
+    ])
+    assert r["enforcer_verdicts"] == (1, 0, 0)
+
+
+def test_prose_is_not_a_ruling_even_when_it_looks_like_one():
+    assert A._declared("Using `rg` to find it") == ([], [])
+    assert not A._SKIPPING.search("**Skipping the tests** for now")
+    assert not A._USING.search("**Using the tool**")
+    m = A._SKIPPING.search("intro\n\n`NO SKILL: x`")
+    assert m and m.group("new") and "\n" not in m.group(0)
+
+
+def test_continuations_are_counted_with_their_re_read(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("Skill", skill="study"), _say("USING: study"),
+        _user("turn two"), _say("USING: study (continuing)"),
+        _tool("mcp__plugin_skill-concierge_skill-search__get_skill", name="study"),
+        _user("turn three"), _say("USING: study (continuing)"),
+        _user("turn four"), _say("USING: ak-cook (continuing)"),
+    ])
+    assert r["continuations"] == (3, 1, 1)   # total, re-read in the turn, no earlier use

@@ -7,8 +7,10 @@
 > (`_AUTHORIZED_SIGNATURES` in `skills/skill-usage-audit/scripts/audit_skill_usage.py`) OUT of the
 > body — the audit counts a `SKILL-CHECK:` line as a lawful skip by those phrases, and a copy here
 > would miscount real dodges as authorized. Pinned by `tests/test_doctrine_text.py`.
-> Two literals are harness-rewrite targets in `doctrine.py` (`_harness_adapt`) and must stay
-> byte-exact: the claude-form search tool name and `get_skill("<name>")`. Pinned by its selftest.
+> The claude-form search tool name (and the slash forms) are harness-rewrite targets in
+> `doctrine.py` (`_harness_adapt`) and must stay byte-exact. `get_skill("<name>")` is rewritten by
+> no harness; it appears exactly once, in rule 5 (pinned by `tests/test_doctrine_text.py` and the
+> doctrine selftest, which checks the OMP rendering keeps it).
 > EFFORT ("work to done-and-proven") lives in the standalone effort-gate plugin since v0.4.0; this
 > order governs *which / whether a skill* only.
 > The skip ruling is `NO SKILL: <why>` since v0.52.0 (ADR-0062); it replaced the older `SKIPPING` token.
@@ -46,7 +48,7 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
 
    **A loaded body that excludes the task** — a hit's or not — is re-ruled in the same reply: a new `USING:` or `SEARCH:` line ending `(re-rule: <old>)`, quoting the excluding line — and tell the user you switched.
 
-   **Continuing a skill.** To keep following a skill you invoked earlier this session when this turn's offer does not list it: line 1 `USING: <name> (continuing)`, then re-read its body in this reply with the rule-5 call (your harness's skill tool only when that call is unavailable), before other work. The re-read stands in for the search; a body that excludes the new work is re-ruled as above.
+   **Continuing a skill.** To keep following a skill you invoked earlier this session when this turn's offer does not list it and the new work is the same task: line 1 `USING: <name> (continuing)`, then re-read its body in this reply with `get_skill` (rule 5) — your harness's skill tool only when that call is unavailable or cannot find the skill — before other work. The re-read stands in for the search; a body that excludes the new work is re-ruled as above.
 
 4. **A lawful skip has exactly two sources**, and `NO SKILL:` names which one: a search shown in this
    reply whose hits fail the rule-3 bar; or a `SKILL-CHECK:` line from the enforcer saying this turn
