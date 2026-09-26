@@ -411,5 +411,58 @@ def test_a_resumed_session_s_copy_never_wins(tmp_path, monkeypatch):
     for order in (sorted, lambda xs: sorted(xs, reverse=True)):
         monkeypatch.setattr(A.glob, "glob", lambda *a, **k: order(real_glob(*a, **k)))
         root = tmp_path / order.__name__
-        r = _audit_files(root, monkeypatch, {"p/s1.jsonl": own, "p/s2.jsonl": copy})
+        r = _audit_files(root, monkeypatch, {"p/s1.jsonl": own, "p/a0.jsonl": copy})   # the copy sorts first
         assert r["continuations"] == (1, 0, 0, 0), order
+
+
+def test_the_harness_fields_decide_before_the_text():
+    """A team runner's inbox relay, a plain-text task notice, a system prompt and a program's SDK
+    prompt are not work; a person's prompt is, whatever form it is stored in."""
+    human = {"origin": {"kind": "human"}, "promptSource": "typed"}
+    work = [{**_listed({"type": "text", "text": "[Image #1] what is this"}), **human},
+            {**_user("fix the parser"), "promptSource": "sdk", "entrypoint": "claude-desktop-3p"},
+            {**_user("fix the parser"), **human}]
+    not_work = [_listed({"type": "text", "text": "## New Messages – From lead [message] do x"}),
+                _listed({"type": "text", "text": "## Team Governance\nrules"}),
+                _listed({"type": "text", "text": "## Turn Context\nx"}), _user('Team: "alpha" members'),
+                {**_user("2 background agents were stopped"), "origin": {"kind": "task-notification"}},
+                {**_user("carry on with the plan"), "promptSource": "system"},
+                {**_listed({"type": "text", "text": "summarize this conversation"}), "promptSource": "sdk",
+                 "entrypoint": "sdk-ts"},
+                _user("   ")]
+    assert [A._hands_over_work(r) for r in work] == [True] * len(work)
+    assert [A._hands_over_work(r) for r in not_work] == [False] * len(not_work)
+
+
+def test_a_team_relay_in_list_form_opens_no_turn(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _say("NO SKILL: nothing fits"),
+        _listed({"type": "text", "text": "## New Messages – From lead [message] do x"}),
+        _say("NO SKILL: hook-cleared — team relay"),
+    ])
+    assert r["n_skip"] == 2 and (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
+
+
+def test_a_justified_continuation_reads_and_a_negated_one_does_not():
+    for line in ("USING: ak-cook (same task, no new search — continuing)",
+                 "USING: ak-cook (no re-search needed; continuing)",
+                 "USING: ak-cook (not a new task — continuing)", "USING: ak-cook (never left it; continuing)"):
+        assert A._continued_names(line) == ["ak-cook"], line
+    for line in ("USING: ak-debug (instead of continuing ak-cook)", "USING: ak-debug (rather than continuing it)",
+                 "USING: ak-debug (without continuing ak-cook)", "USING: ak-debug (new work, continuing nothing)",
+                 "USING: ak-cook — fit (not a continuation of earlier work)"):
+        assert A._continued_names(line) == [], line
+    assert A._continued_names("USING: ak-cook + ak-git for the commit (continuing)") == ["ak-cook", "ak-git"]
+
+
+def test_the_audit_reads_files_in_a_fixed_order(tmp_path, monkeypatch):
+    """Resumed sessions usually rewrite the copied records' session id, so both copies claim to be
+    their own; a fixed file order decides, not the directory listing."""
+    a = [_user("turn one"), _tool("Skill", skill="study"),
+         _user("turn two"), {**_say("USING: study (continuing)"), "uuid": "a1"}]
+    b = [{**_user("turn two"), "sessionId": "s2"}, {**_say("USING: study (continuing)"), "uuid": "a1", "sessionId": "s2"}]
+    real_glob, got = A.glob.glob, []
+    for rev in (False, True):
+        monkeypatch.setattr(A.glob, "glob", lambda *x, rev=rev, **k: sorted(real_glob(*x, **k), reverse=rev))
+        got.append(_audit_files(tmp_path / str(rev), monkeypatch, {"p/s1.jsonl": a, "p/s2.jsonl": b})["continuations"])
+    assert got[0] == got[1] == (1, 0, 0, 0)

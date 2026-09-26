@@ -66,10 +66,16 @@ flagged as likelier new work). A work turn is a prompt that hands the agent work
 chat message, pasted content, a slash command with arguments, or a typed prompt stored as a list of text
 and image blocks. Stop-hook feedback, notifications, scheduled tasks, cross-session messages,
 local-command output, session builtins (`/compact`, `/plugin`, `/model` …) and compaction summaries do
-not count (since `0.52.4`, by prompt shape since `0.52.5`). A "turn" for the verdicts is every
-string-content user record plus a list-form typed prompt. A record line the store wrote twice is read
-once, and a resumed session's copy of a continuation never replaces its own session's. A parenthetical
-that negates the word ("(new task, not continuing x)") is a fresh ruling; the bare
+not count (since `0.52.4`, by prompt shape since `0.52.5`). Since `0.52.6` the harness's own record
+fields decide first: an `origin.kind` other than `human`, a `system` prompt, or an SDK prompt a program
+sent (entrypoint `sdk-…`) is not work, and neither is a team runner's inbox relay or scaffolding
+(`## New Messages`, `## Team Governance`, `## Turn Context`, `Team: "…"`). A "turn" for the verdicts is
+every string-content user record plus a list-form prompt that hands over work. A record line the store
+wrote twice is read once. Files are read in sorted order; a resumed session usually rewrites the copied
+records' session id, so that order decides which copy of a continuation counts (when a copy keeps the
+original id, the session's own file wins). A note that negates the continuation word itself ("(not
+continuing x)", "(instead of continuing x)") or names a new task is a fresh ruling; a justification
+elsewhere in the note ("same task, no new search — continuing") still reads; the bare
 `USING <name> (continuing)` reads in capitals. Name forms of one skill
 match loosely (`plugin:name` and `name`, or one name ending in `-<the other>`), which can join two
 different skills whose names nest (`ssh-doctor`, `tk-servers-ssh-doctor`); a slash command counts as

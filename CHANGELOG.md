@@ -3,6 +3,31 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.6] — 2026-09-26
+
+### Fixed — ADR-0068: the harness's own fields decide work; anchored negation
+- **Work turns** (review of 0.52.5: 3 Medium, 5 Low). The 0.52.5 list-form rule let in a team runner's
+  inbox relays and scaffolding, and they, not typed prompts, drove its false-skip rise. The harness's own
+  fields now decide first: a non-human `origin.kind` (task notifications, including 31 plain-text
+  ones), a `system` prompt or a program's SDK prompt (1,083 of 1,102 SDK prompts) is not work; the team
+  heads are not work and open no turn; "[Image #1] what is this" typed in list form reads; an empty
+  prompt is not work.
+- **Continuations.** Only a negation of the continuation word itself ("not / instead of / rather than /
+  without continuing") or a new task makes a fresh ruling; "(same task, no new search — continuing)" and
+  "(not a new task — continuing)" read again. "+ ak-git for the commit" reads its second name.
+- **Order.** Transcript files are read in sorted order, so a result never depends on the directory listing.
+- **Prompt-intent miner.** Skips programmatic SDK prompts, system prompts, non-human origins and team
+  relays; a plain-text notification or a team relay ends a turn. Labelled rows 3,763 → 3,506 (164
+  conversational, 93 actionable removed); balanced corpus 440 + 440. The live collection is not rebuilt.
+- **Figures** (0.52.4 / 0.52.5 / 0.52.6 readers, same minute), since 2026-07-04: skip turns 970 / 983 /
+  967, false 604 / 614 / 601; since 2026-09-19 identical.
+- **Correction.** 0.52.5's entry and ADR-0067 misattributed figures: its "+17 turns from list-form
+  prompts" were mostly team relays, three of the four moved gaps had other causes, and "138 / 48 rows,
+  35 flips" do not reproduce as stated (see ADR-0068).
+- **Tests.** Every field rule and team head; the seven negation lines; the file order; the resumed copy
+  sorting first; the miner's turn end once per stimulus head from a literal list. 27 audit mutations and
+  10 miner mutations, each caught.
+
 ## [0.52.5] — 2026-09-26
 
 ### Fixed — ADR-0067: work turns by prompt shape; negated continuations; miner turns

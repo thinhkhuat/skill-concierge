@@ -54,6 +54,8 @@ PROJECTS = Path(os.environ.get("CLAUDE_PROJECTS_DIR", Path.home() / ".claude" / 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 MIN_TOOLS_ACTIONABLE = 3
 
+# A team runner's inbox relays and scaffolding: no origin fields of their own, and they hand work.
+_TEAM_HEADS = ("## New Messages", "## Team Governance", "## Turn Context", 'Team: "')
 # Injection markers — text that arrives as a `user` event but is NOT a typed user prompt
 # (skill bodies, hook output, system notices). Excluded so labels reflect real intent.
 _BAD_PREFIX = ("Base directory for this skill:", "Stop hook feedback", "Caveat:", "## Session",
@@ -61,14 +63,15 @@ _BAD_PREFIX = ("Base directory for this skill:", "Stop hook feedback", "Caveat:"
                "## Context Usage",
                # harness-message heads the enforcer's lane also skips (ADR-0054, ADR-0065)
                "Another Claude session sent a message", "[Cross-session idle notice]",
-               "[SYSTEM NOTIFICATION", "[Scheduled Task")
+               "[SYSTEM NOTIFICATION", "[Scheduled Task") + _TEAM_HEADS
 # A stimulus that hands the agent work without being a typed prompt: a cross-session or teammate
-# message, a notification, a scheduled task, a slash command. The agent's tool calls after it answer
+# message, a notification (tagged, or plain text the harness marks `origin.kind` task-notification),
+# a scheduled task, a slash command, a team inbox relay. The agent's tool calls after it answer
 # it, not the prompt before it, so it ends the current turn unlabelled. A compaction summary does
 # not: an auto-compaction lands inside the prompt's own work, which carries on after it.
 _NEW_STIMULUS = ("Another Claude session sent a message", "[Cross-session idle notice]",
                  "[SYSTEM NOTIFICATION", "[Scheduled Task", "<task-notification", "<teammate-message",
-                 "<cross-session-message", "<command-name", "<command-message")
+                 "<cross-session-message", "<command-name", "<command-message") + _TEAM_HEADS
 _BAD_SUB = ("[Request interrupted", "<system-reminder", "<command-name", "<command-message",
             "<local-command", "<user-prompt-submit-hook", "<persisted-output", "<task-notification",
             "SessionStart hook", "UserPromptSubmit hook")
@@ -98,8 +101,17 @@ def _user_text(ev):
     return None
 
 
+def _not_typed(ev):
+    """The harness's own fields say a person did not type this: an origin other than a human (a
+    task notification, an auto-continuation), a system prompt, or an SDK prompt sent by a program
+    (`sdk-ts`/`sdk-cli` entrypoints: summarizer templates, probes, evals)."""
+    origin = ev.get("origin") if isinstance(ev.get("origin"), dict) else {}
+    return (origin.get("kind") not in (None, "human") or ev.get("promptSource") == "system"
+            or (ev.get("promptSource") == "sdk" and str(ev.get("entrypoint") or "").startswith("sdk-")))
+
+
 def _prompt_text(ev):
-    if ev.get("isMeta"):   # isMeta: hook feedback, slash expansions
+    if ev.get("isMeta") or _not_typed(ev):   # isMeta: hook feedback, slash expansions
         return None
     s = _user_text(ev)
     return s if s is not None and _genuine(s) else None
@@ -107,7 +119,8 @@ def _prompt_text(ev):
 
 def _new_stimulus(ev):
     s = _user_text(ev)
-    return s is not None and s.startswith(_NEW_STIMULUS)
+    origin = ev.get("origin") if isinstance(ev.get("origin"), dict) else {}
+    return s is not None and (s.startswith(_NEW_STIMULUS) or origin.get("kind") == "task-notification")
 
 
 def mine():
@@ -239,6 +252,28 @@ def _selftest():
             PROJECTS = saved
     assert rows == [("thanks, that is all for now", "conversational"),
                     ("fix the parser bug please", "actionable")], rows
+    # Every stimulus kind ends the turn: without it, the three tool calls would label the prompt.
+    heads = ("Another Claude session sent a message", "[Cross-session idle notice]", "[SYSTEM NOTIFICATION",
+             "[Scheduled Task", "<task-notification>", "<teammate-message", "<cross-session-message",
+             "<command-name>", "<command-message>", "## New Messages", "## Team Governance",
+             "## Turn Context", 'Team: "')   # literal, so dropping a head from _NEW_STIMULUS fails here
+    kinds = [say(h + " x") for h in heads] + [
+        say("2 background agents were stopped", origin={"kind": "task-notification"})]
+    for stim in kinds:
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "s.jsonl").write_text("\n".join(json.dumps(e) for e in
+                                                        [say("thanks, that is all for now"), stim, tool, tool, tool]))
+            PROJECTS = Path(d)
+            try:
+                got = mine()
+            finally:
+                PROJECTS = saved
+        assert got == [("thanks, that is all for now", "conversational")], (stim["message"]["content"], got)
+    # The harness's fields: a programmatic SDK prompt, a system prompt and a notification are not typed.
+    assert _prompt_text(say("summarize the conversation above please", promptSource="sdk", entrypoint="sdk-ts")) is None
+    assert _prompt_text(say("fix the parser bug now", promptSource="sdk", entrypoint="claude-desktop-3p"))
+    assert _prompt_text(say("resume the queued task now", promptSource="system")) is None
+    assert _prompt_text(say("## New Messages – From lead [message] do x", origin=None)) is None
     b = balance([("a", "actionable"), ("b", "actionable"),
                  ("c", "actionable"), ("d", "conversational")])
     assert Counter(l for _, l in b) == {"actionable": 1, "conversational": 1}, b

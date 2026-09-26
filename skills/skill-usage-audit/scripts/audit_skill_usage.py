@@ -59,11 +59,16 @@ _USING = re.compile(r'(?im)' + _LEAD.format(w='USING')
 # Rule 3's continuation (ADR-0063/0064): `USING: <name> (continuing)`, and the forms agents write —
 # `(continuing the earlier work)`, `(continued …)`, `(continuation …)`, several names joined by + , &.
 # The bare `USING <name> (continuing)` reads in capitals only, as `_USING` reads it ("Using rg
-# (continuing …)" is prose). A parenthetical that negates the word — "(new task, not continuing x)",
-# what an agent obeying the red-flags row writes — is a fresh ruling, not a continuation.
+# (continuing …)" is prose). A parenthetical that negates the word itself — "(not continuing x)",
+# "(instead of continuing x)" — or names a new task or new work, as an agent obeying the red-flags
+# row writes, is a fresh ruling. A negation elsewhere in the note ("same task, no new search —
+# continuing", "not a new task — continuing") is the doctrine's own justification and still reads.
+_NEGATED_NOTE = (r"[^)\n]*?(?:\b(?:not|no|never)\s+(?:a\s+|an\s+)?continu|n't\s+continu"
+                 r"|\b(?:instead\s+of|rather\s+than|without)\s+continu"
+                 r"|(?<!not a )(?<!no )\bnew\s+(?:task|work)\b)")
 _CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
                          + r'(?:USING:[*`]*\s+|(?-i:USING)\s+)([^\n(]*?)[`*\s]*\('
-                         + r'(?![^)\n]*?\b(?:not|no|never|new (?:task|work))\b[^)\n]*?\bcontinu)'
+                         + r'(?!' + _NEGATED_NOTE + r')'
                          + r'[^)\n]*\bcontinu(?:ing|ed|ation)\b[^)\n]*\)')
 _FILLER = {"then", "and", "also", "plus", "with", "for", "name", "skill"}
 _SKILL_NAME = re.compile(r'[a-z0-9][a-z0-9:_\-]*', re.I)
@@ -72,13 +77,14 @@ STALE_TURNS = 5   # a continuation whose skill was last used more turns ago than
 
 def _continued_names(txt):
     """The skill names an assistant text continues, in order, without repeats. The first part
-    names its skill in its first word ("ak-cook for the build"); a later part is one name after
-    any filler ("then ak-git"), so prose after a comma ("then run the tests") is not read."""
+    names its skill in its first word ("ak-cook for the build"). A later part names one when it is a
+    single word after filler ("then study") or opens with a hyphenated or namespaced name
+    ("+ ak-git for the commit"), so prose after a comma ("then run the tests") is not read."""
     out = []
     for grp in _CONTINUING.findall(txt):
         for i, part in enumerate(re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp)):
             words = [w.strip("`*") for w in part.split() if w.strip("`*").lower() not in _FILLER]
-            if not words or (i and len(words) > 1):
+            if not words or (i and len(words) > 1 and not re.search(r"[-:]", words[0])):
                 continue
             m = _SKILL_NAME.match(words[0])   # anchored: the quoted `<name>` placeholder never matches
             n = norm(m.group(0)) if m else None
@@ -101,7 +107,15 @@ def _continuation_counts(units):
 _WORK_TAGS = ("<pasted_content", "<!--")
 _NOT_WORK_BRACKETS = ("[Request interrupted", "[Scheduled Task", "[Cross-session idle notice]",
                       "[SYSTEM NOTIFICATION")
-_NOT_WORK_TEXT = ("Another Claude session", "/compact")
+_NOT_WORK_TEXT = ("Another Claude session", "/compact",
+                  # a team runner's inbox relays and scaffolding (no origin fields of their own)
+                  "## New Messages", "## Team Governance", "## Turn Context", 'Team: "')
+# The harness's own record fields, where present, decide before the text does: an origin other than
+# a human (a task notification, an auto-continuation), a system prompt, or an SDK prompt sent by a
+# program (`sdk-ts`/`sdk-cli` entrypoints: summarizers, probes, evals) is not work. A typed prompt
+# (`origin.kind` human, or a typed/queued/accepted-suggestion `promptSource`) passes the list-form
+# guard, so "[Image #1] what is this" reads; its text still goes through the head rules.
+_TYPED_SOURCES = ("typed", "queued", "suggestion_accepted")
 _BUILTIN_COMMANDS = {"add-dir", "cd", "clear", "compact", "config", "effort", "export", "fast",
                      "model", "plugin", "reload-plugins", "resume", "theme"}
 _CMD_ARGS = re.compile(r"<command-args>([\s\S]*?)</command-args>")
@@ -133,8 +147,16 @@ def _hands_over_work(rec):
     s = _prompt_text(rec)
     if s is None:
         return False
+    origin = rec.get("origin") if isinstance(rec.get("origin"), dict) else {}
+    kind, source = origin.get("kind"), rec.get("promptSource")
+    if (kind not in (None, "human") or source == "system"
+            or (source == "sdk" and str(rec.get("entrypoint") or "").startswith("sdk-"))):
+        return False
+    typed = kind == "human" or source in _TYPED_SOURCES
     s = s.lstrip()
-    if not isinstance(rec["message"]["content"], str) and s[:1] in "<[":
+    if not s:
+        return False
+    if not typed and not isinstance(rec["message"]["content"], str) and s[0] in "<[":
         return False   # list-form wrappers: interrupts, relayed conversation history
     if s.startswith("<command-"):
         name, args = _CMD.search(s), _CMD_ARGS.search(s)
@@ -464,7 +486,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 "cont": {}, "loads": set(), "used_before": {},
                 "active": active, "skip_text": "", "sid": None}
 
-    for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
+    for fp in sorted(glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True)):   # fixed order
         # H3: subagent (Task sidechain) transcripts sit under a `subagents/` dir but carry the
         # PARENT's sid — flag them per FILE (not sid) so the parent's organic turns survive.
         is_sub = _SUBAGENT_PATH in fp
