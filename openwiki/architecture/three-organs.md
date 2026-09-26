@@ -11,7 +11,7 @@ mechanism conflates:
 
 | Organ | Question | Where it runs | Built from |
 |-------|----------|---------------|------------|
-| **Retrieve** | *Which* skill fits this task? | on-demand (the `search_skills` MCP tool) + inside the per-turn hook | the vendored Qdrant + mpnet-768 engine |
+| **Retrieve** | *Which* skill fits this task? | on-demand (the `search_skills` MCP tool) + inside the per-turn hook | the vendored engine + mpnet-768, backed by a local index owner speaking Qdrant's REST format ([ADR-0070](../../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) |
 | **Enforce** | *Whether* the model uses a skill at all (vs winging it) | every turn, `UserPromptSubmit` hook, in-generation | `hooks/scripts/enforcer.py` + the SessionStart doctrine |
 | **Ledger** | *What* actually got used | every turn + on each invocation | `hooks/scripts/ledger.py` + the enforcer's `offer` events |
 
@@ -57,12 +57,12 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
    ([ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)).
 2. **UserPromptSubmit (every turn)** — the **Enforce** organ:
    [`enforcer.py`](../../hooks/scripts/enforcer.py) runs the per-turn gate — embed the prompt via
-   the warm shim → retrieve top-k from the **same** Qdrant index → apply the score/item floors +
+   the local index owner's warm `/embed` → retrieve top-k from the **same** index → apply the score/item floors +
    the actionability (imperative-veto) gate → inject a ranked SKILL-FIRST mandate, **or** stay
    silent / emit a `SKILL-CHECK:` authorization (fail-open on any error). Then
    [`ledger.py`](../../hooks/scripts/ledger.py) records the turn (or a manual `/skill`).
 3. **Retrieve (on demand)** — Claude calls `search_skills`; the engine embeds the query and ranks
-   the indexed catalogue from Qdrant. Claude reads the ranked names + descriptions.
+   the indexed catalogue from the local index owner. Claude reads the ranked names + descriptions.
 4. **Invoke** — Claude fires the genuinely relevant skills by name.
 5. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation (matcher
    `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant), fail-silent, additive-only.
@@ -77,7 +77,7 @@ SessionStart ──▶ doctrine + auto_reindex (index) + auto_overrides (budget)
 User message ──▶ [Enforce] enforcer: embed ▸ retrieve ▸ floors+intent gate ▸ mandate | SKILL-CHECK | silent
                      │                                    └─▶ [Ledger] turn / offer
                      ▼
-              Claude thinks ──▶ [Retrieve] search_skills (Qdrant) ──▶ Invoke skill
+              Claude thinks ──▶ [Retrieve] search_skills (index owner) ──▶ Invoke skill
                                                                           │
                                                                     [Ledger] auto / search (PostToolUse)
                                                                           │
@@ -87,11 +87,11 @@ User message ──▶ [Enforce] enforcer: embed ▸ retrieve ▸ floors+intent 
 ## Retrieve and Enforce share one index
 
 A subtle but important property: the per-turn enforcer does **not** run a second, cheaper
-retriever. It embeds the prompt through the **same** warm embedding shim and queries the **same**
-Qdrant collection that the `search_skills` tool uses. That is why the embed shim and index model
-must stay in lock-step (fastembed version + model parity) — if the shim's vectors drift from the
-index, both organs degrade silently. The mechanics are in
-[retrieval-engine.md](retrieval-engine.md) and the parity trap is in [operations.md](../operations.md#the-warm-embed-shim).
+retriever. It embeds the prompt through the **same** local index owner's warm `/embed` and queries
+the **same** collection that the `search_skills` tool uses. That is why the owner's embedder and
+the index model must stay in lock-step (fastembed version + model parity) — if the owner's query
+vectors drift from the index, both organs degrade silently. The mechanics are in
+[retrieval-engine.md](retrieval-engine.md) and the parity trap is in [operations.md](../operations.md#the-local-index-owner).
 
 ## See also
 

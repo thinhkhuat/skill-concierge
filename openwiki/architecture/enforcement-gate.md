@@ -126,7 +126,7 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    missing key, any error or a blown budget leaves the embedding path to decide
    (`ENFORCER_JEV_ROUTER` — [ADR-0061](../../docs/adr/0061-jev-skill-router.md), which supersedes
    ADR-0060's yes/no leg).
-4. **Embed.** POST the prompt to the warm shim (`http://127.0.0.1:6363/embed`) under a **hard
+4. **Embed.** POST the prompt to the local index owner's warm `/embed` (`http://127.0.0.1:6363/embed`) under a **hard
    500 ms** socket timeout (`EMBED_TIMEOUT_S = 0.5`). Timeout → mandate-only (plus any route hits),
    ledger band `fallback/embed_timeout`; other error → `fallback/embed_down`. (History: a 90 ms
    cap caused ~60% timeouts under CPU contention on a single-threaded shim → the shim was made

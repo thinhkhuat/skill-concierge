@@ -1,7 +1,7 @@
 ---
 name: doctor
 user-invocable: true
-description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, the MCP seems to run old code after a plugin update, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, engine freshness, Qdrant, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start Qdrant, reindex, re-apply overrides).
+description: Diagnose and repair a broken or degraded skill-concierge install. Use this skill when the skill-search MCP won't connect, search_skills returns nothing or stale results, skills have gone dark, the MCP seems to run old code after a plugin update, or anything about skill-concierge misbehaves after setup or a plugin update. Runs scripts/doctor.py to check the deployment layer (engine venv, engine freshness, the local index owner, MCP wiring, settings overrides, ledger) and delegates retrieval health to the engine; with --fix it applies safe repairs (start the index owner, reindex, re-apply overrides).
 argument-hint: "[--fix]"
 next-skills: skill-concierge:flywheel
 license: MIT
@@ -33,9 +33,8 @@ the engine's own `skill-search --health`, so the two never drift.
    | Engine venv | the stable venv + `skill-search` bin exist |
    | Engine freshness | the venv's COPIED engine matches the deployed vendored source — catches a **stale MCP serving old code after `/plugin update`** (the venv is built once by setup.sh and never refreshed by an update); WARN → rerun setup.sh |
    | MCP wiring | `.mcp.json` is valid + `bin/skill-search-mcp` is executable |
-   | Qdrant | the vector store answers at its URL (or the container is stopped) |
+   | Index owner | the local index owner (ADR-0070; replaces the Qdrant container and the Docker embed shim) answers its Qdrant-compatible REST port + `/health`, its `code_version`, and its SQLite file's integrity/point counts |
    | Retrieval health | engine `--health`: embedder reachable, no dark/stale skills, index fresh |
-   | Enrichment overlay | legacy MEAN overlay state (now superseded by the multi-vector layer) |
    | Multi-vector layer | trigger points present (MAX-pool retrieval, ADR-0012); WARNs if `SKILL_MULTIVECTOR` is on but none exist |
    | Corpus health | per-skill calibration `ok`/`weak`/`no-signal` counts from `eval/thresholds.json` |
    | Retrieval flywheel | is the utterance-generation LLM configured + reachable, per-skill utterance coverage (which skills lack utterances), and the **last flywheel run** from the global manifest (`~/.claude/skill-concierge/flywheel-manifest.json`). Read-only, **fail-open** (never FAIL — the flywheel is optional). [ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md) |
@@ -51,8 +50,10 @@ the engine's own `skill-search --health`, so the two never drift.
    python3 "$CLAUDE_PLUGIN_ROOT/scripts/doctor.py" --fix
    ```
 
-   `--fix` applies only fast, safe repairs, then re-checks: start a stopped Qdrant
-   container, `--reindex` a stale/dark index, re-apply the settings overrides, purge
+   `--fix` applies only fast, safe repairs, then re-checks: start a stopped index owner
+   (also stopping + disabling a revived `skill-search-qdrant`/`skill-concierge-embed-shim`
+   container if an old harness copy brought Docker back onto the owner's ports),
+   `--reindex` a stale/dark index, re-apply the settings overrides, purge
    junk utterance layers, and regenerate the keep-off offer-suppression map into
    `~/.claude/skill-concierge/keep-off.json` (re-run on every `--fix` pass; inert while the
    ledger window is thin — ADR-0054).
@@ -79,7 +80,7 @@ the engine's own `skill-search --health`, so the two never drift.
 - **`/mcp` shows skill-search not connected** → `Engine venv` / `MCP wiring`. Fix: run setup.
 - **search behaves like an OLD version after a plugin update** → `Engine freshness`. The MCP venv
   is stale (copied engine, not refreshed by `/plugin update`). Fix: rerun setup.sh, then restart.
-- **search returns nothing or stale** → `Qdrant` / `Retrieval health`. Fix: `--fix` (reindex)
+- **search returns nothing or stale** → `Index owner` / `Retrieval health`. Fix: `--fix` (reindex)
   — note the SessionStart `auto_reindex` hook now self-heals index staleness in the background.
 - **`Keep-off` row is WARN ("no generated map yet")** → the ledger-derived suppression map has not
   been built on this machine. Fix: `--fix` (regenerates every pass; stays inert until ≥40 clean

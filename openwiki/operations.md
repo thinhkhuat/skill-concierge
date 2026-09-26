@@ -15,9 +15,11 @@ runs the same thing and verifies it. Four numbered steps (with sub-steps):
    vendored version is a static `0.1.0`, so plain pip would see "already satisfied" and skip
    copying changed code — this is the stale-engine trap; see below). Stamps
    `$VENV/.engine-plugin-version` so the launcher can auto-resync after a `/plugin update`.
-2. **[2/4] Qdrant.** Start the `skill-search-qdrant` Docker container (image `qdrant/qdrant:v1.18.2`,
-   published on `127.0.0.1:6333` only). **[2b/4]** Build + run the warm embed shim as a Docker sidecar
-   (`skill-concierge-embed-shim`, bound `127.0.0.1:6363`; skipped if already listening).
+2. **[2/4] Index owner.** Start the local index owner (`python -m skill_search.index_owner`, from
+   the stable venv) — no Docker, no container. It binds `127.0.0.1`/`::1` on port `6333`
+   (Qdrant-compatible REST) and `6363` (`/embed`+`/health`+`/jev`); a running owner is stopped and
+   restarted first so freshly-reinstalled code takes effect
+   ([ADR-0070](../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)).
 3. **[3/4] Index.** `skill-search --reindex` (multi-vector built by the reindex itself).
    **[3b/4]** Build the actionability-gate `prompt_intent` corpus (fail-soft).
    **[3c/4]** Build the keep-off offer-suppression map into `~/.claude/skill-concierge/keep-off.json`
@@ -40,18 +42,21 @@ the built index can never diverge from the model the live MCP server uses.
 read-only deployment health check; a green `status: OK` is the bar to claim "done". The check
 list is owned by `CHECKS` in [`scripts/doctor.py`](../scripts/doctor.py) (`check_python` returns
 N/A once the venv exists) and delegates the retrieval diagnostic to `skill-search --health` (DRY):
-Python, venv, **engine freshness**, running engine, MCP wiring, Qdrant, engine health
-(stale-but-serving = WARN, not FAIL), enrichment, multi-vector layer, prompt-intent corpus,
-corpus health (reads `eval/thresholds.json`), **retrieval flywheel** (configured? / reachable? /
-utterance coverage), trigger hygiene, overrides, blocklist, **keep-off** (durable map present /
-inert / populated), external catalogs, one row per harness integration, ledger dir,
+Python, venv, **engine freshness**, running engine, MCP wiring, **the index owner** (`/health` +
+`code_version` + its SQLite file's integrity/point counts, ADR-0070), owner ports (FAIL if any
+container still publishes 6333/6363), owner log (FAIL on a downgrade or port-conflict line), embed
+parity, engine health (stale-but-serving = WARN, not FAIL), multi-vector layer, prompt-intent
+corpus, corpus health (reads `eval/thresholds.json`), **retrieval flywheel** (configured? /
+reachable? / utterance coverage), trigger hygiene, overrides, blocklist, **keep-off** (durable map
+present / inert / populated), external catalogs, one row per harness integration, ledger dir,
 duplicate-MCP, and MCP reachability. Exit 0 unless a check FAILs.
 
-`--fix` performs only **fast, safe** repairs (`AUTO_FIXERS`): start a stopped Qdrant, reindex,
-re-apply the enrichment overlay, re-apply overrides, rebuild the prompt-intent corpus, purge junk
+`--fix` performs only **fast, safe** repairs (`AUTO_FIXERS`): start a stopped index owner (also
+stopping + disabling a revived `skill-search-qdrant`/`skill-concierge-embed-shim` container on the
+owner's ports), reindex, re-apply overrides, rebuild the prompt-intent corpus, purge junk
 utterances, and regenerate the keep-off map (this one re-runs on **every** `--fix` pass —
 `REFRESH_FIXERS` — so the ledger-derived map keeps up with the window). It **never** rebuilds the
-venv or the container — heavy bootstrap is handed off to `setup.sh`.
+venv or the owner from scratch — heavy bootstrap is handed off to `setup.sh`.
 [ADR-0007](../docs/adr/0007-maintenance-skills-setup-doctor.md), [ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md).
 
 ## Telemetry — `analyze.py`
@@ -82,20 +87,21 @@ windowed run** — only a full-ledger run counts them.
 ### Reading the ledger: the epoch-scoped trap
 
 **Never cite a ledger rate pooled across config changes.** This repo changes the very things the
-ledger measures — gate floors, the retrieval engine, the doctrine, the embed shim — *almost
+ledger measures — gate floors, the retrieval engine, the doctrine, the index owner — *almost
 daily*, so the ledger is a **sequence of short config epochs, not one dataset**. An all-time rate
 describes *no real configuration*. Before quoting any rate:
 
 1. Find the current epoch start — the last commit touching `hooks/scripts/enforcer.py`,
    `hooks/doctrine/skill-first.md`, `vendor/skill-search/skill_search/server.py`, or
-   `scripts/embed_server.py`.
+   `vendor/skill-search/skill_search/index_owner.py` (the local index owner, ADR-0070;
+   `scripts/embed_server.py` is retired).
 2. Window `analyze.py --since "<that datetime>"`. Never quote the all-time number.
 3. Exclude contamination — subagent / harness / `<task-notification>` traffic and your own
    meta/self-session turns are not representative.
 4. Respect sample size — a fresh epoch may be too small; say **"insufficient data"** rather than
    pool backward.
-5. Design vs environment — a shift not aligned to a config commit is environmental (shim/Docker/
-   load), not a property of the code.
+5. Design vs environment — a shift not aligned to a config commit is environmental (owner
+   load/contention), not a property of the code.
 
 An epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured". This exact mistake once
 invalidated a whole multi-agent analysis. Full rule: [`AGENTS.md` → Guardrails](../AGENTS.md). And
@@ -108,24 +114,37 @@ scrubbed corpus of verbatim false-skip excuses (`NO SKILL:` clauses, and `SKIPPI
 `./logs/skill-rationalizations.txt`), to feed future doctrine authoring — never counts a lawful
 hook-authorized skip as a rationalization.
 
-## The warm embed shim
+## The local index owner
 
-The per-turn enforcer must embed the prompt in ≲ its budget, so the model is held warm in memory
-by a Docker sidecar rather than cold-loaded per turn:
+The per-turn enforcer must embed the prompt in ≲ its budget, and the store must answer in
+sub-millisecond time — one local process holds the model **and** the vectors warm in memory,
+replacing both the Docker `skill-search-qdrant` container and the Docker warm embed shim with
+zero config changes anywhere ([ADR-0070](../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)):
 
-- **Server** [`scripts/embed_server.py`](../scripts/embed_server.py): a `ThreadingHTTPServer`
-  holding the fastembed mpnet-768 model; `POST /embed {text}` → `{vector[768]}`, `GET /health`. It
+- **Server** [`vendor/skill-search/skill_search/index_owner.py`](../vendor/skill-search/skill_search/index_owner.py):
+  a `ThreadingHTTPServer` holding the fastembed mpnet-768 model and every collection's vectors.
+  On port `6333` it answers a Qdrant-compatible REST subset (`GET/PUT/DELETE /collections/{c}`,
+  `points/scroll`, `points/query`, `points/query/groups`, …) backed by one SQLite file (default
+  `~/.cache/skill-search/index.sqlite`, `SKILL_INDEX_DB`), which it alone writes (an exclusive
+  `fcntl` lock). On port `6363` it answers `POST /embed {text}` → `{vector[768]}`, `GET /health`,
+  and `POST /jev` (the Jev skill router's relay, ported from the retired shim — ADR-0061). It
   reuses the engine's **exact** embed function under the deployed env (a parity contract) so its
   vectors match the live index — otherwise retrieval degrades with no error. Threaded because a
-  single-threaded shim timed out ~60% of turns under contention. **fastembed pinned at 0.8.0.**
-- **Launcher** [`bin/embed-shim`](../bin/embed-shim): execs the stable venv's python with the
-  deployed embed env.
-- **Container:** `skill-concierge-embed-shim` on `127.0.0.1:6363`, `--restart unless-stopped`.
+  single-threaded process timed out ~60% of turns under contention when this was still a bare
+  embed shim. **fastembed pinned at 0.8.0.**
+- **Autostart replaces Docker's restart policy:** [`bin/skill-search-mcp`](../bin/skill-search-mcp)
+  starts it when `/health` doesn't answer; the enforcer hook starts it on a refused connection
+  (never on a timeout or a 503, which mean busy or loading); `setup.sh` stops and restarts it
+  after (re)install. A duplicate start is harmless — the loser of the owner's file lock exits in
+  milliseconds. `SKILL_OWNER_AUTOSTART=0` disables both hook-side autostarts.
+- **`scripts/embed_server.py`/`bin/embed-shim`** (the old shim) are retired from the live
+  deployment path — nothing starts them anymore; their code lives on only as the historical
+  starting point `index_owner.py` was grown from (`VENDORED.md`).
 
-Verify health with `docker ps --filter name=skill-concierge-embed-shim` (the name is
-env-overridable via `SKILL_EMBED_CONTAINER`, [`setup.sh:21`](../setup.sh)). A stopped/slow shim
-shows up as a sustained `fallback: true` rate in the ledger's `offer` events; `doctor --fix`
-restarts it. See [caveats §9](../docs/caveats.md).
+Verify health with `curl -s http://127.0.0.1:6363/health` — there is no container to check. A
+stopped/slow owner shows up as a sustained `fallback: true` rate in the ledger's `offer` events;
+`doctor --fix` starts it (and stops/disables a revived legacy container first, if one is found on
+the owner's ports). See [caveats §3, §9](../docs/caveats.md).
 
 ## The stale-engine trap (post-update)
 
@@ -169,7 +188,7 @@ number rather than a boolean, and `SKILL_TRIGGER_PURITY` defaults to a non-boole
 | `TRIGGERS_MAX` | `12` | per-skill COMBINED cap across all trigger sources; live deploy uses `16` so utterances add slots rather than evict desc/body | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
 | `ENFORCER_SELFREF_SKIP` | `1` | enforcer pre-authorizes a 3rd AUTHORIZED-SKIP leg for pure self-referential recap turns ("explain your last answer"); `=0` restores the old 2-leg behavior | [0019](../docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
 | `ENFORCER_HARNESS_SKIP` | `1` | enforcer pre-authorizes a 4th AUTHORIZED-SKIP leg for harness-generated prompts (`<task-notification>`, `<system-reminder>`, cross-session/teammate messages, interrupted/continued banners, OMP `omp-msum` wrappers) BEFORE any I/O — ledger band `harness_skip`, no chain hint; `=0` routes them like any prompt | [0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
-| `ENFORCER_JEV_ROUTER` | `1` | Jev skill router for English prompts (`TYPESAFE_API_KEY`): whole-catalogue Jev ranking + per-candidate `fits` re-check → top-5 offer; best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) → 5th AUTHORIZED-SKIP leg (band `jev_skip`); per call `ENFORCER_JEV_TIMEOUT` 1.5 s, whole route `ENFORCER_JEV_BUDGET` 3.0 s; goes through the embed shim's warm `/jev` relay; any failure → embedding path; `=0` (or `ENFORCER_JEV_GATE=0`) restores the 4-leg ladder | [0061](../docs/adr/0061-jev-skill-router.md) |
+| `ENFORCER_JEV_ROUTER` | `1` | Jev skill router for English prompts (`TYPESAFE_API_KEY`): whole-catalogue Jev ranking + per-candidate `fits` re-check → top-5 offer; best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) → 5th AUTHORIZED-SKIP leg (band `jev_skip`); per call `ENFORCER_JEV_TIMEOUT` 1.5 s, whole route `ENFORCER_JEV_BUDGET` 3.0 s; goes through the local index owner's warm `/jev` relay (ADR-0070; ported from the retired Docker embed shim); any failure → embedding path; `=0` (or `ENFORCER_JEV_GATE=0`) restores the 4-leg ladder | [0061](../docs/adr/0061-jev-skill-router.md) |
 | `ENFORCER_DETERMINISTIC` | `1` | `config/deterministic-routes.json` phrases, matched as whole words, pin the named skill to the top of the offer (score 1.0, retrieved twin dropped), computed before embed so a timeout cannot lose it; `=0` disables (was default-inert before v0.47.0) | [0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
 | `ENFORCER_EMBED_TIMEOUT` / `ENFORCER_QDRANT_TIMEOUT` | `0.5` / `0.25` | per-leg hard caps in seconds (0.35 / 0.1 before v0.47.0 — every epoch "outage" was censoring at the old caps) | [0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
 | `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
@@ -254,7 +273,7 @@ that the catch-loop silently swallowed, costing that skill its triggers. See
 
 | File | Purpose |
 |------|---------|
-| [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, Qdrant URL, `SKILL_TOP_K=10` |
+| [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, the local index owner's Qdrant-compatible URL, `SKILL_TOP_K=10` |
 | [`config/keep-on.json`](../config/keep-on.json) | the **shipped SEED** for the curated always-on allowlist (**32 entries** in `keep_on`); on first run it is seeded once into the canonical durable home `~/.claude/skill-concierge/keep-on.json` (survives `/plugin update`, [ADR-0025](../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) writes the policy to `~/.claude/settings.json` (atomic, backs up, refuses empty). Curate it with the `keep-on` skill / `scripts/keep-on.py`. **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
 | [`config/keep-off.json`](../config/keep-off.json) | the **empty seed** for ledger-derived offer-suppression — chronic never-take skills dropped from the enforcer menu ([ADR-0011](../docs/adr/0011-ledger-derived-offer-suppression.md)); since v0.47.0 the generated map lives in `~/.claude/skill-concierge/keep-off.json` (durable home, `doctor --fix` regenerates, harness-shaped offers excluded, keep-on members exempt — [ADR-0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md)) |
 | `~/.claude/skill-concierge/blocklist.json` | the **user-ordered disable tier** ([ADR-0046](../docs/adr/0046-blocklist-disable-tier.md)) — flat `{"blocked": [...]}`, absent = no-op, **never seeded**. Enforced at four layers: PreToolUse(Skill) **deny** (`hooks/scripts/skill_guard.py`, the plugin-level gate), enforcer offers/hints/routes, engine search-filter + `get_skill` refusal (live-read, index-neutral), and an apply-overrides strip of blocked keep-on names. Bare entry blocks every qualified twin; qualified entry is exact-only. Manage with the `blocklist` skill / `scripts/blocklist.py`; kill-switch `SKILL_BLOCKLIST=0` |

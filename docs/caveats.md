@@ -5,7 +5,7 @@ Symptom → cause → what to do. ADRs hold the *why*; this holds the *don't*.
 
 > **Before reading the whole list:** run `skill-concierge:doctor` (or `python3 scripts/doctor.py`).
 > It mechanically checks the deployment layer + retrieval health and auto-fixes the common
-> ones (§3 Qdrant down, §6 reindex, the overrides applier) with `--fix`. This file is the
+> ones (§3 index owner down, §6 reindex, the overrides applier) with `--fix`. This file is the
 > human reference for what doctor can't or won't touch. (ADR-0007.)
 
 ---
@@ -45,15 +45,22 @@ atomic, backs up, refuses empty keep-on — ADR-0005). Guard/avoid the upstream 
 
 ---
 
-## §3 — Qdrant must be up
+## §3 — The index owner must be up
 
 **Symptom:** search/health errors; MCP returns nothing useful.
 
-**Cause:** the engine needs the `skill-search-qdrant` container (`localhost:6333`).
+**Cause:** the engine needs the local index owner — one process
+(`python -m skill_search.index_owner`, from the shared venv) that answers Qdrant's REST
+subset on `localhost:6333` and `/embed`+`/health`+`/jev` on `:6363` (ADR-0070; supersedes
+the Docker-Qdrant half of ADR-0003).
 
-**Do:** `docker ps --filter name=skill-search-qdrant` → expect `Up`. Container is
-`--restart unless-stopped`; if absent, `setup.sh` recreates it. In the live fusion, a Qdrant
-outage degrades to mandate-only fallback (ADR-0002), not a crash.
+**Do:** `curl -s http://127.0.0.1:6363/health` → expect `{"status":"ok",...}`. There is no
+container to check anymore: `bin/skill-search-mcp` starts the owner when `/health` doesn't
+answer, the enforcer hook starts it on a refused connection, and `setup.sh` starts/restarts
+it after (re)install. `skill-concierge:doctor --fix` starts a stopped owner, and also stops
+and disables a revived `skill-search-qdrant`/`skill-concierge-embed-shim` container if an old
+harness copy brought Docker back onto these ports. In the live fusion, an owner outage
+degrades to mandate-only fallback (ADR-0002), not a crash.
 
 ---
 
@@ -131,23 +138,23 @@ The ledger code itself never rotates/caps/deletes — the risk is entirely in lo
 
 ---
 
-## §9 — Embed shim must be running (Docker sidecar, `skill-concierge-embed-shim`)
+## §9 — The warm embed port is served by the same index owner, not a Docker sidecar
 
 **Symptom:** per-turn latency spikes over budget; enforcer telemetry shows
 high `fallback: true` rate in `offer` events.
 
-**Cause:** the warm embedding shim (`scripts/embed_server.py`) runs as a Docker sidecar
-(`skill-concierge-embed-shim` container, `127.0.0.1:6363`; overridable via
-`SKILL_EMBED_CONTAINER` — `setup.sh:21`). If the container is stopped or
-crashed, or the model fails to load in-memory, the enforcer hook hits the 200ms timeout
-(`EMBED_TIMEOUT_S`, `enforcer.py:63` — relaxed from 90ms per ADR-0008) and
-falls back to mandate-only. The fallback works (never crashes), but enforcement degrades.
+**Cause:** the warm embedding endpoint on `127.0.0.1:6363` is the same local index owner
+§3 covers (ADR-0070) — not a separate `skill-concierge-embed-shim` Docker container. The
+old shim process (`scripts/embed_server.py`, `bin/embed-shim`) is retired from the live
+deployment path; if the owner is down, still loading, or the model fails, the enforcer hook
+hits `ENFORCER_EMBED_TIMEOUT` (0.5s default, `enforcer.py`) and falls back to mandate-only.
+The fallback works (never crashes), but enforcement degrades.
 
-**Do:** `docker ps --filter name=skill-concierge-embed-shim` → expect `Up`. Container is
-`--restart unless-stopped`, so restart Docker or run `setup.sh` to recreate it.
-`skill-concierge:doctor --fix` auto-restarts the container if down. Monitor fallback rate
+**Do:** `curl -s http://127.0.0.1:6363/health` → expect `{"status":"ok",...}`. There is no
+container to restart; `skill-concierge:doctor --fix` (or a plain prompt, via the enforcer's
+own connection-refused autostart) starts the owner if it is down. Monitor fallback rate
 in `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` (`offer` events with
-`fallback: true`); sustained high rate signals a shim health problem.
+`fallback: true`); sustained high rate signals an owner health problem.
 
 ---
 

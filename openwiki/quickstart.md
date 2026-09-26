@@ -30,7 +30,7 @@ skill-concierge separates three failure modes the default conflates:
 
 | Organ | Question | Mechanism | Deep page |
 |-------|----------|-----------|-----------|
-| **Retrieve** | *Which* skill fits? | semantic search over the catalogue (Qdrant + multilingual embeddings), a MAX-pool trigger layer mined from each skill's description, its body's labeled decision-sections, **and** offline flywheel-generated natural-utterance phrases (EN+VN) | [architecture/retrieval-engine.md](architecture/retrieval-engine.md) |
+| **Retrieve** | *Which* skill fits? | semantic search over the catalogue (a local index owner speaking Qdrant's REST format + multilingual embeddings), a MAX-pool trigger layer mined from each skill's description, its body's labeled decision-sections, **and** offline flywheel-generated natural-utterance phrases (EN+VN) | [architecture/retrieval-engine.md](architecture/retrieval-engine.md) |
 | **Enforce** | *Whether* the model uses a skill at all | a per-turn `UserPromptSubmit` hook that hands over ranked candidates under a use-mandate; on its silent verdicts (getaway, conversational, self-recap, harness-generated prompt) it emits a `SKILL-CHECK:` authorization instead | [architecture/enforcement-gate.md](architecture/enforcement-gate.md) |
 | **Ledger** | *What actually got used* | a compounding, append-only skill-invocation log → data-backed always-on curation | [architecture/enforcement-gate.md](architecture/enforcement-gate.md#the-ledger--what-actually-got-used) |
 
@@ -60,17 +60,18 @@ These have bitten before; the ADRs and [`docs/caveats.md`](../docs/caveats.md) e
 |-------------|-------|
 | Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), or Cline | host for the plugin (or its adapter), hooks, and MCP server |
 | Python 3.10–3.12 | `snake_case`; set `SKILL_PYTHON` to pin an interpreter |
-| Docker / OrbStack | runs the Qdrant vector store **and** the warm embed shim (both Docker sidecars) |
 
-The embedding model (`paraphrase-multilingual-mpnet-base-v2`, 768-dim) downloads on first
-index build via `fastembed` — no API key, fully local.
+No Docker: the vector store and the warm embedder are one local process, the index owner
+([ADR-0070](../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)), which
+`setup.sh` starts itself. The embedding model (`paraphrase-multilingual-mpnet-base-v2`, 768-dim)
+downloads on first index build via `fastembed` — no API key, fully local.
 
 ## Install & verify
 
 ```bash
 git clone https://github.com/thinhkhuat/skill-concierge.git
 cd skill-concierge
-./setup.sh          # idempotent: stable venv + Qdrant + embed shim + reindex + apply-overrides
+./setup.sh          # idempotent: stable venv + start the index owner + reindex + apply-overrides
 ```
 
 Then **restart Claude Code** and confirm the server is live:
@@ -81,13 +82,13 @@ Then **restart Claude Code** and confirm the server is live:
 
 Or run the **`skill-concierge:setup`** skill (same bootstrap, self-verifying). If a green
 `status: OK` is not what you get, run **`skill-concierge:doctor`** (or `python3 scripts/doctor.py`)
-— it diagnoses the venv, Qdrant, MCP wiring, overrides, and retrieval health, and `--fix`
-auto-repairs the common failures. Full setup/ops detail: **[operations.md](operations.md)**.
+— it diagnoses the venv, the local index owner, MCP wiring, overrides, and retrieval health, and
+`--fix` auto-repairs the common failures. Full setup/ops detail: **[operations.md](operations.md)**.
 
 **In Codex** (v0.24.0+, ADR-0033): add the repo as a plugin marketplace
 (`codex plugin marketplace add https://github.com/thinhkhuat/skill-concierge.git`), install
 with `codex plugin add skill-concierge@skill-concierge`, then verify the MCP with
-`codex mcp list` (should list `skill-search`). The engine sidecars (Qdrant + embed shim),
+`codex mcp list` (should list `skill-search`). The local index owner,
 index, and ledger are SHARED with the Claude Code install — one concierge, four harnesses.
 Once registered, [`adapters/codex/install.sh`](../adapters/codex/install.sh) keeps the cached
 copy in sync with this checkout's SSOT version via `codex plugin marketplace upgrade` then
@@ -106,8 +107,8 @@ in a dev checkout with no marketplace plugin it appends the extension path to
 `~/.omp/agent/config.yml`. OMP ignores Claude-format hooks — enforcement runs from the
 `skill-concierge.ext.ts` extension module (`package.json` `omp.extensions`) — and it expands the
 plugin `.mcp.json`'s `${CLAUDE_PLUGIN_ROOT}` natively, so no per-harness MCP descriptor is
-written (a duplicate `skill-search` at user scope is a known hazard). The engine sidecars, index,
-and ledger are SHARED with every other harness install.
+written (a duplicate `skill-search` at user scope is a known hazard). The local index owner,
+index, and ledger are SHARED with every other harness install.
 
 ## The MCP tools
 

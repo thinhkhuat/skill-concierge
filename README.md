@@ -46,7 +46,7 @@ skill-concierge addresses three distinct failure modes the default conflates:
 
 | Organ | Question it answers | Mechanism |
 |-------|---------------------|-----------|
-| **Retrieve** | *Which* skill fits this task? | semantic search over the skill catalogue (Qdrant + multilingual embeddings), including a MAX-pool trigger layer mined from both each skill's description **and** its body's labeled decision sections (`## When to Use`, `Triggers:`, `Use when:`) — [ADR-0012](docs/adr/0012-multi-vector-max-pool-retrieval.md), [ADR-0016](docs/adr/0016-body-derived-trigger-points.md) |
+| **Retrieve** | *Which* skill fits this task? | semantic search over the skill catalogue (a local index owner speaking Qdrant's REST format + multilingual embeddings — [ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)), including a MAX-pool trigger layer mined from both each skill's description **and** its body's labeled decision sections (`## When to Use`, `Triggers:`, `Use when:`) — [ADR-0012](docs/adr/0012-multi-vector-max-pool-retrieval.md), [ADR-0016](docs/adr/0016-body-derived-trigger-points.md) |
 | **Enforce** | *Whether* the model uses a skill at all (vs winging it) | a per-turn hook that hands over the right candidates under a use-mandate; on its silent verdicts (four legs: score-floor miss, conversational turn, self-recap, harness message) it injects a `SKILL-CHECK:` authorization instead of nothing — [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md), [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
 | **Ledger** | *What actually got used* | a compounding, append-only skill-invocation log → data-backed always-on curation |
 
@@ -70,11 +70,11 @@ skill-concierge addresses three distinct failure modes the default conflates:
 |-------------|-----------------|
 | [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://codex.openai.com), [Command Code](https://github.com/sst/command-code), [Oh My Pi](https://ohmy.pi), or [ZCode](https://z.ai) | host for the plugin, hooks, and MCP server |
 | Python | 3.10–3.12 (set `SKILL_PYTHON` to pin a specific interpreter) |
-| Docker / [OrbStack](https://orbstack.dev/) | runs the Qdrant vector store (server tier) |
 
-> The embedding model (`paraphrase-multilingual-mpnet-base-v2`, 768-dim) downloads on first
-> index build via `fastembed` — no API key, fully local. For a service-free embedded tier,
-> see the `ponytail:` note at the top of [`setup.sh`](setup.sh).
+> No Docker. The vector store and the warm embedder are one local process — the index
+> owner (`python -m skill_search.index_owner`, [ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md))
+> — that `setup.sh` starts itself. The embedding model (`paraphrase-multilingual-mpnet-base-v2`,
+> 768-dim) downloads on first index build via `fastembed` — no API key, fully local.
 
 ## Install & setup
 
@@ -84,14 +84,16 @@ plugin at <https://github.com/thinhkhuat/skill-concierge>.
 ```bash
 git clone https://github.com/thinhkhuat/skill-concierge.git
 cd skill-concierge
-./setup.sh          # builds the stable venv, ensures Qdrant, reindexes, applies overrides
+./setup.sh          # builds the stable venv, starts the index owner, reindexes, applies overrides
 ```
 
 `setup.sh` is idempotent and safe to re-run. It performs four steps:
 
 1. **Stable venv** — installs the vendored engine + deps into `~/.claude/skill-concierge/venv`
    (outside the plugin cache, so it survives reinstalls — [ADR-0004](docs/adr/0004-bundled-mcp-launcher-stable-venv.md)).
-2. **Qdrant** — starts a `skill-search-qdrant` Docker container on `127.0.0.1:6333` (loopback only; gRPC 6334 is not published).
+2. **Index owner** — starts the local index owner (`python -m skill_search.index_owner`, from
+   the stable venv) on `127.0.0.1`/`::1`, port `6333` (Qdrant-compatible REST) and `6363`
+   (`/embed`+`/health`+`/jev`) — no Docker, no container ([ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)).
 3. **Index** — builds/refreshes the multilingual index, then runs a health check.
 4. **Overrides** — applies the curated always-on policy to `~/.claude/settings.json` (backed up first).
 
@@ -185,7 +187,7 @@ the built index can't diverge from the model the server uses):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `SKILL_QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
+| `SKILL_QDRANT_URL` | `http://localhost:6333` | the local index owner's Qdrant-compatible REST endpoint — the name and port are kept for compatibility (no rename, no config change; [ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) |
 | `SKILL_EMBED_BACKEND` | `fastembed` | embedding backend |
 | `SKILL_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | embedding model |
 
@@ -197,9 +199,14 @@ the built index can't diverge from the model the server uses):
 |----------|---------|
 | `SKILL_PYTHON` | first of `python3.12/3.11/3.10` on `PATH` |
 | `SKILL_CONCIERGE_VENV` | `~/.claude/skill-concierge/venv` |
-| `SKILL_QDRANT_CONTAINER` | `skill-search-qdrant` |
-| `SKILL_QDRANT_IMAGE` | `qdrant/qdrant:v1.18.2` |
+| `SKILL_INDEX_DB` | `~/.cache/skill-search/index.sqlite` — the index owner's one SQLite file |
 | `SKILL_CONCIERGE_LOG` | `~/.claude/skill-concierge/logs` (ledger directory) |
+
+`SKILL_QDRANT_CONTAINER` (default `skill-search-qdrant`) and `SKILL_EMBED_CONTAINER`
+(default `skill-concierge-embed-shim`) are no longer read by `setup.sh` — they only name the
+two legacy Docker containers `doctor.py`/`doctor.py --fix` recognize and stop if an old harness
+copy revives them onto the owner's ports (`SKILL_QDRANT_IMAGE` is unused; nothing pins an image
+anymore).
 
 ### Flywheel LLM config (utterance generation — ADR-0027)
 
@@ -229,7 +236,7 @@ Behavior-changing kill-switches, all **default ON** except `SKILL_LLM_TRIGGERS` 
 | `ENFORCER_AUTHORIZED_SKIP` | `1` (ON) | Enforcer (`hooks/scripts/enforcer.py`) injects a `SKILL-CHECK:` authorization line on its silent verdicts (getaway score-floor miss, conversational-intent skip; later joined by the self-recap and harness-message lanes) instead of nothing. `=0` restores the old silence. [ADR-0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md). |
 | `ENFORCER_SELFREF_SKIP` | `1` (ON) | Enforcer authorizes a skip for the narrow self-referential recap lane (a turn that only asks to explain/rephrase the agent's own prior message). `=0` restores the old 2-lane behaviour. [ADR-0019](docs/adr/0019-over-fire-lane-and-gate-legibility.md). |
 | `ENFORCER_HARNESS_SKIP` | `1` (ON) | Harness-message lane: a prompt whose head is harness-generated (`<task-notification>`, `<system-reminder>`, cross-session/teammate messages, interrupted/continued banners, OMP `omp-msum` wrappers) is authorized to skip BEFORE the refusal guard, consult route, embed and every Qdrant call — ledger band `harness_skip`, no chain hint. `=0` routes such prompts like any other. [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
-| `ENFORCER_JEV_ROUTER` | `1` (ON) | Jev skill router, English prompts only (`TYPESAFE_API_KEY`): Jev ranks the whole invocable catalogue (chunked Choice, one call), re-checks the shortlist with one `fits` Noul per candidate (second call) and offers its top 5; best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) takes the fifth `SKILL-CHECK:` leg (band `jev_skip`). Runs in a worker thread overlapping embed/Qdrant, through the embed shim's warm `/jev` relay; any failure or a blown `ENFORCER_JEV_BUDGET` (3.0 s) leaves the embedding path to decide. `ENFORCER_JEV_MODEL` pins `jev-1.13.0`. `=0` (or the ADR-0060 `ENFORCER_JEV_GATE=0`) reverts to the pre-v0.50.0 path. [ADR-0061](docs/adr/0061-jev-skill-router.md). |
+| `ENFORCER_JEV_ROUTER` | `1` (ON) | Jev skill router, English prompts only (`TYPESAFE_API_KEY`): Jev ranks the whole invocable catalogue (chunked Choice, one call), re-checks the shortlist with one `fits` Noul per candidate (second call) and offers its top 5; best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) takes the fifth `SKILL-CHECK:` leg (band `jev_skip`). Runs in a worker thread overlapping embed/Qdrant, through the local index owner's warm `/jev` relay ([ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md); ported from the retired Docker embed shim); any failure or a blown `ENFORCER_JEV_BUDGET` (3.0 s) leaves the embedding path to decide. `ENFORCER_JEV_MODEL` pins `jev-1.13.0`. `=0` (or the ADR-0060 `ENFORCER_JEV_GATE=0`) reverts to the pre-v0.50.0 path. [ADR-0061](docs/adr/0061-jev-skill-router.md). |
 | `ENFORCER_DETERMINISTIC` | `1` (ON) | `config/deterministic-routes.json` phrases, matched as whole words, pin the named skill to the top of the offer (score 1.0, retrieved twin dropped), computed before embed so a timeout cannot lose it; honours keep-off, the blocklist and the harness-invocability test. `=0` disables (default-inert before `0.47.0`). [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
 | `ENFORCER_EMBED_TIMEOUT` / `ENFORCER_QDRANT_TIMEOUT` | `0.5` / `0.25` | Per-leg hard caps in seconds (0.35 / 0.1 before `0.47.0` — every epoch "outage" was censoring at the old caps). [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
 | `SKILL_CONCIERGE_KEEPOFF` | `~/.claude/skill-concierge/keep-off.json` | Path of the ledger-derived keep-off map (ADR-0011), regenerated by `doctor --fix` and `setup.sh`; `config/keep-off.json` is only the empty seed. [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
@@ -345,7 +352,7 @@ skill-concierge/
 ├── adapters/cline/                            # Cline adapter: file-hook bridge (.cjs) + hook shim templates + install.sh + mcp.json (ADR-0051)
 ├── .mcp.json                                  # registers the MCP via bin/skill-search-mcp launcher
 ├── bin/skill-search-mcp                       # launcher → stable venv (survives cache wipes; ADR-0004)
-├── setup.sh                                    # bootstrap: venv + Qdrant + reindex + apply-overrides
+├── setup.sh                                    # bootstrap: venv + start the index owner + reindex + apply-overrides
 ├── scripts/apply-overrides.py                  # atomic keep-on writer → ~/.claude/settings.json (ADR-0005; --check/--if-changed drift modes)
 ├── scripts/keep-on.py                          # view/add/remove the always-on allowlist (ADR-0025)
 ├── scripts/analyze.py                          # ledger analyzer (uptake / dodge / hit@k)
@@ -366,7 +373,7 @@ skill-concierge/
 └── README.md
 ```
 
-The engine source is vendored for portability; its Python deps, the Qdrant service, the
+The engine source is vendored for portability; its Python deps, the local index owner, the
 embedding model, the index, and the `settings.json` overrides are **reproduced by `setup.sh`**,
 not embedded.
 
@@ -377,8 +384,9 @@ each harness's extension mechanism supports (settings hooks for Claude Code, a m
 Command Code, a TS extension module for OMP — Codex auto-discovers hooks, no `hooks` field; ZCode
 natively runs the Claude-format plugin hooks; DSH rides a Cordis `agent/pre-step` plugin; Cline
 uses its native file hooks — the last two via `adapters/dsh/` and `adapters/cline/`);
-discovery always indexes **all** harnesses' roots into one shared Qdrant collection under
-distinct per-harness scopes (fail-open — a harness you don't run is simply absent from disk);
+discovery always indexes **all** harnesses' roots into one shared collection (served by the
+local index owner in Qdrant's REST shape) under distinct per-harness scopes (fail-open — a
+harness you don't run is simply absent from disk);
 and the MCP server is wired per-harness from the shared descriptor, never duplicated.
 
 | Harness | Discovery roots (scopes) | Enforcement vehicle | MCP wiring |
@@ -405,12 +413,12 @@ Claude's own account-synced skills would render as installed in a harness cache 
 2. **UserPromptSubmit** — `hooks/scripts/enforcer.py` runs the per-turn gate: skip harness-generated
    prompts before any I/O (task notifications, monitor events, cross-session messages, OMP summarizer
    calls — ADR-0054) → pin any skill the prompt names (deterministic routes, config-driven) → embed the
-   prompt via the warm shim → retrieve top-k from the SAME Qdrant index → drop keep-off/blocklisted
+   prompt via the local index owner's warm `/embed` → retrieve top-k from the SAME index → drop keep-off/blocklisted
    rows → apply the score/item floors + the actionability gate → inject a ranked SKILL-FIRST mandate,
    or a `SKILL-CHECK:` authorization on the silent legs (fail-open on any error).
    Then `hooks/scripts/ledger.py` records the turn (or a manual `/skill`).
 3. **Retrieve** (on demand) — Claude calls `search_skills`; the engine embeds the query and ranks the
-   indexed catalogue from Qdrant.
+   indexed catalogue from the local index owner.
 4. **Invoke** — Claude reads the ranked names + descriptions and fires the relevant skills.
 5. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation
    (matcher `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant since v0.4.1); a
@@ -518,9 +526,9 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 `0.20.8` — **published, the engine-drift message no longer names a cause it cannot observe. One symptom hides two causes with opposite remedies: a server still live on the old build (restart — a reindex hands the mismatch back) or a manifest merely left over from the previous release (reindex — it re-stamps and clears). The text asserted the first while every engine upgrade lands in the second, because changing the engine necessarily changes the build id. The engine now offers both remedies and asserts neither; doctor, which holds the live-server evidence in the same pass, decides which applies, names the pids, and auto-fixes ONLY a fleet proven entirely on the current build. 0.20.7: doctor's `Running engine` check compares build IDENTITY, not file timestamps. 0.20.6 added the check and answered the question with `max(ctime, mtime)` of the venv engine — but `setup.sh` re-copies the engine on every run, so those timestamps advance even when the bytes do not, and the first deploy flagged three live servers while the engine's own `health()` correctly reported `stale: false`. Each MCP server now publishes the build it runs to `~/.cache/skill-search/servers/<pid>.json` at startup and doctor looks it up, so a no-op re-copy is invisible by construction; `started_at` guards pid reuse, CLI runs are excluded by their flags, and an engine too old to publish an id reports N/A rather than accusing every server. `health()` correspondingly emits `engine_build` on every report (`index_written_by: null` when clean) — consumers key on that field, never on the block's presence. 0.20.6: a frontmatter value is now indexed as its TEXT, without its YAML scalar syntax. `parse_skill()` took the regex capture verbatim, so `description: >-` carried the literal `">-"` plus every continuation line's newline and indent into the embedded text, and `description: "…"` kept its surrounding quotes — the retriever was scoring skills partly on punctuation. `_unwrap_scalar` now handles block scalars (literal keeps line breaks, folded folds to spaces), quoted flow scalars, and plain wrapped scalars, on `description:` and `when_to_use:` alike, still without a YAML dependency. Measured on this catalogue: 210 of 416 skills affected; after the fix, 0. Distinct from 0.20.4, which fixed where a value ENDS; this fixes the value's own syntax. Same release documents `docs/caveats.md` §16 — the always-on allowlist is a BUDGET, not a list: `skillOverrides` does not apply to plugin skills at all (63 of them ≈ 5.3k tok/turn only `/plugin disable` can reclaim), and past `skillListingBudgetFraction` Claude Code DROPS descriptions rather than truncating them, choosing by `usageCount × 0.5^(days/7)` — so a long description loses its slot to a shorter, less-used skill. 0.20.5: `setup.sh` now builds the index with the SAME trigger-layer composition the query server serves. Its `env_run()` forwarded only the embedder and store keys from `.mcp.json`, so every run rebuilt at engine defaults — `SKILL_LLM_TRIGGERS` off, `TRIGGERS_MAX` 12 — pruning the utterance points while the MCP served with the layer ON at 16. The server then reported its own freshly-built index as stale, permanently, and every `search_skills` reply carried a spurious "run reindex()" warning. This is the identical gap `auto_reindex._mcp_env()` closed in 0.16.1; setup.sh was never updated. It now reads the same four keys through the existing `read_mcp()` SSOT helper, exporting each only when non-empty (an empty `SKILL_LLM_TRIGGERS` would read as truthy and switch the layer on by accident). 0.20.4: a frontmatter value now ends at the NEXT key even when that key is hyphenated. The terminator was `(?=\n\w+:|\Z)`, and `\w` is `[A-Za-z0-9_]` — it excludes `-`, so `user-invocable:`, `argument-hint:` and `allowed-tools:` never stopped the capture and their raw key/value lines were swallowed into `description`. That polluted the skill listing and, worse, the EMBEDDED text: a vector carrying the literal "user-invocable: true" is noise that degrades retrieval. Measured on this catalogue: 168 of 356 personal skills affected, ~1.7k est. tokens of frontmatter junk indexed; after the fix, 0. 0.20.3: skill discovery now identifies a skill by its DIRECTORY name — the way Claude Code actually does. `parse_skill()` preferred frontmatter `name:`, so any skill whose `name:` differed from its folder got its `skillOverrides` entry written under a key Claude Code never looks up: the name-only budget silently never applied and the skill's full description stayed resident every turn, while `apply-overrides --check` still reported "in sync, no drift" (it only ever compared its own map to itself). Measured on a 606-skill catalogue: 122 skills mismatched, ~9.6k tokens of description resident per session, and 21 of 32 curated keep-on entries silently unmatched. Verified: `zread-cli` ships `name: zread` — a valid slug, not an unparseable one — and Claude Code still lists and overrides it as `zread-cli`. 0.20.2: `doctor` now catches junk ALREADY AT REST in the utterance layer (`Trigger hygiene`), and `--fix` purges it. 0.20.1 stopped a degraded model from *writing* junk; nothing audited what earlier runs had already stored — 5 skills were found holding empty strings, one-char noise and a phrase repeated three times. The reason it hid is load-bearing: coverage measures *presence*, not *validity* — a skill whose utterances are all junk still counts toward `N/M have utterances`, never shows as missing, and the generator then skips it forever (cache-hit + layer present); a green `467/467` was hiding junk. The check re-runs `clean_triggers()` over each live skill's stored layer, importing the junk definition rather than restating it so it cannot drift from the generator. `--fix` drops the poisoned layer (keeping any prose layer), clears the generation-cache key and reindexes, backing up `triggers.json` first — it never regenerates, because doctor never calls the LLM; the cleared cache key is what lets the next flywheel run rewrite the skill instead of skipping it. Still a *mechanical* filter: semantically-wrong but well-formed output passes. 0.20.1: the flywheel actually reaches the skills it was meant to fix. Three bugs, one symptom: `auto_flywheel` runs `--generate --limit 25`, but both generators sliced the alphabetically-sorted full skill list *before* filtering out already-covered skills — so every capped run burned its whole budget on no-ops (`generated=0`) while 29 skills sat with no utterances, permanently. The cap now applies after the filter (0/25 → 25/25 slots doing real work), restoring what `enforcement-gate.md` already documented. `doctor` separately reported `0/467` coverage on a fully-covered install because `check_flywheel()` ignored the `SKILL_TRIGGERS` env seam every other tool honours and read an absent `eval/` under the plugin cache; it now honours the seam and says "coverage unknown" rather than miscounting an absent file as zero. And `validate_reply()` only checked "a list of ≥4 strings", so a degraded local model poisoned the live index with empty strings, one-char noise and repeated phrases — while the Vietnamese-parity retry manufactured its own junk (pressed for Vietnamese, the model echoed the literal words `tiếng Việt`, which counted). Validation now runs on cleaned phrases; it catches malformed junk, not semantically-wrong-but-well-formed output. Generation model set to `gemma-4-12b-it-qat-optiq` via `FLYWHEEL_LLM_MODEL` on reliability grounds — 0.20.0's measured case for e4b is not refuted, and was not re-measured. 0.20.0: flywheel reliability: a truncated completion no longer silently costs a skill its triggers. `flywheel_llm.chat()` never inspected `finish_reason`, so a reply cut short at `max_tokens` surfaced as an opaque `JSONDecodeError` and the generator skipped that skill with only a `WARN` on stdout. `chat()` now raises `TruncatedCompletion` on any explicit `finish_reason != "stop"`, keying on the field rather than on whether the body parses — a `length` cut can leave syntactically valid but semantically short JSON. Root cause reproduced and independently validated: LM Studio enforces `json_schema` strictly (`pattern` and `minItems` alike), so a constraint the model is unlikely to satisfy masks the string-closing quote and generation runs to the token cap. Same release swaps the generation model default to `gemma-4-e4b-it-qat-optiq` (MRR `0.231 → 0.462`, mean rank `56.6 → 13.1` on a 20-probe held-out eval) and fixes a `FLYWHEEL_LLM_MODEL` default that pointed at a model no endpoint serves. 0.19.1: multi-session correctness — a globally-shared artifact must never be driven by a CWD-scoped view. `skillOverrides` lives in the global `~/.claude/settings.json`, but the override map was built from `discover_skills()`, whose project dir is `Path.cwd()/.claude/skills` — so each session saw the other's keys as drift and rewrote the global file, churning a backup every time. Project-scoped skills are now excluded; the map is identical from every CWD. 0.19.0: the same class of bug in the index (ADR-0028) — concurrent sessions sharing one Qdrant collection were pruning each other's project skills, since `build_index()` deleted any point absent from *its* view. Points now carry an owning `scope` (`personal`/`plugin`/`project:<root>`); only the installed + enabled plugin version is indexed (the cache is append-only and had been serving ancient versions and disabled plugins); `health()` stops false-alarming. 0.18.1: flywheel regen cache moved to the canonical durable home so `/plugin update` cannot wipe it. 0.18.0: `auto_flywheel` SessionStart hook + a global run manifest; smart `--generate` covers both generators for new/changed skills. 0.17.0: the retrieval flywheel promoted to first-class — multi-provider LLM routing, the `skill-concierge:flywheel` skill, and a fail-open `doctor` flywheel check. 0.16.1: stability fix for the utterance layer — the detached `auto_reindex` SessionStart hook only forwarded the embedder/store env from `.mcp.json`, so a background reindex rebuilt at engine defaults and pruned the utterance points every run; `auto_reindex._mcp_env()` now forwards the trigger-layer keys (`SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/`SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS`) so the indexer builds the same index the query server serves. 0.16.0: LLM-utterance trigger layer (ADR-0026): offline flywheel-generated natural-utterance phrases (EN+VN, 532/532 skills) layered FIRST as MAX-pool trigger points, utterances-first + `TRIGGERS_MAX=16`, gated `SKILL_LLM_TRIGGERS`; shadow-vs-live gate rank-1 +7.0 / top-5 +8.4 / false-fire −0.4. 0.15.0: autonomous `skillOverrides` freshness + seamless keep-on management (ADR-0025): a SessionStart self-heal (`auto_overrides.py`) reconciles the name-only budget on catalogue drift the same way the index already self-heals, `doctor` now detects override drift, and `scripts/keep-on.py` + the `keep-on` skill make the always-on allowlist viewable/editable. 0.14.1: stale-index root-cause fix (retrieval-health detector fingerprints CONTENT not mtime — no more false 'disk changed since last index', ADR-0024). 0.14.0: anti-dodge integration (H1–H5, ADRs 0019–0023) — folds anti-skip doctrine craft + a measurement loop into the enforcement layer; see [`docs/anti-dodge-integration-v0.14.md`](docs/anti-dodge-integration-v0.14.md). Prior: self-healing MCP launcher (engine auto-resyncs on `/plugin update`, ADR-0018); MCP live, all three organs semantic, SKILL-FIRST gate + actionability gate live, bundled maintenance skills. Recall upgrades: `search_skills` query fanout — the caller passes 2–3 phrasings, the server MAX-pools the union so a skill a single phrasing buries still surfaces; the enforcer offer menu widened 5→8 (ADR-0017, supersedes ADR-0009); `SKILL_TOP_K=10` for the pull tool. Multi-vector MAX-pool retrieval (ADR-0012) also mines each skill body's labeled decision-sections (ADR-0016); the enforcer's two silent verdict legs emit a `SKILL-CHECK:` authorization (ADR-0015). Everything default-ON behind env kill-switches.**
 **Retrieve** (MCP) + **Enforce** (the `enforcer.py` UserPromptSubmit hook sources candidates
-from the SAME semantic index via a warm threaded embed shim, with a hard-timeout → mandate-only
-fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy lexical
-`skill_first_nudge.py` is retired (deregistered from `~/.claude/settings.json`).
+from the SAME semantic index via the local index owner's warm `/embed`, with a hard-timeout →
+mandate-only fallback) + **Ledger** (telemetry: `offer`/`search`/hit@k/fallback). The legacy
+lexical `skill_first_nudge.py` is retired (deregistered from `~/.claude/settings.json`).
 
 The deployment now **self-guards against staleness**: doctor's `Engine freshness` check
 (ADR-0013) catches a stale MCP venv engine after a `/plugin update`, and three SessionStart hooks
@@ -571,14 +579,14 @@ the longitudinal lift on the hardest behavior (false-SKIPPING, now measurable vi
 ## Troubleshooting
 
 **Start here:** run the **`skill-concierge:doctor`** skill (or `python3 scripts/doctor.py`) —
-it diagnoses the venv, Qdrant, MCP wiring, overrides, and retrieval health, and `--fix`
-auto-repairs most of the rows below (start Qdrant, reindex, re-apply overrides).
+it diagnoses the venv, the local index owner, MCP wiring, overrides, and retrieval health, and
+`--fix` auto-repairs most of the rows below (start the index owner, reindex, re-apply overrides).
 
 | Symptom | Cause & fix |
 |---------|-------------|
 | `/mcp` shows skill-search **not connected** (`-32000` / ENOENT) | The engine venv is missing. Run `bash setup.sh` once, then restart Claude Code. The launcher only execs a **stable** venv — it never builds on spawn ([ADR-0004](docs/adr/0004-bundled-mcp-launcher-stable-venv.md)). |
 | Two `skill-search` servers listed | A leftover user-scope MCP. Remove it: `claude mcp remove skill-search -s user`. |
-| `setup.sh` aborts at step 2 | Docker daemon not running. Start Docker/OrbStack and re-run. |
+| `setup.sh` aborts at step 2 ("index owner did not come up") | See `~/.claude/skill-concierge/logs/index-owner.log` for the reason (port already held by something else, a crashed model load, …); no Docker daemon is involved. |
 | Vendored eval prints recall@k ≈ `0.00` | **Not a bug.** The eval labels target a different skill universe — see [caveats §1](docs/caveats.md). |
 | Router reverted to `name-only` after a cache `setup.sh` rerun | Ensure `skill-concierge:skill-search` is in `config/keep-on.json` (fixed in 0.1.2). |
 
@@ -594,14 +602,17 @@ Created by [`setup.sh`](setup.sh):
 
 | Component | What is created | Reversal |
 |-----------|-----------------|----------|
-| Stable venv | `~/.claude/skill-concierge/venv/` — vendored engine + Python deps (`setup.sh:18`, step 1) | `rm -rf ~/.claude/skill-concierge/venv/` |
+| Stable venv | `~/.claude/skill-concierge/venv/` — vendored engine + Python deps (`setup.sh:47`, step 1) | `rm -rf ~/.claude/skill-concierge/venv/` |
 | Durable home | `~/.claude/skill-concierge/` — logs, keep-on policy (`keep-on.json`), telemetry ledger, utterance triggers (`triggers.json`), per-skill thresholds (`thresholds.json`), flywheel manifest, chain overrides (`next-skills-overrides.json`) | `rm -rf ~/.claude/skill-concierge/` |
-| Qdrant container | Docker container `skill-search-qdrant` (`setup.sh:19`, step 2), image `qdrant/qdrant:v1.18.2`, volume at `~/.cache/skill-search/qdrant-server/` | `docker rm -f skill-search-qdrant && docker rmi qdrant/qdrant:v1.18.2 && rm -rf ~/.cache/skill-search/qdrant-server/` |
-| Embed shim | Docker container `skill-concierge-embed-shim` (`setup.sh:21`, step 2b), image `skill-concierge-embed-shim:latest` | `docker rm -f skill-concierge-embed-shim && docker rmi skill-concierge-embed-shim:latest` |
+| Index owner | A local process (`python -m skill_search.index_owner`, `setup.sh:63`, step 2) started from the stable venv — no container, no image ([ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)); its data is one SQLite file at `~/.cache/skill-search/index.sqlite` (`SKILL_INDEX_DB`) | Stop the process (it exits on its own once the venv is removed and cannot restart), then `rm -rf ~/.cache/skill-search/` |
 | Old ledger migration | If the old path `~/.local/share/skill-concierge/` or `~/.claude/skill-telemetry/` exists from a pre-0.13 install, it is orphaned after setup. | `rm -rf ~/.local/share/skill-concierge/ ~/.claude/skill-telemetry/` |
 | MCP launcher records (if enabled) | `~/.cache/skill-search/servers/<pid>.json` — per-launch build-id record | `rm -rf ~/.cache/skill-search/` |
 
-No launchd agents are created — the warm embed shim runs as a Docker sidecar, not a launchd plist (the embed shim was switched to Docker sidecar before the first published release).
+No launchd agents are created — the index owner is started on demand by `bin/skill-search-mcp`,
+the enforcer hook, and `setup.sh` (ADR-0070), never by a launchd plist. If an older install left
+`skill-search-qdrant` and/or `skill-concierge-embed-shim` Docker containers behind, remove them
+too: `docker rm -f skill-search-qdrant skill-concierge-embed-shim` (image names vary by install
+date; `docker images` lists what is left to `docker rmi`).
 
 ### Claude Code
 
@@ -612,7 +623,7 @@ Once installed once via `claude plugin marketplace add` + `claude plugin install
 **To uninstall:**
 1. Disable the plugin: `/plugin disable skill-concierge` in Claude Code. This removes the hooks and MCP server from the running session without deleting data.
 2. Fully remove: `/plugin uninstall skill-concierge` — deletes the versioned cache dir.
-3. After either, clean shared components (venv, Qdrant, durable home) as described above.
+3. After either, clean shared components (venv, index owner, durable home) as described above.
 
 ### Codex
 

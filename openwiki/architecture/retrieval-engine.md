@@ -13,13 +13,13 @@ patches logged in [`vendor/skill-search/VENDORED.md`](../../vendor/skill-search/
 ## Code default vs deployed config — do not confuse them
 
 The engine's *code* defaults are upstream values; this *deployment* overrides all of them via
-[`.mcp.json`](../../.mcp.json), the `bin/embed-shim` launcher, and `setup.sh`. Both are stated
-here so the wrong default doesn't propagate:
+[`.mcp.json`](../../.mcp.json) and `setup.sh`. Both are stated here so the wrong default doesn't
+propagate:
 
 | Knob | Engine code default | **Deployed value** | Set by |
 |------|---------------------|--------------------|--------|
-| Embedding model | `BAAI/bge-small-en-v1.5` (384-dim, EN) | **`paraphrase-multilingual-mpnet-base-v2` (768-dim, multilingual)** | `.mcp.json`, embed-shim, setup.sh |
-| Vector store | HTTP store at `http://localhost:6333` (the embedded on-disk mode was deleted in vector-store Track B) | **Qdrant server** (Docker `skill-search-qdrant` @ `localhost:6333`) | `.mcp.json` |
+| Embedding model | `BAAI/bge-small-en-v1.5` (384-dim, EN) | **`paraphrase-multilingual-mpnet-base-v2` (768-dim, multilingual)** | `.mcp.json`, the index owner's own `setdefault`, setup.sh |
+| Vector store | HTTP store at `http://localhost:6333` (the embedded on-disk mode was deleted in vector-store Track B) | **the local index owner** (`python -m skill_search.index_owner`, no Docker; speaks the same Qdrant-compatible REST subset at `localhost:6333` — [ADR-0070](../../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) | `.mcp.json` |
 | `TOP_K` | 6 | **10** (`SKILL_TOP_K`) | `.mcp.json` |
 | `SKILL_LLM_TRIGGERS` | `0` (off) | **`1` — the utterance layer is ON here** | `.mcp.json` |
 | `TRIGGERS_MAX` | 12 | **16** (so utterances *add* slots rather than evict desc/body) | `.mcp.json` |
@@ -31,11 +31,15 @@ here so the wrong default doesn't propagate:
 > shipped **on** in [`.mcp.json`](../../.mcp.json) — the utterance layer is live in this deployment
 > ([ADR-0026](../../docs/adr/0026-llm-utterance-trigger-layer.md)).
 
-The multilingual model was chosen to fix EN-query → VN-skill misses (`VENDORED.md`); the server
-tier replaced the (now deleted) embedded store so concurrent Claude sessions don't fight a single-process lock.
-Vector-store Track B adds a dormant local index owner (`skill_search/index_owner.py`) that serves the same REST
-subset from one SQLite file; it replaces the Docker Qdrant only at the owner's cutover (`VENDORED.md`).
-See [ADR-0003](../../docs/adr/0003-embedder-and-vector-store.md).
+The multilingual model was chosen to fix EN-query → VN-skill misses (`VENDORED.md`). Concurrent
+Claude sessions don't fight a single-process lock because the store is served by **one** local
+index owner (`skill_search/index_owner.py`) rather than one embedded store per process; the owner
+holds every collection's vectors in memory, persists them to one SQLite file, and speaks the same
+Qdrant REST subset every existing caller already used — replacing the Docker `skill-search-qdrant`
+container and the Docker warm embed shim with zero config changes anywhere
+([ADR-0070](../../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md);
+`VENDORED.md`). See [ADR-0003](../../docs/adr/0003-embedder-and-vector-store.md) for the
+embedder-model decision, which this did not change.
 
 ## What gets indexed — model-invocable `SKILL.md` only
 
@@ -220,8 +224,9 @@ CLI entrypoint `skill-search` (`server.main()`): no args → MCP stdio server; `
 
 - **Switching the embedding model requires a full rebuild** — a collection built at one dim can't
   accept another dim's vectors; `build_index` raises telling you to `force=True`.
-- **fastembed must stay pinned at 0.8.0** across the shim and the index build — 0.5.1 switches to
-  CLS pooling and silently mismatches the 0.8.0-built index (retrieval degrades with no error).
+- **fastembed must stay pinned at 0.8.0** across the index owner's `/embed` and the index build —
+  0.5.1 switches to CLS pooling and silently mismatches the 0.8.0-built index (retrieval degrades
+  with no error).
 - **Never run the upstream `generate_overrides.py`** — it targets the wrong settings file with a
   2-item keep-on default and nukes the curated allowlist ([caveats §2](../../docs/caveats.md)).
 - **`enrich_index.py` was retired** (archived out of the repo with `multivector_experiment.py`,
