@@ -274,8 +274,9 @@ PY
 
     DEST="$CODEX_PLUGIN_CACHE/$VERSION"
     mkdir -p "$DEST"
-    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
       git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
+      echo "    exported HEAD → $DEST"
     else
       # Non-git checkout: copy everything except VCS/scratch dirs.
       tar -C "$ROOT" -cf - \
@@ -283,9 +284,10 @@ PY
           --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
           --exclude='.zcode' --exclude='.unlazy' \
           --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
+          --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
           . | tar -xf - -C "$DEST"
+      echo "    copied the working tree (not a git checkout) → $DEST"
     fi
-    echo "    exported HEAD → $DEST"
     chmod +x "$DEST/bin/"* "$DEST/setup.sh" "$DEST"/adapters/*/install.sh 2>/dev/null || true
     echo "    bin/ + installer exec bits ensured"
 

@@ -330,9 +330,9 @@ def test_real_claude_binary_is_never_invoked(tmp_path):
 def test_git_worktree_export_excludes_untracked_and_ignored_files(tmp_path):
     """A git *worktree*'s `.git` is a FILE, not a directory — `[ -d "$ROOT/.git" ]` would
     misclassify it as a non-git checkout and tar the whole working tree, untracked and
-    ignored files included. `git -C "$ROOT" rev-parse --is-inside-work-tree` must detect
-    it correctly, so the fallback still takes the `git archive HEAD` branch, which only
-    ever exports what is committed."""
+    ignored files included. The check compares `git rev-parse --show-toplevel` with ROOT,
+    so a worktree still takes the `git archive HEAD` branch, which only ever exports
+    what is committed."""
     base_repo = tmp_path / "base-repo"
     (base_repo / ".claude-plugin").mkdir(parents=True)
     (base_repo / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "8.0.0"}))
@@ -368,3 +368,40 @@ def test_git_worktree_export_excludes_untracked_and_ignored_files(tmp_path):
     assert not (dest / "untracked.txt").exists(), "git archive HEAD must exclude untracked files"
     assert not (dest / "ignored.txt").exists(), "git archive HEAD must exclude gitignored files"
     assert not (dest / ".git").exists()
+
+
+def test_plain_root_inside_another_repo_copies_only_itself(tmp_path):
+    """A non-git ROOT that sits inside an unrelated git repo must NOT take the
+    `git archive HEAD` branch: git would export the OUTER repo's committed tree into the
+    plugin cache. It takes the working-tree copy instead, and drops tool caches."""
+    outer = tmp_path / "outer-repo"
+    outer.mkdir()
+    (outer / "outer-secret.txt").write_text("belongs to the outer repo")
+    subprocess.run(["git", "init", "-q"], cwd=outer, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=outer, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+                   cwd=outer, check=True)
+
+    root = outer / "plain-checkout"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "8.0.0"}))
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.write_text("#!/bin/sh\necho fixture\n")
+    launcher.chmod(0o755)
+    (root / "hooks" / "scripts").mkdir(parents=True)
+    (root / "hooks" / "scripts" / "enforcer.py").write_text("# enforcer fixture v8.0.0\n")
+    (root / ".pytest_cache").mkdir()
+    (root / ".pytest_cache" / "junk").write_text("tool cache")
+
+    home, _old_cache = _seed_home_with_cache(tmp_path, version="1.0.0")
+    r = _run(tmp_path, root, home, mode="up_to_date_stale")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "copied the working tree (not a git checkout)" in r.stdout
+    assert "exported HEAD" not in r.stdout
+
+    dest = home / ".claude" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "8.0.0"
+    assert (dest / "bin" / "skill-search-mcp").exists()
+    assert not (dest / "outer-secret.txt").exists(), "the outer repo's files must never be exported"
+    assert not (dest / "plain-checkout").exists()
+    assert not (dest / ".pytest_cache").exists(), "tool caches must not be copied"

@@ -22,7 +22,7 @@
 #      cache/skill-concierge/skill-concierge/<version>/, exec bits ensured,
 #      then repoint installed_plugins.json (backup first, written atomically).
 #      This installs code that has NOT been published to the marketplace
-#      remote — said so loudly.
+#      remote — the script says so on stderr with a `!!` notice.
 #
 # IMPORTANT — MCP: the plugin package carries `.mcp.json` with
 # `${CLAUDE_PLUGIN_ROOT}` interpolation, and Claude Code expands that natively
@@ -30,10 +30,12 @@
 # a duplicate `skill-search` declaration is a known hazard. There is
 # deliberately no --no-mcp / --mcp-fallback flag here (unlike Cline / ZCode).
 #
-# `-y` is passed to `claude plugin update` because it is required for a
-# non-interactive run (per --help, it accepts the CLI's own displayed update —
-# not an arbitrary marketplace command); this repo's marketplace declares no
-# command-source, so there is nothing else for `-y` to auto-accept here.
+# `-y` is passed to `claude plugin update` because a non-interactive run needs
+# it. Per --help, `-y` accepts "the displayed marketplace-declared command"
+# without the confirmation prompt, so it WOULD auto-accept a command the
+# marketplace declares. This repo's marketplace declares none today. If it
+# ever does, switch to the narrower `--accept-command <sha256>`, which accepts
+# only that exact command.
 #
 # Usage:
 #   ./adapters/claude-code/install.sh [--root <path>]
@@ -149,13 +151,14 @@ else
       exit 1
     fi
     echo "  [•] CLI did not reach SSOT -> syncing this checkout into the Claude Code cache"
-    echo "      NOTE: this deploys code from the local checkout that the marketplace"
-    echo "      remote (github.com/thinhkhuat/skill-concierge) may not carry yet — the"
-    echo "      normal case when a version bump has not been pushed."
+    echo "!! This deploys code from the local checkout that the marketplace remote" >&2
+    echo "   (github.com/thinhkhuat/skill-concierge) may not carry yet — the normal" >&2
+    echo "   case when a version bump has not been pushed." >&2
     DEST="$CLAUDE_PLUGIN_CACHE/$VERSION"
     mkdir -p "$DEST"
-    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
       git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
+      echo "    exported HEAD → $DEST"
     else
       # Non-git checkout: copy everything except VCS/scratch dirs.
       tar -C "$ROOT" -cf - \
@@ -163,9 +166,10 @@ else
           --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
           --exclude='.zcode' --exclude='.unlazy' \
           --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
+          --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
           . | tar -xf - -C "$DEST"
+      echo "    copied the working tree (not a git checkout) → $DEST"
     fi
-    echo "    exported HEAD → $DEST"
     chmod +x "$DEST/bin/"* "$DEST/setup.sh" "$DEST"/adapters/*/install.sh 2>/dev/null || true
     echo "    bin/ + installer exec bits ensured"
 

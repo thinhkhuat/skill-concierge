@@ -458,29 +458,34 @@ def test_root_flag_reads_ssot_from_the_given_path(tmp_path):
     assert f"SSOT version: v{alt_version}" in result.stdout
 
 
+def _write_plugin_fixture(root, version):
+    """The minimal plugin tree the Codex installer's fallback and verify steps expect."""
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": version}))
+    (root / ".codex-plugin").mkdir(parents=True)
+    (root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "skill-concierge", "version": version}))
+    (root / ".codex-plugin" / "mcp.json").write_text("{}")
+    (root / ".codex").mkdir()
+    (root / ".codex" / "hooks.json").write_text("{}")
+    (root / "skills").mkdir()
+    (root / "skills" / ".gitkeep").write_text("")  # git tracks no empty dirs
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.write_text("#!/bin/sh\necho fixture\n")
+    launcher.chmod(0o755)
+    (root / "hooks" / "scripts").mkdir(parents=True)
+    shutil.copy2(ENFORCER_SRC, root / "hooks" / "scripts" / "enforcer.py")
+
+
 def test_git_worktree_export_excludes_untracked_and_ignored_files(tmp_path):
     """A git *worktree*'s `.git` is a FILE, not a directory — `[ -d "$ROOT/.git" ]` would
     misclassify it as a non-git checkout and tar the whole working tree, untracked and
-    ignored files included. `git -C "$ROOT" rev-parse --is-inside-work-tree` must detect
-    it correctly, so the fallback still takes the `git archive HEAD` branch, which only
-    ever exports what is committed."""
+    ignored files included. The check compares `git rev-parse --show-toplevel` with ROOT,
+    so a worktree still takes the `git archive HEAD` branch, which only ever exports
+    what is committed."""
     base_repo = tmp_path / "base-repo"
-    (base_repo / ".claude-plugin").mkdir(parents=True)
-    (base_repo / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "7.0.0"}))
-    (base_repo / ".codex-plugin").mkdir(parents=True)
-    (base_repo / ".codex-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "skill-concierge", "version": "7.0.0"}))
-    (base_repo / ".codex-plugin" / "mcp.json").write_text("{}")
-    (base_repo / ".codex").mkdir()
-    (base_repo / ".codex" / "hooks.json").write_text("{}")
-    (base_repo / "skills").mkdir()
-    (base_repo / "skills" / ".gitkeep").write_text("")  # git tracks no empty dirs
-    (base_repo / "bin").mkdir()
-    launcher = base_repo / "bin" / "skill-search-mcp"
-    launcher.write_text("#!/bin/sh\necho fixture\n")
-    launcher.chmod(0o755)
-    (base_repo / "hooks" / "scripts").mkdir(parents=True)
-    shutil.copy2(ENFORCER_SRC, base_repo / "hooks" / "scripts" / "enforcer.py")
+    _write_plugin_fixture(base_repo, "7.0.0")
     (base_repo / ".gitignore").write_text("ignored.txt\n")
     subprocess.run(["git", "init", "-q"], cwd=base_repo, check=True)
     subprocess.run(["git", "add", "-A"], cwd=base_repo, check=True)
@@ -511,3 +516,37 @@ def test_git_worktree_export_excludes_untracked_and_ignored_files(tmp_path):
     assert not (dest / "untracked.txt").exists(), "git archive HEAD must exclude untracked files"
     assert not (dest / "ignored.txt").exists(), "git archive HEAD must exclude gitignored files"
     assert not (dest / ".git").exists()
+
+
+def test_plain_root_inside_another_repo_copies_only_itself(tmp_path):
+    """A non-git ROOT that sits inside an unrelated git repo must NOT take the
+    `git archive HEAD` branch: git would export the OUTER repo's committed tree into the
+    plugin cache. It takes the working-tree copy instead, and drops tool caches."""
+    outer = tmp_path / "outer-repo"
+    outer.mkdir()
+    (outer / "outer-secret.txt").write_text("belongs to the outer repo")
+    subprocess.run(["git", "init", "-q"], cwd=outer, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=outer, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+                   cwd=outer, check=True)
+
+    root = outer / "plain-checkout"
+    _write_plugin_fixture(root, "7.0.0")
+    (root / ".pytest_cache").mkdir()
+    (root / ".pytest_cache" / "junk").write_text("tool cache")
+
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": False,
+        "remote_version": "1.0.0",  # != ROOT's SSOT -> forces the fallback
+    })
+    result = _run(_env(home, fakebin), "--root", str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "copied the working tree (not a git checkout)" in result.stdout
+    assert "exported HEAD" not in result.stdout
+
+    dest = _cache_root(home) / "7.0.0"
+    assert (dest / "bin" / "skill-search-mcp").exists()
+    assert not (dest / "outer-secret.txt").exists(), "the outer repo's files must never be exported"
+    assert not (dest / "plain-checkout").exists()
+    assert not (dest / ".pytest_cache").exists(), "tool caches must not be copied"
