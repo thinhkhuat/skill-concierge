@@ -3,6 +3,27 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.7] — 2026-09-27
+
+### Added — ADR-0069: Codex and Claude Code installers (owner decision D9)
+- **`adapters/codex/install.sh`** keeps an existing Codex registration at this checkout's version:
+  `codex plugin marketplace upgrade`, then `codex plugin add`, never `remove`. It refuses a downgrade and
+  an installed-but-disabled plugin before any CLI call, exits 1 unless `codex plugin list` shows the
+  plugin installed, and exports this checkout into a new cache dir only when the pushed marketplace lags.
+- **`adapters/claude-code/install.sh`** runs `claude plugin update … --json -y`, refuses a downgrade
+  before and after it, and when the marketplace lags exports this checkout and repoints
+  `installed_plugins.json` (backup first, atomic swap). It never touches `enabledPlugins`.
+- **Doctor** gains a Claude Code row (installed content vs this checkout, launcher exec bit); the Codex
+  row picks the newest version dir numerically and names the installer as the fix.
+- **All exporting installers** (Codex, Claude Code, OMP, ZCode) use `git archive HEAD` only when the
+  checkout is its own git top level, so a git worktree exports HEAD and a plain directory inside another
+  repo is copied as itself.
+- **Unverified:** whether Claude Code keeps a hand-repointed registry entry through its own updates, and
+  whether a live Codex session loads hooks and MCP from a fallback-synced dir. OMP/ZCode installers have no
+  dedicated tests; `CODEX_HOME` / `CLAUDE_CONFIG_DIR` are ignored.
+- The first Codex installer failed its independent review (it could uninstall the plugin and exit 0);
+  the release carries the fixes, reviewed again finding by finding before the merge.
+
 ## [0.52.6] — 2026-09-26
 
 ### Fixed — ADR-0068: the harness's own fields decide work; anchored negation

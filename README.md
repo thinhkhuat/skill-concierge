@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.52.6-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.52.7-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -429,6 +429,7 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.52.7` — **published, ADR-0069: installers for Codex (`adapters/codex/install.sh`: `marketplace upgrade` + `add`, never `remove`; refuses a downgrade and a disabled plugin before any CLI call) and Claude Code (`adapters/claude-code/install.sh`: `claude plugin update`, with a backed-up, atomic registry repoint when the marketplace lags); doctor gains a Claude Code row; every installer exports `git archive HEAD` only from a checkout's own top level.** See [CHANGELOG](CHANGELOG.md).
 `0.52.6` — **published, ADR-0068: the harness's own record fields decide what is work (a notification, a system prompt or a program's SDK prompt is not; a team runner's inbox relays are not); "(same task, no new search — continuing)" reads as a continuation while "(instead of continuing x)" does not; the prompt-intent miner drops programmatic and team-relay records; corrects ADR-0067's figures.** See [CHANGELOG](CHANGELOG.md).
 `0.52.5` — **published, ADR-0067: a work turn is decided by the prompt's shape (a slash command with arguments, a relayed chat message and pasted content are work; session builtins, notifications and scheduled tasks are not; a typed prompt stored as a list opens a turn); a duplicated record line is read once; "(new task, not continuing x)" is a fresh ruling; the prompt-intent miner ends a turn at a cross-session message, notification, scheduled task or slash command.** See [CHANGELOG](CHANGELOG.md).
 `0.52.4` — **published, ADR-0066: the stale-continuation flag counts work turns only (Stop-hook replies, slash-command records and notifications no longer widen the gap — the 0.52.3 "stale" figures were mostly those); continuations need their colon and skip filler words; a slash command is earlier use only from the user's own prompt; the prompt-intent miner skips the same harness messages as the enforcer.** See [CHANGELOG](CHANGELOG.md).

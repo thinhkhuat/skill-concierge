@@ -13,6 +13,11 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.7 — Codex and Claude Code installers (ADR-0069)
+
+**No new epoch for any watch item.** The release adds installers and a doctor row; the standing order,
+the enforcer and the engine are unchanged. W25-W28 keep reading from the 0.52.3 deploy.
+
 ## v0.52.6 — the harness's fields decide work; anchored negation (ADR-0068)
 
 **Starts per harness** when its plugin cache reaches `0.52.6`. No standing-order change, so no new trail
