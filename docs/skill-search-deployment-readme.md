@@ -303,7 +303,7 @@ cp ~/.claude.json.bak-skillsearch-server-260625-233755 ~/.claude.json
 claude mcp remove skill-search -s user
 
 # 3. Vector store — since ADR-0070 this is the local index owner, not a container
-lsof -ti :6333 | xargs -r kill                                     # stop the owner
+curl -s 127.0.0.1:6333/ | grep -q "skill-concierge index owner" && lsof -nP -t -iTCP:6333 -sTCP:LISTEN | xargs -r kill   # stop the owner (listener only, after the title check)
 rm -f ~/.cache/skill-search/index.sqlite*                          # owner data (optional)
 # Legacy install only — remove a leftover Qdrant container if one still exists:
 docker rm -f skill-search-qdrant 2>/dev/null

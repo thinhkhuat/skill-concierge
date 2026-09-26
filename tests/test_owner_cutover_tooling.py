@@ -11,6 +11,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -472,23 +473,24 @@ def test_check_embed_parity_reports_a_clean_timeout_instead_of_hanging(dr, monke
 
 def _fake_venv(tmp_path):
     """A fake venv whose `python` answers the two `-c` shapes the launcher/setup.sh use
-    (H2's owner-start Popen call, and the deployed-version JSON read) plus the legacy `-m`
-    form some other caller might still use. The owner-start branch is emulated with a REAL
-    background job under `set -m` (job control) so it lands in its OWN process group — the
-    same property `start_new_session=True` buys in production — recorded to `pgid_file` so
-    tests can assert on it instead of trusting the launcher's word for it.
+    (the owner-start Popen call, and the deployed-version JSON read) plus the legacy `-m`
+    form some other caller might still use. The owner-start branch runs the launcher's OWN
+    Popen code under the real interpreter, with a stub `skill_search.index_owner` first on
+    PYTHONPATH that records its process group to `pgid_file` — so the test sees the group
+    the launcher's code really produced, and dropping start_new_session makes it fail.
     """
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
     marker = tmp_path / "owner-started"
     pgid_file = tmp_path / "owner-pgid"
+    stub = tmp_path / "stubpkg" / "skill_search"
+    stub.mkdir(parents=True)
+    (stub / "__init__.py").write_text("")
+    (stub / "index_owner.py").write_text(
+        f"import os\nopen({str(pgid_file)!r}, 'w').write(str(os.getpgrp()))\n"
+        f"open({str(marker)!r}, 'a').write('skill_search.index_owner\\n')\n")
     py = venv / "bin" / "python"
-    # macOS ships bash 3.2, which has no $BASHPID (RULES [37]) — `exec sh -c '...'` inside
-    # the backgrounded job replaces that subshell's own image, so its freshly-started `$$`
-    # is trustworthy, and it inherits the job's pgid (set once, at the top-level fork, by
-    # `set -m`) regardless.
     py.write_text(f'''#!/bin/bash
-set -m
 if [ "$1" = "-m" ]; then
   echo "$2" >> "{marker}"
   exit 0
@@ -496,8 +498,7 @@ fi
 if [ "$1" = "-c" ]; then
   case "$2" in
     *Popen*)
-      (exec sh -c 'ps -o pgid= -p $$ | tr -d " " >> "{pgid_file}"; echo "skill_search.index_owner" >> "{marker}"') &
-      exit 0
+      exec env PYTHONPATH="{stub.parent}" "{sys.executable}" -c "$2" "$3"
       ;;
     *)
       f="$3"

@@ -497,6 +497,24 @@ def test_probe_treats_a_refused_port_as_nobody(tmp_path):
     assert io_._probe(port) is None
 
 
+@pytest.mark.parametrize("err", ["EADDRNOTAVAIL", "EAFNOSUPPORT", "ENETUNREACH", "EHOSTUNREACH"])
+def test_probe_treats_a_missing_ipv6_loopback_as_nobody(monkeypatch, err):
+    """A host without ::1 fails the connect with an address error, not a refusal. That
+    must read as 'nobody there' (as _bind assumes), or every start ends in PORT CONFLICT."""
+    import errno
+    import http.client
+    from skill_search import index_owner as io_
+    real_connect = http.client.HTTPConnection.connect
+
+    def connect(self):
+        if self.host == "::1":
+            raise OSError(getattr(errno, err), err)
+        return real_connect(self)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", connect)
+    assert io_._probe(_free_port()) is None
+
+
 class _FlakyDB:
     """Proxies a real sqlite3.Connection but fails partway through the FIRST
     executemany() called on it, after really applying its first row/param-set —
@@ -638,7 +656,6 @@ def test_ports_derive_from_qdrant_url_and_embed_shim_port_when_unset(tmp_path):
 
 def test_default_ports_fall_back_to_6333_6363_with_nothing_configured(tmp_path):
     """L4 control: with every port env var unset, 6333/6363 remain the final fallback."""
-    from skill_search import index_owner as io_
     env = dict(os.environ)
     for k in ("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT", "SKILL_QDRANT_URL", "EMBED_SHIM_PORT"):
         env.pop(k, None)

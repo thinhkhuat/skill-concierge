@@ -142,7 +142,7 @@ anything written to the owner in between. `qdrant-client` is already removed fro
 `vendor/skill-search/pyproject.toml` (this branch), so a revert to Docker Qdrant needs no engine
 downgrade: the engine's `_Store` (`vendor/skill-search/skill_search/server.py`) speaks the same plain
 Qdrant REST paths (`/collections/{c}`, `points/scroll`, `points/query/groups`, …) against
-`SKILL_QDRANT_URL` whether the answerer is the owner or a real Qdrant server. The Phase 6 cleanup
+`SKILL_QDRANT_URL` whether the answerer is the owner or a real Qdrant server (inferred from the code; a revert has not been run). The Phase 6 cleanup
 (deleting `Dockerfile`/`.dockerignore` and the retired containers/images) has not run, so both
 container images and the vendored `Dockerfile` remain on disk — a revert needs no re-provisioning step
 beyond restarting them.

@@ -817,7 +817,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health" and method == "GET":
             owner.check_stamp()
             if not owner.ready:
-                return self._send(503, {"status": "loading", "code_version": owner.code_version})
+                return self._send(503, {"status": "loading", "code_version": owner.code_version,
+                                        "routes": ["embed", "jev"]})
             return self._send(200, {"status": "ok", "model": owner.model, "dim": owner.dim,
                                     "code_version": owner.code_version,
                                     "stamp_version": owner.stamp_version,
@@ -897,7 +898,12 @@ def _probe(port: int) -> str | None:
             seen = "other"
         except ConnectionRefusedError:
             pass                                  # nobody listening on this host/family
-        except (OSError, http.client.HTTPException):
+        except OSError as e:
+            if e.errno not in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT,
+                               errno.ENETUNREACH, errno.EHOSTUNREACH):
+                seen = "other"                    # accepted then reset/closed
+            # else: this host has no such loopback (e.g. no ::1) — nobody there, as _bind assumes
+        except http.client.HTTPException:
             seen = "other"                        # accepted then reset/closed/malformed
         finally:
             conn.close()
