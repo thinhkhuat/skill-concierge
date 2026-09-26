@@ -136,7 +136,7 @@ if [ "$MARKETPLACE" = "1" ]; then
       echo "  [•] CLI did not reach SSOT -> syncing this checkout into the OMP cache"
       DEST="$PINNED"
       mkdir -p "$DEST"
-      if [ -d "$ROOT/.git" ]; then
+      if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
       else
         # Non-git checkout: copy everything except VCS/scratch dirs.

@@ -1,15 +1,18 @@
 """adapters/codex/install.sh must sync an existing Codex registration. Codex has no
 local install-record file (unlike OMP/ZCode) and no `codex plugin upgrade` verb — the
-canonical sequence is `marketplace upgrade` -> `remove` -> `add`. When a version gap is
-left over after that sequence (the marketplace is a GIT source: the CLI installs what
-is PUSHED to the remote, never this checkout), the installer falls back to exporting
-this checkout straight into the versioned Codex cache dir — proven live in a sandboxed
-CODEX_HOME with the real `codex` binary (see the orchestration report's "Fallback
-probe" section) to be exactly what `codex plugin list --json` re-scans and reports,
-with zero registry to repoint. These tests run against a FAKE `codex` executable
-placed first on PATH — the real binary is never invoked; the fallback's own
-`git archive HEAD` still reads this actual repo checkout (read-only) but writes only
-into the sandboxed $HOME."""
+canonical sequence is `marketplace upgrade` -> `add`, NEVER `remove`: a bare `add`
+refreshes an already-installed plugin in place, a FAILED `add` never uninstalls the
+previous copy, and a SUCCESSFUL `add` unconditionally wipes the plugin's entire cache
+directory (every version dir and every non-version staging dir) before installing the
+fresh one — first install or refresh alike. When a version gap is left over after `add` succeeds (the
+marketplace is a GIT source: the CLI installs what is PUSHED to the remote, never this
+checkout), the installer falls back to exporting this checkout straight into a NEW
+versioned Codex cache dir, which `codex plugin list --json` re-scans with zero further
+CLI involvement (no registry to repoint).
+
+These tests run against a FAKE `codex` executable placed first on PATH — the real binary
+is never invoked; the fallback's own `git archive HEAD` still reads this actual repo
+checkout (read-only) but writes only into the sandboxed $HOME."""
 import json
 import os
 import shutil
@@ -82,11 +85,14 @@ def main():
         if state.get("plugin_installed"):
             installed.append({"pluginId": "skill-concierge@skill-concierge", "name": "skill-concierge",
                                "marketplaceName": "skill-concierge", "version": state["remote_version"],
-                               "installed": True, "enabled": True})
+                               "installed": True, "enabled": bool(state.get("enabled", True))})
         print(json.dumps({"installed": installed}))
         sys.exit(0)
 
     if sub == "remove":
+        # Real Codex: deletes the plugin's whole cache tree AND its config entry. This
+        # installer never calls it (see its header) — modeled here in case a test wants to
+        # simulate a manual removal done before the installer even runs.
         if state.get("fail_remove"):
             sys.exit(1)
         state["plugin_installed"] = False
@@ -99,9 +105,12 @@ def main():
         if state.get("fail_add"):
             sys.exit(1)
         version = state["remote_version"]
+        # Real Codex: `add` unconditionally wipes the ENTIRE plugin cache dir — every
+        # version dir, every non-version staging dir — before installing the fresh
+        # version, first install or refresh of an existing one alike.
+        if CACHE_BASE.is_dir():
+            shutil.rmtree(CACHE_BASE)
         dest = CACHE_BASE / version
-        if dest.exists():
-            shutil.rmtree(dest)
         (dest / ".codex-plugin").mkdir(parents=True)
         (dest / ".codex-plugin" / "plugin.json").write_text(
             json.dumps({"name": "skill-concierge", "version": version}))
@@ -117,6 +126,7 @@ def main():
         (dest / "hooks" / "scripts").mkdir(parents=True)
         shutil.copy2(ENFORCER_SRC, dest / "hooks" / "scripts" / "enforcer.py")
         state["plugin_installed"] = True
+        state["enabled"] = True  # `add` always (re-)enables — Codex has no CLI to keep it off
         _save(state)
         sys.exit(0)
 
@@ -155,8 +165,9 @@ def _env(home, fakebin):
     )
 
 
-def _run(env):
-    return subprocess.run(["bash", str(INSTALLER)], env=env, capture_output=True, text=True, timeout=60)
+def _run(env, *extra_args):
+    return subprocess.run(["bash", str(INSTALLER), *extra_args], env=env,
+                           capture_output=True, text=True, timeout=60)
 
 
 def _log_lines(home):
@@ -164,6 +175,10 @@ def _log_lines(home):
     if not log.exists():
         return []
     return [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+
+
+def _cache_root(home):
+    return home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
 
 
 def test_fresh_install_reaches_ssot_and_fixes_exec_bit(tmp_path):
@@ -176,7 +191,7 @@ def test_fresh_install_reaches_ssot_and_fixes_exec_bit(tmp_path):
     result = _run(env)
     assert result.returncode == 0, result.stdout + result.stderr
 
-    dest = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / SSOT_VERSION
+    dest = _cache_root(home) / SSOT_VERSION
     assert json.loads((dest / ".codex-plugin" / "plugin.json").read_text())["version"] == SSOT_VERSION
     launcher = dest / "bin" / "skill-search-mcp"
     assert os.access(launcher, os.X_OK), "installer must chmod +x the launcher"
@@ -186,7 +201,7 @@ def test_fresh_install_reaches_ssot_and_fixes_exec_bit(tmp_path):
     assert ["plugin", "marketplace", "upgrade", "skill-concierge"] in argvs
     assert ["plugin", "add", "skill-concierge@skill-concierge"] in argvs
     assert ["plugin", "remove", "skill-concierge@skill-concierge"] not in argvs, \
-        "nothing was installed yet — remove must not be called"
+        "this installer must never call 'codex plugin remove'"
 
 
 def test_second_run_is_a_no_op_fast_path(tmp_path):
@@ -205,141 +220,30 @@ def test_second_run_is_a_no_op_fast_path(tmp_path):
     assert _log_lines(home) == [], "fast path must not call the codex CLI at all"
 
 
-def test_stale_remote_falls_back_to_local_checkout_sync_without_deleting_old_dir(tmp_path):
-    """Proven live (sandboxed CODEX_HOME + real codex binary, see the orchestration
-    report): Codex keeps no registry, so `codex plugin list --json` re-scans the cache
-    dir tree on every call, resolving the newest dir by semver. A version-named dir
-    dropped straight into it via `git archive HEAD` is picked up with zero further CLI
-    involvement — and the SAME probe proved a stale sibling dir is simply never
-    resolved as current, so this installer must NEVER delete one: no sibling installer
-    deletes anything, nothing here can back up a directory before removing it, and a
-    running Codex session could be using the old dir right now."""
-    # Two DIFFERENT stale versions: one the fake CLI's `add` will (re)create at
-    # remote_version, and an OLDER one it never touches at all — isolating "my
-    # installer's own fallback never deletes" from "the CLI naturally overwrites the
-    # exact version dir it (re)installs," which is not this installer's concern.
-    untouched_version = "0.1.0"
-    remote_version = "0.45.0"
-    assert untouched_version != SSOT_VERSION and remote_version != SSOT_VERSION
-    home, fakebin = _make_home(tmp_path, {
-        "marketplace_registered": True,
-        "plugin_installed": False,  # no `remove` call — the pre-seeded dir is untouched by the CLI step
-        "remote_version": remote_version,
-    })
-    # Pre-seed a cache dir at an unrelated old version, as if installed long ago.
-    dest = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / untouched_version
-    (dest / ".codex-plugin").mkdir(parents=True)
-    (dest / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": untouched_version}))
-    (dest / "skills").mkdir()
-    marker = dest / "skills" / "marker.txt"
-    marker.write_text("pre-existing content that must survive")
-
-    env = _env(home, fakebin)
-    result = _run(env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "deploys the LOCAL checkout DIRECTLY" in result.stderr
-    assert "not" in result.stderr and "pushed" in result.stderr
-
-    cache_root = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
-    versions = {d.name for d in cache_root.iterdir() if d.is_dir()}
-    assert versions == {untouched_version, remote_version, SSOT_VERSION}, \
-        "every old version dir must survive, untouched, alongside the new one"
-    assert marker.read_text() == "pre-existing content that must survive", "the old dir's content must be untouched"
-
-    ssot_dest = cache_root / SSOT_VERSION
-    assert json.loads((ssot_dest / ".codex-plugin" / "plugin.json").read_text())["version"] == SSOT_VERSION
-    assert (ssot_dest / "AGENTS.md").exists(), "git archive HEAD must have populated the real checkout"
-    assert not (ssot_dest / ".git").exists(), "git archive HEAD never includes .git itself"
-    assert os.access(ssot_dest / "bin" / "skill-search-mcp", os.X_OK)
-
-
-def test_add_failure_still_falls_back_to_local_checkout_sync(tmp_path):
-    """Codex's own remove-then-add sequence (per --help: "remove" "removes its local
-    cache") can leave the cache dir gone entirely before `add` fails — the fallback must
-    still reach the SSOT even from nothing on disk."""
-    home, fakebin = _make_home(tmp_path, {
-        "marketplace_registered": True,
-        "plugin_installed": True,
-        "remote_version": "0.45.0",
-        "fail_add": True,
-    })
-    env = _env(home, fakebin)
-    result = _run(env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "deploys the LOCAL checkout DIRECTLY" in result.stderr
-
-    cache_root = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
-    assert {d.name for d in cache_root.iterdir() if d.is_dir()} == {SSOT_VERSION}
-
-
-def test_non_version_staging_dir_is_left_alone(tmp_path):
-    """Codex itself creates non-version-named staging dirs under this cache tree from
-    an interrupted install (the real machine carries a live plugin-install-UEVanZ/
-    leftover, documented in the scout report). Neither the fallback nor
-    _cached_version() may treat a dir shaped like "plugin-install-XYZ" as a version —
-    and, since the fallback never deletes anything at all, it must survive untouched."""
-    stale_version = "0.45.0"
-    assert stale_version != SSOT_VERSION
-    home, fakebin = _make_home(tmp_path, {
-        "marketplace_registered": True,
-        "plugin_installed": False,
-        "remote_version": stale_version,
-    })
-    cache_root = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
-    # A non-version-shaped dir sitting alongside the version dirs, same shape a stale
-    # `_ver_gt`-based glob (a first-pass draft of this script had one) would have
-    # matched and mis-sorted (its "version" tuple decodes to all -1s: neither newer
-    # nor older than anything, by design of ver_key's fallback).
-    staging = cache_root / "plugin-install-XYZ"
-    staging.mkdir(parents=True)
-    (staging / "marker.txt").write_text("codex-owned staging content")
-
-    env = _env(home, fakebin)
-    result = _run(env)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    assert (staging / "marker.txt").read_text() == "codex-owned staging content", \
-        "a non-version-named sibling dir must never be touched, let alone deleted"
-    versions = {d.name for d in cache_root.iterdir() if d.is_dir()}
-    assert versions == {stale_version, SSOT_VERSION, "plugin-install-XYZ"}
-
-
-def test_downgrade_after_cli_refresh_is_refused(tmp_path):
-    """The one-directional guard must re-apply AFTER the CLI refresh too: the refresh
-    itself could install something newer than this checkout (a teammate pushed ahead)."""
-    newer_version = "99.0.0"
-    assert newer_version != SSOT_VERSION
-    home, fakebin = _make_home(tmp_path, {
-        "marketplace_registered": True,
-        "plugin_installed": False,
-        "remote_version": newer_version,
-    })
-    env = _env(home, fakebin)
-    result = _run(env)
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "refusing to downgrade" in result.stderr
-    assert "after the CLI refresh" in result.stderr
-
-    cache_root = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
-    assert not (cache_root / SSOT_VERSION).exists(), "no local-checkout sync must be attempted on a downgrade"
-
-
-def test_cached_version_sort_is_semver_not_lexical(tmp_path):
-    """Proven live: with cache dirs "0.9.0" and "0.52.3" both present, the real `codex
+def test_fast_path_tolerates_lexically_smaller_and_non_version_siblings(tmp_path):
+    """With cache dirs "0.9.0" and "0.52.3" both present, the real `codex
     plugin list --json` reports "0.52.3" (semver-aware), while a naive lexical-string
-    sort — scripts/doctor.py's own _codex_cached_version() — ranks "0.9.0" higher
-    ('9' > '5' at the first differing character). This installer's _cached_version()
-    must resolve the fast path correctly regardless of a stray lower-digit-width dir."""
+    sort ranks "0.9.0" higher ('9' > '5' at the first differing character). This
+    installer's _cached_version() must resolve the fast path correctly regardless of a
+    stray lower-digit-width dir, and must never mistake a non-version-named staging dir
+    (the real machine carries a live plugin-install-UEVanZ/ leftover) for a version. The
+    fast path calls no CLI at all, so every sibling here survives untouched no matter what
+    Codex's own `add` might otherwise do to them."""
     home, fakebin = _make_home(tmp_path, {
         "marketplace_registered": True,
         "plugin_installed": True,
         "remote_version": SSOT_VERSION,
     })
-    cache_root = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+    cache_root = _cache_root(home)
+
     low = cache_root / "0.9.0"
     (low / ".codex-plugin").mkdir(parents=True)
     (low / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": "0.9.0"}))
     (low / "skills").mkdir()
+
+    staging = cache_root / "plugin-install-XYZ"
+    staging.mkdir(parents=True)
+    (staging / "marker.txt").write_text("codex-owned staging content")
 
     current = cache_root / SSOT_VERSION
     (current / ".codex-plugin").mkdir(parents=True)
@@ -360,6 +264,139 @@ def test_cached_version_sort_is_semver_not_lexical(tmp_path):
     assert "Already current" in result.stdout, \
         "a lexical-string sort would misidentify 0.9.0 as newest and skip the fast path"
     assert _log_lines(home) == [], "the fast path must not call the codex CLI at all"
+    assert (staging / "marker.txt").read_text() == "codex-owned staging content"
+    assert (low / ".codex-plugin" / "plugin.json").exists()
+
+
+def test_fallback_never_deletes_the_version_dir_add_just_created(tmp_path):
+    """The fallback runs only AFTER `add` already succeeded (see header step 6-7) — and
+    Codex's own `add` wipes the plugin's entire cache dir before installing its own
+    version dir. So the only thing that can be sitting there when the
+    fallback starts is the dir `add` itself just created; this installer's OWN fallback
+    step (git archive HEAD -> a NEW versioned dir) must never delete that, only add
+    alongside it — no sibling installer deletes anything, and a running Codex session
+    could be using that dir right now."""
+    remote_version = "0.45.0"
+    assert remote_version != SSOT_VERSION
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": False,
+        "remote_version": remote_version,
+    })
+    env = _env(home, fakebin)
+    result = _run(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "deploys the LOCAL checkout DIRECTLY" in result.stderr
+
+    cache_root = _cache_root(home)
+    versions = {d.name for d in cache_root.iterdir() if d.is_dir()}
+    assert versions == {remote_version, SSOT_VERSION}, \
+        "the version dir 'add' just created must survive the fallback, alongside the new one"
+
+    ssot_dest = cache_root / SSOT_VERSION
+    assert json.loads((ssot_dest / ".codex-plugin" / "plugin.json").read_text())["version"] == SSOT_VERSION
+    assert (ssot_dest / "AGENTS.md").exists(), "git archive HEAD must have populated the real checkout"
+    assert not (ssot_dest / ".git").exists(), "git archive HEAD never includes .git itself"
+    assert os.access(ssot_dest / "bin" / "skill-search-mcp", os.X_OK)
+
+    argvs = [l["argv"] for l in _log_lines(home)]
+    assert ["plugin", "remove", "skill-concierge@skill-concierge"] not in argvs
+
+
+def test_add_failure_never_falls_back_and_exits_nonzero(tmp_path):
+    """A failed `codex plugin add` must never trigger the manual-checkout fallback: Codex's
+    own `add` never uninstalls the previous copy on failure, so this
+    installer trusts that and reports the failure with restore steps rather than syncing a
+    local checkout over a state it cannot fully verify."""
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": True,
+        "remote_version": "0.45.0",
+        "fail_add": True,
+    })
+    env = _env(home, fakebin)
+    result = _run(env)
+    assert result.returncode != 0, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "does not report" in combined and "installed" in combined
+    assert "previous install should still be intact" in combined
+    assert "codex plugin list --json" in combined
+
+    cache_root = _cache_root(home)
+    assert not cache_root.is_dir() or not any(d.name == SSOT_VERSION for d in cache_root.iterdir() if d.is_dir()), \
+        "no local-checkout sync must be attempted after a failed add"
+
+    argvs = [l["argv"] for l in _log_lines(home)]
+    assert ["plugin", "remove", "skill-concierge@skill-concierge"] not in argvs
+
+
+def test_disabled_plugin_refuses_before_any_cli_call(tmp_path):
+    """Codex's `add` always re-enables a plugin and has no CLI to keep one disabled (no
+    plugin enable/disable subcommand, and a `-c ...enabled=false` override does not
+    persist). If the plugin is already disabled, the installer must refuse before making
+    any mutating CLI call at all — never refresh it first and complain afterward."""
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": True,
+        "remote_version": "0.1.0",
+        "enabled": False,
+    })
+    config_toml = home / ".codex" / "config.toml"
+    config_toml.parent.mkdir(parents=True, exist_ok=True)
+    config_toml.write_text('[plugins."skill-concierge@skill-concierge"]\nenabled = false\n')
+    before = config_toml.read_bytes()
+
+    env = _env(home, fakebin)
+    result = _run(env)
+    assert result.returncode != 0, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "is installed but disabled" in combined
+    assert "set enabled = true" in combined
+
+    argvs = [l["argv"] for l in _log_lines(home)]
+    assert ["plugin", "marketplace", "upgrade", "skill-concierge"] not in argvs, \
+        "the guard must fire before 'marketplace upgrade' runs"
+    assert ["plugin", "add", "skill-concierge@skill-concierge"] not in argvs, \
+        "the guard must fire before 'add' runs"
+
+    state = json.loads((home / ".codex-test-state.json").read_text())
+    assert state["enabled"] is False, "'add' never ran, so the plugin stays disabled"
+    assert config_toml.read_bytes() == before, "the installer must never touch config.toml itself"
+
+
+def test_enabled_plugin_stays_enabled_across_a_refresh(tmp_path):
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": True,
+        "remote_version": SSOT_VERSION,
+        "enabled": True,
+    })
+    env = _env(home, fakebin)
+    result = _run(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "is installed but disabled" not in combined
+    assert "was disabled before this sync" not in combined
+
+
+def test_downgrade_after_cli_refresh_is_refused(tmp_path):
+    """The one-directional guard must re-apply AFTER the CLI refresh too: the refresh
+    itself could install something newer than this checkout (a teammate pushed ahead)."""
+    newer_version = "99.0.0"
+    assert newer_version != SSOT_VERSION
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": False,
+        "remote_version": newer_version,
+    })
+    env = _env(home, fakebin)
+    result = _run(env)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "refusing to downgrade" in result.stderr
+    assert "after the CLI refresh" in result.stderr
+
+    cache_root = _cache_root(home)
+    assert not (cache_root / SSOT_VERSION).exists(), "no local-checkout sync must be attempted on a downgrade"
 
 
 def test_downgrade_is_refused_before_any_codex_call(tmp_path):
@@ -369,7 +406,7 @@ def test_downgrade_is_refused_before_any_codex_call(tmp_path):
         "plugin_installed": True,
         "remote_version": newer_version,
     })
-    dest = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / newer_version
+    dest = _cache_root(home) / newer_version
     (dest / ".codex-plugin").mkdir(parents=True)
     (dest / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": newer_version}))
     (dest / "skills").mkdir()
@@ -397,21 +434,8 @@ def test_marketplace_not_registered_prints_bootstrap_instructions(tmp_path):
     argvs = [l["argv"] for l in _log_lines(home)]
     assert ["plugin", "marketplace", "upgrade", "skill-concierge"] not in argvs
     assert ["plugin", "add", "skill-concierge@skill-concierge"] not in argvs
-    cache_root = home / ".codex" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+    cache_root = _cache_root(home)
     assert not cache_root.is_dir() or not any(cache_root.iterdir())
-
-
-def test_unknown_flag_prints_usage_and_exits_1(tmp_path):
-    home, fakebin = _make_home(tmp_path, {
-        "marketplace_registered": True,
-        "plugin_installed": False,
-        "remote_version": SSOT_VERSION,
-    })
-    env = _env(home, fakebin)
-    result = subprocess.run(["bash", str(INSTALLER), "--bogus"], env=env,
-                             capture_output=True, text=True, timeout=60)
-    assert result.returncode == 1
-    assert "usage:" in result.stderr
 
 
 def test_root_flag_reads_ssot_from_the_given_path(tmp_path):
@@ -429,7 +453,61 @@ def test_root_flag_reads_ssot_from_the_given_path(tmp_path):
         "remote_version": alt_version,
     })
     env = _env(home, fakebin)
-    result = subprocess.run(["bash", str(INSTALLER), "--root", str(alt_root)], env=env,
-                             capture_output=True, text=True, timeout=60)
+    result = _run(env, "--root", str(alt_root))
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"SSOT version: v{alt_version}" in result.stdout
+
+
+def test_git_worktree_export_excludes_untracked_and_ignored_files(tmp_path):
+    """A git *worktree*'s `.git` is a FILE, not a directory — `[ -d "$ROOT/.git" ]` would
+    misclassify it as a non-git checkout and tar the whole working tree, untracked and
+    ignored files included. `git -C "$ROOT" rev-parse --is-inside-work-tree` must detect
+    it correctly, so the fallback still takes the `git archive HEAD` branch, which only
+    ever exports what is committed."""
+    base_repo = tmp_path / "base-repo"
+    (base_repo / ".claude-plugin").mkdir(parents=True)
+    (base_repo / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "7.0.0"}))
+    (base_repo / ".codex-plugin").mkdir(parents=True)
+    (base_repo / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "skill-concierge", "version": "7.0.0"}))
+    (base_repo / ".codex-plugin" / "mcp.json").write_text("{}")
+    (base_repo / ".codex").mkdir()
+    (base_repo / ".codex" / "hooks.json").write_text("{}")
+    (base_repo / "skills").mkdir()
+    (base_repo / "skills" / ".gitkeep").write_text("")  # git tracks no empty dirs
+    (base_repo / "bin").mkdir()
+    launcher = base_repo / "bin" / "skill-search-mcp"
+    launcher.write_text("#!/bin/sh\necho fixture\n")
+    launcher.chmod(0o755)
+    (base_repo / "hooks" / "scripts").mkdir(parents=True)
+    shutil.copy2(ENFORCER_SRC, base_repo / "hooks" / "scripts" / "enforcer.py")
+    (base_repo / ".gitignore").write_text("ignored.txt\n")
+    subprocess.run(["git", "init", "-q"], cwd=base_repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=base_repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+                    cwd=base_repo, check=True)
+
+    worktree = tmp_path / "worktree"
+    subprocess.run(["git", "worktree", "add", str(worktree), "HEAD"], cwd=base_repo, check=True,
+                    capture_output=True, text=True)
+    assert (worktree / ".git").is_file(), "a linked worktree's .git must be a FILE, not a dir"
+
+    (worktree / "untracked.txt").write_text("must never be exported")
+    (worktree / "ignored.txt").write_text("must never be exported either")
+
+    home, fakebin = _make_home(tmp_path, {
+        "marketplace_registered": True,
+        "plugin_installed": False,
+        "remote_version": "1.0.0",  # != the worktree's own SSOT -> forces the fallback
+    })
+    env = _env(home, fakebin)
+    result = _run(env, "--root", str(worktree))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "exported HEAD" in result.stdout, "a real git checkout must take the git-archive branch"
+
+    dest = _cache_root(home) / "7.0.0"
+    assert dest.is_dir()
+    assert (dest / "bin" / "skill-search-mcp").exists()
+    assert not (dest / "untracked.txt").exists(), "git archive HEAD must exclude untracked files"
+    assert not (dest / "ignored.txt").exists(), "git archive HEAD must exclude gitignored files"
+    assert not (dest / ".git").exists()

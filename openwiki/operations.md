@@ -364,20 +364,28 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
 - **Codex and Claude Code plugin caches are also copies, refreshed only by their own installer.**
   [`adapters/codex/install.sh`](../adapters/codex/install.sh) refreshes the Codex marketplace
   clone under `~/.codex/plugins/cache/skill-concierge/skill-concierge/<ver>/` to the SSOT version
-  (`codex plugin marketplace upgrade` + `remove` + `add` — there is no `codex plugin upgrade`
-  verb; installs whatever is pushed to the git remote). A remaining version gap falls back to a
-  `git archive HEAD` export into a new version-named cache dir — older dirs are left in place,
-  since Codex resolves the semver-newest by scanning, not a registry — with a loud
-  unpushed-content notice; a live session actually loading hooks/MCP from that dir is unverified
-  beyond `codex plugin list`.
+  via `codex plugin marketplace upgrade` then `codex plugin add` — there is no
+  `codex plugin upgrade` verb, and this installer never calls `remove`: a bare `add` refreshes
+  an existing install in place, and a failed `add` never uninstalls the previous copy (both
+  verified live). The CLI installs whatever is pushed to the git remote, and a successful `add`
+  was verified live to wipe the plugin's ENTIRE cache dir (every version and staging dir) before
+  installing the fresh one. A remaining version gap falls back to a `git archive HEAD` export
+  into a NEW version-named cache dir instead — this fallback step itself never deletes anything
+  (Codex resolves the semver-newest by scanning, not a registry) — with a loud unpushed-content
+  notice; a live session actually loading hooks/MCP from that dir is unverified beyond
+  `codex plugin list`. Codex also has no CLI to disable a plugin or keep one disabled through a
+  refresh, so if the plugin is already disabled the installer refuses right away, before
+  `marketplace upgrade` or `add` runs — no mutating CLI call is made — rather than refreshing it
+  first and only complaining afterward.
   [`adapters/claude-code/install.sh`](../adapters/claude-code/install.sh) refreshes
   `~/.claude/plugins/cache/skill-concierge/skill-concierge/<ver>/` via
-  `claude plugin update skill-concierge@skill-concierge --json -y`, falling back to a local
-  `git archive` sync plus a backed-up `installed_plugins.json` repoint when the marketplace
-  remote hasn't caught up to this checkout yet (never touching `enabledPlugins` or the shared
-  venv — a session restart is required either way). Whether Claude Code accepts a
-  hand-repointed registry entry is unverified beyond the sandboxed test suite. `doctor`'s Codex
-  and Claude Code rows both warn when the cached content lags the SSOT.
+  `claude plugin update skill-concierge@skill-concierge --json -y`, refusing a downgrade both before
+  and after that call, falling back to a local `git archive` sync plus a backed-up,
+  atomically-written `installed_plugins.json` repoint when the marketplace remote hasn't caught
+  up to this checkout yet (never touching `enabledPlugins` or the shared venv — a session
+  restart is required either way). Whether Claude Code accepts a hand-repointed registry entry
+  is unverified beyond the sandboxed test suite. `doctor`'s Codex and Claude Code rows both warn
+  when the cached content lags the SSOT.
 
 ## See also
 

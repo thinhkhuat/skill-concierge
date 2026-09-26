@@ -46,7 +46,7 @@ echo "    SSOT version: $VERSION"
 # ── 2. Export the release tree into the versioned cache dir ──────────────────
 DEST="$CACHE_BASE/$VERSION"
 mkdir -p "$DEST"
-if [ -d "$ROOT/.git" ]; then
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
 else
   # Non-git checkout: copy everything except VCS/scratch dirs.

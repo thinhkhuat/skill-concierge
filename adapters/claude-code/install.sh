@@ -8,26 +8,32 @@
 # install in sync with THIS checkout, on par with the OMP/ZCode installers
 # (sync + verify; doctor's "Claude Code integration" row reports the result):
 #   1. SSOT version read from $ROOT/.claude-plugin/plugin.json
-#   2. Fast path: registry + cache content already at SSOT -> no writes, verify only.
-#   3. Otherwise refresh via `claude plugin update` — then VERIFY the outcome (the
+#   2. One-directional guard: refuse if the deployed copy is NEWER than this
+#      checkout — before any CLI call, no writes (same ADR-0042 doctrine as the
+#      re-check after the CLI, below).
+#   3. Fast path: registry + cache content already at SSOT -> no writes, verify only.
+#   4. Otherwise refresh via `claude plugin update` — then VERIFY the outcome (the
 #      CLI pulls from the marketplace's git remote, so it can only ever reach
 #      whatever is PUSHED to that remote; a local checkout ahead of origin will
 #      not be reached by the CLI at all).
-#   4. If the CLI did not reach the SSOT (the normal case for an unpushed
+#   5. If the CLI did not reach the SSOT (the normal case for an unpushed
 #      checkout, or if the CLI errored), fall back to a manual sync from this
 #      checkout: git archive HEAD -> the versioned cache dir
 #      cache/skill-concierge/skill-concierge/<version>/, exec bits ensured,
-#      then repoint installed_plugins.json (backup first). This installs code
-#      that has NOT been published to the marketplace remote — said so loudly.
-#   One-directional guard: a checkout OLDER than the deployed copy is never
-#   synced down (same doctrine as the launcher's engine resync, ADR-0042 —
-#   a stale checkout must not downgrade a newer deployed plugin).
+#      then repoint installed_plugins.json (backup first, written atomically).
+#      This installs code that has NOT been published to the marketplace
+#      remote — said so loudly.
 #
 # IMPORTANT — MCP: the plugin package carries `.mcp.json` with
 # `${CLAUDE_PLUGIN_ROOT}` interpolation, and Claude Code expands that natively
 # (the OMP precedent). We DO NOT write a second, manual MCP entry anywhere:
 # a duplicate `skill-search` declaration is a known hazard. There is
 # deliberately no --no-mcp / --mcp-fallback flag here (unlike Cline / ZCode).
+#
+# `-y` is passed to `claude plugin update` because it is required for a
+# non-interactive run (per --help, it accepts the CLI's own displayed update —
+# not an arbitrary marketplace command); this repo's marketplace declares no
+# command-source, so there is nothing else for `-y` to auto-accept here.
 #
 # Usage:
 #   ./adapters/claude-code/install.sh [--root <path>]
@@ -114,26 +120,18 @@ if [ "$INSTALLED" = "$VERSION" ] && [ "$DEPLOYED" = "$VERSION" ] && [ -d "$INSTA
   echo "  [✓] Already current: Claude Code deploy v$INSTALLED (content v$DEPLOYED) == SSOT v$VERSION"
   DEST="$INSTALLED_PATH"
 else
+  # ── One-directional downgrade guard — before any CLI call, no writes ──────
+  if [ -n "$DEPLOYED" ] && ! _ver_ge "$VERSION" "$DEPLOYED"; then
+    echo "!! refusing to downgrade: deployed Claude Code copy v$DEPLOYED is NEWER than" >&2
+    echo "   this checkout v$VERSION. Update the checkout (git pull) or keep the newer" >&2
+    echo "   deployed copy — a stale checkout never downgrades (ADR-0042 doctrine)." >&2
+    exit 1
+  fi
+
   echo "  [•] Claude Code deploy v${INSTALLED:-none} (content v${DEPLOYED:-none}) != SSOT v$VERSION -> refreshing via claude CLI"
   if command -v claude >/dev/null 2>&1; then
-    set +e
-    CLI_OUT="$(claude plugin update "$PLUGIN_ID" --scope "$SCOPE" --json -y 2>&1)"
-    CLI_RC=$?
-    set -e
-    python3 -c "
-import json, sys
-raw = sys.argv[1]
-try:
-    line = [l for l in raw.splitlines() if l.strip()][-1]
-    d = json.loads(line)
-    print('    CLI outcome:', d.get('updateOutcome', d.get('outcome', 'unknown')),
-          '(', d.get('oldVersion', '?'), '->', d.get('newVersion', '?'), ')')
-except Exception:
-    print('    CLI produced no parseable --json line (rc=' + sys.argv[2] + '):')
-    print('   ', raw.replace(chr(10), chr(10) + '    '))
-" "$CLI_OUT" "$CLI_RC" || true
-    if [ "$CLI_RC" != "0" ]; then
-      echo "    [!] 'claude plugin update' exited $CLI_RC — falling back to checkout sync" >&2
+    if claude plugin update "$PLUGIN_ID" --scope "$SCOPE" --json -y; then :; else
+      echo "    [!] 'claude plugin update' failed — falling back to checkout sync" >&2
     fi
   else
     echo "    [!] 'claude' binary not on PATH — skipping CLI refresh, falling back to checkout sync" >&2
@@ -146,9 +144,8 @@ except Exception:
   if [ "$INSTALLED" != "$VERSION" ] || [ "$DEPLOYED" != "$VERSION" ]; then
     # ── Manual sync fallback (OMP/ZCode parity): export HEAD → cache dir. ──
     if [ -n "$DEPLOYED" ] && ! _ver_ge "$VERSION" "$DEPLOYED"; then
-      echo "!! refusing to downgrade: deployed Claude Code copy v$DEPLOYED is NEWER than" >&2
-      echo "   this checkout v$VERSION. Update the checkout (git pull) or keep the newer" >&2
-      echo "   deployed copy — a stale checkout never downgrades (ADR-0042 doctrine)." >&2
+      echo "!! refusing to downgrade: after the CLI refresh, deployed Claude Code copy v$DEPLOYED" >&2
+      echo "   is NEWER than this checkout v$VERSION. Update the checkout (git pull) and re-run." >&2
       exit 1
     fi
     echo "  [•] CLI did not reach SSOT -> syncing this checkout into the Claude Code cache"
@@ -157,7 +154,7 @@ except Exception:
     echo "      normal case when a version bump has not been pushed."
     DEST="$CLAUDE_PLUGIN_CACHE/$VERSION"
     mkdir -p "$DEST"
-    if [ -d "$ROOT/.git" ]; then
+    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
     else
       # Non-git checkout: copy everything except VCS/scratch dirs.
@@ -174,9 +171,12 @@ except Exception:
 
     HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "")"
 
-    # ── Registry repoint (backup first) — map of LISTS, one record per scope. ──
+    # ── Registry repoint (backup first, written atomically) — map of LISTS,
+    # one record per scope. A plain write-in-place would race a live Claude
+    # Code session's own read-modify-write of the same file; write a temp
+    # file in the same directory and os.replace() it into place instead. ──
     python3 - "$CLAUDE_PLUGINS_JSON" "$DEST" "$VERSION" "$HEAD_SHA" <<'PY'
-import json, shutil, sys, time
+import json, os, shutil, sys, time
 from pathlib import Path
 reg_path, install_path, version, head_sha = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 data = json.loads(reg_path.read_text(encoding="utf-8"))
@@ -195,7 +195,9 @@ for rec in records:
     rec["lastUpdated"] = now
     if head_sha:
         rec["gitCommitSha"] = head_sha
-reg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+tmp_path = reg_path.with_name(reg_path.name + f".tmp-{os.getpid()}")
+tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+os.replace(tmp_path, reg_path)
 print(f"    registry → v{version} (backup: {backup.name})")
 PY
   else
@@ -232,6 +234,7 @@ else
   VERIFY_OK=false
 fi
 echo "  [•] enabledPlugins untouched (this installer never edits ~/.claude/settings.json)"
+python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Claude Code integration" || true
 chmod +x "$0" 2>/dev/null || true
 
 if $VERIFY_OK; then
