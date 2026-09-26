@@ -3,6 +3,51 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.51.0] — 2026-09-26
+
+### Changed — ADR-0061: the Jev skill router replaces the ADR-0060 yes/no leg
+- **Why.** Replayed on real traffic, the v0.50.0 gate (one yes/no Noul on the prompt, skip below 0.25)
+  scored 206 of 431 turns where the agent really used a skill below its threshold (47.8 %; a live-format
+  re-check matched, 21/40) — "commit now pls", "write the session-handoff pls". Its wording and
+  threshold rested on 22 hand-labelled prompts that were never saved.
+- **What.** For English prompts (`_is_english`), `hooks/scripts/enforcer.py` now asks Jev to rank the
+  WHOLE invocable catalogue (`_jev_catalog`, chunked Choice, one call), re-checks the top 10 with a
+  Choice plus one `fits` Noul per candidate (TypeSafe's skill-suggestion recipe, wording verbatim), and
+  offers the rerank's top 5 (`_jev_decide`). Best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) takes the fifth
+  `SKILL-CHECK:` leg (band `jev_skip`, locked signature unchanged). State carries the conversation
+  context read from `transcript_path` (last assistant message tail, last 3 skills loaded).
+- **Measured** (313 English positives + 300 traffic turns, live catalogue, live `_jev_decide`): the used
+  skill is in the offer 177/237 (75 %) vs 86/237 (36 %) for the 8-row embedding menu; 1/313 real skill
+  turns wrongly skipped (1/105 on the September holdout); 2.0 % of traffic skipped. A single "confident
+  lead" row was measured and rejected (it lowered recall to 62-65 %).
+- **Runs in a worker thread** started before the embed step, joined after retrieval under
+  `ENFORCER_JEV_BUDGET` (3.0 s; per call `ENFORCER_JEV_TIMEOUT` 1.5 s). A Jev verdict replaces the
+  embedding getaway/actionability gates and the menu on that turn; any failure, malformed answer or blown
+  budget leaves the embedding path to decide; embed/Qdrant down → a Jev verdict still serves. Replacing
+  the ADR-0009 getaway floor and the ADR-0015 intent skip on English turns was owner-approved 2026-09-26
+  (the two gates wrongly skip 24 of 313 real skill turns, Jev 1). Named
+  deterministic routes and non-English prompts never ask Jev.
+- **Warm relay.** `scripts/embed_server.py` gains `POST /jev`: a fixed-destination relay to
+  `api.typesafe.ai` over a shared pool of warm HTTPS connections (key forwarded, never stored; a timeout
+  is never retried). Measured end to end: ~0.8-1.0 s per turn warm vs 1.6-2.0 s cold. `/health` lists
+  its routes; `setup.sh` rebuilds a shim that lacks `jev`. A shim without the route or not listening →
+  one direct call.
+- **Calibration tooling, no hand-labelled prompts.** `scripts/extract_turn_labels.py` builds a private
+  per-turn corpus from real transcripts (agent rulings as labels) under
+  `~/.claude/skill-concierge/jev-calibration/` (mode 700/600 — the repo is public);
+  `scripts/calibrate_jev_gate.py` replays it (replay / curve / fit with a time holdout / rank / wide /
+  policy) through the enforcer's own catalogue, question builders and `_jev_decide`.
+- `_retrieve`'s per-row invocability test moves into `_row_invocable`, shared with the Jev catalogue.
+- Ledger rows after an attempted route carry `jev: {ms, wide_ms, conf, fit, via, n, ctx, lead}` or
+  `{err, ms}` (plus `outage` when a Jev verdict served an embed/Qdrant outage — the row's `fallback`
+  names it too). Probabilities are validated finite and in [0, 1]; nothing escapes the worker thread;
+  the whole route is capped at 3.0 s regardless of env; the relay is used over loopback only. Tests:
+  `tests/test_jev_router.py` (replaces `test_jev_gate.py`) and `tests/test_jev_relay.py`.
+- **Data sent to TypeSafe per English turn:** the prompt (≤ 4 000 chars), the last assistant message tail
+  (≤ 1 500 chars), and the catalogue's names and short descriptions (~25-30k input tokens, ~$0.001).
+- `ENFORCER_JEV_ROUTER=0` (or the ADR-0060 `ENFORCER_JEV_GATE=0`) restores the pre-v0.50.0 path.
+  EPOCH v0.51.0 (`docs/epoch-watch.md` W21-W24; W18-W20 retired).
+
 ## [0.50.0] — 2026-09-26
 ### Added — ADR-0060: the Jev needs-a-skill gate (fifth AUTHORIZED-SKIP leg)
 - **One TypeSafe Jev call decides whether a turn needs the skill procedure at all**

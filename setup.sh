@@ -78,8 +78,11 @@ fi
 echo "[2b/4] warm embed shim (Docker sidecar '$ENAME' next to Qdrant)"
 # The per-turn enforcer hook POSTs queries here to embed in ~tens of ms instead
 # of paying a cold model load. Sidecar mirrors Qdrant's restart policy. Bound to
-# 127.0.0.1 only — never exposed off-host. Skip cleanly if not already listening.
-if ! curl -s -m 2 "http://127.0.0.1:$EPORT/health" >/dev/null 2>&1; then
+# 127.0.0.1 only — never exposed off-host. A shim that is up but predates the /jev relay
+# (ADR-0061: health lists its routes) is rebuilt too, or the Jev router would stay on the
+# slow direct path forever.
+EHEALTH="$(curl -s -m 2 "http://127.0.0.1:$EPORT/health" 2>/dev/null || true)"
+if [ -z "$EHEALTH" ] || ! printf '%s' "$EHEALTH" | grep -q '"jev"'; then
   docker build -t "$EIMAGE" "$ROOT"
   if docker ps -a --format '{{.Names}}' | grep -qx "$ENAME"; then
     docker rm -f "$ENAME" >/dev/null 2>&1 || true

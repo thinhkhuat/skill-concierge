@@ -104,11 +104,14 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    Computed **before** the embed so a timeout cannot lose them: the fallback mandate carries the
    hits. Honours keep-off, the blocklist and the harness-invocability test. Default ON since
    [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md); `ENFORCER_DETERMINISTIC=0`.
-3c. **Jev needs-a-skill gate (leg E, one network call).** With no deterministic hit, one TypeSafe
-   Jev Noul call asks whether the turn needs a specialized skill at all. p < 0.25 → authorize the
-   skip and stop here (ledger band `jev_skip`); anything else, and any missing key, timeout or
-   error, falls through to the embed (`ENFORCER_JEV_GATE` —
-   [ADR-0060](../../docs/adr/0060-jev-needs-a-skill-gate.md)).
+3c. **Jev skill router (leg E, English prompts, two network calls in a worker thread).** With no
+   deterministic hit, a worker thread starts before the embed step: Jev ranks the whole invocable
+   catalogue (chunked Choice), then re-checks the top 10 with one `fits` Noul per candidate. It is
+   joined after retrieval. Best fit < 0.30 → authorize the skip (band `jev_skip`); otherwise Jev's
+   top 5 replace the embedding menu and the getaway/actionability gates. A non-English prompt, a
+   missing key, any error or a blown budget leaves the embedding path to decide
+   (`ENFORCER_JEV_ROUTER` — [ADR-0061](../../docs/adr/0061-jev-skill-router.md), which supersedes
+   ADR-0060's yes/no leg).
 4. **Embed.** POST the prompt to the warm shim (`http://127.0.0.1:6363/embed`) under a **hard
    500 ms** socket timeout (`EMBED_TIMEOUT_S = 0.5`). Timeout → mandate-only (plus any route hits),
    ledger band `fallback/embed_timeout`; other error → `fallback/embed_down`. (History: a 90 ms
@@ -206,7 +209,7 @@ the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdic
 - **Intent leg** flatly pre-authorizes the skip (the turn was classified conversational).
 - **Self-referential leg** (3rd, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)) pre-authorizes a pure recap of the agent's own prior message.
 - **Harness-message leg** (4th, [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md), `ENFORCER_HARNESS_SKIP`): a prompt whose head is harness-generated (task notification, monitor event, cross-session/teammate message, idle reminder, OMP summarizer wrapper) is pre-authorized **before any I/O** — no embed, no Qdrant, no chain hint; ledger band `harness_skip`. The heading above keeps its original title so existing anchors hold.
-- **Jev needs-a-skill leg** (5th, [ADR-0060](../../docs/adr/0060-jev-needs-a-skill-gate.md), `ENFORCER_JEV_GATE`): one Jev Noul call judges the turn to need no specialized skill (p < 0.25) — no embed, no Qdrant; ledger band `jev_skip`, the p rides every later ledger row as `jev`. Fail-open: no key, timeout or error routes normally.
+- **Jev needs-a-skill leg** (5th, [ADR-0061](../../docs/adr/0061-jev-skill-router.md), `ENFORCER_JEV_ROUTER`; first shipped by ADR-0060 as a yes/no leg): the Jev router found no candidate skill whose `fits` reaches 0.30 — ledger band `jev_skip`, routing telemetry rides the row as `jev`. Fail-open: a non-English prompt, no key, a timeout or an error leaves the embedding path to decide.
 
 `SKILL-CHECK:` is a **cross-file literal contract**: the string is emitted here, honored by the
 doctrine (`skill-first.md`), and **joined on** by the usage audit

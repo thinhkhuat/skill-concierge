@@ -18,9 +18,10 @@ Design contract (mirrors the sibling ledger hook):
 Resilience / budget (Phase 3). The embed POST has a HARD client-side socket
 timeout (see EMBED_TIMEOUT_S for the calibration history; live default 500ms since
 ADR-0054). Every network leg is separately capped, so the worst case is the sum of the
-caps, not an unbounded wait: 1.2s Jev gate (ADR-0060, before embed) + 500ms embed + 250ms
-installed query + up to 2x250ms actionability gate + 250ms external annex + 250ms
-cross-harness annex ~= 2.95s, against a 5s hook timeout.
+caps, not an unbounded wait: 500ms embed + 250ms installed query + up to 2x250ms
+actionability gate + 250ms external annex + 250ms cross-harness annex ~= 1.75s, while the
+ADR-0061 Jev router runs IN PARALLEL in a worker thread (catalogue scroll + 2 calls, each
+capped at 1.5s; ~0.7s warm), joined under a hard 3.0s cap — ~3.8s worst case against a 5s timeout.
 The happy path is ~100ms; the annex legs run only on turns that actually carry an offer. On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
 embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
 never crashing — and stays within the per-turn budget regardless of shim health.
@@ -33,12 +34,15 @@ can compute hit@k and fallback rate:
 """
 import http.client
 import json
+import math
 import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -1356,7 +1360,7 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
         if qdrant_ms is not None:
             ev["qdrant_ms"] = int(qdrant_ms)
         if _JEV_EVENT:
-            ev["jev"] = _JEV_EVENT    # ADR-0060: p (or error) + latency, on every row after an attempted call
+            ev["jev"] = _JEV_EVENT    # ADR-0061: routing telemetry (or error) on every row after an attempted route
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
     except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
@@ -1426,71 +1430,314 @@ HARNESS_SKIP_MSG = (
 )
 
 
-# ADR-0060: the 5th AUTHORIZED-SKIP leg — the Jev needs-a-skill gate. One TypeSafe Jev Noul
-# call asks whether the turn needs a specialized skill at all, BEFORE the embed + Qdrant path.
-# mpnet cosines cannot answer that (a RANK signal, see the tuning note above; 2026-09-26
-# ledger line 11970 offered 8 irrelevant skills at 0.60-0.64 over the 0.45 floor). Errors are
-# lopsided: a wrong YES is today's behaviour, only a wrong NO costs — so the gate fails OPEN
-# (no key, timeout, HTTP/parse error -> None -> normal routing) and a named deterministic
-# route always bypasses it. Question wording tuned 2026-09-26 on 22 labelled EN+VN prompts:
-# every NO scored <= 0.12 and every YES >= 0.45; the skip floor sits between. Its signature
-# phrase "Jev needs-a-skill gate" is a LOCKED cross-file contract with the audit script
-# (_AUTHORIZED_SIGNATURES) — same rule as the selfref leg. `=0` restores the 4-leg ladder.
-JEV_GATE = os.environ.get("ENFORCER_JEV_GATE", "1") != "0"
+# ADR-0061: the Jev skill router (supersedes ADR-0060's yes/no leg, whose 0.25 threshold rested on
+# 22 hand-picked prompts and, replayed on real traffic, skipped 48 % of turns where the agent
+# really used a skill). For an English prompt, Jev ranks the WHOLE invocable catalogue in one
+# request (TypeSafe's skill-suggestion recipe: chunked Choice questions), re-checks the shortlist
+# with one `fits` Noul per candidate, and offers its top 5 in the rerank Choice's order. Every
+# number below is measured on real outcomes (turns where agents actually used a skill) by
+# scripts/calibrate_jev_gate.py — never on a hand-written tuning set:
+#   - the used skill is in Jev's offer 177/237 (75 %) vs 86/237 (36 %) for the 8-row embedding menu;
+#   - best `fits` < 0.30 (vendor default; the holdout fit picked 0.34): 1/313 false NO, 1/105 on the
+#     Sept holdout, 2 % of traffic skipped;
+#   - a single confident lead (Choice confidence >= 0.70/0.90/0.95) LOWERED that recall to 62-65 %
+#     (the lead was wrong 29 times in 73), so the offer is never collapsed to one row.
+# English only (owner order 2026-09-26; Jev's primary training language is English): any other
+# prompt, a missing key, or any Jev failure leaves the embedding path to decide, unchanged. A
+# named deterministic route never asks Jev. The locked signature "Jev needs-a-skill gate" (audit
+# _AUTHORIZED_SIGNATURES) now names the "no candidate fits" skip. `ENFORCER_JEV_ROUTER=0` — or the
+# ADR-0060 `ENFORCER_JEV_GATE=0` — restores the pre-v0.50.0 embedding-only path byte-identically.
+JEV_ROUTER = (os.environ.get("ENFORCER_JEV_ROUTER", "1") != "0"
+              and os.environ.get("ENFORCER_JEV_GATE", "1") != "0")
 JEV_URL = os.environ.get("ENFORCER_JEV_URL", "https://api.typesafe.ai/v1/systemone")
+# The warm-connection relay in the embed shim. The key rides that request in clear text, so the relay
+# is used only over loopback; any other shim host means direct HTTPS calls.
+JEV_RELAY_URL = (f"http://{EMBED_HOST}:{EMBED_PORT}/jev"
+                 if EMBED_HOST in ("127.0.0.1", "localhost", "::1") else None)
 JEV_MODEL = os.environ.get("ENFORCER_JEV_MODEL", "jev-1.13.0")   # pinned: jev-latest drifts
-JEV_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_TIMEOUT", "1.2"))   # measured 0.58-0.88 s
-JEV_SKIP_BELOW = float(os.environ.get("ENFORCER_JEV_SKIP_BELOW", "0.25"))
+JEV_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_TIMEOUT", "1.5"))   # per call; cold wide p90 1.25 s
+# Thread start -> join. Capped at 3.0 s whatever the env says: the annex queries run after the join and
+# the hook is killed at 5 s, so a larger budget would trade a slow offer for no offer at all.
+JEV_BUDGET_S = min(float(os.environ.get("ENFORCER_JEV_BUDGET", "3.0")), 3.0)
+JEV_FITS_FLOOR = float(os.environ.get("ENFORCER_JEV_FITS_FLOOR", "0.30"))
 JEV_MAX_CHARS = 4000
-JEV_QUESTION = {
-    "type": "noul",
-    "instructions": (
-        "An AI coding agent has built-in abilities: chat, answer questions, explain, read and edit "
-        "files, run shell commands, search the web, and message other sessions. It also has a large "
-        "library of specialized skills (step-by-step playbooks for things like writing, editing, "
-        "translating or de-AI-polishing Vietnamese or English text, Vietnamese government reports, "
-        "rendering Word/PDF documents, deploying services, research briefings, debugging and fixing "
-        "failing code or tests, code review, building UIs, managing plugins). Should the agent load "
-        "one of those specialized playbooks to handle the user's request well, rather than handle it "
-        "directly with its built-in abilities?"),
-    "criteria": {
-        "true": ("The request is a substantial task in a domain where a documented playbook adds real "
-                 "value: producing or editing a deliverable, fixing a bug or failing test, a multi-step "
-                 "workflow, a domain procedure — in any language."),
-        "false": ("The request is conversation, a question about the agent's own prior answer, an "
-                  "acknowledgement, a go-ahead to continue, a short direct action the agent can do with "
-                  "built-in tools, or a request whose method the user already dictated."),
-    },
-}
+JEV_CHUNK = 250          # a Choice holds at most 255 options
+JEV_WIDE_DESC = 160      # catalogue descriptions in the wide call (~24k input tokens for ~500 skills)
+JEV_PER_CHUNK = 5        # shortlist = top 5 of every chunk (chunk distributions are not comparable)
+JEV_RERANK_DESC = 400
+JEV_OFFER_ROWS = 5      # measured: top 5 -> 74 % recall, top 3 -> 65 %, today's 8-row menu -> 36 %
+JEV_CTX_CHARS = 1500
+JEV_TAIL_BYTES = 262144  # transcript tail read for the conversation context
+# Verbatim from docs.typesafe.ai/cookbooks/skill_suggestion.md (fetched 2026-09-26).
+JEV_CHOICE_INSTRUCTIONS = ("Which of these skills, if any, is the right one to load to help with the "
+                           "user's latest request?")
 JEV_SKIP_MSG = (
-    AUTHORIZED_SKIP_MARKER + " the Jev needs-a-skill gate judged this turn to need no specialized "
-    "skill (p={p:.2f} < {floor:.2f}). SKIPPING: none is pre-authorized; no search_skills needed. If "
-    "the turn does hand you a substantial task in a skill's domain, route it (SEARCH/USING)."
+    AUTHORIZED_SKIP_MARKER + " the Jev needs-a-skill gate checked the skills that could apply and found "
+    "none that does what this turn asks (best fit {fit:.2f} < {floor:.2f}). SKIPPING: none is "
+    "pre-authorized; no search_skills needed. If the turn does hand you a substantial task in a "
+    "skill's domain, route it (SEARCH/USING)."
 )
-_JEV_EVENT = None   # {"p", "ms"} or {"err", "ms"} for this turn's ledger row; one hook process = one turn
+_JEV_EVENT = None   # this turn's Jev telemetry for the ledger row; one hook process = one turn
+_NON_ASCII_LETTER = re.compile(r"[^\W\d_a-zA-Z]")
+_SKILL_MD_PATH = re.compile(r"/([A-Za-z0-9][\w.:-]*)/SKILL\.md")
+_SKILL_BASE_DIR = re.compile(r"Base directory for this skill: \S*?/([A-Za-z0-9][\w.:-]*)/?\s")
 
 
-def _jev_needs_skill(prompt: str):
-    """P(this turn needs a specialized skill) from one Jev Noul call, or None to fall through.
-    None (no network call) when the gate is off or TYPESAFE_API_KEY is absent; None on any
-    timeout/HTTP/parse error. Records the outcome in _JEV_EVENT for the ledger row."""
-    global _JEV_EVENT
+def _is_english(prompt: str) -> bool:
+    """The calibration population's language rule: fewer than two non-ASCII letters."""
+    return len(_NON_ASCII_LETTER.findall(prompt)) < 2
+
+
+def _skill_key(name: str) -> str:
+    """Namespaced and bare forms merge (`ak:cook` -> `ak-cook`), as the usage audit's norm()."""
+    return (name or "").strip().lstrip("/").split(" ")[0].replace(":", "-").lower()
+
+
+def _jev_context(transcript_path: str):
+    """(tail of the last assistant message, last 3 skills loaded) from the session transcript, via
+    a bounded tail read. Any problem -> empty context, never an error."""
+    try:
+        with open(transcript_path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - JEV_TAIL_BYTES))
+            lines = fh.read().decode("utf-8", "replace").splitlines()[1 if size > JEV_TAIL_BYTES else 0:]
+    except (OSError, TypeError, ValueError):
+        return "", []
+    prev, skills = "", []
+
+    def seen(name):
+        k = _skill_key(name)
+        if k:
+            if k in skills:
+                skills.remove(k)
+            skills.append(k)
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("isSidechain"):
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if rec.get("type") == "assistant" and isinstance(content, list):
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text" and (b.get("text") or "").strip():
+                    prev = b["text"]
+                elif b.get("type") == "tool_use":
+                    nm, inp = b.get("name") or "", b.get("input") or {}
+                    if nm == "Skill":
+                        seen(str(inp.get("skill") or ""))
+                    elif nm.endswith("get_skill"):
+                        seen(str(inp.get("name") or inp.get("skill") or ""))
+                    elif nm in ("Read", "Bash"):
+                        for m in _SKILL_MD_PATH.findall(str(inp.get("file_path") or inp.get("command") or "")):
+                            seen(m)
+        elif rec.get("type") == "user":
+            text = content if isinstance(content, str) else " ".join(
+                b.get("text", "") for b in content or [] if isinstance(b, dict))
+            for m in _SKILL_BASE_DIR.findall(text + " "):
+                seen(m)
+    return prev[-JEV_CTX_CHARS:], skills[-3:]
+
+
+def _row_invocable(name: str, scope) -> bool:
+    """The per-row test `_retrieve` applies (project isolation, cross-harness twin, the session's
+    plugin gate) — shared so the Jev catalogue offers exactly what retrieval could.
+
+    INVOCABLE_PLUGIN_IDS None means the manifest was unreadable, i.e. the twin test cannot be
+    made: drop ONLY on positive knowledge — an unknown must filter nothing, or an unreadable
+    settings file silently reinstates the very mislabelling this replaced. The exception is DSH
+    and Cline, which have NO skill-plugin registry by design: their verdict is the scope +
+    filesystem twin, so a None there must not switch the whole filter off (it did before
+    v0.49.0). The last test is ADR-0052's: a plugin disabled in THIS session's merged layers."""
+    if CROSS_HARNESS and PROJECT_ISOLATION and _project_row_verdict(scope, name) == "other":
+        return False
+    if (CROSS_HARNESS and (INVOCABLE_PLUGIN_IDS is not None or RUNNING_HARNESS in ("dsh", "cline"))
+            and _scope_is_foreign(scope) and not _invocable_twin(name)):
+        return False
+    return _plugin_gate_ok(name, scope)
+
+
+def _jev_catalog() -> list:
+    """[(name, description)] this session can invoke: every installed skill's base point (tier
+    external excluded), through `_row_invocable`, keep-off and the blocklist."""
+    rows, seen, off = [], set(), None
+    while True:
+        body = {"limit": 2000, "with_payload": ["name", "description", "scope"], "with_vector": False,
+                "filter": {"must": [{"key": "kind", "match": {"value": "base"}}],
+                           "must_not": [{"key": "tier", "match": {"value": "external"}}]}}
+        if off is not None:
+            body["offset"] = off
+        res = _post_json(f"{QDRANT_URL}/collections/{COLLECTION}/points/scroll", body,
+                         JEV_TIMEOUT_S)["result"]
+        for pt in res.get("points", []):
+            pl = pt.get("payload") or {}
+            n = pl.get("name")
+            if n and n not in seen:
+                seen.add(n)
+                if _row_invocable(n, pl.get("scope")):
+                    rows.append((n, pl.get("description") or "", 0.0))
+        off = res.get("next_page_offset")
+        if off is None:
+            break
+    rows, _ = _drop_keepoff(rows, KEEPOFF)
+    rows, _ = _drop_blocklisted(rows)
+    return [(n, d) for n, d, _s in rows]
+
+
+def _jev_fits_text(name: str, desc: str) -> str:
+    return (f"Does the skill '{name}' do the specific thing the user's request asks for? "
+            f"It is described as: {desc}")
+
+
+def _jev_wide_questions(catalog: list) -> dict:
+    """The whole catalogue as parallel Choice questions of at most JEV_CHUNK options each."""
+    return {f"wide::{i // JEV_CHUNK}": {
+                "type": "choice", "instructions": JEV_CHOICE_INSTRUCTIONS,
+                "criteria": {n: (d or n)[:JEV_WIDE_DESC] for n, d in catalog[i:i + JEV_CHUNK]}}
+            for i in range(0, len(catalog), JEV_CHUNK)}
+
+
+def _jev_shortlist(answers: dict) -> list:
+    """Top JEV_PER_CHUNK names of every wide chunk, chunk order kept."""
+    out = []
+    for k in sorted((k for k in answers if k.startswith("wide::")), key=lambda k: int(k.split("::")[1])):
+        pr = answers[k]["probabilities"]
+        out += sorted(pr, key=lambda n: -pr[n])[:JEV_PER_CHUNK]
+    return out
+
+
+def _jev_rerank_questions(shortlist: list) -> dict:
+    """shortlist = [(name, desc)] -> one Choice over it plus one `fits` Noul per candidate."""
+    qs = {"which": {"type": "choice", "instructions": JEV_CHOICE_INSTRUCTIONS,
+                    "criteria": {n: (d or n)[:JEV_RERANK_DESC] for n, d in shortlist}}}
+    for i, (n, d) in enumerate(shortlist):
+        qs[f"fits::{i}"] = {"type": "noul", "instructions": _jev_fits_text(n, (d or n)[:JEV_RERANK_DESC])}
+    return qs
+
+
+def _jev_decide(answers: dict, shortlist: list):
+    """Pure policy over one rerank answer -> (verdict, rows, confidence, best_fit).
+    "skip" when no candidate's `fits` reaches JEV_FITS_FLOOR; otherwise "offer" with the top
+    JEV_OFFER_ROWS rows (name, desc, probability) in Choice order. Raises on a malformed answer."""
+    def prob(x) -> float:
+        v = float(x)
+        if not (math.isfinite(v) and 0.0 <= v <= 1.0):
+            raise ValueError("probability out of range")
+        return v
+    best = max(prob(answers[f"fits::{i}"]["noul"]) for i in range(len(shortlist)))
+    which = answers["which"]
+    conf = prob(which["confidence"])
+    if best < JEV_FITS_FLOOR:
+        return "skip", [], conf, best
+    desc = dict(shortlist)
+    probs = {n: prob(p) for n, p in which["probabilities"].items() if n in desc}
+    order = sorted(probs, key=lambda n: -probs[n])
+    if not order:
+        raise ValueError("choice names none of the shortlist")
+    rows = [(n, desc[n], probs[n]) for n in order[:JEV_OFFER_ROWS]]
+    return "offer", rows, conf, best
+
+
+def _jev_call(state: dict, questions: dict, key: str):
+    """One System One request -> (answers, via). Goes through the embed shim's warm relay; a shim
+    without the route (404) or not listening falls back to one direct call. A timeout is not
+    retried — the per-turn budget is spent."""
+    body = {"model": JEV_MODEL, "state": state, "questions": questions}
+    auth = {"Authorization": "Bearer " + key}
+    if JEV_RELAY_URL is None:
+        return _post_json(JEV_URL, body, JEV_TIMEOUT_S, auth)["answers"], "direct"
+    try:
+        return _post_json(JEV_RELAY_URL, body, JEV_TIMEOUT_S,
+                          {**auth, "X-Jev-Timeout": str(JEV_TIMEOUT_S)})["answers"], "relay"
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    except urllib.error.URLError as e:
+        if not isinstance(e.reason, ConnectionRefusedError):
+            raise
+    return _post_json(JEV_URL, body, JEV_TIMEOUT_S, auth)["answers"], "direct"
+
+
+def _jev_route(prompt: str, transcript_path: str) -> dict:
+    """One ADR-0061 routing decision -> {"result": (verdict, rows, best_fit) | None, "event": {...}}.
+    Result None = not eligible or failed: the embedding path decides. Runs in a worker thread, so
+    it returns its telemetry instead of writing module state."""
     key = os.environ.get("TYPESAFE_API_KEY", "")
-    if not (JEV_GATE and key):
-        return None
-    body = {"model": JEV_MODEL, "state": {"request": prompt[:JEV_MAX_CHARS]},
-            "questions": {"needs_playbook": JEV_QUESTION}}
+    if not (JEV_ROUTER and key and _is_english(prompt)):
+        return {"result": None, "event": None}
     t0 = time.time()
     try:
-        ans = _post_json(JEV_URL, body, JEV_TIMEOUT_S, {"Authorization": "Bearer " + key})
-        p = float(ans["answers"]["needs_playbook"]["noul"])
-        if not 0.0 <= p <= 1.0:
-            raise ValueError("noul out of range")
-        _JEV_EVENT = {"p": round(p, 3), "ms": int((time.time() - t0) * 1000)}
-        return p
-    except (OSError, ValueError, KeyError, TypeError, UnicodeError, http.client.HTTPException) as e:
-        _JEV_EVENT = {"err": type(e).__name__, "ms": int((time.time() - t0) * 1000)}
+        catalog = _jev_catalog()
+        prev, skills = _jev_context(transcript_path)
+        state = {"request": prompt[:JEV_MAX_CHARS], "recent_context": prev,
+                 "skills_already_loaded_this_session": skills}
+        wide, via = _jev_call(state, _jev_wide_questions(catalog), key)
+        t1 = time.time()
+        desc = dict(catalog)
+        shortlist = [(n, desc[n]) for n in _jev_shortlist(wide) if n in desc]
+        if not shortlist:
+            raise ValueError("wide answer names none of the catalogue")
+        rerank, _ = _jev_call(state, _jev_rerank_questions(shortlist), key)
+        verdict, rows, conf, best = _jev_decide(rerank, shortlist)
+        return {"result": (verdict, rows, best), "event": {
+            "ms": int((time.time() - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
+            "conf": round(conf, 3), "fit": round(best, 3), "via": via, "n": len(catalog),
+            "ctx": bool(prev), "lead": rows[0][0] if rows else None}}
+    except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
+            http.client.HTTPException) as e:
+        return {"result": None, "event": {"err": type(e).__name__, "ms": int((time.time() - t0) * 1000)}}
+
+
+def _jev_start(prompt: str, transcript_path: str):
+    """Run `_jev_route` in a daemon thread so it overlaps the embed and Qdrant legs."""
+    box = {}
+    t0 = time.time()
+
+    def work():
+        try:
+            box.update(_jev_route(prompt, transcript_path))
+        except Exception as e:  # noqa: BLE001 — the thread boundary: a hook never lets an error escape
+            box.update({"result": None, "event": {"err": type(e).__name__, "ms": int((time.time() - t0) * 1000)}})
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    return t, box, time.time() + JEV_BUDGET_S
+
+
+def _jev_join(job):
+    """-> (verdict, rows, best_fit) or None (the embedding path decides). Records this turn's Jev
+    telemetry for the ledger row; a route still running at the deadline is abandoned."""
+    global _JEV_EVENT
+    if job is None:
         return None
+    t, box, deadline = job
+    t.join(max(0.0, deadline - time.time()))
+    if t.is_alive():
+        _JEV_EVENT = {"err": "BudgetExceeded", "ms": int(JEV_BUDGET_S * 1000)}
+        return None
+    _JEV_EVENT = box.get("event")
+    return box.get("result")
+
+
+def _jev_serve(sid: str, prompt: str, jev, offered: list, outage: str, **ledger) -> bool:
+    """Act on a Jev verdict when no embedding result is available to combine it with (embed or
+    Qdrant down). True when it decided the turn. The outage stays visible: the offer row's
+    `fallback` and the `jev.outage` field both name it, so fallback rates still count it."""
+    if jev is None:
+        return False
+    if _JEV_EVENT is not None:
+        _JEV_EVENT["outage"] = outage
+    verdict, rows, best = jev
+    if verdict == "skip":
+        _append_offer(sid, "jev_skip", offered, "jev_no_fit", prompt, **ledger)
+        _authorized_skip_inject("jev", sid, fit=best, floor=JEV_FITS_FLOOR)
+        return True
+    _inject(_ranked_mandate(rows) + _chain_hint(sid))
+    _append_offer(sid, "offer", [[n, round(p, 4)] for (n, _d, p) in rows], outage, prompt, **ledger)
+    return True
 
 
 def _authorized_skip_inject(kind: str, sid: str = "", hint: bool = True, **fmt) -> None:
@@ -1615,19 +1862,7 @@ def _retrieve(vector: list) -> list:
             continue
         pl = hits[0].get("payload", {}) or {}
         name = pl.get("name", g.get("id", "?"))
-        # INVOCABLE_PLUGIN_IDS is None means the manifest was unreadable, i.e. the twin test
-        # cannot be made. Drop ONLY on positive knowledge — an unknown must filter nothing, or
-        # an unreadable settings file silently reinstates the very mislabelling this replaced.
-        if (CROSS_HARNESS and PROJECT_ISOLATION
-                and _project_row_verdict(pl.get("scope"), name) == "other"):
-            continue
-        # A None registry means "unknown" (drop nothing) — except under DSH and Cline, which
-        # have NO skill-plugin registry by design: their verdict is the scope + filesystem
-        # twin, so a None there must not switch the whole filter off (it did before v0.49.0).
-        if (CROSS_HARNESS and (INVOCABLE_PLUGIN_IDS is not None or RUNNING_HARNESS in ("dsh", "cline"))
-                and _scope_is_foreign(pl.get("scope")) and not _invocable_twin(name)):
-            continue
-        if not _plugin_gate_ok(name, pl.get("scope")):   # ADR-0052: plugin disabled in THIS session's merged layers
+        if not _row_invocable(name, pl.get("scope")):
             continue
         out.append((name, pl.get("description", ""), float(hits[0].get("score", 0.0))))
         if len(out) >= TOP_K:
@@ -2153,14 +2388,10 @@ def main() -> int:
         _hits = _route_hits(prompt, KEEPOFF)
         _hits_offered = [[n, 1.0] for (n, _d, _s) in _hits]
 
-        # ADR-0060 Jev needs-a-skill gate: after every no-I/O lane, before embed. A NAMED skill
-        # (deterministic hit) is explicit intent and never asks Jev. None = fall through.
-        if not _hits:
-            _p = _jev_needs_skill(prompt)
-            if _p is not None and _p < JEV_SKIP_BELOW:
-                _append_offer(sid, "jev_skip", [], "jev_no_skill", prompt)
-                _authorized_skip_inject("jev", sid, p=_p, floor=JEV_SKIP_BELOW)
-                return 0
+        # ADR-0061 Jev skill router: after every no-I/O lane; started NOW in a worker thread so
+        # it overlaps the embed and Qdrant legs, joined once retrieval is done. A NAMED skill
+        # (deterministic hit) is explicit intent and never asks Jev.
+        _jev_job = _jev_start(prompt, data.get("transcript_path") or "") if not _hits else None
 
         # Embed (HARD timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow (named hits survive).
         embed_ms = None
@@ -2170,11 +2401,15 @@ def main() -> int:
             embed_ms = (time.time() - t0) * 1000
         except TimeoutError:
             embed_ms = (time.time() - t0) * 1000
+            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "embed_timeout", embed_ms=embed_ms):
+                return 0
             _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
             _append_offer(sid, "fallback", _hits_offered, "embed_timeout", prompt, embed_ms=embed_ms)
             return 0
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
             embed_ms = (time.time() - t0) * 1000
+            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "embed_down", embed_ms=embed_ms):
+                return 0
             _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
             _append_offer(sid, "fallback", _hits_offered, "embed_down", prompt, embed_ms=embed_ms)
             return 0
@@ -2186,6 +2421,9 @@ def main() -> int:
             qdrant_ms = (time.time() - t1) * 1000
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             qdrant_ms = (time.time() - t1) * 1000
+            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "qdrant_down",
+                          embed_ms=embed_ms, qdrant_ms=qdrant_ms):
+                return 0
             _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
             _append_offer(sid, "fallback", _hits_offered, "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             return 0
@@ -2209,10 +2447,24 @@ def main() -> int:
         top = cands[0][2] if cands else 0.0
         offered = [[n, round(s, 4)] for (n, _d, s) in cands]
 
+        # ADR-0061: a Jev verdict replaces the embedding getaway/actionability gates and the
+        # menu; the embedding results still size the annexes. `offered` in a jev_skip row is
+        # what retrieval would have shown, kept for comparison.
+        _jev = _jev_join(_jev_job)
+        if _jev is not None and _jev[0] == "skip":
+            _append_offer(sid, "jev_skip", offered, "jev_no_fit", prompt, dropped=_dropped or None,
+                          embed_ms=embed_ms, qdrant_ms=qdrant_ms)
+            _authorized_skip_inject("jev", sid, fit=_jev[2], floor=JEV_FITS_FLOOR)
+            return 0
+        _jev_rows = _jev[1] if _jev is not None else None
+
         # Getaway: top candidate below its floor (per-skill tau when armed+`ok`, else the
-        # global floor). A deterministic hit always clears — it IS the intent.
+        # global floor). A deterministic hit always clears — it IS the intent. ADR-0061 (owner-
+        # approved 2026-09-26): on a turn the Jev router decided (`_jev_rows`), Jev's verdict
+        # replaces this floor and the actionability gate below — measured on 313 real English
+        # skill turns, these two gates wrongly skip 24, Jev 1. Every other turn keeps both.
         floor = _floor_for(cands[0][0]) if cands else GETAWAY_FLOOR
-        if not det and top < floor:
+        if not det and not _jev_rows and top < floor:
             # No semantic fit → trivial/out-of-catalogue. Log the consideration so
             # coverage/fallback stats stay honest, then authorize the skip (or stay fully
             # silent if the kill-switch is off) instead of leaving the agent to re-derive
@@ -2225,7 +2477,7 @@ def main() -> int:
         # floor — but if this is a NON-imperative turn that leans conversational over
         # actionable, the offer is noise the agent reliably dodges. Suppress it. Fail toward
         # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
-        if not det and not _is_imperative(prompt) and _intent_conversational(vector):
+        if not det and not _jev_rows and not _is_imperative(prompt) and _intent_conversational(vector):
             _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             _authorized_skip_inject("intent_skip", sid)
             return 0
@@ -2252,12 +2504,15 @@ def main() -> int:
             _external = []
         try:
             _foreign = _retrieve_foreign(
-                vector, _atop, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in cands))
+                vector, _atop, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in (_jev_rows or []) + cands))
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _foreign = []
 
-        shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
-        shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
+        if _jev_rows:   # ADR-0061: the rerank Choice's top JEV_OFFER_ROWS, in its order
+            shown = _jev_rows
+        else:
+            shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
+            shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
         _ext_takes = _external_takes() if (ANNEX_COMPLEMENT and _external) else None
         _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes)
                 + _chain_hint(sid))

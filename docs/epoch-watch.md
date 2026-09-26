@@ -13,7 +13,33 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
-## v0.50.0 — the Jev needs-a-skill gate (ADR-0060; committed 2026-09-26)
+## v0.51.0 — the Jev skill router (ADR-0061; supersedes the v0.50.0 yes/no leg)
+
+**Starts per harness** when its plugin cache reaches `0.51.0` AND the embed shim's `/health` lists
+`jev` (`setup.sh` rebuilds an older shim); ledger rows carry no version, but every routed row carries
+`jev.via` (`relay` / `direct`). On English turns Jev now composes the menu (top 5) and replaces the
+getaway/actionability gates, so offer-level rates (take, hit@k, fallback) reset — never pool them with
+v0.50.0 or earlier. Vietnamese and other non-English turns keep the embedding path: their rates continue
+the v0.49.0 series. Tuning orders carried over: `ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=0`.
+
+Replay baseline (2026-09-26, `scripts/calibrate_jev_gate.py policy`, English, live catalogue): used skill
+in the offer 177/237 = 75 % (embedding menu 36 %); false NO 1/313 (holdout 1/105); traffic skipped 2.0 %. Re-derive, never
+hand-tune: `extract_turn_labels.py` → `calibrate_jev_gate.py replay --shelf wide` → `fit` / `policy`.
+
+| # | Watch | Command | Trigger | Action |
+|---|-------|---------|---------|--------|
+| W21 | False NO: a `jev_skip` turn that needed a skill | ledger `offer` rows with band `jev_skip`; read the session for a later `Skill` / `search_skills` use or a user correction | any confirmed case on a substantial task | lower `ENFORCER_JEV_FITS_FLOOR` (env), then re-run the calibrator on a fresh extract — never add the prompt to a hand-written set |
+| W22 | Offer quality on live traffic | `extract_turn_labels.py`, then for English turns since the cache reached 0.51.0: used skill (USING + executed) in `offered` | below ~65 % on ≥ 100 English turns (replay: 74 %) | re-run `calibrate_jev_gate.py replay --shelf wide` + `policy`; check `jev.ctx` (context missing?) and catalogue size `jev.n` |
+| W23 | Latency, errors and the relay | `jev.ms`, `jev.err`, `jev.via` on ledger rows | p90 `ms` > 1500, `err` on > 5 % of rows, or `via=direct` on most rows | `curl localhost:6363/health` must list `jev` (else `setup.sh`); raise `ENFORCER_JEV_TIMEOUT` (the whole route stays capped at 3.0 s — a larger budget would get the hook killed at 5 s), or `ENFORCER_JEV_ROUTER=0` while TypeSafe is degraded |
+| W24 | Catalogue drift | `jev.n` on ledger rows | catalogue size moves > 10 % from the replay's | re-run the replay on the new catalogue before trusting W22 |
+
+## v0.50.0 — the Jev needs-a-skill gate (ADR-0060; committed 2026-09-26) — SUPERSEDED by v0.51.0
+
+W18-W20 are retired with the leg they watched. Replayed on real traffic the leg skipped 47.8 % of turns
+where the agent really used a skill (ADR-0061 *Context*); W18's "add the prompt to the tuning set" is the
+hand-written-set practice ADR-0061 removed.
+
+### v0.50.0 original watch items (historical)
 
 **Starts per harness** when its plugin cache reaches `0.50.0` (`doctor` lists cache versions); ledger
 rows carry no version. The gate removes offers from turns Jev judges skill-free, so offer-level rates
