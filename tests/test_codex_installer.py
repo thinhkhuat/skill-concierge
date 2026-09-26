@@ -104,6 +104,8 @@ def main():
     if sub == "add":
         if state.get("fail_add"):
             sys.exit(1)
+        if state.get("add_noop"):
+            sys.exit(0)   # reports success but installs nothing
         version = state["remote_version"]
         # Real Codex: `add` unconditionally wipes the ENTIRE plugin cache dir — every
         # version dir, every non-version staging dir — before installing the fresh
@@ -153,6 +155,10 @@ def _make_home(tmp_path, state):
     claude_path = fakebin / "claude"
     claude_path.write_text("#!/bin/sh\nexit 0\n")
     claude_path.chmod(claude_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    # doctor falls back to `docker ps` when Qdrant does not answer: keep the real one out too.
+    docker_path = fakebin / "docker"
+    docker_path.write_text("#!/bin/sh\nexit 1\n")
+    docker_path.chmod(docker_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return home, fakebin
 
 
@@ -162,6 +168,7 @@ def _env(home, fakebin):
         HOME=str(home),
         PATH=str(fakebin) + os.pathsep + os.environ.get("PATH", ""),
         FAKE_CODEX_ENFORCER_SRC=str(ENFORCER_SRC),
+        SKILL_QDRANT_URL="http://127.0.0.1:9",   # the verify step's doctor never reaches live Qdrant
     )
 
 
@@ -217,7 +224,8 @@ def test_second_run_is_a_no_op_fast_path(tmp_path):
     (home / ".codex-test-log.jsonl").unlink()
     second = _run(env)
     assert second.returncode == 0, second.stdout + second.stderr
-    assert _log_lines(home) == [], "fast path must not call the codex CLI at all"
+    assert [l["argv"] for l in _log_lines(home)] == [["plugin", "list", "--json"]], \
+        "the fast path makes only the read-only registry check"
 
 
 def test_fast_path_tolerates_lexically_smaller_and_non_version_siblings(tmp_path):
@@ -226,7 +234,8 @@ def test_fast_path_tolerates_lexically_smaller_and_non_version_siblings(tmp_path
     sort ranks "0.9.0" higher ('9' > '5' at the first differing character). This
     installer's _cached_version() must resolve the fast path correctly regardless of a
     stray lower-digit-width dir, and must never mistake a non-version-named staging dir
-    (the real machine carries a live plugin-install-UEVanZ/ leftover) for a version. The
+    (Codex keeps its plugin-install-<random>/ one level up; the fixture puts one here to
+    prove the dirname filter) for a version. The
     fast path calls no CLI at all, so every sibling here survives untouched no matter what
     Codex's own `add` might otherwise do to them."""
     home, fakebin = _make_home(tmp_path, {
@@ -263,7 +272,8 @@ def test_fast_path_tolerates_lexically_smaller_and_non_version_siblings(tmp_path
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Already current" in result.stdout, \
         "a lexical-string sort would misidentify 0.9.0 as newest and skip the fast path"
-    assert _log_lines(home) == [], "the fast path must not call the codex CLI at all"
+    assert [l["argv"] for l in _log_lines(home)] == [["plugin", "list", "--json"]], \
+        "the fast path makes only the read-only registry check"
     assert (staging / "marker.txt").read_text() == "codex-owned staging content"
     assert (low / ".codex-plugin" / "plugin.json").exists()
 
@@ -550,3 +560,104 @@ def test_plain_root_inside_another_repo_copies_only_itself(tmp_path):
     assert not (dest / "outer-secret.txt").exists(), "the outer repo's files must never be exported"
     assert not (dest / "plain-checkout").exists()
     assert not (dest / ".pytest_cache").exists(), "tool caches must not be copied"
+
+
+def _installed_once(tmp_path):
+    """A home whose cache is current and complete after one normal run."""
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": SSOT_VERSION})
+    env = _env(home, fakebin)
+    assert _run(env).returncode == 0
+    (home / ".codex-test-log.jsonl").unlink()
+    return home, env
+
+
+def _set_state(home, **kw):
+    path = home / ".codex-test-state.json"
+    state = json.loads(path.read_text())
+    state.update(kw)
+    path.write_text(json.dumps(state))
+
+
+def test_an_incomplete_cache_is_not_current(tmp_path):
+    """A copy with only its manifest and skills (an interrupted export) must not pass as current:
+    Codex starts ./bin/skill-search-mcp itself and reads the MCP and hooks files."""
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": True,
+                                          "remote_version": SSOT_VERSION})
+    part = _cache_root(home) / SSOT_VERSION
+    (part / ".codex-plugin").mkdir(parents=True)
+    (part / ".codex-plugin" / "plugin.json").write_text(json.dumps({"name": "skill-concierge",
+                                                                     "version": SSOT_VERSION}))
+    (part / "skills").mkdir()
+    result = _run(_env(home, fakebin))
+    assert "Already current" not in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (part / ".codex-plugin" / "mcp.json").is_file() and (part / ".codex" / "hooks.json").is_file()
+
+
+def test_fast_path_reports_a_disabled_plugin_without_claiming_it_loads(tmp_path):
+    home, env = _installed_once(tmp_path)
+    _set_state(home, enabled=False)
+    result = _run(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DISABLED" in result.stderr and "stays disabled" in result.stdout
+    assert "Restart Codex" not in result.stdout
+
+
+def test_fast_path_fails_when_codex_does_not_list_the_plugin(tmp_path):
+    home, env = _installed_once(tmp_path)
+    _set_state(home, plugin_installed=False)
+    result = _run(env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "does not show" in result.stderr
+
+
+def test_an_add_that_installs_nothing_exits_nonzero(tmp_path):
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": SSOT_VERSION, "add_noop": True})
+    result = _run(_env(home, fakebin))
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "does not report" in result.stderr
+
+
+def test_a_root_with_an_apostrophe_works(tmp_path):
+    alt_root = tmp_path / "Thinh's checkout"
+    shutil.copytree(ROOT / ".claude-plugin", alt_root / ".claude-plugin")
+    (alt_root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "1.2.3"}))
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": "1.2.3"})
+    result = _run(_env(home, fakebin), "--root", str(alt_root))
+    assert "SyntaxError" not in result.stderr, result.stderr
+    assert "SSOT version: v1.2.3" in result.stdout, result.stdout + result.stderr
+
+
+def test_a_renamed_git_dir_is_refused_before_any_cli_call(tmp_path):
+    alt_root = tmp_path / "toggled"
+    shutil.copytree(ROOT / ".claude-plugin", alt_root / ".claude-plugin")
+    (alt_root / "git").mkdir()
+    (alt_root / "git" / "HEAD").write_text("ref: refs/heads/main\n")
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": "1.0.0"})
+    result = _run(_env(home, fakebin), "--root", str(alt_root))
+    assert result.returncode == 1 and "git/" in result.stderr, result.stdout + result.stderr
+    assert _log_lines(home) == []
+
+
+def test_a_symlinked_root_still_exports_head(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".claude-plugin").mkdir(parents=True)
+    (repo / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "7.0.0"}))
+    (repo / "bin").mkdir()
+    (repo / "bin" / "skill-search-mcp").write_text("#!/bin/sh\n")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+                   cwd=repo, check=True)
+    (repo / "untracked.txt").write_text("never exported")
+    link = tmp_path / "link"
+    link.symlink_to(repo)
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": "1.0.0"})
+    result = _run(_env(home, fakebin), "--root", str(link))
+    assert "exported HEAD" in result.stdout, result.stdout + result.stderr
+    assert not (_cache_root(home) / "7.0.0" / "untracked.txt").exists()

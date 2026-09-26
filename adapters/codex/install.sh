@@ -43,8 +43,9 @@
 #      session could be using an existing dir right now. NOTE — Codex's OWN
 #      `add` (step 4) is far more aggressive than this script: it was observed
 #      live to unconditionally wipe the ENTIRE cache/skill-concierge/skill-
-#      concierge/ directory — every version dir, every non-version staging
-#      dir (e.g. plugin-install-<random>/), first install or refresh alike —
+#      concierge/ directory — every version dir and anything else inside it
+#      (Codex keeps its own plugin-install-<random>/ staging one level up),
+#      first install or refresh alike —
 #      before installing the fresh version. That is Codex's own behavior at
 #      step 4/6, not this script's; the fallback only ever runs AFTER `add`
 #      already succeeded, so it starts from whatever `add` just left behind
@@ -136,13 +137,51 @@ print(result)
 PY
 }
 
-VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
+VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: v$VERSION"
+
+# _is_own_checkout — true when $ROOT is its own git top level. Compared by file identity (-ef), so a
+# symlinked or case-variant path to a real checkout still counts; a plain directory inside some other
+# repo does not.
+_is_own_checkout() {
+  local top
+  top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
+}
+
+# _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
+# interrupted copy never leaves a half-filled DIR that a later run reads as current. An existing DIR
+# is moved aside to DIR.replaced-<time> (not a version name, so nothing resolves it), never deleted.
+_export_to() {
+  local dest="$1" stage
+  mkdir -p "$(dirname "$dest")"
+  stage="$(mktemp -d "$(dirname "$dest")/.staging.XXXXXX")"
+  if _is_own_checkout; then
+    git -C "$ROOT" archive HEAD | tar -x -C "$stage"
+    echo "    exported HEAD → $dest"
+  else
+    # Non-git checkout: copy everything except VCS/scratch dirs.
+    tar -C "$ROOT" -cf - \
+        --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
+        --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
+        --exclude='.zcode' --exclude='.unlazy' \
+        --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
+        --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
+        . | tar -xf - -C "$stage"
+    echo "    copied the working tree (not a git checkout) → $dest"
+  fi
+  if [ -e "$dest" ]; then
+    mv "$dest" "$dest.replaced-$(date +%Y%m%d-%H%M%S)-$$"
+  fi
+  mv "$stage" "$dest"
+}
 
 # A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
 # uncommitted version change would put HEAD's content in a dir named for the new version: refuse
-# before any CLI call or write.
-if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
+# before any CLI call or write. A checkout whose git dir is renamed to `git/` (the workbench's
+# no-dot toggle) is refused too: copying it as a plain tree would ship that database and every
+# untracked file.
+if _is_own_checkout; then
   HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
   if [ "$HEAD_VERSION" != "$VERSION" ]; then
@@ -150,6 +189,10 @@ if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" &
     echo "   installs HEAD. Commit the version change (or restore the file), then re-run." >&2
     exit 1
   fi
+elif [ -f "$ROOT/git/HEAD" ]; then
+  echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
+  echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
+  exit 1
 fi
 
 CACHED="$(_cached_version)"
@@ -164,13 +207,23 @@ if [ -n "$CACHED" ] && ! _ver_ge "$VERSION" "$CACHED"; then
 fi
 
 REFRESHED=0
-if [ "$CACHED" = "$VERSION" ] && [ -d "$DEST/skills" ] && [ -f "$DEST/.codex-plugin/plugin.json" ]; then
+# Codex starts ./bin/skill-search-mcp directly and reads the MCP and hooks files from the cached
+# tree, so a copy without them is not current, whatever its manifest says.
+_complete() {
+  [ -d "$1/skills" ] && [ -f "$1/.codex-plugin/plugin.json" ] && [ -f "$1/bin/skill-search-mcp" ] \
+    && [ -f "$1/.codex-plugin/mcp.json" ] && [ -f "$1/.codex/hooks.json" ]
+}
+if [ "$CACHED" = "$VERSION" ] && _complete "$DEST"; then
   # ── Fast path: already current, no CLI calls, no content writes (the
   # self-heal exec-bit chmod below still runs on every path) ─────────────────
   echo "  [✓] Already current: Codex cache v$CACHED == SSOT v$VERSION"
 else
   REFRESHED=1
-  echo "  [•] Codex cache v${CACHED:-none} != SSOT v$VERSION -> checking Codex registration"
+  echo "  [•] Codex cache v${CACHED:-none} != SSOT v$VERSION (or incomplete) -> checking Codex registration"
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "!! the codex CLI is not on PATH — this installer refreshes through it. Install Codex first." >&2
+    exit 1
+  fi
 
   MKT_JSON="$(codex plugin marketplace list --json 2>/dev/null || echo '{"marketplaces":[]}')"
   PLG_JSON="$(codex plugin list --json 2>/dev/null || echo '{"installed":[]}')"
@@ -286,26 +339,12 @@ PY
     echo "     add $PLUGIN_SELECTOR' will replace this with the canonical git-tracked copy." >&2
 
     DEST="$CODEX_PLUGIN_CACHE/$VERSION"
-    mkdir -p "$DEST"
-    if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
-      git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
-      echo "    exported HEAD → $DEST"
-    else
-      # Non-git checkout: copy everything except VCS/scratch dirs.
-      tar -C "$ROOT" -cf - \
-          --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
-          --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
-          --exclude='.zcode' --exclude='.unlazy' \
-          --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
-          --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-          . | tar -xf - -C "$DEST"
-      echo "    copied the working tree (not a git checkout) → $DEST"
-    fi
+    _export_to "$DEST"
     chmod +x "$DEST/bin/"* "$DEST/setup.sh" "$DEST"/adapters/*/install.sh 2>/dev/null || true
     echo "    bin/ + installer exec bits ensured"
 
     # Older version dirs under this cache path are left in place, deliberately
-    # — see header step 7.
+    # — see header step 7. A replaced incomplete copy is kept as <version>.replaced-<time>.
 
     CACHED="$(_cached_version)"
     DEST="$CODEX_PLUGIN_CACHE/$CACHED"
@@ -327,39 +366,47 @@ chmod +x "$DEST/bin/"* 2>/dev/null || true
 # ── Verify ────────────────────────────────────────────────────────────────
 echo "==> verify:"
 VERIFY_OK=true
-test "$(python3 -c "import json;print(json.load(open('$DEST/.codex-plugin/plugin.json'))['version'])" 2>/dev/null)" = "$VERSION" \
+test "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$DEST/.codex-plugin/plugin.json" 2>/dev/null)" = "$VERSION" \
   && echo "    cache manifest: v$VERSION" \
   || { echo "    !! cache manifest version mismatch" >&2; VERIFY_OK=false; }
 test -d "$DEST/skills" && echo "    skills/ present: yes" \
   || { echo "    !! skills/ missing at $DEST" >&2; VERIFY_OK=false; }
+# Codex runs the launcher itself and reads the MCP and hooks files from this tree: each is required.
 test -x "$DEST/bin/skill-search-mcp" && echo "    launcher executable: yes" \
-  || echo "    [!] launcher not executable at $DEST/bin/skill-search-mcp" >&2
+  || { echo "    !! launcher missing or not executable at $DEST/bin/skill-search-mcp" >&2; VERIFY_OK=false; }
 test -f "$DEST/.codex-plugin/mcp.json" && echo "    .codex-plugin/mcp.json present: yes" \
-  || echo "    [!] .codex-plugin/mcp.json missing at $DEST" >&2
+  || { echo "    !! .codex-plugin/mcp.json missing at $DEST" >&2; VERIFY_OK=false; }
 test -f "$DEST/.codex/hooks.json" && echo "    .codex/hooks.json present: yes" \
-  || echo "    [!] .codex/hooks.json missing at $DEST" >&2
+  || { echo "    !! .codex/hooks.json missing at $DEST" >&2; VERIFY_OK=false; }
 diff -q "$ROOT/hooks/scripts/enforcer.py" "$DEST/hooks/scripts/enforcer.py" >/dev/null 2>&1 \
-  && echo "    enforcer byte-identical to repo HEAD: yes" \
-  || echo "    [!] enforcer differs from repo HEAD (deployed copy is a foreign build)" >&2
-if [ "$REFRESHED" = "1" ]; then
-  # Registry state, not just files on disk: a filesystem-only check cannot
-  # distinguish an actually-failed 'add' from one that merely lags the SSOT.
-  if codex plugin list --json 2>/dev/null | python3 -c "
+  && echo "    enforcer identical to this checkout's: yes" \
+  || echo "    [!] enforcer differs from this checkout's (deployed copy is another build)" >&2
+# Registry state on every path, not just files on disk: Codex loads only an installed, enabled plugin.
+LOADS=false
+if ! command -v codex >/dev/null 2>&1; then
+  echo "    !! the codex CLI is not on PATH — cannot confirm Codex has the plugin installed" >&2
+  VERIFY_OK=false
+else
+  PLG_JSON="$(codex plugin list --json 2>/dev/null || echo '{"installed":[]}')"
+  PLUGIN_STATE="$(python3 - "$PLG_JSON" "$PLUGIN_SELECTOR" <<'PY'
 import json, sys
-plg = json.load(sys.stdin)
-rec = next((p for p in plg.get('installed', [])
-            if p.get('pluginId') == '$PLUGIN_SELECTOR' and p.get('installed')), None)
-sys.exit(0 if rec else 1)
-" >/dev/null 2>&1; then
-    echo "    codex plugin list: installed"
-  else
-    echo "    !! codex plugin list --json does not show '$PLUGIN_SELECTOR' installed" >&2
-    VERIFY_OK=false
-  fi
+plg, plugin_sel = json.loads(sys.argv[1]), sys.argv[2]
+rec = next((p for p in plg.get("installed", [])
+            if p.get("pluginId") == plugin_sel and p.get("installed")), None)
+print("not-installed" if not rec else ("enabled" if rec.get("enabled", True) else "disabled"))
+PY
+)"
+  case "$PLUGIN_STATE" in
+    enabled) echo "    codex plugin list: installed, enabled"; LOADS=true ;;
+    disabled) echo "    [!] codex plugin list: installed but DISABLED — Codex will not load it until it is enabled" >&2 ;;
+    *) echo "    !! codex plugin list --json does not show '$PLUGIN_SELECTOR' installed" >&2; VERIFY_OK=false ;;
+  esac
 fi
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Codex integration" || true
 
-if $VERIFY_OK; then
+if $VERIFY_OK && ! $LOADS; then
+  echo "==> Done. The cache is at v$VERSION; the plugin stays disabled in Codex, as it was."
+elif $VERIFY_OK; then
   echo "==> Done. Restart Codex (fresh session) to load v$VERSION — hooks and .mcp.json"
   echo "    are auto-discovered from the cache at session start. Then confirm: doctor's"
   echo "    Codex integration row is OK, and a session's MCP tools list skill-search."

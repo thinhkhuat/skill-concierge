@@ -384,7 +384,7 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
   atomically-written `installed_plugins.json` repoint when the marketplace remote hasn't caught
   up to this checkout yet (never touching `enabledPlugins` or the shared venv — a session
   restart is required either way). Whether Claude Code accepts a hand-repointed registry entry
-  is unverified beyond the sandboxed test suite. `doctor`'s Codex and Claude Code rows both warn
+  is unverified (the tests use a fake `claude`). `doctor`'s Codex and Claude Code rows both warn
   when the cached content lags the SSOT.
 
 ## See also

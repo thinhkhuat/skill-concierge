@@ -40,13 +40,24 @@ done
 echo "==> skill-concierge → ZCode sync (from: $ROOT)"
 
 # ── 1. SSOT version ──────────────────────────────────────────────────────────
-VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
+VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: $VERSION"
+
+# _is_own_checkout — true when $ROOT is its own git top level. Compared by file identity (-ef), so a
+# symlinked or case-variant path to a real checkout still counts; a plain directory inside some other
+# repo does not.
+_is_own_checkout() {
+  local top
+  top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
+}
 
 # A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
 # uncommitted version change would put HEAD's content in a dir named for the new version: refuse
-# before any CLI call or write.
-if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
+# before any CLI call or write. A checkout whose git dir is renamed to `git/` (the workbench's
+# no-dot toggle) is refused too: copying it as a plain tree would ship that database and every
+# untracked file.
+if _is_own_checkout; then
   HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
   if [ "$HEAD_VERSION" != "$VERSION" ]; then
@@ -54,12 +65,16 @@ if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" &
     echo "   installs HEAD. Commit the version change (or restore the file), then re-run." >&2
     exit 1
   fi
+elif [ -f "$ROOT/git/HEAD" ]; then
+  echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
+  echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
+  exit 1
 fi
 
 # ── 2. Export the release tree into the versioned cache dir ──────────────────
 DEST="$CACHE_BASE/$VERSION"
 mkdir -p "$DEST"
-if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
+if _is_own_checkout; then
   git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
   echo "    exported HEAD → $DEST"
 else
@@ -128,7 +143,7 @@ fi
 
 # ── 6. Verify ────────────────────────────────────────────────────────────────
 echo "==> verify:"
-test "$(python3 -c "import json;print(json.load(open('$DEST/.claude-plugin/plugin.json'))['version'])")" = "$VERSION" \
+test "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$DEST/.claude-plugin/plugin.json")" = "$VERSION" \
   && echo "    cache manifest: v$VERSION" \
   || { echo "    !! cache manifest version mismatch" >&2; exit 1; }
 test -x "$DEST/bin/skill-search-mcp" && echo "    launcher executable: yes"

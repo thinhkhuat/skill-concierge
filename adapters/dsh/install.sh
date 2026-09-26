@@ -46,7 +46,7 @@ done
 echo "==> skill-concierge → DSH sync (from: $ROOT)"
 
 # ── 1. SSOT version ──────────────────────────────────────────────────────────
-VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
+VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: $VERSION"
 
 # ── 2. Resolve DSH profile directories ──────────────────────────────────────

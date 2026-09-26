@@ -3,6 +3,30 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.9] — 2026-09-27
+
+### Fixed — ADR-0072: the installers fail closed (post-ship review of 0.52.7: 1 High, 6 Medium, 10 Low)
+- **Codex** (the High): the fast path and the verify step require the launcher, `.codex-plugin/mcp.json`
+  and `.codex/hooks.json`, not just the manifest and `skills/`; the fallback copy is staged and swapped
+  in, so an interrupted copy can no longer pass as current. The verify step always reads Codex's own
+  `plugin list`: not installed → exit 1, disabled → said plainly, no `codex` CLI → a clear error.
+- **Quoting:** every installer (Codex, Claude Code, OMP, ZCode, Cline, DSH) passes paths to `python3` and
+  `node` as arguments; a checkout path with an apostrophe works.
+- **Claude Code registry:** the repoint writes through a symlink, keeps the file's permissions, stops if
+  the file changes while it runs, repoints only the refreshed scope, records a commit only for a real
+  checkout, and names each backup uniquely. The fallback is staged and swapped in; the launcher's exec
+  bit is restored on every path; a missing launcher fails the verify.
+- **Checkout test** by file identity (symlinked and case-variant paths still export HEAD); a root whose
+  git dir is renamed to `git/` is refused before any CLI call.
+- **Doctor:** the Codex row checks the launcher and MCP descriptor; the Claude Code and ZCode rows treat a
+  missing launcher as a finding; the Claude Code row reports the deployed version and returns it as
+  `version`.
+- **Tests** are hermetic (dead Qdrant port, stub `docker`). 15 new installer tests: 12 fail on 0.52.8,
+  3 pin existing behaviour and fail when it is broken.
+- **Correction.** 0.52.7's entry and ADR-0069 said the Codex installer refuses a disabled plugin
+  "before any CLI call" (two read-only calls come first) and implied its verify fails on a missing
+  launcher, MCP or hooks file (it only warned until now).
+
 ## [0.52.8] — 2026-09-27
 
 ### Fixed — ADR-0071: unscored harness turns; clean miner corpus; installers install HEAD's version

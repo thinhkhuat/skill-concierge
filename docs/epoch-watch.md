@@ -13,6 +13,11 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.9 — installers fail closed (ADR-0072)
+
+**No new epoch for any watch item.** Installers and doctor rows only; the standing order, the enforcer,
+the engine and the audit are unchanged.
+
 ## v0.52.8 — unscored harness turns; clean miner corpus (ADR-0071)
 
 **Starts per harness** when its plugin cache reaches `0.52.8`. No standing-order change, so no new trail

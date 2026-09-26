@@ -153,6 +153,10 @@ def _fake_claude_dir(tmp_path):
     exe = d / "claude"
     exe.write_text(FAKE_CLAUDE)
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    # doctor falls back to `docker ps` when Qdrant does not answer: keep the real one out too.
+    docker = d / "docker"
+    docker.write_text("#!/bin/sh\nexit 1\n")
+    docker.chmod(docker.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return d
 
 
@@ -161,6 +165,7 @@ def _run(tmp_path, root, home, mode, *, source=None, extra_env=None):
     env["HOME"] = str(home)
     env["PATH"] = str(_fake_claude_dir(tmp_path)) + os.pathsep + os.environ.get("PATH", "")
     env["FAKE_CLAUDE_MODE"] = mode
+    env["SKILL_QDRANT_URL"] = "http://127.0.0.1:9"   # the verify step's doctor never reaches live Qdrant
     env["FAKE_CLAUDE_LOG"] = str(tmp_path / "fake-claude.log")
     if source is not None:
         env["FAKE_CLAUDE_SOURCE"] = str(source)
@@ -405,3 +410,74 @@ def test_plain_root_inside_another_repo_copies_only_itself(tmp_path):
     assert not (dest / "outer-secret.txt").exists(), "the outer repo's files must never be exported"
     assert not (dest / "plain-checkout").exists()
     assert not (dest / ".pytest_cache").exists(), "tool caches must not be copied"
+
+
+def test_fallback_replaces_the_tree_and_keeps_the_old_one_aside(tmp_path):
+    """The export is staged and swapped in: no file from an older tree survives in the dir, and the
+    old tree is moved aside, not deleted."""
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
+    dest = home / ".claude" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "2.0.0"
+    dest.mkdir(parents=True)
+    (dest / "stale.txt").write_text("from an interrupted run")
+    r = _run(tmp_path, repo, home, mode="error")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (dest / "stale.txt").exists()
+    aside = [d for d in dest.parent.iterdir() if d.name.startswith("2.0.0.replaced-")]
+    assert len(aside) == 1 and (aside[0] / "stale.txt").exists()
+
+
+def test_the_registry_symlink_and_its_mode_are_kept(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
+    reg = home / ".claude" / "plugins" / "installed_plugins.json"
+    real = tmp_path / "dotfiles" / "installed_plugins.json"
+    real.parent.mkdir()
+    shutil.move(str(reg), real)
+    real.chmod(0o600)
+    reg.symlink_to(real)
+    r = _run(tmp_path, repo, home, mode="error")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert reg.is_symlink()
+    assert json.loads(real.read_text())["plugins"][PLUGIN_ID][0]["version"] == "2.0.0"
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600)
+
+
+def test_only_the_refreshed_scope_is_repointed(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
+    reg = home / ".claude" / "plugins" / "installed_plugins.json"
+    data = json.loads(reg.read_text())
+    other = {"scope": "project", "projectPath": "/elsewhere", "installPath": "/elsewhere/cache", "version": "1.5.0"}
+    data["plugins"][PLUGIN_ID].append(other)
+    reg.write_text(json.dumps(data))
+    r = _run(tmp_path, repo, home, mode="error")
+    assert r.returncode == 0, r.stdout + r.stderr
+    recs = _registry(home)["plugins"][PLUGIN_ID]
+    assert recs[0]["version"] == "2.0.0" and recs[1] == other
+
+
+def test_the_launcher_exec_bit_is_restored_after_a_cli_update(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    source = _make_repo(tmp_path, "published", "2.0.0")
+    (source / "bin" / "skill-search-mcp").chmod(0o644)
+    home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
+    r = _run(tmp_path, repo, home, mode="updated", source=source)
+    assert r.returncode == 0, r.stdout + r.stderr
+    dest = Path(_registry(home)["plugins"][PLUGIN_ID][0]["installPath"])
+    assert os.access(dest / "bin" / "skill-search-mcp", os.X_OK)
+
+
+def test_a_newer_copy_after_the_cli_refresh_is_refused(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    source = _make_repo(tmp_path, "published", "3.0.0")
+    home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
+    r = _run(tmp_path, repo, home, mode="updated", source=source)
+    assert r.returncode == 1 and "after the CLI refresh" in r.stderr, r.stdout + r.stderr
+
+
+def test_a_missing_launcher_fails_the_verify(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, cache = _seed_home_with_cache(tmp_path, version="2.0.0")
+    r = _run(tmp_path, repo, home, mode="up_to_date_current")
+    assert r.returncode == 1 and "launcher missing" in r.stderr, r.stdout + r.stderr

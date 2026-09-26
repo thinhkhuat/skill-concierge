@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "==> skill-concierge → Cline install (from: $ROOT)"
-VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
+VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: $VERSION"
 
 test -f "$BRIDGE" || { echo "!! bridge missing: $BRIDGE" >&2; exit 1; }
@@ -94,13 +94,13 @@ echo "==> verify:"
 for f in UserPromptSubmit.cjs PostToolUse.cjs; do
   test -f "$CLINE_HOOKS/$f" && echo "    shim present: $f"
 done
-node -e "require('$BRIDGE')" 2>/dev/null && echo "    bridge module loads: yes" \
+node -e 'require(process.argv[1])' "$BRIDGE" 2>/dev/null && echo "    bridge module loads: yes" \
   || { echo "    !! bridge failed to load" >&2; exit 1; }
-if [ "$NO_MCP" = "0" ] && python3 -c "
+if [ "$NO_MCP" = "0" ] && python3 -c '
 import json,sys
-c=json.load(open('$CLINE_SETTINGS'))
-s=c.get('mcpServers',{}).get('skill-search')
-sys.exit(0 if s and s.get('command') else 1)" 2>/dev/null; then
+c=json.load(open(sys.argv[1]))
+s=c.get("mcpServers",{}).get("skill-search")
+sys.exit(0 if s and s.get("command") else 1)' "$CLINE_SETTINGS" 2>/dev/null; then
   echo "    MCP row present: skill-search"
 fi
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Cline integration" || true

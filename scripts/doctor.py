@@ -1361,10 +1361,10 @@ def _codex_cached_version():
     """Version of the Codex-cached plugin clone under
     ~/.codex/plugins/cache/<name>/<name>/<ver>/, or None when absent/unreadable. Multiple
     version dirs can sit side by side there between installer runs (a manually-synced
-    fallback dir is never pruned by this repo's own tooling; a leftover non-version
-    staging dir like `plugin-install-UEVanZ` can also linger — though Codex's own
-    `plugin add` was separately observed to wipe the whole directory on its next
-    successful refresh) — `codex plugin list --json` resolves the semver-NEWEST one, so
+    fallback dir is never pruned by this repo's own tooling, and the installer's own
+    `.staging.*` / `*.replaced-*` dirs can sit there too; Codex keeps its own
+    `plugin-install-<random>` staging one level up, and its `plugin add` was observed to
+    wipe this whole directory on its next successful refresh) — `codex plugin list --json` resolves the semver-NEWEST one, so
     this filters to all-numeric dotted-version dir names and sorts by the dotted-integer
     tuple key `_ver_tuple` (same key `check_zcode()` uses), never lexically: a plain
     string sort ranks "0.9.0" above "0.52.3" ('9' > '5' at the first differing
@@ -1421,11 +1421,20 @@ def check_codex():
         skills_dir = CODEX_PLUGIN_CACHE / cached_ver / "skills"
         if not skills_dir.is_dir():
             findings.append(f"Codex cache v{cached_ver} missing skills/ dir — incomplete install")
+        # Codex starts ./bin/skill-search-mcp itself (no interpreter in its mcp.json), so the
+        # launcher and its exec bit are load-bearing, as is the MCP descriptor.
+        launcher = CODEX_PLUGIN_CACHE / cached_ver / "bin" / "skill-search-mcp"
+        if not (launcher.is_file() and os.access(launcher, os.X_OK)):
+            findings.append(f"Codex cache v{cached_ver} launcher bin/skill-search-mcp missing or not "
+                            "executable — run adapters/codex/install.sh")
+        if not (CODEX_PLUGIN_CACHE / cached_ver / ".codex-plugin" / "mcp.json").is_file():
+            findings.append(f"Codex cache v{cached_ver} missing .codex-plugin/mcp.json — incomplete install")
     if findings:
         return {"id": "codex", "label": "Codex integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None}
     return {"id": "codex", "label": "Codex integration", "status": OK,
-            "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills present",
+            "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills, launcher and MCP "
+                      "descriptor present",
             "fix": None}
 
 def check_commandcode():
@@ -1561,7 +1570,10 @@ def check_zcode():
             findings.append(f"ZCode cache v{cached_ver} != SSOT v{ssot} — update via "
                             "Settings → Plugin Management (skill-concierge marketplace)")
         launcher = ZCODE_PLUGIN_CACHE / cached_ver / "bin" / "skill-search-mcp"
-        if launcher.is_file() and not os.access(launcher, os.X_OK):
+        if not launcher.is_file():
+            findings.append(f"bin/skill-search-mcp missing from the ZCode cache v{cached_ver} — "
+                            "the MCP server cannot start; re-run adapters/zcode/install.sh")
+        elif not os.access(launcher, os.X_OK):
             findings.append(f"bin/skill-search-mcp in the ZCode cache v{cached_ver} lost its exec bit "
                             "(cosmetic under the interpreter-form .mcp.json; repair: chmod +x)")
     if findings:
@@ -1607,10 +1619,11 @@ def check_claude_code():
         return {"id": "claude-code", "label": "Claude Code integration", "status": WARN,
                 "detail": "claude-code: not installed (no ~/.claude/plugins) — optional "
                           "harness, no action needed",
-                "fix": None}
+                "fix": None, "version": None}
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     installed_ver, install_path = _claude_code_installed()
+    deployed_ver = None
     if installed_ver is None:
         findings.append("skill-concierge has no Claude Code install record (installed_plugins.json)")
     else:
@@ -1623,15 +1636,19 @@ def check_claude_code():
                             "re-run adapters/claude-code/install.sh")
         if install_path:
             launcher = Path(install_path) / "bin" / "skill-search-mcp"
-            if launcher.is_file() and not os.access(launcher, os.X_OK):
+            if not launcher.is_file():
+                findings.append(f"bin/skill-search-mcp missing from the Claude Code cache v{deployed_ver} — "
+                                "the MCP server cannot start; re-run adapters/claude-code/install.sh")
+            elif not os.access(launcher, os.X_OK):
                 findings.append(f"bin/skill-search-mcp in the Claude Code cache v{deployed_ver} "
                                 "lost its exec bit — re-run adapters/claude-code/install.sh")
+    # `version` is the deployed content's own version (what Claude Code will load), not the record's.
     if findings:
         return {"id": "claude-code", "label": "Claude Code integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None}
+                "detail": "; ".join(findings), "fix": None, "version": deployed_ver}
     return {"id": "claude-code", "label": "Claude Code integration", "status": OK,
-            "detail": f"Claude Code plugin v{installed_ver} matches SSOT v{ssot}; launcher executable",
-            "fix": None}
+            "detail": f"Claude Code plugin v{deployed_ver} matches SSOT v{ssot}; launcher executable",
+            "fix": None, "version": deployed_ver}
 
 
 _DSH_OWN_IDS = ("skill-concierge", "unlazy-stop", "skill-concierge-enforcer")
@@ -2246,8 +2263,17 @@ def _selftest():
                 {"name": "skill-concierge", "version": codex_ssot}))
             (cached_dir / "skills" / "dummy").mkdir(parents=True)
             (cached_dir / "skills" / "dummy" / "SKILL.md").write_text("# placeholder")
+            (cached_dir / ".codex-plugin" / "mcp.json").write_text("{}")
+            (cached_dir / "bin").mkdir()
+            (cached_dir / "bin" / "skill-search-mcp").write_text("#!/bin/sh\n")
+            (cached_dir / "bin" / "skill-search-mcp").chmod(0o755)
             row = check_codex()
             assert row["status"] == OK, row
+            # Codex starts the launcher itself: without its exec bit the row is not OK.
+            (cached_dir / "bin" / "skill-search-mcp").chmod(0o644)
+            row = check_codex()
+            assert row["status"] == WARN and "launcher" in row["detail"], row
+            (cached_dir / "bin" / "skill-search-mcp").chmod(0o755)
             # Version lag: cache v0.0.1 vs SSOT -> WARN naming both.
             # Write lower version into the cached plugin.json
             (cached_dir / ".codex-plugin" / "plugin.json").write_text(json.dumps(
@@ -2330,6 +2356,13 @@ def _selftest():
             row = check_claude_code()
             assert (row["status"] == WARN and "lost its exec bit" in row["detail"]
                     and "adapters/claude-code/install.sh" in row["detail"]), row
+            # Launcher missing -> WARN, never OK; the row carries the deployed version, not the record's.
+            launcher.unlink()
+            _g["CLAUDE_PLUGINS_FILE"].write_text(json.dumps({
+                "plugins": {"skill-concierge@skill-concierge": [
+                    {"scope": "user", "installPath": str(install_dir), "version": "0.0.1"}]}}))
+            row = check_claude_code()
+            assert row["status"] == WARN and "missing" in row["detail"] and row["version"] == cc_ssot, row
     finally:
         _g.update(_saved_cc)
 
