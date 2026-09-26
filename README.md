@@ -604,6 +604,8 @@ No launchd agents are created — the warm embed shim runs as a Docker sidecar, 
 
 Installed via the plugin marketplace. The plugin bundle (`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`) is not written by a local installer — it is placed by the marketplace or by `cp` into `~/.claude/plugins/cache/skill-concierge/skill-concierge/<version>/`. The hooks wiring (`hooks/hooks.json` → `UserPromptSubmit` enforcer + ledger, `SessionStart` doctrine + self-heal, `PostToolUse` ledger) and MCP wiring (`.mcp.json` → shared `skill-search` server) ship with the plugin package.
 
+Once installed once via `claude plugin marketplace add` + `claude plugin install`, [`adapters/claude-code/install.sh`](adapters/claude-code/install.sh) keeps the cached copy in sync with this checkout's SSOT version: it runs `claude plugin update skill-concierge@skill-concierge --json -y`, and — only when the marketplace remote hasn't caught up to this checkout yet — falls back to a local `git archive` sync plus a backed-up `installed_plugins.json` repoint. It never touches `enabledPlugins` in `settings.json` or the shared venv/Qdrant stamp, and a session restart is required to pick up a freshly-synced version. Whether Claude Code's own update/session-start logic accepts a hand-repointed registry entry is **unverified** — treat the fallback path as provisional until confirmed by a real update + restart.
+
 **To uninstall:**
 1. Disable the plugin: `/plugin disable skill-concierge` in Claude Code. This removes the hooks and MCP server from the running session without deleting data.
 2. Fully remove: `/plugin uninstall skill-concierge` — deletes the versioned cache dir.
@@ -612,6 +614,8 @@ Installed via the plugin marketplace. The plugin bundle (`.claude-plugin/plugin.
 ### Codex
 
 Wired by the plugin manifest `.codex-plugin/plugin.json` (`.codex-plugin/plugin.json:1-40`) and the matching MCP descriptor `.codex-plugin/mcp.json`. The hooks file `.codex/hooks.json` provides the openwiki-parity commit guard only (`.codex/hooks.json:2-16` — enforcement hooks auto-discover from the plugin cache per ADR-0033). Skill discovery indexes `~/.codex/skills/` and `~/.codex/plugins/cache/`.
+
+Once registered once via `codex plugin marketplace add` + `codex plugin add skill-concierge@skill-concierge`, [`adapters/codex/install.sh`](adapters/codex/install.sh) keeps the cached copy in sync with this checkout's SSOT version via the CLI's own `codex plugin marketplace upgrade` + `remove` + `add` sequence (there is no `codex plugin upgrade` verb) — the CLI installs whatever is pushed to the **git remote**. If a version gap remains, it exports `git archive HEAD` into a new version-named cache dir instead (older dirs stay in place — Codex resolves the semver-newest by scanning, not a registry); a loud notice flags the unpushed content, and whether a live Codex session actually loads hooks/MCP from that dir is unverified beyond `codex plugin list`.
 
 **To uninstall:**
 1. Remove the plugin from Codex's config (Codex CLI: remove the plugin entry from `~/.codex/skills/` and `~/.codex/plugins/cache/` or via the Codex UI).

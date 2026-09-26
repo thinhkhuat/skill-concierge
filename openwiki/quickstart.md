@@ -89,6 +89,12 @@ auto-repairs the common failures. Full setup/ops detail: **[operations.md](opera
 with `codex plugin add skill-concierge@skill-concierge`, then verify the MCP with
 `codex mcp list` (should list `skill-search`). The engine sidecars (Qdrant + embed shim),
 index, and ledger are SHARED with the Claude Code install — one concierge, four harnesses.
+Once registered, [`adapters/codex/install.sh`](../adapters/codex/install.sh) keeps the cached
+copy in sync with this checkout's SSOT version (`codex plugin marketplace upgrade` + `remove`
++ `add` — there is no `codex plugin upgrade` verb; installs whatever is pushed to the git
+remote). A remaining version gap falls back to a `git archive HEAD` export into a new
+version-named cache dir instead — older dirs stay, since Codex scans for the semver-newest —
+with a loud unpushed-content notice; a live session actually loading it is unverified.
 
 **In OMP** (v0.28.0+, ADR-0039): install via the plugin marketplace — `adapters/omp/install.sh`
 detects an installed `skill-concierge@skill-concierge` marketplace plugin and refreshes it with

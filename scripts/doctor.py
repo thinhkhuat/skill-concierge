@@ -32,6 +32,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,20 @@ CODEX_PLUGIN_CACHE = CODEX_DIR / "plugins" / "cache" / "skill-concierge" / "skil
 # ~/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/<ver>/. WARN-only.
 ZCODE_DIR = Path.home() / ".zcode"
 ZCODE_PLUGIN_CACHE = ZCODE_DIR / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+# Claude Code harness surface — the reference harness. skill-concierge installs once via
+# `claude plugin marketplace add` + `claude plugin install`, then adapters/claude-code/install.sh
+# keeps it current: a `claude plugin update` CLI refresh, falling back to a local git-archive
+# sync (with an installed_plugins.json repoint) when the marketplace remote hasn't caught up
+# to this checkout yet. Same OMP-shaped install record (a map of lists keyed by
+# "<name>@<marketplace>"), but content decides over the record: a version dir under
+# cache/skill-concierge/skill-concierge/<ver>/ can carry a `.in_use/<pid>.json` marker (a
+# running session's own claim on that version) — this check only ever reads specific files
+# it already knows the path to (the version's own .claude-plugin/plugin.json, bin/), never
+# lists the version dir's contents, so that marker is never mistaken for install state.
+# WARN-only — a plugin-free dev checkout is one 'claude-code: not installed' row, not a failure.
+CLAUDE_PLUGINS_DIR = Path.home() / ".claude" / "plugins"
+CLAUDE_PLUGINS_FILE = CLAUDE_PLUGINS_DIR / "installed_plugins.json"
+CLAUDE_PLUGIN_CACHE = CLAUDE_PLUGINS_DIR / "cache" / "skill-concierge" / "skill-concierge"
 # Command Code harness surface (ADR-0038) — skill-concierge integrates via a mod,
 # SessionStart hooks in settings.json, and an mcp.json entry. No version record file
 # (the mod and settings reference the dev path directly). WARN-only.
@@ -1349,18 +1364,32 @@ def check_omp():
             "detail": f"OMP plugin v{ver} matches SSOT v{ssot}; marketplace + extension surface in sync",
             "fix": None}
 
+_VERSION_DIRNAME = re.compile(r"^\d+(\.\d+)*$")
+
+
 def _codex_cached_version():
     """Version of the Codex-cached plugin clone (the last marketplace update), or None
     when the cache dir is absent/unreadable. Codex stores the clone at:
     ~/.codex/plugins/cache/<name>/<name>/<ver>/ — the outer dir is the name, the inner
     dir is also the name (nested from the marketplace clone), and .ver/ is the versioned
-    content tree — but there is no index file; the version dir name is the version."""
+    content tree — but there is no index file; the version dir name is the version.
+
+    Codex never prunes an old version dir — several can coexist under this path (the
+    real cache also accumulates non-version staging dirs like `plugin-install-UEVanZ`,
+    which must never be mistaken for a version) — and `codex plugin list --json` resolves
+    the semver-NEWEST one, not the lexically-largest dir name. A plain string sort gets
+    this wrong the moment digit widths differ ("0.9.0" sorts above "0.52.3" because '9' >
+    '5' at the first differing character — reproduced live 2026-09-26, see
+    plans/reports/orchestrate-260926-2100/impl-codex/result.md), so this filters to
+    all-numeric dotted-version dir names first, then sorts by the dotted-integer tuple
+    key `_ver_tuple` (same key `check_zcode()` uses), never lexically."""
     try:
         base = CODEX_PLUGIN_CACHE
         if not base.is_dir():
             return None
-        # Walk versioned dirs under nest/<name>/; pick the newest by dir name
-        candidates = sorted([d for d in base.iterdir() if d.is_dir()], reverse=True)
+        candidates = sorted(
+            (d for d in base.iterdir() if d.is_dir() and _VERSION_DIRNAME.match(d.name)),
+            key=lambda d: _ver_tuple(d.name), reverse=True)
         if not candidates:
             return None
         # Each candidate e.g. "0.28.1" — read the plugin.json inside for confirmation
@@ -1377,11 +1406,14 @@ def check_codex():
     """Codex harness install state — version parity and surface presence (ADR-0033).
 
     Codex installs skill-concierge through its own plugin marketplace system. The
-    cached clone lives under ~/.codex/plugins/cache/skill-concierge/skill-concierge/<ver>/.
-    Unlike OMP, Codex has no user-level install-record file — enablement is in
-    config.toml (TOML, not stdlib-parseable on 3.10). Version is read from the cached
-    .codex-plugin/plugin.json and compared to the SSOT in the source repo. Every check
-    is WARN-only — no Codex install is one 'codex: not installed' row, never a failure.
+    cached clone lives under ~/.codex/plugins/cache/skill-concierge/skill-concierge/<ver>/ —
+    Codex never prunes an old version dir, so several can sit side by side there; it
+    resolves the semver-NEWEST one, and so does `_codex_cached_version()` (dotted-integer
+    sort, never lexical — see its docstring). Unlike OMP, Codex has no user-level
+    install-record file — enablement is in config.toml (TOML, not stdlib-parseable on
+    3.10). Version is read from the cached .codex-plugin/plugin.json and compared to the
+    SSOT in the source repo. Every check is WARN-only — no Codex install is one 'codex:
+    not installed' row, never a failure.
 
     Two signals:
       1. install presence — cached plugin dir with .codex-plugin/plugin.json
@@ -1398,7 +1430,8 @@ def check_codex():
         findings.append("no Codex plugin cache found (never installed via marketplace)")
     else:
         if ssot and cached_ver != ssot:
-            findings.append(f"Codex cache v{cached_ver} != SSOT v{ssot} — update via Codex marketplace")
+            findings.append(f"Codex cache v{cached_ver} != SSOT v{ssot} — "
+                            "run adapters/codex/install.sh")
     # Surface: verify skills dir exists in the cached version
     if cached_ver:
         skills_dir = CODEX_PLUGIN_CACHE / cached_ver / "skills"
@@ -1552,6 +1585,68 @@ def check_zcode():
                 "detail": "; ".join(findings), "fix": None}
     return {"id": "zcode", "label": "ZCode integration", "status": OK,
             "detail": f"ZCode cache v{cached_ver} matches SSOT v{ssot}; launcher executable",
+            "fix": None}
+
+
+def _claude_code_installed():
+    """(version, installPath) of skill-concierge@skill-concierge in Claude Code's own
+    install record, or (None, None) when there is no record. Same map-of-lists shape as
+    OMP's (one entry per install scope); the head entry is the active scope."""
+    try:
+        rec = json.loads(CLAUDE_PLUGINS_FILE.read_text(encoding="utf-8"))
+        entry = rec["plugins"]["skill-concierge@skill-concierge"]
+    except JSON_READ_ERRORS:
+        return None, None
+    if not entry:
+        return None, None
+    head = entry[0] if isinstance(entry, list) else entry
+    if not isinstance(head, dict):
+        return None, None
+    return head.get("version"), head.get("installPath")
+
+
+def check_claude_code():
+    """Claude Code harness install state — install record vs deployed content vs SSOT.
+
+    Claude Code is the reference harness: skill-concierge is installed once via
+    `claude plugin marketplace add` + `claude plugin install`, then kept current by
+    adapters/claude-code/install.sh (a `claude plugin update` CLI refresh, falling back
+    to a local git-archive sync when the marketplace remote hasn't caught up to this
+    checkout yet). Two signals:
+      1. deployed content — the installed path's OWN .claude-plugin/plugin.json version
+         (falling back to the registry's version when that is unreadable) vs the SSOT;
+         "content decides, not the record" — a hand-repointed registry entry could lie.
+      2. launcher exec bit — bin/skill-search-mcp under the installed path.
+    WARN-only — a plugin-free dev checkout is one 'not installed' row, never a failure.
+    """
+    if not CLAUDE_PLUGINS_DIR.exists():
+        return {"id": "claude-code", "label": "Claude Code integration", "status": WARN,
+                "detail": "claude-code: not installed (no ~/.claude/plugins) — optional "
+                          "harness, no action needed",
+                "fix": None}
+    findings = []
+    ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+    installed_ver, install_path = _claude_code_installed()
+    if installed_ver is None:
+        findings.append("skill-concierge has no Claude Code install record (installed_plugins.json)")
+    else:
+        deployed_ver = installed_ver
+        if install_path:
+            deployed_ver = _descriptor_version(
+                Path(install_path) / ".claude-plugin" / "plugin.json") or installed_ver
+        if ssot and deployed_ver != ssot:
+            findings.append(f"Claude Code plugin v{deployed_ver} != SSOT v{ssot} — "
+                            "re-run adapters/claude-code/install.sh")
+        if install_path:
+            launcher = Path(install_path) / "bin" / "skill-search-mcp"
+            if launcher.is_file() and not os.access(launcher, os.X_OK):
+                findings.append(f"bin/skill-search-mcp in the Claude Code cache v{deployed_ver} "
+                                "lost its exec bit — re-run adapters/claude-code/install.sh")
+    if findings:
+        return {"id": "claude-code", "label": "Claude Code integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "claude-code", "label": "Claude Code integration", "status": OK,
+            "detail": f"Claude Code plugin v{installed_ver} matches SSOT v{ssot}; launcher executable",
             "fix": None}
 
 
@@ -1726,8 +1821,8 @@ CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine
           check_engine_health, check_enrichment, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_blocklist, check_keepoff,
-          check_catalogs, check_omp, check_codex, check_commandcode, check_zcode, check_dsh,
-          check_cline,
+          check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
+          check_claude_code, check_dsh, check_cline,
           check_ledger, check_dup_mcp, check_mcp_enabled]
 
 
@@ -2175,8 +2270,94 @@ def _selftest():
                 {"name": "skill-concierge", "version": "0.0.1"}))
             row = check_codex()
             assert row["status"] == WARN and "0.0.1" in row["detail"] and codex_ssot in row["detail"], row
+            assert "adapters/codex/install.sh" in row["detail"], row
     finally:
         _g.update(_saved_codex)
+
+    # Regression: _codex_cached_version() must pick the semver-NEWEST version dir, not the
+    # lexically-largest dir name, and must ignore non-version staging dirs Codex leaves
+    # behind (e.g. `plugin-install-UEVanZ`) — a plain string sort ranks "0.9.0" above
+    # "0.52.3" ('9' > '5' at the first differing char), reproduced live 2026-09-26
+    # against the real ~/.codex (impl-codex's report).
+    _saved_codex_ver = {k: _g[k] for k in ("CODEX_PLUGIN_CACHE",)}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "cache"
+            _g["CODEX_PLUGIN_CACHE"] = base
+            for ver in ("0.9.0", "0.52.3"):
+                pdir = base / ver / ".codex-plugin"
+                pdir.mkdir(parents=True)
+                (pdir / "plugin.json").write_text(json.dumps(
+                    {"name": "skill-concierge", "version": ver}))
+            # A non-version staging dir carrying its OWN (bogus) descriptor, so passing
+            # this case requires the dirname filter to exclude it structurally — it must
+            # not merely rely on a missing plugin.json to skip past it.
+            stage = base / "plugin-install-UEVanZ" / ".codex-plugin"
+            stage.mkdir(parents=True)
+            (stage / "plugin.json").write_text(json.dumps(
+                {"name": "skill-concierge", "version": "9.9.9"}))
+            assert _codex_cached_version() == "0.52.3", _codex_cached_version()
+    finally:
+        _g.update(_saved_codex_ver)
+
+    # --- Claude Code harness check: fixture-driven, never touches the real ~/.claude/plugins ---
+    # Three outcomes: absent registry -> WARN "not installed"; deployed content matches SSOT
+    # -> OK; version lag (content decides, not the record) -> WARN naming the install script.
+    _saved_cc = {k: _g[k] for k in ("CLAUDE_PLUGINS_DIR", "CLAUDE_PLUGINS_FILE", "CLAUDE_PLUGIN_CACHE")}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            _g["CLAUDE_PLUGINS_DIR"] = base / ".claude" / "plugins"
+            _g["CLAUDE_PLUGINS_FILE"] = _g["CLAUDE_PLUGINS_DIR"] / "installed_plugins.json"
+            _g["CLAUDE_PLUGIN_CACHE"] = _g["CLAUDE_PLUGINS_DIR"] / "cache" / "skill-concierge" / "skill-concierge"
+            # No ~/.claude/plugins at all -> WARN "not installed", never FAIL.
+            row = check_claude_code()
+            assert row["status"] == WARN and "not installed" in row["detail"], row
+            # Registry present but no record for skill-concierge -> WARN naming it.
+            _g["CLAUDE_PLUGINS_DIR"].mkdir(parents=True)
+            _g["CLAUDE_PLUGINS_FILE"].write_text(json.dumps({"plugins": {}}))
+            row = check_claude_code()
+            assert row["status"] == WARN and "no Claude Code install record" in row["detail"], row
+            # Fully in sync: registry + the installed path's own plugin.json match SSOT.
+            cc_ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+            install_dir = _g["CLAUDE_PLUGIN_CACHE"] / cc_ssot
+            (install_dir / ".claude-plugin").mkdir(parents=True)
+            (install_dir / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "skill-concierge", "version": cc_ssot}))
+            (install_dir / "bin").mkdir()
+            launcher = install_dir / "bin" / "skill-search-mcp"
+            launcher.write_text("#!/bin/sh\n")
+            launcher.chmod(0o755)
+            _g["CLAUDE_PLUGINS_FILE"].write_text(json.dumps({
+                "plugins": {"skill-concierge@skill-concierge": [
+                    {"scope": "user", "installPath": str(install_dir), "version": cc_ssot}]}}))
+            row = check_claude_code()
+            assert row["status"] == OK, row
+            # Version lag: the installed content's own descriptor is stale -> WARN naming
+            # both versions and pointing at the install script (content decides, not the
+            # record — the registry can still say cc_ssot while the deployed tree lags).
+            (install_dir / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "skill-concierge", "version": "0.0.1"}))
+            row = check_claude_code()
+            assert (row["status"] == WARN and "0.0.1" in row["detail"] and cc_ssot in row["detail"]
+                    and "adapters/claude-code/install.sh" in row["detail"]), row
+            (install_dir / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "skill-concierge", "version": cc_ssot}))
+            # Exec bit lost on the launcher -> WARN naming the install script.
+            launcher.chmod(0o644)
+            row = check_claude_code()
+            assert (row["status"] == WARN and "lost its exec bit" in row["detail"]
+                    and "adapters/claude-code/install.sh" in row["detail"]), row
+            # A `.in_use/<pid>.json` marker in the version dir must never be scanned or
+            # mistaken for install state (the marker Claude Code itself writes for a running
+            # session holding that version open).
+            launcher.chmod(0o755)
+            (install_dir / ".in_use").mkdir()
+            (install_dir / ".in_use" / "12345.json").write_text(json.dumps({"pid": 12345}))
+            row = check_claude_code()
+            assert row["status"] == OK, row
+    finally:
+        _g.update(_saved_cc)
 
     # --- Command Code harness check (ADR-0038): fixture-driven, never touches the real ~/.commandcode ---
     # Two outcomes: absent CC -> WARN "not installed"; all surface present -> OK.
@@ -2261,6 +2442,7 @@ def _selftest():
     assert any(getattr(fn, "__name__", "") == "check_codex" for fn in CHECKS)
     assert any(getattr(fn, "__name__", "") == "check_commandcode" for fn in CHECKS)
     assert any(getattr(fn, "__name__", "") == "check_omp" for fn in CHECKS)
+    assert any(getattr(fn, "__name__", "") == "check_claude_code" for fn in CHECKS)
     print("selftest ok")
     return 0
 

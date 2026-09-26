@@ -361,6 +361,23 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
   YAML parser; `doctor`'s DSH row flags a patch file DSH cannot load. Re-run the installer after
   changing it; DSH picks the plugin up at its next start
   ([ADR-0050](../docs/adr/0050-dsh-hexa-harness-parity.md) §5, ADR-0059 §4).
+- **Codex and Claude Code plugin caches are also copies, refreshed only by their own installer.**
+  [`adapters/codex/install.sh`](../adapters/codex/install.sh) refreshes the Codex marketplace
+  clone under `~/.codex/plugins/cache/skill-concierge/skill-concierge/<ver>/` to the SSOT version
+  (`codex plugin marketplace upgrade` + `remove` + `add` — there is no `codex plugin upgrade`
+  verb; installs whatever is pushed to the git remote). A remaining version gap falls back to a
+  `git archive HEAD` export into a new version-named cache dir — older dirs are left in place,
+  since Codex resolves the semver-newest by scanning, not a registry — with a loud
+  unpushed-content notice; a live session actually loading hooks/MCP from that dir is unverified
+  beyond `codex plugin list`.
+  [`adapters/claude-code/install.sh`](../adapters/claude-code/install.sh) refreshes
+  `~/.claude/plugins/cache/skill-concierge/skill-concierge/<ver>/` via
+  `claude plugin update skill-concierge@skill-concierge --json -y`, falling back to a local
+  `git archive` sync plus a backed-up `installed_plugins.json` repoint when the marketplace
+  remote hasn't caught up to this checkout yet (never touching `enabledPlugins` or the shared
+  venv — a session restart is required either way). Whether Claude Code accepts a
+  hand-repointed registry entry is unverified beyond the sandboxed test suite. `doctor`'s Codex
+  and Claude Code rows both warn when the cached content lags the SSOT.
 
 ## See also
 
