@@ -61,8 +61,14 @@ The report also counts **continuations** (rule 3; ADR-0064, ADR-0065; epoch-watc
 `USING: <name> (continuing …)` — `(continued …)`, `(continuation …)` and several names included — per
 turn: whether the turn loads the skill (the Skill tool or skill-search's `get_skill`, before or after the
 line), whether the session used it before this turn (a load, a `USING:` line or the user's slash command,
-before the `--since` window too), and how many turns ago it was last used (more than 5 is flagged as
-likelier new work). Counts are shown for all sessions and for organic ones (self/meta excluded);
+before the `--since` window too), and how many **work turns** ago it was last used (more than 5 is
+flagged as likelier new work). A work turn is a typed prompt that hands the agent work: Stop-hook
+feedback, slash-command records, notifications, cross-session messages and compaction summaries do not
+count (since `0.52.4`; a "turn" for the verdicts is still every prompt record). Name forms of one skill
+match loosely (`plugin:name` and `name`, or one name ending in `-<the other>`), which can join two
+different skills whose names nest (`ssh-doctor`, `tk-servers-ssh-doctor`); a slash command counts as
+earlier use only from the user's own prompt, not from a tool result that quotes one. The listing shows
+local time, sorted, with self/meta sessions marked. Counts are shown for all sessions and for organic ones (self/meta excluded);
 `--continuations` lists each one (session id prefix, time, skill) for hand review. A queued user prompt
 splits a turn, so a re-read after it is missed. The `SEARCH` declaration count is display-only and
 includes bare title-case prose lines ("Search …"); the raw-line pre-filter is case-sensitive, so a

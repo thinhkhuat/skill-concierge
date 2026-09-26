@@ -287,3 +287,51 @@ def test_earlier_use_before_the_window_counts_and_subagents_are_excluded(tmp_pat
     r = _audit_files(tmp_path, monkeypatch, {"p/s1.jsonl": main, "p/s1/subagents/a.jsonl": sub},
                      since=A.parse_since("2026-09-26 10:00:00"))
     assert r["continuations"] == (1, 0, 0, 0)
+
+
+def test_hook_and_notification_records_do_not_widen_the_stale_gap(tmp_path, monkeypatch):
+    """A Stop-hook reply, a slash-command record or a notification is not a new piece of work."""
+    recs = [_user("turn 0"), _tool("Skill", skill="study")]
+    for _ in range(A.STALE_TURNS + 2):
+        recs += [{**_user("Stop hook feedback: keep going"), "isMeta": True},
+                 _user("<local-command-caveat>Caveat: …</local-command-caveat>"),
+                 _user("<task-notification><summary>done</summary></task-notification>")]
+    recs.append(_say("USING: study (continuing)"))
+    r = _audit(tmp_path, monkeypatch, recs)
+    assert r["continuations"][3] == 0
+
+
+def test_the_stale_cut_off_is_more_than_five_work_turns(tmp_path, monkeypatch):
+    def run(gap):
+        recs = [_user("turn 0"), _tool("Skill", skill="study")] + [_user(f"turn {i}") for i in range(1, gap)]
+        recs += [_user("last"), _say("USING: study (continuing)")]
+        return _audit(tmp_path / str(gap), monkeypatch, recs)["continuations"][3]
+    assert (run(A.STALE_TURNS), run(A.STALE_TURNS + 1)) == (0, 1)
+
+
+def test_the_organic_split_drops_self_meta_sessions(tmp_path, monkeypatch):
+    d = tmp_path / "projects" / "p"
+    d.mkdir(parents=True)
+    (d / "s1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        _user("tune the skill-concierge gate"), _tool("Skill", skill="study"),
+        _user("more"), _say("USING: study (continuing)")]))
+    monkeypatch.setattr(A, "PROJECTS", str(tmp_path / "projects"))
+    r = A.audit(since=None, meta_keywords=["skill-concierge"], subagent_stop=True)
+    assert (r["continuations"][0], r["continuations_organic"][0]) == (1, 0)
+
+
+def test_a_foreign_search_skills_call_does_not_back_a_skip(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("mcp__agent-playbook__search_skills", query="q"), _say("NO SKILL: nothing fits"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"]) == (1, 0)
+
+
+def test_real_transcripts_compact_json_form_is_read(tmp_path, monkeypatch):
+    """The store writes compact JSON ("type":"assistant"); the pre-filter guard must match it."""
+    d = tmp_path / "projects" / "p"
+    d.mkdir(parents=True)
+    recs = [_user("turn one"), _say("No skill: trivial")]
+    (d / "s1.jsonl").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
+    monkeypatch.setattr(A, "PROJECTS", str(tmp_path / "projects"))
+    assert A.audit(since=None, meta_keywords=[], subagent_stop=True)["n_skip"] == 1

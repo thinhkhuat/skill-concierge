@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.52.3-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.52.4-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -429,6 +429,7 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.52.4` — **published, ADR-0066: the stale-continuation flag counts work turns only (Stop-hook replies, slash-command records and notifications no longer widen the gap — the 0.52.3 "stale" figures were mostly those); continuations need their colon and skip filler words; a slash command is earlier use only from the user's own prompt; the prompt-intent miner skips the same harness messages as the enforcer.** See [CHANGELOG](CHANGELOG.md).
 `0.52.3` — **published, ADR-0065: the usage audit reads every continuation form (`(continuing …)`, `(continued …)`, several names), judges earlier use from the session before the turn, counts a load anywhere in the turn as the re-read, flags continuations of a skill last used more than 5 turns earlier, splits organic from self/meta sessions and lists each one with `--continuations`; a red-flags row sends "I'm still in <skill>" on new work to SEARCH; cross-session idle notices take the harness-message lane.** See [CHANGELOG](CHANGELOG.md).
 `0.52.2` — **published, ADR-0064: a continuation is for the same task only, re-reads with `get_skill` (the harness skill tool when that call is unavailable or cannot find the skill), and the usage audit counts continuations — re-read or not, and whether the skill was used earlier; a search now backs a skip only when it came before the ruling; the June 2026 enforcer head counts again; the embed-shim relay test no longer leaks its model env into the test process.** See [CHANGELOG](CHANGELOG.md).
 `0.52.1` — **published, ADR-0063: an agent continuing a skill it invoked earlier this session skips the search but re-reads the skill's body first (`USING: <name> (continuing)` + `get_skill`, the harness skill tool only as a fallback); the usage audit judges a skip by what the agent had been told when it ruled, reads bold-colon rulings but not bold prose headings, retracts wrapped re-rules, and splits `NO SKILL:` from old `SKIPPING` counts; corrections to ADR-0062's figures.** See [CHANGELOG](CHANGELOG.md).

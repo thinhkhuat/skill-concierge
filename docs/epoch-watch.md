@@ -13,6 +13,13 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.4 — the stale gap counts work turns (ADR-0066)
+
+**Starts per harness** when its plugin cache reaches `0.52.4`. No standing-order change, so no new trail
+epoch for the rulings: W25-W28 keep reading from the 0.52.3 deploy (Claude Code 2026-09-26 21:20:20). The
+continuation counter changed again (work-turn gap, parsing): continuation counts across 0.52.3 → 0.52.4
+readers are not comparable.
+
 ## v0.52.3 — continuation counter reads every form; stale-continuation red flag (ADR-0065)
 
 **Starts per harness** when its plugin cache reaches `0.52.3` and a session restarts. A **trail epoch**
@@ -40,7 +47,7 @@ so W25-W27 below are read from the 0.52.1 deploy, not the 0.52.0 one. The audit 
 
 | # | Watch | Command | Trigger | Action |
 |---|-------|---------|---------|--------|
-| W28 | Continuations re-read and scoped | `audit_skill_usage.py --since "<deploy>" --continuations` → the continuations line, organic part (total; re-read in the turn; no earlier use; last used > 5 turns ago) and the listed units for hand review | continuations without the re-read, more than a stray one per week | the rule 3 paragraph is not landing — make the re-read the first clause, or have the enforcer name the last-used skill on short turns |
+| W28 | Continuations re-read and scoped | `audit_skill_usage.py --since "<deploy>" --continuations` → the continuations line, organic part (total; re-read in the turn; no earlier use; last used > 5 work turns ago) and the listed units for hand review | continuations without the re-read, more than a stray one per week; or organic stale continuations (last used > 5 work turns ago) that hand review finds are new work | re-read missing: the rule 3 paragraph is not landing — make the re-read the first clause, or have the enforcer name the last-used skill on short turns; stale-and-new-work: the red-flags row is not landing — move it up, or have the enforcer warn when a continued skill is absent from a high-fit offer |
 
 ## v0.52.0 — `NO SKILL:` ruling, whole-shelf label, shorter standing order (ADR-0062)
 

@@ -57,7 +57,10 @@ MIN_TOOLS_ACTIONABLE = 3
 # (skill bodies, hook output, system notices). Excluded so labels reflect real intent.
 _BAD_PREFIX = ("Base directory for this skill:", "Stop hook feedback", "Caveat:", "## Session",
                "PROMPT EVALUATION", "This session is being continued", "Your turn ended",
-               "## Context Usage")
+               "## Context Usage",
+               # harness-message heads the enforcer's lane also skips (ADR-0054, ADR-0065)
+               "Another Claude session sent a message", "[Cross-session idle notice]",
+               "[SYSTEM NOTIFICATION", "[Scheduled Task")
 _BAD_SUB = ("[Request interrupted", "<system-reminder", "<command-name", "<command-message",
             "<local-command", "<user-prompt-submit-hook", "<persisted-output", "<task-notification",
             "SessionStart hook", "UserPromptSubmit hook")
@@ -74,7 +77,7 @@ def _genuine(s):
 
 
 def _prompt_text(ev):
-    if ev.get("type") != "user":
+    if ev.get("type") != "user" or ev.get("isMeta"):   # isMeta: hook feedback, slash expansions
         return None
     c = ev.get("message", {}).get("content")
     if isinstance(c, str):

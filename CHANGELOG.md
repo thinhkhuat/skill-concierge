@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.4] — 2026-09-26
+
+### Fixed — ADR-0066: the stale-continuation gap counts work turns
+- **Stale flag.** The 0.52.3 gap counted every text-only user record as a turn — Stop-hook feedback,
+  slash-command records, notifications, cross-session messages — about 11,000 of them against roughly 3,400
+  typed prompts, so "more than 5 turns ago" often meant one or two real prompts. It now counts only prompts
+  that hand the agent work. Corrected figures: since 2026-07-04 stale 12 → 1; since 2026-09-19 4 → 0 —
+  0.52.3's CHANGELOG and ADR-0065 overstated them.
+- **Continuation parsing.** The form needs its colon (prose "Using rg (continuing …)" is not a ruling),
+  filler words (`then`, `and`, `for`…) are not read as skill names, the quoted `<name>` placeholder is
+  skipped, and "(phase 2, continuing)" reads. A slash command counts as earlier use only from the user's
+  own prompt, not from a tool result quoting a transcript. A duplicated record line is counted once. The
+  `--continuations` listing is in local time, sorted, with self/meta sessions marked.
+- **Class sweep.** `scripts/build_prompt_intent.py` (the gate's grounding-corpus miner) now skips the
+  harness-message heads the enforcer's lane skips — cross-session messages and idle notices, system
+  notifications, scheduled tasks — and `isMeta` records.
+- **Tests.** Stop-hook and notification records do not widen the gap; the exact 5-work-turn cut-off; the
+  organic split; a foreign `search_skills` does not back a skip; the compact JSON form real transcripts
+  use. Each fails when its behaviour is broken (five mutations, each caught by exactly one test).
+
 ## [0.52.3] — 2026-09-26
 
 ### Changed — ADR-0065: the continuation counter reads every form; a red flag for stale continuations

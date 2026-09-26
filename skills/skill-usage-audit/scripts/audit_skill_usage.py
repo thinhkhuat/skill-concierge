@@ -59,7 +59,8 @@ _USING = re.compile(r'(?im)' + _LEAD.format(w='USING')
 # Rule 3's continuation (ADR-0063/0064): `USING: <name> (continuing)`, and the forms agents write —
 # `(continuing the earlier work)`, `(continued …)`, `(continuation …)`, several names joined by + , &.
 _CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
-                         + r'USING(?::[*`]*\s+|\s+)([^\n(]*?)[`*\s]*\(continu(?:ing|ed|ation)\b[^)\n]*\)')
+                         + r'USING:[*`]*\s+([^\n(]*?)[`*\s]*\([^)\n]*\bcontinu(?:ing|ed|ation)\b[^)\n]*\)')
+_FILLER = {"then", "and", "also", "plus", "with", "for", "name", "skill"}
 _SKILL_NAME = re.compile(r'[a-z0-9][a-z0-9:_\-]*', re.I)
 STALE_TURNS = 5   # a continuation whose skill was last used more turns ago than this is likelier new work
 
@@ -68,10 +69,14 @@ def _continued_names(txt):
     """The skill names an assistant text continues, in order, without repeats."""
     out = []
     for grp in _CONTINUING.findall(txt):
-        for tok in re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp):
-            m = _SKILL_NAME.search(tok.strip("`* "))
+        for part in re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp):
+            part = part.strip("`* ")
+            if part.startswith("<"):          # the doctrine's own `<name>` placeholder, quoted
+                continue
+            words = [w for w in part.split() if w.lower() not in _FILLER]
+            m = _SKILL_NAME.match(words[0].strip("`*")) if words else None
             n = norm(m.group(0)) if m else None
-            if n and n not in _NOT_A_SKILL and n not in out:
+            if n and n not in _NOT_A_SKILL and n not in _FILLER and n not in out:
                 out.append(n)
     return out
 
@@ -80,6 +85,23 @@ def _continuation_counts(units):
     """(total, re-read in the turn, no earlier use this session, last used > STALE_TURNS turns ago)."""
     return (len(units), sum(1 for u in units if u[3]), sum(1 for u in units if u[4] is None),
             sum(1 for u in units if u[4] is not None and u[4] > STALE_TURNS))
+
+
+_NOT_WORK_HEADS = ("<", "[", "Another Claude session", "Stop hook", "This session is being continued")
+
+
+def role_is_user_prompt(rec, msg):
+    """A user record whose content is the prompt string (not a tool result echoing a transcript)."""
+    return rec.get("type") == "user" and isinstance(msg, dict) and isinstance(msg.get("content"), str)
+
+
+def _hands_over_work(rec):
+    """True for a user prompt that hands the agent work: typed text, not a harness, hook,
+    notification, slash-command or compaction record. The stale gap counts only these."""
+    c = (rec.get("message") or {}).get("content")
+    if rec.get("isMeta") or rec.get("isCompactSummary") or not isinstance(c, str):
+        return False
+    return not c.lstrip().startswith(_NOT_WORK_HEADS)
 
 
 def _same_skill(a, b):
@@ -121,10 +143,11 @@ AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
 def _note_used(rec, line, last_used, turn_no):
     """Record in `last_used` (name -> turn number) the skills a record uses: Skill / get_skill calls,
     USING lines, a user's slash command."""
-    for m in _CMD.findall(line):
-        if norm(m):
-            last_used[norm(m)] = turn_no
     msg = rec.get("message")
+    if rec.get("type") == "user" and isinstance(msg, dict) and isinstance(msg.get("content"), str):
+        for m in _CMD.findall(msg["content"]):
+            if norm(m):
+                last_used[norm(m)] = turn_no
     if rec.get("type") != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("content"), list):
         return
     for blk in msg["content"]:
@@ -369,10 +392,14 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     rerules = Counter()   # retracted USING declarations, moved out of `using`
     sess_raw = defaultdict(Counter)   # every USING per session (subagent files included) — the undo base
     n_search = n_skip = n_skip_new = 0
-    cont_units = []    # one per continued skill per turn: (sid, ts, name, re-read, turns since last use)
+    cont_units = []    # one per continued skill per turn: (sid, epoch, name, re-read, work turns since last use)
+    seen_units = set()
 
     def _close_continuations(turn):
-        for name, (gap, sid_, ts_) in turn["cont"].items():
+        for name, (gap, sid_, ts_, uuid_) in turn["cont"].items():
+            if uuid_ and (uuid_, name) in seen_units:   # a duplicated record line
+                continue
+            seen_units.add((uuid_, name))
             reread = any(_same_skill(name, x) for x in turn["loads"])
             cont_units.append((sid_, ts_, name, reread, gap))
     # per-session prompt text, to flag self/meta sessions
@@ -417,7 +444,10 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                   "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                                   "sid": cur["sid"], "sub": is_sub})
                 cur = _new_turn(True)
-                turn_no += 1
+                try:   # the stale gap counts work turns only (a Stop-hook reply is the same task)
+                    turn_no += _hands_over_work(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
                 cur["used_before"] = dict(last_used)   # "earlier use" means before this turn
             # Genuine user-prompt lines must always reach sess_text below for meta
             # classification, even when they carry none of these tool/doctrine markers
@@ -462,7 +492,9 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 n = norm(m)
                 if n:
                     slash[n] += 1
-                    last_used[n] = turn_no   # the user invoked it
+                    msg0 = rec.get("message")
+                    if role_is_user_prompt(rec, msg0):
+                        last_used[n] = turn_no   # the user invoked it
                     if n in _SEARCH_SLUGS:
                         cur["saw_search"] = True
             msg = rec.get("message")
@@ -506,7 +538,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                 if c not in cur["cont"]:
                                     last = [t for n, t in cur["used_before"].items() if _same_skill(c, n)]
                                     gap = (turn_no - max(last)) if last else None
-                                    cur["cont"][c] = (gap, sid, rec.get("timestamp") or "")
+                                    cur["cont"][c] = (gap, sid, ts_epoch(rec) or 0.0, rec.get("uuid"))
                         for n in used:
                             last_used[n] = turn_no
                         undone = _tally(used, retracted, sid, using, sess_raw, rerules)
@@ -561,7 +593,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         "n_search": n_search, "n_skip": n_skip, "n_skip_new": n_skip_new,
         "continuations": _continuation_counts(cont_units),
         "continuations_organic": _continuation_counts([u for u in cont_units if u[0] not in meta_sessions]),
-        "continuation_units": cont_units,
+        "continuation_units": sorted(((u, u[0] in meta_sessions) for u in cont_units), key=lambda x: x[0][1]),
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
         "enforcer_verdicts": enforcer_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
@@ -672,6 +704,9 @@ def main():
             and bool(_SKIPPING.search("`NO SKILL: nothing fits`"))         # backtick-wrapped
             and bool(_USING.search("**USING: ak-git**"))
             and _declared("**USING: b (re-rule: a)**") == (["b"], ["a"])   # a bold re-rule retracts
+            and _continued_names("USING: ak-cook for the build, then ak-git (continuing the work)") == ["ak-cook", "ak-git"]
+            and _continued_names("Using rg (continuing the search)") == []            # prose, no colon
+            and _continued_names("USING: <name> (continuing)") == []                 # the quoted placeholder
             and not _SEARCH.search("**Search results**")                    # a bold heading is prose
             and _enforcer_output(_att("UserPromptSubmit", auth)) == [auth]
             and _enforcer_output(_att("UserPromptSubmit", "CONSULT-ROUTE · x")) == ["CONSULT-ROUTE · x"]
@@ -740,9 +775,12 @@ def main():
               f"no earlier use this session {cn}; last used > {STALE_TURNS} turns ago {cs}  "
               f"[organic, self/meta excluded: {ot} — {orr} / {on} / {os_}]")
         if args.continuations:
-            for sid_, ts_, name, reread, gap in r["continuation_units"]:
-                print(f"    {str(sid_)[:8]} {ts_[:19]} {name} re-read={'yes' if reread else 'no'} "
-                      f"turns-since-last-use={gap if gap is not None else 'never'}")
+            import datetime as _dt
+            for (sid_, ep, name, reread, gap), meta in r["continuation_units"]:
+                when = _dt.datetime.fromtimestamp(ep).strftime("%Y-%m-%d %H:%M:%S") if ep else "?"
+                print(f"    {str(sid_)[:8]} {when} {name} re-read={'yes' if reread else 'no'} "
+                      f"work-turns-since-last-use={gap if gap is not None else 'never'}"
+                      f"{' [self/meta]' if meta else ''}")
     efs, els, eaz = r["enforcer_verdicts"]
     if efs + els + eaz:
         print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "
