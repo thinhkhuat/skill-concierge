@@ -389,12 +389,12 @@ def extract():
                 tloc = dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(TZ)
             except ValueError:
                 tloc = None
-            band = top = jev = None
+            band = top = jev = offered = None
             lg = ledger.get((sid, tn["txt"].strip()[:120]))
             if lg and lg["offer"] and tloc:
                 o = min(lg["offer"], key=lambda x: abs(x[0] - tloc.timestamp()))
                 if abs(o[0] - tloc.timestamp()) < 600:
-                    band, top, jev = o[1], o[2][:3], o[3]
+                    band, top, jev, offered = o[1], o[2][:3], o[3], o[2]
             corr = next((name for name, rx in CORRECTION_RES if nxt and rx.search(nxt[:2000])), None)
             ep = rec.get("entrypoint") or ""
             rows[uid] = {
@@ -416,7 +416,7 @@ def extract():
                 "n_tool_calls": tn["n_tools"], "n_assistant_records": tn["n_assistant"],
                 "interrupted": tn["interrupted"],
                 "ledger_turn_row": bool(lg and lg["turn"]), "ledger_offer_band": band,
-                "ledger_offer_top3": top, "ledger_jev": jev,
+                "ledger_offer_top3": top, "ledger_offered": offered, "ledger_jev": jev,
                 "next_prompt_correction": corr, "next_prompt_head": (nxt or "")[:160] if corr else None,
             }
             by_uuid[uid] = len(tn["texts"])

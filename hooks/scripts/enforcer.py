@@ -1210,7 +1210,7 @@ def _floor_for(name: str) -> float:
 
 
 # ── deterministic route overrides (config-driven, default ON since ADR-0054) ──────
-# A tiny, high-precision exact-substring -> skill map for intents where semantic ranking is
+# A tiny, high-precision whole-word phrase -> skill map for intents where semantic ranking is
 # unreliable but the intent is unambiguous — above all a prompt that NAMES the skill
 # ("/unlazy", "cook --auto", "progress-map"): 11 such prompts in the v0.46.0 epoch were
 # missed by the preview. GUARANTEES the mapped skill leads the menu (score 1.0, retrieved
@@ -1220,7 +1220,13 @@ def _floor_for(name: str) -> float:
 # disables; missing/empty config -> no-op. CURATE SPARINGLY — this system's dodge is
 # dominated by FALSE offers, so every route must be near-zero false-positive: a literal
 # skill name, its slash form, or an alias replayed from a ledger miss. Format:
-# {"routes":[{"contains":"<lower substring>","skill":"<exact name>"}]}.
+# {"routes":[{"contains":"<lowercased phrase>","skill":"<exact name>"}]}.
+# WHOLE-WORD match: a route whose text starts or ends in a name character (ASCII letter, digit,
+# `_`, `-`) must not continue into a longer word on that side — `/cook` pinned ak-cook three times
+# from `docs.typesafe.ai/cookbooks` URLs (ledger, 2026-09-26). ASCII-only on purpose: route texts
+# are ASCII skill names, and a route written between CJK characters (no spaces) must still fire.
+# Replayed on the ledger's 120-char prompt heads the boundary drops only those three plus one
+# `cook --auto` inside `/ak-cook --auto`, which the `ak-cook` route still catches.
 _ROUTES_PATH = Path(os.environ.get(
     "SKILL_CONCIERGE_ROUTES",
     Path(__file__).resolve().parents[2] / "config" / "deterministic-routes.json"))
@@ -1239,10 +1245,22 @@ def _load_routes() -> list:
 
 
 _ROUTES = _load_routes()
+_NAME_CHAR = re.compile(r"[\w-]", re.ASCII)
+
+
+def _route_matches(sub: str, low: str) -> bool:
+    """`sub` occurs in `low` as a whole word: no name character continues it on a side where
+    `sub` itself begins or ends with one."""
+    pat = re.escape(sub)
+    if _NAME_CHAR.match(sub[0]):
+        pat = r"(?<![\w-])" + pat
+    if _NAME_CHAR.match(sub[-1]):
+        pat += r"(?![\w-])"
+    return re.search(pat, low, re.ASCII) is not None
 
 
 def _route_hits(prompt: str, keepoff: frozenset = frozenset()) -> list:
-    """Every configured route whose substring is in the lowercased prompt, as
+    """Every configured route whose text is in the lowercased prompt as a whole word, as
     [(name, desc, 1.0)] in first-match order, de-duped. Pure (no I/O) so it runs before the
     embed step. NEVER resurfaces a keep-off'd (ADR-0011) or blocklisted (ADR-0046) skill —
     suppression outranks a route, else a co-configured route silently bypasses it. Inert
@@ -1257,7 +1275,7 @@ def _route_hits(prompt: str, keepoff: frozenset = frozenset()) -> list:
     # twin rescue, so on a divergent shelf a bare personal route goes inert (ADR-0057).
     personal_foreign = "personal" in FOREIGN_SCOPES
     for sub, skill in _ROUTES:
-        if sub not in low or skill in seen or skill in keepoff or _blocked(skill):
+        if skill in seen or skill in keepoff or _blocked(skill) or not _route_matches(sub, low):
             continue
         if personal_foreign and ":" not in skill and not _invocable_twin(skill):
             continue
@@ -1689,7 +1707,13 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             "ctx": bool(prev), "lead": rows[0][0] if rows else None}}
     except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
             http.client.HTTPException) as e:
-        return {"result": None, "event": {"err": type(e).__name__, "ms": int((time.time() - t0) * 1000)}}
+        return {"result": None, "event": _jev_err(type(e).__name__, t0)}
+
+
+def _jev_err(name: str, t0: float) -> dict:
+    """A router error event. `leg` tells it apart from the v0.50.0 leg's `{err, ms}` rows, which
+    sessions still on the old hook keep writing into the same ledger."""
+    return {"err": name, "ms": int((time.time() - t0) * 1000), "leg": "router"}
 
 
 def _jev_start(prompt: str, transcript_path: str):
@@ -1701,7 +1725,7 @@ def _jev_start(prompt: str, transcript_path: str):
         try:
             box.update(_jev_route(prompt, transcript_path))
         except Exception as e:  # noqa: BLE001 — the thread boundary: a hook never lets an error escape
-            box.update({"result": None, "event": {"err": type(e).__name__, "ms": int((time.time() - t0) * 1000)}})
+            box.update({"result": None, "event": _jev_err(type(e).__name__, t0)})
     t = threading.Thread(target=work, daemon=True)
     t.start()
     return t, box, time.time() + JEV_BUDGET_S
@@ -1716,7 +1740,7 @@ def _jev_join(job):
     t, box, deadline = job
     t.join(max(0.0, deadline - time.time()))
     if t.is_alive():
-        _JEV_EVENT = {"err": "BudgetExceeded", "ms": int(JEV_BUDGET_S * 1000)}
+        _JEV_EVENT = {"err": "BudgetExceeded", "ms": int(JEV_BUDGET_S * 1000), "leg": "router"}
         return None
     _JEV_EVENT = box.get("event")
     return box.get("result")
@@ -2696,9 +2720,15 @@ def _selftest() -> int:
         _ROUTES = [("open a pull request", "ck:git")]
         hit = [n for n, _d, _s in _route_hits("please open a pull request now")]
         if hit != ["ck:git"]:
-            bad.append(f"deterministic route must fire on a substring match: {hit}")
+            bad.append(f"deterministic route must fire on a whole-word match: {hit}")
         if _route_hits("an unrelated prompt") != []:
             bad.append("deterministic route must not fire without a match")
+        _ROUTES = [("/cook", "ak-cook"), ("open a pull request", "ck:git")]
+        if _route_hits("see https://docs.typesafe.ai/cookbooks/x and open a pull requests page") != []:
+            bad.append("deterministic route must not fire inside a longer word (/cookbooks)")
+        if [n for n, _d, _s in _route_hits("run /cook now")] != ["ak-cook"]:
+            bad.append("deterministic route must fire on a whole-word match")
+        _ROUTES = [("open a pull request", "ck:git")]
         merged = _merge_route_hits(_route_hits("open a pull request"),
                                    [("other", "o", 0.5), ("ck:git", "real desc", 0.3)])
         if [n for n, _d, _s in merged] != ["ck:git", "other"]:

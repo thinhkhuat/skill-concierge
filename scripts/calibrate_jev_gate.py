@@ -20,7 +20,11 @@ training language is English per docs.typesafe.ai/concepts/state.md).
           at or below --target, re-checked on a later time holdout
   rank    does Jev put the skill the agent actually used nearer the top than retrieval does?
   wide    recall of the used skill: retrieval's shortlist vs Jev over the whole catalogue
-  policy  the enforcer's own `_jev_decide` over the cached wide-pipeline answers
+  policy  the enforcer's own `_jev_decide` over the cached wide-pipeline answers, plus what
+          cutting low-probability tail rows from the offer would cost
+  live    epoch-watch W21-W24 on live v0.51.0 traffic: router latency, errors, relay use and
+          catalogue size from the ledger; false NO and offer quality (with SDK and dev-session
+          slices) from the label corpus
 
 Variants: `bare` (the request alone) and `ctx` (plus the previous assistant message and the
 skills already loaded this session — context the live hook can read from the transcript).
@@ -36,7 +40,6 @@ import importlib.util
 import json
 import math
 import os
-import random
 import sys
 import tempfile
 import time
@@ -163,7 +166,9 @@ def pick(enf, rows, n_unlab, seed):
     pool = [r for r in rows if enf._is_english(r["prompt"]) and r["entry_class"] == "interactive"
             and not r["meta_session"] and reaches_gate(enf, r["prompt"])]
     pos = [r for r in pool if is_positive(r)]
-    unl = random.Random(seed).sample(pool, min(n_unlab, len(pool)))
+    # Hash-ordered, not random.sample: a turn keeps its place when the pool gains or loses rows
+    # elsewhere (a re-extract, a lane change), so cached scores stay reusable.
+    unl = sorted(pool, key=lambda r: hashlib.sha256(f"{seed}:{r['uuid']}".encode()).hexdigest())[:n_unlab]
     return pos, unl
 
 
@@ -190,7 +195,7 @@ def cmd_replay(a):
     print(f"{len(pos)} positives, {len(unl)} traffic, {len(rows)} unique turns", flush=True)
     cat_h = None
     if a.shelf == "wide":   # the proposed live pipeline: Jev ranks the whole catalogue first
-        catalog = live_catalog()
+        catalog = live_catalog(record=True)
         cat_h = catalog_hash(catalog)
         desc = dict(catalog)
         shelves = {}
@@ -317,7 +322,7 @@ def cmd_curve(a):
 def cmd_fit(a):
     """Fit on turns before --holdout-from, then check the bound on turns from that date on."""
     enf = load_enforcer()
-    P, U, _, _ = scored(enf, a)
+    P, U, _, nu = scored(enf, a)
     train = [x for r, x in P if (r["ts_local"] or "") < a.holdout_from]
     test = [x for r, x in P if (r["ts_local"] or "") >= a.holdout_from]
     menu = [x for r, x in U if r["ledger_offer_band"] == "offer"]
@@ -331,6 +336,7 @@ def cmd_fit(a):
         out[sig] = {"threshold": t, "train_n": len(train), "holdout_n": len(test),
                     "holdout_false_no": fn_te, "holdout_ucb": round(wilson_upper(fn_te, len(test)), 4),
                     "skip_all": round(sum(signals(x)[sig] < t for _, x in U) / max(len(U), 1), 3),
+                    "traffic_scored": f"{len(U)}/{nu}",
                     "skip_menu": round(sum(signals(x)[sig] < t for x in menu) / max(len(menu), 1), 3)}
     print(json.dumps(out, indent=2))
     return 0
@@ -368,19 +374,21 @@ def cmd_rank(a):
 
 
 WIDE_CACHE = CAL_DIR / "wide-scores.jsonl"
-CATALOG_SNAPSHOT = CAL_DIR / "invocable-catalog.json"   # what live_catalog() last returned, for the record
+CATALOG_SNAPSHOT = CAL_DIR / "invocable-catalog.json"   # the catalogue the last replay/wide run scored against
 
 
 def catalog_hash(catalog):
     return hashlib.sha256(json.dumps(catalog, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def live_catalog():
+def live_catalog(record=False):
     """The catalogue the live hook would send Jev from this cwd: the enforcer's own `_jev_catalog`
-    (project isolation makes it cwd-dependent). Snapshot written for the record; the cache key
-    carries the full catalogue, so a changed catalogue is never replayed from stale scores."""
+    (project isolation makes it cwd-dependent). The cache key carries the full catalogue, so a
+    changed catalogue is never replayed from stale scores. `record` (replay/wide only) writes the
+    snapshot W24 compares live traffic against; reading commands never overwrite it."""
     cat = [list(x) for x in load_enforcer()._jev_catalog()]
-    CATALOG_SNAPSHOT.write_text(json.dumps(cat))
+    if record:
+        CATALOG_SNAPSHOT.write_text(json.dumps(cat))
     return cat
 
 
@@ -414,7 +422,7 @@ def wide_answers(enf, a, rows, catalog):
 def cmd_wide(a):
     """Recall of the used skill: retrieval's shortlist vs a Jev ranking of the WHOLE catalogue."""
     enf = load_enforcer()
-    catalog = live_catalog()
+    catalog = live_catalog(record=True)
     names = {n.split(":")[-1] for n, _ in catalog}
     pos, _ = pick(enf, load_corpus(a.corpus), 0, a.seed)
     pos = [r for r in pos if gold(r) & names]            # gold still invocable today
@@ -463,6 +471,7 @@ def cmd_policy(a):
     sk = sum(decide(x)[0] == "skip" for _, x in U)
     installed = {n.split(":")[-1] for n in catalog}
     top_ok = lead_ok = offered = 0
+    used_tail, pos_tail, traffic_tail = [], [], []   # tail = the rows after the lead
     for r, x in P:
         verdict, rows, _conf, _ = decide(x)
         if verdict != "offer" or not gold(r) & installed:
@@ -470,12 +479,165 @@ def cmd_policy(a):
         offered += 1
         top_ok += bool(gold(r) & {n.split(":")[-1] for n, _, _ in rows})
         lead_ok += rows[0][0].split(":")[-1] in gold(r)
+        pos_tail += [p for _, _, p in rows[1:]]
+        used_tail += [p for n, _, p in rows[1:] if n.split(":")[-1] in gold(r)][:1]
+    for _, x in U:
+        verdict, rows, _conf, _ = decide(x)
+        traffic_tail += [p for _, _, p in rows[1:]] if verdict == "offer" else []
     print(f"live policy (fits floor {enf.JEV_FITS_FLOOR}, top {enf.JEV_OFFER_ROWS}) on {len(P)} positives, {len(U)} traffic:")
     print(f"  false NO {fn}/{len(P)} ({100 * fn / max(len(P), 1):.1f}%, UCB {100 * wilson_upper(fn, len(P)):.1f}%);"
           f" holdout from {a.holdout_from}: {fn_h}/{len(held)}")
     print(f"  traffic skipped {sk}/{len(U)} ({100 * sk / max(len(U), 1):.1f}%)")
     print(f"  offers (used skill still installed) containing it: {top_ok}/{offered} ({100 * top_ok / max(offered, 1):.1f}%);"
           f" first row is it: {lead_ok} ({100 * lead_ok / max(offered, 1):.1f}%)")
+    for thr in TAIL_CUTS:
+        print(f"  tail rows below p {thr}: {100 * below(pos_tail, thr):.0f}% of positives' tail rows,"
+              f" {100 * below(traffic_tail, thr):.0f}% of traffic's; used skills among them"
+              f" {sum(p < thr for p in used_tail)}/{len(used_tail)} (a cut there loses these)")
+    return 0
+
+
+TAIL_CUTS = (0.01, 0.05)
+TZ_LOCAL = "Asia/Saigon"
+
+
+def below(ps, thr):
+    return sum(p < thr for p in ps) / len(ps) if ps else 0.0
+
+
+def pctl(xs, q):
+    """Nearest-rank percentile; None on no data."""
+    if not xs:
+        return None
+    s = sorted(xs)
+    return s[min(len(s) - 1, max(0, math.ceil(q * len(s)) - 1))]
+
+
+def jev_kind(jev):
+    """Which leg wrote a ledger `jev` field: "router" (v0.51.0 — a routed turn, or an error marked
+    `leg: router`), "v050" (the v0.50.0 yes/no leg's `{p, ms}`), "err?" (an unmarked `{err, ms}`:
+    either the v0.50.0 leg or v0.51.0 before its errors were marked), or None."""
+    if not isinstance(jev, dict):
+        return None
+    if "p" in jev:
+        return "v050"
+    if "err" in jev:
+        return "router" if jev.get("leg") == "router" else "err?"
+    return "router" if "fit" in jev or "via" in jev else None
+
+
+def parse_since(text):
+    """--since: a naive time is local (+07); an explicit offset is honoured."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+    t = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return t.replace(tzinfo=ZoneInfo(TZ_LOCAL)) if t.tzinfo is None else t
+
+
+def turn_time(r):
+    import datetime as dt
+    try:
+        return dt.datetime.fromisoformat(r.get("ts_local") or "")
+    except ValueError:
+        return None
+
+
+LEDGER = HOME / "logs" / "skill-invocation-ledger.log"
+
+
+def router_rows(path, since_ts, harness):
+    """Offer rows written by the v0.51.0 router since `since_ts` for `harness`. An unmarked error
+    row takes the kind of the same session's latest earlier `jev` row; with none it is counted
+    as unattributed. Malformed lines are skipped. -> (rows, unattributed_errors)"""
+    last, rows, unknown = {}, [], 0
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for ln in fh:
+            if '"jev"' not in ln:
+                continue
+            try:
+                r = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(r, dict) or r.get("ev") != "offer":
+                continue
+            kind = jev_kind(r.get("jev"))
+            sid = r.get("sid")
+            if kind == "err?":
+                kind = last.get(sid)
+            elif kind:
+                last[sid] = kind
+            if r.get("t", 0) < since_ts or r.get("harness", "claude") != harness:
+                continue
+            if kind == "router":
+                rows.append(r)
+            elif kind is None and "err" in (r.get("jev") or {}):
+                unknown += 1
+    return rows, unknown
+
+
+def cmd_live(a):
+    """W21-W24 (docs/epoch-watch.md, v0.51.0) on live traffic since --since: router telemetry from
+    the ledger, offer quality from the label corpus (re-run extract_turn_labels.py first). Prints
+    no prompt text: the corpus is private and this output may be pasted into tracked files."""
+    since = parse_since(a.since)
+    enf = load_enforcer()
+    rows, unknown = router_rows(LEDGER, since.timestamp(), a.harness)
+    ok = [r for r in rows if "err" not in r["jev"]]
+    ms = [r["jev"]["ms"] for r in ok if "ms" in r["jev"]]
+    via = {v: sum(r["jev"].get("via") == v for r in ok) for v in ("relay", "direct")}
+    errs = {}
+    for r in rows:
+        if "err" in r["jev"]:
+            errs[r["jev"]["err"]] = errs.get(r["jev"]["err"], 0) + 1
+    print(f"router rows since {since.isoformat(timespec='minutes')} ({a.harness}): {len(rows)} "
+          f"({len(ok)} routed, {len(rows) - len(ok)} errors; {unknown} unattributed error rows left out)")
+    print(f"W23 latency ms p50 {pctl(ms, .5)} p90 {pctl(ms, .9)} (trigger p90 > 1500);"
+          f" errors {100 * (len(rows) - len(ok)) / max(len(rows), 1):.1f}% {errs} (trigger > 5%); via {via}")
+    ns = [r["jev"]["n"] for r in ok if "n" in r["jev"]]
+    med = pctl(ns, .5)
+    try:
+        base_n = len(json.loads(CATALOG_SNAPSHOT.read_text()))
+    except (OSError, ValueError):
+        base_n = None
+    drift = abs(med - base_n) / base_n if med is not None and base_n else None
+    try:
+        catalog = live_catalog()
+    except Exception as e:  # noqa: BLE001 — Qdrant down: report the rest
+        catalog = None
+        print(f"  (live catalogue unavailable: {type(e).__name__})")
+    print(f"W24 catalogue size on rows: median {med} min {min(ns, default=None)} max {max(ns, default=None)};"
+          f" replay catalogue {base_n} (snapshot {CATALOG_SNAPSHOT.name}); this cwd now "
+          f"{len(catalog) if catalog is not None else '?'}"
+          + (f"; drift from the replay {100 * drift:.0f}% (trigger > 10%)" if drift is not None else ""))
+    tail = [p for r in ok if r.get("band") == "offer" for _n, p in (r.get("offered") or [])[1:]]
+    print(f"W22 tail rows on live offers: {len(tail)}; below p {TAIL_CUTS[0]}: {100 * below(tail, TAIL_CUTS[0]):.0f}%")
+
+    if a.harness != "claude":
+        print("W21/W22 skipped: the label corpus holds Claude Code transcripts only")
+        return 0
+    corpus = load_corpus(a.corpus)
+    newest = max((r.get("ts_local") or "" for r in corpus), default="")
+    print(f"label corpus: {len(corpus)} rows, newest turn {newest[:16]} (re-run extract_turn_labels.py for fresh turns)")
+    live = [r for r in corpus if (t := turn_time(r)) is not None and t >= since
+            and jev_kind(r.get("ledger_jev")) == "router" and "err" not in r["ledger_jev"]]
+    skips = [r for r in live if r["ledger_offer_band"] == "jev_skip"]
+    used = [r for r in skips if r["label"] == "NEEDS_SKILL"]
+    print(f"W21 jev_skip turns: {len(skips)}; of them the agent then used a skill: {len(used)}"
+          " (read each session; a real one on a substantial task = trigger)")
+    for r in used:
+        print(f"    session {r['sid']} turn {r.get('uuid')} at {r['ts_local'][:16]} used {sorted(gold(r))}")
+    installed = {n.split(":")[-1] for n, _d in catalog} if catalog is not None else None
+    slices = {"interactive (replay population)": lambda r: r["entry_class"] == "interactive" and not r["meta_session"],
+              "sdk / claude -p": lambda r: r["entry_class"] == "sdk",
+              "skill-concierge dev sessions": lambda r: bool(r["meta_session"])}
+    for label, keep in slices.items():
+        pos = [r for r in live if keep(r) and r["ledger_offer_band"] == "offer" and r.get("ledger_offered")
+               and r["label"] == "NEEDS_SKILL" and r["label_rule"] == "using+executed_this_turn"
+               and not r["interrupted"] and not r["next_prompt_correction"]
+               and (installed is None or gold(r) & installed)]   # as `policy`: the used skill is in the catalogue
+        hit = sum(bool(gold(r) & {n.split(":")[-1] for n, _p in r["ledger_offered"]}) for r in pos)
+        print(f"W22 {label}: used skill in the offer {hit}/{len(pos)}"
+              + (f" ({100 * hit / len(pos):.0f}%)" if pos else "") + " (trigger < 65% on >= 100; replay 74.7%)")
     return 0
 
 
@@ -495,6 +657,13 @@ def selftest():
     s = signals(rec)
     assert s["max_fits"] == 0.9 and abs(s["gate_mean"] - 0.6) < 1e-9
     assert s["fits_of_choice_top"] == 0.4 and s["max_relevant"] == 0.7 and s["max_fits_and_relevant"] == 0.5
+    assert pctl([], .5) is None and pctl([5, 1, 3], .5) == 3 and pctl(list(range(1, 11)), .9) == 9
+    assert below([0.001, 0.2, 0.004, 0.5], 0.01) == 0.5 and below([], 0.01) == 0.0
+    assert jev_kind({"ms": 900, "fit": 0.9, "via": "relay", "n": 400}) == "router"
+    assert jev_kind({"err": "Timeout", "ms": 3000, "leg": "router"}) == "router"
+    assert jev_kind({"err": "Timeout", "ms": 3000}) == "err?" and jev_kind({"p": 0.41, "ms": 400}) == "v050"
+    assert jev_kind(None) is None and jev_kind({"ms": 5}) is None
+    assert parse_since("2026-09-26T03:03Z") == parse_since("2026-09-26T10:03")
     print("selftest OK")
     return 0
 
@@ -522,8 +691,13 @@ def main():
         if name in ("fit", "policy"):
             s.add_argument("--target", type=float, default=0.03, help="max false-NO rate (95%% upper bound)")
             s.add_argument("--holdout-from", default="2026-09-01", help="fit before this local date, test from it")
+    s = sub.add_parser("live")
+    s.add_argument("--corpus", type=Path, default=CORPUS)
+    s.add_argument("--since", default="2026-09-26T10:03", help="start of the window; naive = local +07; default: the Claude Code deploy")
+    s.add_argument("--harness", default="claude", help="ledger `harness` to report (each harness has its own deploy time)")
     a = ap.parse_args()
-    return {"replay": cmd_replay, "curve": cmd_curve, "fit": cmd_fit, "rank": cmd_rank, "wide": cmd_wide, "policy": cmd_policy}[a.cmd](a)
+    return {"replay": cmd_replay, "curve": cmd_curve, "fit": cmd_fit, "rank": cmd_rank, "wide": cmd_wide, "policy": cmd_policy,
+            "live": cmd_live}[a.cmd](a)
 
 
 if __name__ == "__main__":

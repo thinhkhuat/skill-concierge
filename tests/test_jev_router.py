@@ -173,6 +173,7 @@ def test_jev_failure_leaves_the_embedding_path_to_decide(tmp_path, monkeypatch):
         assert calls and embed
         assert "Jev needs-a-skill gate" not in out and "tk-research" in out    # retrieval's menu
         assert rows[-1]["band"] == "offer" and rows[-1]["jev"]["err"] == type(err).__name__
+        assert rows[-1]["jev"]["leg"] == "router"   # tells it from the v0.50.0 leg's unmarked {err, ms}
 
 
 def test_malformed_rerank_answer_falls_back(tmp_path, monkeypatch):
@@ -188,6 +189,7 @@ def test_blown_budget_is_abandoned(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_jev_route", lambda p, t: (time.sleep(0.5), {"result": ("offer", [], 0.9)})[1])
     out, _, embed, rows = _run(mod, monkeypatch, rerank=CONFIDENT)
     assert embed and rows[-1]["jev"]["err"] == "BudgetExceeded" and "tk-research" in out
+    assert rows[-1]["jev"]["leg"] == "router"
 
 
 def test_embed_down_still_served_by_jev(tmp_path, monkeypatch):
@@ -254,6 +256,7 @@ def test_unexpected_error_in_the_worker_is_contained(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_jev_context", broken)
     out, _, embed, rows = _run(mod, monkeypatch, rerank=CONFIDENT)
     assert embed and "tk-research" in out and rows[-1]["jev"]["err"] == "AttributeError"
+    assert rows[-1]["jev"]["leg"] == "router"   # the thread-boundary error path
 
 
 def test_outage_served_by_jev_stays_visible_in_the_ledger(tmp_path, monkeypatch):

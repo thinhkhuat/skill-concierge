@@ -3,6 +3,56 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.51.1] — 2026-09-26
+
+### Fixed — deterministic routes match whole words only
+- **Why.** A route fired on any substring: `/cook` pinned `ak-cook` to the top of the offer three times
+  from `docs.typesafe.ai/cookbooks/…` URLs (ledger, 2026-09-26).
+- **What.** `_route_matches` in `hooks/scripts/enforcer.py`: a route whose text begins or ends with a
+  name character (ASCII letter, digit, `_`, `-`) must not continue into a longer word on that side.
+  ASCII-only so a route written between CJK characters (no spaces) still fires.
+- **Replayed.** On the 120-character prompt heads of all 5,196 ledger offer rows: 138 route hits kept,
+  3 dropped — all three the `/cookbooks` URLs (one `cook --auto` inside `/ak-cook --auto` is still caught
+  by the `ak-cook` route). On the full prompts of the 3,026-turn label corpus: 4 dropped — two
+  `/cookbooks` URLs and two `session handoff` hits inside longer words (a hyphenated compound and a
+  filename); no skill was used on either turn.
+- **Tests.** `tests/test_deterministic_routes.py`: every seeded route, inside-word negatives on both
+  sides and on the hyphen rule, punctuation, case, CJK and Vietnamese context. Mutation-checked: the old
+  substring rule, a missing leading check, `\w` without `-`, and Unicode `\w` each fail it. An
+  enforcer selftest case.
+
+### Added — the epoch-watch W21-W24 report and the offer tail-row measurement
+- `scripts/calibrate_jev_gate.py live [--since]`: router rows from the ledger (W23 latency p50/p90, error
+  share, relay vs direct; W24 catalogue size vs the replay's catalogue snapshot; tail rows on live offers), and from
+  the label corpus W21 (`jev_skip` turns where the agent then used a skill) and W22 (used skill in the
+  offer, sliced interactive / SDK or `claude -p` / skill-concierge dev sessions; like `policy`, only
+  turns whose used skill is in the catalogue). v0.50.0 rows are left out: its `{p, ms}` rows by shape,
+  and its unmarked `{err, ms}` rows by the kind of the same session's earlier row — router error events
+  now carry `leg: "router"` (enforcer `_jev_err`), so new rows need no guessing; an unmarked error with
+  no earlier row is reported as unattributed, not counted. `--harness` (default `claude`) windows one
+  harness; `--since` honours an explicit offset. W24 compares against the replay's catalogue snapshot,
+  which only `replay`/`wide` now write. It prints no prompt text (session and turn ids only): the corpus
+  is private. Pinned offline by `tests/test_calibrate_live.py` (mutation-checked on its seven filters).
+  `extract_turn_labels.py` now keeps the full offered list per turn (`ledger_offered`), not only the
+  top 3.
+- `policy` prints what cutting low-probability tail rows (the rows after the lead) would cost. Measured
+  2026-09-26: a cut at p < 0.01 removes 8 % of tail rows on real skill turns and 3 % on traffic and loses
+  1 of 79 used skills found in the tail; at p < 0.05 it loses 14. The top-5 offer stays.
+
+### Measured — TypeSafe keep-alive
+- An idle HTTPS connection to `api.typesafe.ai` was reusable after 240 s and closed by the server after
+  420 s. The relay's existing single fresh-connection retry covers a stale pooled connection; no code
+  change. Details: `docs/epoch-watch.md` (v0.51.0).
+
+### Changed — a stable traffic sample in the calibrator
+- The traffic sample is hash-ordered by turn id instead of `random.sample`, so a turn keeps its place
+  when the pool changes elsewhere; before, any pool change (the route fix moved 2 turns: 1,751 → 1,753)
+  reshuffled the whole sample and orphaned the cached scores. The switch itself re-drew the sample once:
+  the wide shelf was re-scored (297 of the 300 turns; 3 have no scores), while the retired mpnet-shelf
+  caches now cover about 93 of 300 — `fit` prints its coverage (`traffic_scored`). Re-measured on the
+  new sample: traffic skipped 9/297 (3.0 %; the old sample's 2.0 % is not comparable); false NO and
+  offer recall unchanged (1/313, 177/237).
+
 ## [0.51.0] — 2026-09-26
 
 ### Changed — ADR-0061: the Jev skill router replaces the ADR-0060 yes/no leg

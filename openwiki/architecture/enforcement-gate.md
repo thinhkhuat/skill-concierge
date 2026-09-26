@@ -98,8 +98,8 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    (`enforcer.py:550`), so a pure "explain your last answer" turn never reaches the embed. Detail in
    [leg C](#the-authorized-skip-tier-three-legs-two-formerly-silent) below.
 3b. **Deterministic routes (pure, no I/O).** `_route_hits` matches
-   [`config/deterministic-routes.json`](../../config/deterministic-routes.json) substrings — a
-   prompt that NAMES a skill (`/unlazy`, `cook --auto`, `progress-map`) — and the hits lead the
+   [`config/deterministic-routes.json`](../../config/deterministic-routes.json) phrases as whole
+   words (never inside a longer word: `/cook` must not fire on `…/cookbooks`) — a prompt that NAMES a skill (`/unlazy`, `cook --auto`, `progress-map`) — and the hits lead the
    menu at score 1.0 later in the flow (retrieved twin dropped, getaway and intent gate bypassed).
    Computed **before** the embed so a timeout cannot lose them: the fallback mandate carries the
    hits. Honours keep-off, the blocklist and the harness-invocability test. Default ON since
@@ -177,10 +177,9 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    `doctor --fix` / `setup.sh` from the ledger — harness-shaped offers excluded, keep-on members
    exempt — [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md)); the shipped
    `config/keep-off.json` is the empty seed. Fail-open to the empty set.
-7. **Deterministic routes** (`_deterministic_hits`, `enforcer.py:582`). **Inert unless
-   `ENFORCER_DETERMINISTIC` is set** — but when a route *does* hit, it leads the menu and
-   **bypasses both the getaway floor and the intent gate** below (`if not det and …`). Worth knowing
-   the step exists in the sequence even though it ships off.
+7. **Deterministic routes** (`_route_hits`, computed in step 3b). **Default ON since ADR-0054**
+   (`ENFORCER_DETERMINISTIC=0` disables): when a route hits, it leads the menu and **bypasses both
+   the getaway floor and the intent gate** below (`if not det and …`).
 8. **Getaway floor.** `GETAWAY_FLOOR = 0.45`: if the top candidate scores below it → **silent
    verdict leg A** (see AUTHORIZED-SKIP). This floor is **operator-set over the data that argued
    against it** (taken offers historically scored *lower* than dodged ones) — a pinned

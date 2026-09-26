@@ -28,15 +28,45 @@ v0.50.0 or earlier. Vietnamese and other non-English turns keep the embedding pa
 the v0.49.0 series. Tuning orders carried over: `ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=0`.
 
 Replay baseline (2026-09-26, `scripts/calibrate_jev_gate.py policy`, English, live catalogue): used skill
-in the offer 177/237 = 75 % (embedding menu 36 %); false NO 1/313 (holdout 1/105); traffic skipped 2.0 %. Re-derive, never
+in the offer 177/237 = 74.7 % (embedding menu 36 %); false NO 1/313 (holdout 1/105); traffic skipped 2.0 %. Re-derive, never
 hand-tune: `extract_turn_labels.py` → `calibrate_jev_gate.py replay --shelf wide` → `fit` / `policy`.
+Re-measured 2026-09-26 10:19 on the calibrator's new stable (hash-ordered) traffic sample: traffic
+skipped 9/297 of a 300-turn sample (3.0 %; 3 turns unscored) — the 2.0 % above came from the old random sample and is not comparable; false NO
+and offer recall unchanged.
+
+**Offer tail rows (W22's filler question, answered offline 2026-09-26):** `policy` prints the cost of
+cutting the rows after the lead by probability. p < 0.01 removes 8 % of tail rows on real skill turns
+(3 % on traffic) and loses 1 of the 79 used skills that sat in the tail; p < 0.05 loses 14. The offer
+stays at the top 5 — a near-zero row is sometimes the skill the agent uses. Re-check with `live` (its
+"tail rows" line) once real traffic exists.
+
+**TypeSafe keep-alive (measured 2026-09-26 10:14-10:21, direct HTTPS, one connection per idle gap):**
+reuse after 5, 30, 60, 120 and 240 s idle succeeded (232-334 ms); after 420 s the server had closed the
+connection (`RemoteDisconnected`, `Server: cloudflare`, no `Keep-Alive` timeout header). So a pooled relay
+connection goes stale somewhere between 4 and 7 minutes of quiet; the relay's one fresh-connection retry
+covers it — the server closed the idle connection with no response, so the failed attempt was never
+processed (inference from `RemoteDisconnected`) and nothing is billed twice. A
+turn after a longer pause pays one fresh handshake (the first router call only). Probe:
+`plans/260926-1010-open-items-after-v0510/checks/keepalive_probe.py` (untracked plans dir).
+
+**Whole-word deterministic routes (v0.51.1, same day):** replayed on 5,196 ledger offer rows the
+fix drops 3 route hits, all `/cookbooks` URLs (4 on the full prompts of the label corpus: two
+`/cookbooks` URLs, two `session handoff` inside longer words, no skill used on either) — too few to move
+any W-item; no reset.
+
+**One command for W21-W24:** `scripts/extract_turn_labels.py` (fresh turns), then
+`scripts/calibrate_jev_gate.py live --harness <name> --since "<that harness's deploy, local time>"`.
+Only v0.51.0 router rows count: v0.50.0 `{p, ms}` rows by shape; an unmarked `{err, ms}` row takes the
+kind of its session's earlier row (router errors carry `leg: "router"` from v0.51.1); with no
+earlier row it is reported as unattributed. W21/W22 read the label corpus, which is Claude Code only. The
+report prints session and turn ids, never prompt text.
 
 | # | Watch | Command | Trigger | Action |
 |---|-------|---------|---------|--------|
-| W21 | False NO: a `jev_skip` turn that needed a skill | ledger `offer` rows with band `jev_skip`; read the session for a later `Skill` / `search_skills` use or a user correction | any confirmed case on a substantial task | lower `ENFORCER_JEV_FITS_FLOOR` (env), then re-run the calibrator on a fresh extract — never add the prompt to a hand-written set |
-| W22 | Offer quality on live traffic | `extract_turn_labels.py`, then for English turns since the cache reached 0.51.0: used skill (USING + executed) in `offered` | below ~65 % on ≥ 100 English turns (replay: 74 %) | re-run `calibrate_jev_gate.py replay --shelf wide` + `policy`; check `jev.ctx` (context missing?) and catalogue size `jev.n` |
-| W23 | Latency, errors and the relay | `jev.ms`, `jev.err`, `jev.via` on ledger rows | p90 `ms` > 1500, `err` on > 5 % of rows, or `via=direct` on most rows | `curl localhost:6363/health` must list `jev` (else `setup.sh`); raise `ENFORCER_JEV_TIMEOUT` (the whole route stays capped at 3.0 s — a larger budget would get the hook killed at 5 s), or `ENFORCER_JEV_ROUTER=0` while TypeSafe is degraded |
-| W24 | Catalogue drift | `jev.n` on ledger rows | catalogue size moves > 10 % from the replay's | re-run the replay on the new catalogue before trusting W22 |
+| W21 | False NO: a `jev_skip` turn that needed a skill | `live` → W21 line (lists each `jev_skip` turn where the agent then used a skill); read those sessions for a user correction | any confirmed case on a substantial task | lower `ENFORCER_JEV_FITS_FLOOR` (env), then re-run the calibrator on a fresh extract — never add the prompt to a hand-written set |
+| W22 | Offer quality on live traffic | `live` → W22 lines: used skill (USING + executed) in the offer, per slice (interactive = the replay population; SDK / `claude -p`; dev sessions), plus tail rows below p 0.01 | below ~65 % on ≥ 100 English turns (replay: 74.7 %) | re-run `calibrate_jev_gate.py replay --shelf wide` + `policy`; check `jev.ctx` (context missing?) and catalogue size `jev.n` |
+| W23 | Latency, errors and the relay | `live` → W23 line (`jev.ms` p50/p90, `jev.err` share, `jev.via` split) | p90 `ms` > 1500, `err` on > 5 % of rows, or `via=direct` on most rows | `curl localhost:6363/health` must list `jev` (else `setup.sh`); raise `ENFORCER_JEV_TIMEOUT` (the whole route stays capped at 3.0 s — a larger budget would get the hook killed at 5 s), or `ENFORCER_JEV_ROUTER=0` while TypeSafe is degraded |
+| W24 | Catalogue drift | `live` → W24 line (`jev.n` on rows vs the replay's catalogue snapshot; also the cwd's catalogue now — project isolation makes `n` vary by cwd) | catalogue size moves > 10 % from the replay's | re-run the replay on the new catalogue before trusting W22 |
 
 ## v0.50.0 — the Jev needs-a-skill gate (ADR-0060; committed 2026-09-26) — SUPERSEDED by v0.51.0
 
