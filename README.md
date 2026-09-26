@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.52.9-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.54.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -437,6 +437,7 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.54.0` — **published, ADR-0070: a local index owner replaces the Qdrant container and the Docker embed shim — one process serves Qdrant's REST subset on 6333 and `/embed`, `/health` and `/jev` on 6363 from a SQLite store, starts itself on demand, and needs no Docker; the engine drops `qdrant-client` and its embedded mode. Upgrading takes the switch-over steps in the CHANGELOG, not just a plugin update.** See [CHANGELOG](CHANGELOG.md).
 `0.52.9` — **published, ADR-0072: the installers fail closed — the Codex installer requires the launcher, MCP and hooks files, stages its copy and swaps it in, and always asks Codex whether the plugin is installed and enabled; paths never become code in any installer; the Claude Code registry repoint keeps a symlink and its permissions and repoints only the refreshed scope; doctor flags a missing launcher.** See [CHANGELOG](CHANGELOG.md).
 `0.52.8` — **published, ADR-0071: a harness record in list form (a team relay, a program's prompt) opens a turn that is never scored; continuation notes are read by meaning; the prompt-intent miner skips subagent transcripts and bot heartbeats and reads files in a fixed order; every exporting installer refuses an uncommitted version change; the SDK rule is kept as a recorded trade-off and ADR-0068's "all from programs" claim is corrected.** See [CHANGELOG](CHANGELOG.md).
 `0.52.7` — **published, ADR-0069: installers for Codex (`adapters/codex/install.sh`: `marketplace upgrade` + `add`, never `remove`; refuses a downgrade and a disabled plugin before any mutating CLI call) and Claude Code (`adapters/claude-code/install.sh`: `claude plugin update`, with a backed-up, atomic registry repoint when the marketplace lags); doctor gains a Claude Code row; every installer exports `git archive HEAD` only from a checkout's own top level.** See [CHANGELOG](CHANGELOG.md).

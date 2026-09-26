@@ -3,6 +3,41 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.54.0] — 2026-09-27
+
+0.53 is skipped (D7).
+
+### Changed — ADR-0070: a local index owner replaces the Qdrant container and the Docker embed shim
+- **One local process, the index owner** (`vendor/skill-search/skill_search/index_owner.py`), grown from the
+  warm embed shim: it keeps every collection in one SQLite file, holds the vectors and the embedding model in
+  memory, and searches with exact cosine math. It answers on the same addresses as before: Qdrant's REST
+  subset on port 6333 and `/embed`, `/health` and `/jev` on port 6363, so no hook, adapter or harness config
+  needs a new setting. `SKILL_QDRANT_URL` keeps its name (D2).
+- **The engine** talks to the store through a small stdlib HTTP client; `qdrant-client` and the embedded
+  on-disk Qdrant mode are gone. Query vectors come from the owner's `/embed`.
+- **Autostart replaces Docker's restart policy:** the MCP launcher starts the owner when `/health` does not
+  answer, the per-turn hook only on a refused connection, and `setup.sh` restarts it after a reinstall. A
+  second start exits on the owner's file lock.
+- **The `/jev` relay** (Jev skill router) moves into the owner with the same contract: fixed upstream, the key
+  forwarded and never stored, one fresh-connection retry after a reset, no retry after a timeout.
+- **Doctor:** owner rows (`/health` and `code_version`, SQLite integrity, point counts, embed parity) and a
+  `--cutover` gate that fails any Claude Code, Codex, OMP or ZCode copy below this release; every automatic
+  Docker start is gone, and `--fix` stops a revived container instead.
+- **Tooling:** `scripts/migrate_qdrant_to_local.py` (copy and verify a live Qdrant store into the owner's
+  SQLite), `scripts/archive_qdrant_collection.py`; the legacy enrichment and multi-vector experiment scripts
+  are retired, and the `claude_skills_shadow` collection is archived.
+- **Tests** run the engine suite against an ephemeral owner on free ports, never the live store.
+
+### Upgrade notes — this release needs a switch-over, not only a plugin update
+- The owner memory cost is accepted: about 2 GB steady, 3 GB at startup (D5).
+- Follow the switch-over order (D10, TASK-021 in
+  `plans/260925-2349-vector-store-hardening-and-migration/architecture-vector-store-3.md`): stop the Qdrant and
+  embed-shim containers, move the migrated SQLite store into place, update Claude Code, start the owner, then
+  update the OMP, Codex and ZCode copies and restart every session. An older engine can still search the
+  owner, but it cannot build its index there, so every session moves to this release (D6). Skill search is
+  dark for a few minutes during the switch.
+- Do not run an older `setup.sh` or `doctor.py --fix` after the switch: they start the Qdrant container again.
+
 ## [0.52.9] — 2026-09-27
 
 ### Fixed — ADR-0072: the installers fail closed (post-ship review of 0.52.7: 1 High, 6 Medium, 10 Low)
