@@ -2670,12 +2670,13 @@ def _selftest():
         _g.update(_saved_cc)
 
     # --- ZCode harness check: fixture-driven, never touches the real ~/.zcode ---
-    _saved_zc = {k: _g[k] for k in ("ZCODE_DIR", "ZCODE_PLUGIN_CACHE")}
+    _saved_zc = {k: _g[k] for k in ("ZCODE_DIR", "ZCODE_PLUGIN_CACHE", "ZCODE_PLUGINS_FILE")}
     try:
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             _g["ZCODE_DIR"] = base / ".zcode"
             _g["ZCODE_PLUGIN_CACHE"] = base / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+            _g["ZCODE_PLUGINS_FILE"] = base / ".zcode" / "cli" / "plugins" / "installed_plugins.json"
             zc_ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
             (_g["ZCODE_PLUGIN_CACHE"] / zc_ssot / "bin").mkdir(parents=True)
             launcher = _g["ZCODE_PLUGIN_CACHE"] / zc_ssot / "bin" / "skill-search-mcp"
