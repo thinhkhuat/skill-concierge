@@ -373,3 +373,9 @@ upstream is re-vendored:
 The only non-code file added under `vendor/` beyond the upstream source is `eval/README-LOCAL.md`
 (a local caveat note). If upstream changes, re-vendor from the same source and re-apply BOTH the
 plugin-level customization layer and these engine patches.
+- **`mcp` capped below 2 (v0.51.0, 2026-09-26):** `pyproject.toml` pins `mcp[cli]>=1.2,<2`. The unbounded
+  `>=1.2` let a fresh install (the embed-shim Docker build) resolve `mcp` 2.x, which renamed `FastMCP` to
+  `MCPServer` and removed `mcp.server.fastmcp`; `server.py` imports that path, so the image build failed at
+  the model-bake step. Existing venvs (1.29.0) were unaffected. Lift the cap only together with a port of
+  `server.py` to the 2.x API (upstream migration guide:
+  https://py.sdk.modelcontextprotocol.io/v2/migration/#fastmcp-renamed-to-mcpserver).
