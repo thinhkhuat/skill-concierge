@@ -58,23 +58,29 @@ _USING = re.compile(r'(?im)' + _LEAD.format(w='USING')
                     + r'USING(?::[*`]*\s+[`*]*|\s+)([a-z0-9][a-z0-9:_\-]*)')
 # Rule 3's continuation (ADR-0063/0064): `USING: <name> (continuing)`, and the forms agents write —
 # `(continuing the earlier work)`, `(continued …)`, `(continuation …)`, several names joined by + , &.
+# The bare `USING <name> (continuing)` reads in capitals only, as `_USING` reads it ("Using rg
+# (continuing …)" is prose). A parenthetical that negates the word — "(new task, not continuing x)",
+# what an agent obeying the red-flags row writes — is a fresh ruling, not a continuation.
 _CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
-                         + r'USING:[*`]*\s+([^\n(]*?)[`*\s]*\([^)\n]*\bcontinu(?:ing|ed|ation)\b[^)\n]*\)')
+                         + r'(?:USING:[*`]*\s+|(?-i:USING)\s+)([^\n(]*?)[`*\s]*\('
+                         + r'(?![^)\n]*?\b(?:not|no|never|new (?:task|work))\b[^)\n]*?\bcontinu)'
+                         + r'[^)\n]*\bcontinu(?:ing|ed|ation)\b[^)\n]*\)')
 _FILLER = {"then", "and", "also", "plus", "with", "for", "name", "skill"}
 _SKILL_NAME = re.compile(r'[a-z0-9][a-z0-9:_\-]*', re.I)
 STALE_TURNS = 5   # a continuation whose skill was last used more turns ago than this is likelier new work
 
 
 def _continued_names(txt):
-    """The skill names an assistant text continues, in order, without repeats."""
+    """The skill names an assistant text continues, in order, without repeats. The first part
+    names its skill in its first word ("ak-cook for the build"); a later part is one name after
+    any filler ("then ak-git"), so prose after a comma ("then run the tests") is not read."""
     out = []
     for grp in _CONTINUING.findall(txt):
-        for part in re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp):
-            part = part.strip("`* ")
-            if part.startswith("<"):          # the doctrine's own `<name>` placeholder, quoted
+        for i, part in enumerate(re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp)):
+            words = [w.strip("`*") for w in part.split() if w.strip("`*").lower() not in _FILLER]
+            if not words or (i and len(words) > 1):
                 continue
-            words = [w for w in part.split() if w.lower() not in _FILLER]
-            m = _SKILL_NAME.match(words[0].strip("`*")) if words else None
+            m = _SKILL_NAME.match(words[0])   # anchored: the quoted `<name>` placeholder never matches
             n = norm(m.group(0)) if m else None
             if n and n not in _NOT_A_SKILL and n not in _FILLER and n not in out:
                 out.append(n)
@@ -87,7 +93,18 @@ def _continuation_counts(units):
             sum(1 for u in units if u[4] is not None and u[4] > STALE_TURNS))
 
 
-_NOT_WORK_HEADS = ("<", "[", "Another Claude session", "Stop hook", "This session is being continued")
+# Which prompt heads hand the agent work. A `<tag>` record is harness output (notifications,
+# local-command output, `!` shell echoes, teammate messages) except pasted content and a pasted
+# HTML comment. A slash command is work when it carries arguments (`/ak:cook fix the parser`),
+# unless it is a builtin that configures the session. A bracketed head is typed text (a relayed
+# chat message) except the notices below — the enforcer's harness-message lane plus scheduled tasks.
+_WORK_TAGS = ("<pasted_content", "<!--")
+_NOT_WORK_BRACKETS = ("[Request interrupted", "[Scheduled Task", "[Cross-session idle notice]",
+                      "[SYSTEM NOTIFICATION")
+_NOT_WORK_TEXT = ("Another Claude session", "/compact")
+_BUILTIN_COMMANDS = {"add-dir", "cd", "clear", "compact", "config", "effort", "export", "fast",
+                     "model", "plugin", "reload-plugins", "resume", "theme"}
+_CMD_ARGS = re.compile(r"<command-args>([\s\S]*?)</command-args>")
 
 
 def role_is_user_prompt(rec, msg):
@@ -95,13 +112,38 @@ def role_is_user_prompt(rec, msg):
     return rec.get("type") == "user" and isinstance(msg, dict) and isinstance(msg.get("content"), str)
 
 
+def _prompt_text(rec):
+    """A user record's prompt: its string content, or the text of a list holding only text and
+    image blocks (a typed prompt stored in list form). None for anything else — a tool result."""
+    msg = rec.get("message")
+    c = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list) and c and all(isinstance(b, dict) and b.get("type") in ("text", "image") for b in c):
+        return " ".join(b.get("text", "") for b in c if b.get("type") == "text")
+    return None
+
+
 def _hands_over_work(rec):
-    """True for a user prompt that hands the agent work: typed text, not a harness, hook,
-    notification, slash-command or compaction record. The stale gap counts only these."""
-    c = (rec.get("message") or {}).get("content")
-    if rec.get("isMeta") or rec.get("isCompactSummary") or not isinstance(c, str):
+    """True for a user prompt that hands the agent work: typed text, a relayed chat message, pasted
+    content or a skill command with arguments — not a harness, hook, notification or compaction
+    record. The stale gap counts only these."""
+    if rec.get("type") != "user" or rec.get("isMeta") or rec.get("isCompactSummary"):
         return False
-    return not c.lstrip().startswith(_NOT_WORK_HEADS)
+    s = _prompt_text(rec)
+    if s is None:
+        return False
+    s = s.lstrip()
+    if not isinstance(rec["message"]["content"], str) and s[:1] in "<[":
+        return False   # list-form wrappers: interrupts, relayed conversation history
+    if s.startswith("<command-"):
+        name, args = _CMD.search(s), _CMD_ARGS.search(s)
+        return bool(name and args and args.group(1).strip() and norm(name.group(1)) not in _BUILTIN_COMMANDS)
+    if s.startswith("<"):
+        return s.startswith(_WORK_TAGS)
+    if s.startswith("["):
+        return not s.startswith(_NOT_WORK_BRACKETS)
+    return not s.startswith(_NOT_WORK_TEXT)
 
 
 def _same_skill(a, b):
@@ -140,11 +182,11 @@ _SEARCH_SLUGS = {"skill-search", "skill-concierge-skill-search"}
 AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
 
 
-def _note_used(rec, line, last_used, turn_no):
+def _note_used(rec, last_used, turn_no):
     """Record in `last_used` (name -> turn number) the skills a record uses: Skill / get_skill calls,
     USING lines, a user's slash command."""
     msg = rec.get("message")
-    if rec.get("type") == "user" and isinstance(msg, dict) and isinstance(msg.get("content"), str):
+    if role_is_user_prompt(rec, msg):
         for m in _CMD.findall(msg["content"]):
             if norm(m):
                 last_used[norm(m)] = turn_no
@@ -393,15 +435,22 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     sess_raw = defaultdict(Counter)   # every USING per session (subagent files included) — the undo base
     n_search = n_skip = n_skip_new = 0
     cont_units = []    # one per continued skill per turn: (sid, epoch, name, re-read, work turns since last use)
-    seen_units = set()
+    unit_at = {}       # (record uuid, name) -> (index in cont_units, read from the session's own file)
 
     def _close_continuations(turn):
-        for name, (gap, sid_, ts_, uuid_) in turn["cont"].items():
-            if uuid_ and (uuid_, name) in seen_units:   # a duplicated record line
-                continue
-            seen_units.add((uuid_, name))
+        for name, (gap, sid_, ts_, uuid_, own_file) in turn["cont"].items():
             reread = any(_same_skill(name, x) for x in turn["loads"])
-            cont_units.append((sid_, ts_, name, reread, gap))
+            unit = (sid_, ts_, name, reread, gap)
+            key = (uuid_, name)
+            if uuid_ and key in unit_at:
+                # A resumed session's file copies the records it continues from; the copy in the
+                # session's own file wins, whatever order the files are read in.
+                i, had_own = unit_at[key]
+                if own_file and not had_own:
+                    cont_units[i], unit_at[key] = unit, (i, True)
+                continue
+            unit_at[key] = (len(cont_units), own_file)
+            cont_units.append(unit)
     # per-session prompt text, to flag self/meta sessions
     sess_text = defaultdict(str)
     sess_skill = defaultdict(Counter)
@@ -421,12 +470,15 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         is_sub = _SUBAGENT_PATH in fp
         file_dispatch = False   # a team/dispatched scaffolding marker seen in this file
         file_sid = None
+        own_sid = os.path.basename(fp)[:-len(".jsonl")]   # a session's own file is named for it
+        file_uuids = set()
         last_used = {}      # skill -> turn number of its last use this session (Skill, get_skill, USING, slash)
         turn_no = 0
-        # Turn segmentation: a genuine user prompt (string `content`) opens a turn; a
-        # tool_result user record (`content` is a LIST) does not. We accumulate, per turn,
-        # whether a SKIPPING was declared and whether a real search_skills call fired in the
-        # SAME turn, judging at the boundary so SEARCH-then-SKIPPING order is handled.
+        # Turn segmentation: a user record with string `content` opens a turn, and so does a typed
+        # prompt stored as a list of text/image blocks; a tool_result user record (a list) does
+        # not. We accumulate, per turn, whether a SKIPPING was declared and whether a real
+        # search_skills call fired in the SAME turn, judging at the boundary so SEARCH-then-SKIPPING
+        # order is handled.
         cur = _new_turn(False)
         for line in _read_lines(fp):
             if '"timestamp"' not in line:
@@ -437,21 +489,10 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 file_dispatch = True
             is_user = ('"type":"user"' in line or '"type": "user"' in line)
             is_list_content = ('"content":[' in line or '"content": [' in line)
-            if is_user and not is_list_content:  # genuine user prompt -> new turn
-                _close_continuations(cur)
-                if cur["active"] and cur["saw_skip"]:
-                    turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
-                                  "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
-                                  "sid": cur["sid"], "sub": is_sub})
-                cur = _new_turn(True)
-                try:   # the stale gap counts work turns only (a Stop-hook reply is the same task)
-                    turn_no += _hands_over_work(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-                cur["used_before"] = dict(last_used)   # "earlier use" means before this turn
-            # Genuine user-prompt lines must always reach sess_text below for meta
-            # classification, even when they carry none of these tool/doctrine markers
-            # (e.g. "review the skill-concierge gate" has no USING/SEARCH/SKIPPING token).
+            maybe_prompt = is_user and not (is_list_content and '"tool_result"' in line)
+            # User prompt lines must always reach sess_text below for meta classification, even
+            # when they carry none of these tool/doctrine markers (e.g. "review the
+            # skill-concierge gate" has no USING/SEARCH/SKIPPING token).
             has_marker = ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
                           or "USING" in line or "SEARCH" in line or "SKIPPING" in line
                           or "NO SKILL:" in line or AUTHORIZED_SKIP_MARKER in line
@@ -462,16 +503,33 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                           or (('"type":"assistant"' in line or '"type": "assistant"' in line)
                               and (_NO_SKILL_ANY_CASE.search(line) or "get_skill" in line))
                           or ('"attachment"' in line and ("SKILL-FIRST" in line or "CONSULT-ROUTE" in line)))
-            if not (has_marker or (is_user and not is_list_content)):
+            if not (has_marker or maybe_prompt):
                 continue
-            # Count ONLY the enforcer's own authorization line: from its own hook output
-            # (_enforcer_output), anchored on its message signatures (_is_authorized_skip_line) —
-            # the marker literal also appears in the doctrine, in files and in prose about it.
             try:
                 rec = json.loads(line.strip())
             except json.JSONDecodeError as exc:
                 print(f"warning: invalid JSON record in {fp}: {exc}", file=sys.stderr)
                 continue
+            uid = rec.get("uuid")
+            if uid:   # a record line duplicated in the file is read once
+                if uid in file_uuids:
+                    continue
+                file_uuids.add(uid)
+            opens = role_is_user_prompt(rec, rec.get("message")) or _hands_over_work(rec)
+            if opens:   # a user prompt -> new turn
+                _close_continuations(cur)
+                if cur["active"] and cur["saw_skip"]:
+                    turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
+                                  "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
+                                  "sid": cur["sid"], "sub": is_sub})
+                cur = _new_turn(True)
+                turn_no += _hands_over_work(rec)   # the stale gap counts work turns only
+                cur["used_before"] = dict(last_used)   # "earlier use" means before this turn
+            elif not has_marker:
+                continue
+            # Count ONLY the enforcer's own authorization line: from its own hook output
+            # (_enforcer_output), anchored on its message signatures (_is_authorized_skip_line) —
+            # the marker literal also appears in the doctrine, in files and in prose about it.
             own = _enforcer_output(rec)
             if any(_is_authorized_skip_line(x) for x in own):
                 cur["saw_marker"] = True
@@ -482,7 +540,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             if since is not None:
                 e = ts_epoch(rec)
                 if e is None or e < since:
-                    _note_used(rec, line, last_used, turn_no)   # a continuation in the window may lean on it
+                    _note_used(rec, last_used, turn_no)   # a continuation in the window may lean on it
                     continue
             sid = rec.get("sessionId") or fp
             cur["sid"] = file_sid = sid  # file = one session; thread onto the turn for the sid-join
@@ -538,7 +596,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                 if c not in cur["cont"]:
                                     last = [t for n, t in cur["used_before"].items() if _same_skill(c, n)]
                                     gap = (turn_no - max(last)) if last else None
-                                    cur["cont"][c] = (gap, sid, ts_epoch(rec) or 0.0, rec.get("uuid"))
+                                    cur["cont"][c] = (gap, sid, ts_epoch(rec) or 0.0, rec.get("uuid"), sid == own_sid)
                         for n in used:
                             last_used[n] = turn_no
                         undone = _tally(used, retracted, sid, using, sess_raw, rerules)
@@ -707,6 +765,11 @@ def main():
             and _continued_names("USING: ak-cook for the build, then ak-git (continuing the work)") == ["ak-cook", "ak-git"]
             and _continued_names("Using rg (continuing the search)") == []            # prose, no colon
             and _continued_names("USING: <name> (continuing)") == []                 # the quoted placeholder
+            and _continued_names("USING: ak-debug (new task, not continuing ak-cook)") == []   # negated
+            and _continued_names("USING: ak-cook — fit (not a continuation of earlier work)") == []
+            and _continued_names("USING: ak-cook (continuing — no new skill needed)") == ["ak-cook"]
+            and _continued_names("USING session-handoff (continuing)") == ["session-handoff"]   # bare, capitals
+            and _continued_names("USING: study, then run the tests (continuing)") == ["study"]
             and not _SEARCH.search("**Search results**")                    # a bold heading is prose
             and _enforcer_output(_att("UserPromptSubmit", auth)) == [auth]
             and _enforcer_output(_att("UserPromptSubmit", "CONSULT-ROUTE · x")) == ["CONSULT-ROUTE · x"]
@@ -772,12 +835,11 @@ def main():
     if ct:
         ot, orr, on, os_ = r["continuations_organic"]
         print(f"  continuations (`USING: <x> (continuing …)`, rule 3): {ct} — re-read in the turn {cr}; "
-              f"no earlier use this session {cn}; last used > {STALE_TURNS} turns ago {cs}  "
+              f"no earlier use this session {cn}; last used > {STALE_TURNS} work turns ago {cs}  "
               f"[organic, self/meta excluded: {ot} — {orr} / {on} / {os_}]")
         if args.continuations:
-            import datetime as _dt
             for (sid_, ep, name, reread, gap), meta in r["continuation_units"]:
-                when = _dt.datetime.fromtimestamp(ep).strftime("%Y-%m-%d %H:%M:%S") if ep else "?"
+                when = dt.datetime.fromtimestamp(ep).strftime("%Y-%m-%d %H:%M:%S") if ep else "?"
                 print(f"    {str(sid_)[:8]} {when} {name} re-read={'yes' if reread else 'no'} "
                       f"work-turns-since-last-use={gap if gap is not None else 'never'}"
                       f"{' [self/meta]' if meta else ''}")

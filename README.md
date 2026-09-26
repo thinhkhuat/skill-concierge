@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.52.4-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.52.5-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -429,6 +429,7 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.52.5` — **published, ADR-0067: a work turn is decided by the prompt's shape (a slash command with arguments, a relayed chat message and pasted content are work; session builtins, notifications and scheduled tasks are not; a typed prompt stored as a list opens a turn); a duplicated record line is read once; "(new task, not continuing x)" is a fresh ruling; the prompt-intent miner ends a turn at a cross-session message, notification, scheduled task or slash command.** See [CHANGELOG](CHANGELOG.md).
 `0.52.4` — **published, ADR-0066: the stale-continuation flag counts work turns only (Stop-hook replies, slash-command records and notifications no longer widen the gap — the 0.52.3 "stale" figures were mostly those); continuations need their colon and skip filler words; a slash command is earlier use only from the user's own prompt; the prompt-intent miner skips the same harness messages as the enforcer.** See [CHANGELOG](CHANGELOG.md).
 `0.52.3` — **published, ADR-0065: the usage audit reads every continuation form (`(continuing …)`, `(continued …)`, several names), judges earlier use from the session before the turn, counts a load anywhere in the turn as the re-read, flags continuations of a skill last used more than 5 turns earlier, splits organic from self/meta sessions and lists each one with `--continuations`; a red-flags row sends "I'm still in <skill>" on new work to SEARCH; cross-session idle notices take the harness-message lane.** See [CHANGELOG](CHANGELOG.md).
 `0.52.2` — **published, ADR-0064: a continuation is for the same task only, re-reads with `get_skill` (the harness skill tool when that call is unavailable or cannot find the skill), and the usage audit counts continuations — re-read or not, and whether the skill was used earlier; a search now backs a skip only when it came before the ruling; the June 2026 enforcer head counts again; the embed-shim relay test no longer leaks its model env into the test process.** See [CHANGELOG](CHANGELOG.md).

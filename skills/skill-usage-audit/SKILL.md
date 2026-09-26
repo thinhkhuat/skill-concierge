@@ -62,9 +62,15 @@ The report also counts **continuations** (rule 3; ADR-0064, ADR-0065; epoch-watc
 turn: whether the turn loads the skill (the Skill tool or skill-search's `get_skill`, before or after the
 line), whether the session used it before this turn (a load, a `USING:` line or the user's slash command,
 before the `--since` window too), and how many **work turns** ago it was last used (more than 5 is
-flagged as likelier new work). A work turn is a typed prompt that hands the agent work: Stop-hook
-feedback, slash-command records, notifications, cross-session messages and compaction summaries do not
-count (since `0.52.4`; a "turn" for the verdicts is still every prompt record). Name forms of one skill
+flagged as likelier new work). A work turn is a prompt that hands the agent work: typed text, a relayed
+chat message, pasted content, a slash command with arguments, or a typed prompt stored as a list of text
+and image blocks. Stop-hook feedback, notifications, scheduled tasks, cross-session messages,
+local-command output, session builtins (`/compact`, `/plugin`, `/model` …) and compaction summaries do
+not count (since `0.52.4`, by prompt shape since `0.52.5`). A "turn" for the verdicts is every
+string-content user record plus a list-form typed prompt. A record line the store wrote twice is read
+once, and a resumed session's copy of a continuation never replaces its own session's. A parenthetical
+that negates the word ("(new task, not continuing x)") is a fresh ruling; the bare
+`USING <name> (continuing)` reads in capitals. Name forms of one skill
 match loosely (`plugin:name` and `name`, or one name ending in `-<the other>`), which can join two
 different skills whose names nest (`ssh-doctor`, `tk-servers-ssh-doctor`); a slash command counts as
 earlier use only from the user's own prompt, not from a tool result that quotes one. The listing shows

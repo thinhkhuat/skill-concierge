@@ -335,3 +335,81 @@ def test_real_transcripts_compact_json_form_is_read(tmp_path, monkeypatch):
     (d / "s1.jsonl").write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
     monkeypatch.setattr(A, "PROJECTS", str(tmp_path / "projects"))
     assert A.audit(since=None, meta_keywords=[], subagent_stop=True)["n_skip"] == 1
+
+
+def _cmd(name, args=""):
+    return _user(f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>\n"
+                 f"<command-args>{args}</command-args>")
+
+
+def _listed(*blocks):
+    return _rec("user", list(blocks))
+
+
+def test_what_hands_over_work():
+    """A work turn is typed work in any stored form; harness output and session builtins are not."""
+    work = [_user("fix the parser"), _cmd("ak:cook", "fix the parser"), _user("[TG DM] owner said: fix it"),
+            _user("<pasted_content>a log</pasted_content> what broke?"), _user("<!-- markdownlint-disable --> # Spec"),
+            _listed({"type": "text", "text": "fix the parser"}),
+            _listed({"type": "image", "source": {}}, {"type": "text", "text": "what is this"})]
+    not_work = [_cmd("ak:cook"), _cmd("plugin", "marketplace update x"), _cmd("compact", "keep the plan"),
+                _user("/compact"), _user("[Scheduled Task] run the digest"), _user("[Request interrupted by user]"),
+                _user("<task-notification>done</task-notification>"), _user("Another Claude session sent a message"),
+                {**_user("Base directory for this skill: /x"), "isMeta": True},
+                {**_user("This session is being continued from a previous conversation"), "isCompactSummary": True},
+                _listed({"type": "text", "text": "[Request interrupted by user for tool use]"}),
+                _listed({"type": "text", "text": "[Relevant skills for this request] x"}),
+                _listed({"type": "tool_result", "content": "ok"}), {**_user("x"), "message": "not a dict"}]
+    assert [A._hands_over_work(r) for r in work] == [True] * len(work)
+    assert [A._hands_over_work(r) for r in not_work] == [False] * len(not_work)
+
+
+def test_a_duplicated_record_line_is_read_once(tmp_path, monkeypatch):
+    """A line the store wrote twice adds no work turn and no second continuation."""
+    recs = [_user("turn 0"), _tool("Skill", skill="study")]
+    for i in range(1, A.STALE_TURNS):
+        recs.append({**_user(f"turn {i}"), "uuid": f"u{i}"})
+    recs += [{**_user("turn 5"), "uuid": "u5"}, {**_user("turn 5"), "uuid": "u5"}]
+    cont = {**_say("USING: study (continuing)"), "uuid": "a1"}
+    r = _audit(tmp_path, monkeypatch, recs + [cont, cont])
+    assert r["continuations"] == (1, 0, 0, 0)
+
+
+def test_a_slash_command_quoted_in_a_tool_result_is_not_an_earlier_use(tmp_path, monkeypatch):
+    quoted = _listed({"type": "tool_result", "content": "<command-name>/study</command-name>"})
+    early, late = "2026-09-26T01:00:00Z", "2026-09-26T12:00:00Z"
+    for since, ts in ((None, late), (A.parse_since("2026-09-26 10:00:00"), early)):
+        recs = [_at(_user("turn one"), ts), _at(quoted, ts),
+                _at(_user("turn two"), late), _at(_say("USING: study (continuing)"), late)]
+        r = _audit_files(tmp_path / str(since), monkeypatch, {"p/s1.jsonl": recs}, since=since)
+        assert r["continuations"][2] == 1, since
+
+
+def test_continuation_notes_are_read_and_negations_are_not():
+    assert A._continued_names("USING: ak-cook (phase 2, continuing)") == ["ak-cook"]
+    assert A._continued_names("USING session-handoff (continuing)") == ["session-handoff"]
+    assert A._continued_names("Using rg (continuing the search)") == []
+    assert A._continued_names("USING: ak-debug (new task, not continuing ak-cook)") == []
+    assert A._continued_names("USING: ak-cook (continuing — no new skill needed)") == ["ak-cook"]
+    assert A._continued_names("USING: study, then run the tests (continuing)") == ["study"]
+
+
+def test_a_typed_prompt_in_list_form_opens_a_work_turn(tmp_path, monkeypatch):
+    recs = [_user("turn 0"), _tool("Skill", skill="study")]
+    recs += [_listed({"type": "text", "text": f"turn {i}"}) for i in range(1, A.STALE_TURNS + 2)]
+    recs.append(_say("USING: study (continuing)"))
+    assert _audit(tmp_path, monkeypatch, recs)["continuations"][3] == 1
+
+
+def test_a_resumed_session_s_copy_never_wins(tmp_path, monkeypatch):
+    """A resumed session's file repeats the records it continues from; the session's own file
+    decides the unit, whichever file is read first."""
+    own = [_user("turn one"), _tool("Skill", skill="study"),
+           _user("turn two"), {**_say("USING: study (continuing)"), "uuid": "a1"}]
+    copy = [{**_user("turn two"), "sessionId": "s1"}, {**_say("USING: study (continuing)"), "uuid": "a1"}]
+    real_glob = A.glob.glob
+    for order in (sorted, lambda xs: sorted(xs, reverse=True)):
+        monkeypatch.setattr(A.glob, "glob", lambda *a, **k: order(real_glob(*a, **k)))
+        root = tmp_path / order.__name__
+        r = _audit_files(root, monkeypatch, {"p/s1.jsonl": own, "p/s2.jsonl": copy})
+        assert r["continuations"] == (1, 0, 0, 0), order

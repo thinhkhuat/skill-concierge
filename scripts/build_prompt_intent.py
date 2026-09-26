@@ -39,6 +39,7 @@ import glob
 import json
 import os
 import sys
+import tempfile
 import urllib.request
 from collections import Counter
 from pathlib import Path
@@ -61,6 +62,13 @@ _BAD_PREFIX = ("Base directory for this skill:", "Stop hook feedback", "Caveat:"
                # harness-message heads the enforcer's lane also skips (ADR-0054, ADR-0065)
                "Another Claude session sent a message", "[Cross-session idle notice]",
                "[SYSTEM NOTIFICATION", "[Scheduled Task")
+# A stimulus that hands the agent work without being a typed prompt: a cross-session or teammate
+# message, a notification, a scheduled task, a slash command. The agent's tool calls after it answer
+# it, not the prompt before it, so it ends the current turn unlabelled. A compaction summary does
+# not: an auto-compaction lands inside the prompt's own work, which carries on after it.
+_NEW_STIMULUS = ("Another Claude session sent a message", "[Cross-session idle notice]",
+                 "[SYSTEM NOTIFICATION", "[Scheduled Task", "<task-notification", "<teammate-message",
+                 "<cross-session-message", "<command-name", "<command-message")
 _BAD_SUB = ("[Request interrupted", "<system-reminder", "<command-name", "<command-message",
             "<local-command", "<user-prompt-submit-hook", "<persisted-output", "<task-notification",
             "SessionStart hook", "UserPromptSubmit hook")
@@ -76,20 +84,30 @@ def _genuine(s):
     return not any(b in s[:60] for b in _BAD_SUB)
 
 
-def _prompt_text(ev):
-    if ev.get("type") != "user" or ev.get("isMeta"):   # isMeta: hook feedback, slash expansions
+def _user_text(ev):
+    """A user event's text — string content, or the text blocks of a list without a tool result."""
+    if ev.get("type") != "user":
         return None
-    c = ev.get("message", {}).get("content")
+    msg = ev.get("message")
+    c = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(c, str):
-        s = c.strip()
-    elif isinstance(c, list):
-        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
-            return None
-        s = " ".join(b.get("text", "") for b in c
-                     if isinstance(b, dict) and b.get("type") == "text").strip()
-    else:
+        return c.strip()
+    if isinstance(c, list) and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+        return " ".join(b.get("text", "") for b in c
+                        if isinstance(b, dict) and b.get("type") == "text").strip()
+    return None
+
+
+def _prompt_text(ev):
+    if ev.get("isMeta"):   # isMeta: hook feedback, slash expansions
         return None
-    return s if _genuine(s) else None
+    s = _user_text(ev)
+    return s if s is not None and _genuine(s) else None
+
+
+def _new_stimulus(ev):
+    s = _user_text(ev)
+    return s is not None and s.startswith(_NEW_STIMULUS)
 
 
 def mine():
@@ -126,6 +144,9 @@ def mine():
             if p is not None:
                 flush(cur)
                 cur = {"p": p[:400], "n": 0, "e": False}
+            elif _new_stimulus(ev):
+                flush(cur)
+                cur = {"p": None, "n": 0, "e": False}
             elif ev.get("type") == "assistant" and cur["p"] is not None:
                 cont = ev.get("message", {}).get("content")
                 if isinstance(cont, list):
@@ -195,6 +216,29 @@ def _selftest():
     assert not _genuine("/clear")
     assert not _genuine("ok")  # < 3 words
     assert not _genuine("Stop hook feedback: blah blah")
+    for head in ("Another Claude session sent a message", "[Cross-session idle notice]",
+                 "[SYSTEM NOTIFICATION", "[Scheduled Task"):
+        assert not _genuine(head + " with enough words to pass"), head
+    assert _prompt_text({"type": "user", "isMeta": True, "message": {"content": "fix the parser bug now"}}) is None
+    # A turn ends at a stimulus that is not a typed prompt; a skill body loaded mid-turn does not end it.
+    tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}
+    say = lambda t, **kw: {"type": "user", "message": {"content": t}, **kw}  # noqa: E731
+    events = [say("thanks, that is all for now"),
+              say("Another Claude session sent a message: run the checks"), tool, tool, tool,
+              say("fix the parser bug please"), say("Base directory for this skill: /x", isMeta=True),
+              say("This session is being continued from a previous conversation.", isCompactSummary=True),
+              tool, tool, tool]
+    global PROJECTS
+    saved = PROJECTS
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "s.jsonl").write_text("\n".join(json.dumps(e) for e in events))
+        PROJECTS = Path(d)
+        try:
+            rows = mine()
+        finally:
+            PROJECTS = saved
+    assert rows == [("thanks, that is all for now", "conversational"),
+                    ("fix the parser bug please", "actionable")], rows
     b = balance([("a", "actionable"), ("b", "actionable"),
                  ("c", "actionable"), ("d", "conversational")])
     assert Counter(l for _, l in b) == {"actionable": 1, "conversational": 1}, b

@@ -3,6 +3,30 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.5] — 2026-09-26
+
+### Fixed — ADR-0067: work turns by prompt shape; negated continuations; miner turns
+- **Work turns** (review of 0.52.4: 3 Medium, 5 Low). The 0.52.4 test dropped every prompt opening `<`
+  or `[` — 461 slash commands with arguments, 43 relayed chat messages, pasted content — and counted
+  123 plain `/compact` records. A work turn is now decided by the prompt's shape: typed text, a relayed
+  chat message, pasted content, a slash command with arguments or a list-form typed prompt is work;
+  session builtins, notifications, scheduled tasks, cross-session messages and `/compact` are not.
+- **Turns and duplicates.** A typed prompt stored as a list of text and image blocks opens a turn
+  (about 210 never did). A record line written twice in one file is read once for every count, and a
+  resumed session's copy of a continuation never replaces its own session's.
+- **Continuations.** "(new task, not continuing x)" and other negated notes are fresh rulings; the bare
+  `USING x (continuing)` reads again, in capitals; "then run the tests" after a comma is not a name.
+- **Prompt-intent miner.** A cross-session message, notification, scheduled task or slash command ends
+  the current turn, so the tool calls it triggers no longer label the typed prompt before it (35 labels
+  flip to conversational, 138 actionable rows drop out). The live collection is not rebuilt.
+- **Figures** (0.52.4 → 0.52.5 reader, same minute): since 2026-09-19 identical; since 2026-07-04 skip
+  turns 954 → 967, false 602 → 612, continuations 98 (re-read 8 → 7, no earlier use 11 → 10, stale 1).
+- **Tests.** Every prompt shape; a duplicated line; a slash command quoted in a tool result, inside and
+  before the window; the phase and negated forms; list-form prompts; the resumed-session copy in both
+  file orders; the miner's turn end. Sixteen mutations of the audit and two of the miner, each caught.
+- Also: `_note_used` loses its unused argument, the listing reuses the module's `datetime`, and a
+  non-dict `message` no longer aborts the audit.
+
 ## [0.52.4] — 2026-09-26
 
 ### Fixed — ADR-0066: the stale-continuation gap counts work turns

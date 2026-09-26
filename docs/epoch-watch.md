@@ -13,6 +13,14 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.5 — work turns by prompt shape; negated continuations (ADR-0067)
+
+**Starts per harness** when its plugin cache reaches `0.52.5`. No standing-order change, so no new trail
+epoch for the rulings: W25-W28 keep reading from the 0.52.3 deploy (Claude Code 2026-09-26 21:20:20).
+The audit's reader changed (list-form prompts open turns, duplicated lines read once, work turns by
+shape, negated continuations): skip-turn and continuation counts across 0.52.4 → 0.52.5 readers are not
+comparable where a window holds list-form prompts or duplicated lines (since 2026-09-19: identical).
+
 ## v0.52.4 — the stale gap counts work turns (ADR-0066)
 
 **Starts per harness** when its plugin cache reaches `0.52.4`. No standing-order change, so no new trail
