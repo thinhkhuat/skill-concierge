@@ -9,6 +9,7 @@ The audit is driven end to end over a fixture transcript store.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -92,8 +93,20 @@ def test_audit_reads_markdown_wrapped_and_any_case_rulings(tmp_path, monkeypatch
     assert r["n_skip"] == 2
 
 
+def _extractor():
+    """Import the extractor without leaking the env defaults its import sets (it loads the enforcer
+    with long timeouts) into the rest of the test session."""
+    saved = dict(os.environ)
+    try:
+        import extract_turn_labels as X
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    return X
+
+
 def test_extractor_reads_both_forms_as_one_ruling():
-    import extract_turn_labels as X
+    X = _extractor()
     assert X.ruling_of("NO SKILL: hook-cleared — conversational turn") == ("SKIPPING", "hook-cleared — conversational turn")
     assert X.ruling_of("SKIPPING: none") == ("SKIPPING", "none")
     assert X.ruling_of("skipping none") == ("SKIPPING", "none")
@@ -117,7 +130,32 @@ def test_audit_scopes_a_verdict_to_turns_the_enforcer_ran(tmp_path, monkeypatch)
 
 def test_a_consult_route_turn_is_an_enforcer_run_turn(tmp_path, monkeypatch):
     r = _audit(tmp_path, monkeypatch, [
-        _user("which skills fit this"), _hook("CONSULT-ROUTE · this turn asks for a deliberated skill curation."),
+        _user("which skills fit this"), _hook("CONSULT-ROUTE · this turn asks for a deliberated skill curation.\nreply line 1 = USING: skill-concierge:consult"),
         _say("NO SKILL: answering directly"),
     ])
     assert r["enforcer_verdicts"] == (1, 0, 0)
+
+
+def test_an_authorization_that_arrives_after_the_ruling_does_not_count(tmp_path, monkeypatch):
+    """A queued notification can bring a SKILL-CHECK: line after the agent already ruled."""
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _say("NO SKILL: nothing fits"), _hook(AUTH),
+    ])
+    assert (r["false_skip"], r["authorized_skip"]) == (1, 0)
+    assert r["enforcer_verdicts"] == (0, 0, 0)
+
+
+def test_the_audit_counts_each_skip_form_and_reads_bold_rulings(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _say("**SKIPPING:** none"),
+        _user("turn two"), _say("NO SKILL: nothing fits"),
+        _user("turn three"), _say("**Search results** follow."),
+        _user("turn four"), _say("**USING: new-skill (re-rule: old-skill)**"),
+    ])
+    assert (r["n_skip"], r["n_skip_new"], r["n_search"]) == (2, 1, 0)
+    assert r["rerules"]["old-skill"] == 1
+
+
+def test_a_continuing_ruling_names_the_skill():
+    """Rule 3's continuation form `USING: <name> (continuing)` counts as that skill."""
+    assert A._declared("USING: study (continuing)") == (["study"], [])

@@ -3,6 +3,31 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.1] — 2026-09-26
+
+### Changed — ADR-0063: continuing a skill re-reads it; audit reader fixes
+- **Continuing a skill.** The first live 0.52.0 session continued its skill after a restart although the
+  offer did not list it, with no search and from memory. Rule 3 now says how (owner-approved wording): line 1
+  `USING: <name> (continuing)`, then re-read the skill's body in the same reply with `get_skill` (the
+  harness's skill tool only when that call is unavailable), before other work. The re-read stands in for the
+  search. `get_skill` is logged as a read, not a new use, so adoption counts stay honest; the exclusion echo
+  still fires on it. Standing order 614 → 682 words.
+- **Audit reader** (second review of 0.52.0: 0 Critical/High/Medium, 9 Low). A turn's verdict uses what
+  the agent had been told when it first ruled — a `SKILL-CHECK:` line arriving later in the turn no longer
+  authorizes the skip. Rulings wrapped in markdown need their colon, so `**SEARCH:** q` reads and a bold
+  heading "**Search results**" does not; a wrapped re-rule now retracts the old skill. The report splits
+  skip rulings into `NO SKILL:` and old `SKIPPING` (epoch-watch W27) and calls the enforcer-run line
+  "turns where the enforcer injected". `extract_turn_labels.py` prints usage errors to stderr; the parser
+  test no longer leaks the extractor's env defaults into the rest of the test run.
+- **Corrections to 0.52.0's text** (in ADR-0063; ADR-0062 stays as accepted): no lower-case rulings exist
+  in the store, the extra ones were all markdown-wrapped; the reader-change figures, complete, measured
+  19:35 since 2026-07-04 (0.51.1 → 0.52.1 reader): USING 1,843 → 1,916, SEARCH 498 → 516, skip turns
+  899 → 925, false 557 → 583, hook-authorized 271 → 262, organic USING 1,036 → 1,066 — reader, not uptake;
+  the whole-shelf ranking never judged the external and other-harness annex rows under it. The ADR index
+  row for 0062 now says 28 % and "the enforcer's own output".
+- **Tests.** Continuation form pinned in the doctrine test and the audit parser; late authorization, bold
+  forms, wrapped re-rule and the split skip count covered in `tests/test_ruling_parsers.py`.
+
 ## [0.52.0] — 2026-09-26
 
 ### Changed — ADR-0062: `NO SKILL: <why>`, whole-shelf offers, a shorter standing order

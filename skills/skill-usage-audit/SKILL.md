@@ -38,8 +38,8 @@ catches it; subagent/`Task` skill use is missed by all three.
 python3 scripts/audit_skill_usage.py --since "<ship/commit time, e.g. 2026-06-29 01:06:35>"
 ```
 
-Outputs the scoped post-change counts (Skill-tool, `/slash`, and the `USING`/`SEARCH`/`SKIPPING`
-trail), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a skip ruling (`NO SKILL:`, or the older `SKIPPING`)
+Outputs the scoped post-change counts (Skill-tool, `/slash`, and the `USING`/`SEARCH`/skip-ruling
+trail, skips split into `NO SKILL:` and the old `SKIPPING`), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a skip ruling (`NO SKILL:`, or the older `SKIPPING`)
 declared with NO same-turn `search_skills` call (the doctrine's hardest rule). A turn carrying the
 enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enforcer's five
 authorized-skip legs — getaway, intent_skip, selfref, the harness-message lane (ADR-0054) and the
@@ -49,8 +49,10 @@ UserPromptSubmit `hook_additional_context` attachment whose text starts with `SK
 `SKILL-CHECK:` or `CONSULT-ROUTE`) — never from the agent's own text, a tool result, a file echo, a
 memory or instructions attachment, another hook or the session-start standing order, so a copied line
 cannot authorize a skip (ADR-0062). The report adds an **enforcer-run turns only** line — the
-same verdict over turns where the enforcer's offer, consult route or `SKILL-CHECK:` line reached the agent — the
-population the doctrine actually governs (Stop-hook feedback and subagent prompts get no offer). Such a turn is
+same verdict over turns where the enforcer's offer, consult route or `SKILL-CHECK:` line reached the agent
+before it ruled (Stop-hook feedback, subagent prompts, and short or slash prompts get no offer, though the
+doctrine still binds the last two). Since `0.52.1` a line that arrives after the ruling — a queued
+notification — neither authorizes the skip nor marks the turn enforcer-run (ADR-0063). Such a turn is
 excluded from the false-skip count and tallied separately as `authorized_skip`, reported alongside
 the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.49.0`
 ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §5), a `USING:`

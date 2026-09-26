@@ -13,6 +13,18 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.1 — continuing a skill re-reads it; audit reader fixes (ADR-0063)
+
+**Starts per harness** when its plugin cache reaches `0.52.1` and a session restarts. A **trail epoch**:
+the standing order changed again ~20 minutes after 0.52.0 (installed 2026-09-26 19:20:51 on Claude Code),
+so W25-W27 below are read from the 0.52.1 deploy, not the 0.52.0 one. The audit reader also changed
+(ADR-0063): counts across the reader change are not comparable. First live `NO SKILL:` ruling seen
+2026-09-26 19:33:56 (a 0.52.0 session), in the taught `hook-cleared — <reason>` form.
+
+| # | Watch | Command | Trigger | Action |
+|---|-------|---------|---------|--------|
+| W28 | Continuations re-read | transcripts: replies whose line 1 is `USING: <name> (continuing)`, and whether a `get_skill` (or Skill) call for that name follows in the same reply; ledger `ev: get_skill` rows | continuations without the re-read, more than a stray one per week | the rule 3 paragraph is not landing — make the re-read the first clause, or have the enforcer name the last-used skill on short turns |
+
 ## v0.52.0 — `NO SKILL:` ruling, whole-shelf label, shorter standing order (ADR-0062)
 
 **Starts per harness** when its plugin cache reaches `0.52.0` and a session restarts (the standing order
@@ -30,7 +42,7 @@ one week, not a law. 129 organic `USING`. Compare only after the ≥ 100-turn fl
 |---|-------|---------|---------|--------|
 | W25 | Doctrine effect on its own population | `audit_skill_usage.py --since "<deploy>"` → the "enforcer-run turns only" line, and organic `USING` | after ≥ 100 enforcer-run turns: false share clearly above the 3 % baseline, or organic `USING` per day clearly below the v0.51.x week | read the false-skip turns' `NO SKILL:` reasons (`--harvest`); tighten the red-flag rows that the excuses match — never restore the old length wholesale |
 | W26 | Router offers searched anyway | label corpus (`extract_turn_labels.py`): English turns with a whole-shelf offer where the agent searched although a row was then used | a large share of searches on turns whose used skill was already in the offer | the offer header or rule 1 wording is not landing; rewrite that line |
-| W27 | `NO SKILL:` form adoption | audit trail: skip rulings written as `NO SKILL:` vs the old `SKIPPING` | old form still dominant a week after every session restarted | a stale standing order in some harness — check its plugin cache version |
+| W27 | `NO SKILL:` form adoption | `audit_skill_usage.py` skip-rulings line (split since 0.52.1): `NO SKILL:` vs old `SKIPPING` | old form still dominant a week after every session restarted | a stale standing order in some harness — check its plugin cache version |
 
 ## v0.51.0 — the Jev skill router (ADR-0061; supersedes the v0.50.0 yes/no leg)
 

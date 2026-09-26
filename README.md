@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.52.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.52.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -429,6 +429,7 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 
 
+`0.52.1` — **published, ADR-0063: an agent continuing a skill it invoked earlier this session skips the search but re-reads the skill's body first (`USING: <name> (continuing)` + `get_skill`, the harness skill tool only as a fallback); the usage audit judges a skip by what the agent had been told when it ruled, reads bold-colon rulings but not bold prose headings, retracts wrapped re-rules, and splits `NO SKILL:` from old `SKIPPING` counts; corrections to ADR-0062's figures.** See [CHANGELOG](CHANGELOG.md).
 `0.52.0` — **published, ADR-0062: the skip ruling is `NO SKILL: <why>` (reason on line 1); router offers are headed "Whole-shelf ranking" and embedding offers "Preview", the two kinds taught once in the standing order, which drops to 614 words (−28 %) with the red-flags table kept; the usage audit and label extractor read both ruling forms, trust a hook authorization only from the enforcer's own output, and report the false-skip rate on turns where the enforcer ran.** See [CHANGELOG](CHANGELOG.md).
 
 `0.51.1` — **published, follow-ups to the Jev router: deterministic routes match whole words only (`/cook` no longer fires inside a `…/cookbooks` URL), `calibrate_jev_gate.py live` reports epoch-watch W21-W24 on live traffic without printing prompt text, router error rows carry `leg: "router"`, and a stable traffic sample in the calibrator. Measured, no code change: cutting low-probability offer rows loses real hits (the top 5 stay); TypeSafe drops an idle connection between 4 and 7 minutes, which the relay's one retry covers.** See [CHANGELOG](CHANGELOG.md).

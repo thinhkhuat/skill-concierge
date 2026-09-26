@@ -74,6 +74,11 @@ def test_doctrine_orders_off_list_read_before_using():
     rerule = _section(rule3, "**A loaded body that excludes the task**", "\n\n")
     for phrase in ("a hit's or not", "`(re-rule: <old>)`", "excluding line", "tell the user"):
         assert phrase in rerule, phrase
+    # Continuing a skill already invoked this session: the re-read replaces the search (ADR-0063).
+    cont = _section(rule3, "**Continuing a skill.**", "\n\n")
+    for phrase in ("invoked earlier this session", "`USING: <name> (continuing)`", "re-read its body",
+                   "the rule-5 call", "skill tool only when", "stands in for the search", "re-ruled"):
+        assert phrase in cont, phrase
     rule5 = _section(body, "5. **", "6. **")
     assert "disabled_in" in rule5 and "switched off" in rule5
     assert "The name matches" in _section(body, "6. **", "Worked example")

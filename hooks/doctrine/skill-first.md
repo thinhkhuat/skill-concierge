@@ -46,6 +46,8 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
 
    **A loaded body that excludes the task** — a hit's or not — is re-ruled in the same reply: a new `USING:` or `SEARCH:` line ending `(re-rule: <old>)`, quoting the excluding line — and tell the user you switched.
 
+   **Continuing a skill.** To keep following a skill you invoked earlier this session when this turn's offer does not list it: line 1 `USING: <name> (continuing)`, then re-read its body in this reply with the rule-5 call (your harness's skill tool only when that call is unavailable), before other work. The re-read stands in for the search; a body that excludes the new work is re-ruled as above.
+
 4. **A lawful skip has exactly two sources**, and `NO SKILL:` names which one: a search shown in this
    reply whose hits fail the rule-3 bar; or a `SKILL-CHECK:` line from the enforcer saying this turn
    is non-task, conversational, harness-generated, a recap of your last message, or that no

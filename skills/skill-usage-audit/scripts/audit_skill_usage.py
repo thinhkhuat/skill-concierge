@@ -49,17 +49,22 @@ DEFAULT_META = ["skill-concierge", "enforcer", "gate floor", "getaway_floor",
                 "max_short_words", "dogfood", "threshold", "impact analysis",
                 "skill-usage-audit", "verify-as-claimed"]
 
-# A ruling may sit inside markdown on line 1 — `USING: x`, **SEARCH: y**, > NO SKILL: z.
-_USING = re.compile(r'(?im)^[\s`*>]*USING:?\s+([a-z0-9][a-z0-9:_\-]*)')
-_SEARCH = re.compile(r'(?im)^[\s`*>]*SEARCH:?\s+')
+# Where a ruling may start. Bare at the line start, the old optional-colon forms still read; inside
+# markdown (`USING: x`, **SEARCH:** y, > NO SKILL: z) the colon is required, so a bold prose heading
+# ("**Search results**") is not a ruling. `{w}` is the ruling word(s).
+_LEAD = r'^(?:[ \t]*|[\s`*>]*[`*>][ \t]*(?={w}:))'
+_USING = re.compile(r'(?im)' + _LEAD.format(w='USING') + r'USING:?[*`]*\s+[`*]*([a-z0-9][a-z0-9:_\-]*)')
+_SEARCH = re.compile(r'(?im)' + _LEAD.format(w='SEARCH') + r'SEARCH:?[*`]*\s+')
 # The skip ruling. `NO SKILL: <why>` since v0.52.0 (ADR-0062); the old `SKIPPING: none` still
 # reads, so transcripts from before the rename stay comparable. The new form needs its colon —
 # prose opening "No skill applies…" is not a ruling; `No skill: <why>` in any case is.
-_SKIPPING = re.compile(r'(?im)^[\s`*>]*(?:SKIPPING:?\s+|NO SKILL:)')
+_SKIPPING = re.compile(r'(?im)' + _LEAD.format(w='(?:SKIPPING|NO SKILL)')
+                       + r'(?:(?P<old>SKIPPING):?[*`]*\s+|(?P<new>NO SKILL):)')
 _NO_SKILL_ANY_CASE = re.compile(r'(?i)NO SKILL:')   # raw-line prefilter for _SKIPPING's new form
 # Doctrine rule 3 (v0.49.0): a re-rule line — the reply switching away from a skill whose loaded
 # body excludes the task — ends `(re-rule: <old>)`. The old skill's USING is retracted, not uptake.
-_RERULE = re.compile(r'(?im)^\s*(?:USING|SEARCH):?\s+[^\n]*\(re-rule:\s*([a-z0-9][a-z0-9:_\-]*)\s*\)')
+_RERULE = re.compile(r'(?im)' + _LEAD.format(w='(?:USING|SEARCH)')
+                     + r'(?:USING|SEARCH):?[*`]*\s+[^\n]*\(re-rule:\s*([a-z0-9][a-z0-9:_\-]*)\s*\)')
 _NOT_A_SKILL = ("the", "none", "a", "an", "it", "this", "that")
 _CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
 # The semantic-search tool, normalized — a SKIPPING is only lawful if one of these fired
@@ -302,7 +307,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     using = Counter()
     rerules = Counter()   # retracted USING declarations, moved out of `using`
     sess_raw = defaultdict(Counter)   # every USING per session (subagent files included) — the undo base
-    n_search = n_skip = 0
+    n_search = n_skip = n_skip_new = 0
     # per-session prompt text, to flag self/meta sessions
     sess_text = defaultdict(str)
     sess_skill = defaultdict(Counter)
@@ -312,6 +317,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
 
     def _new_turn(active):
         return {"saw_search": False, "saw_skip": False, "saw_marker": False, "saw_hook": False,
+                "marker_at_skip": False, "hook_at_skip": False,
                 "active": active, "skip_text": "", "sid": None}
 
     for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
@@ -337,7 +343,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             if is_user and not is_list_content:  # genuine user prompt -> new turn
                 if cur["active"] and cur["saw_skip"]:
                     turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
-                                  "saw_marker": cur["saw_marker"], "saw_hook": cur["saw_hook"], "skip_text": cur["skip_text"],
+                                  "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                                   "sid": cur["sid"], "sub": is_sub})
                 cur = _new_turn(True)
             # Genuine user-prompt lines must always reach sess_text below for meta
@@ -346,10 +352,10 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             has_marker = ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
                           or "USING" in line or "SEARCH" in line or "SKIPPING" in line
                           or "NO SKILL:" in line or AUTHORIZED_SKIP_MARKER in line
-                          # Widened only on the record kinds that need it: a line admitted here
-                          # also feeds a user record's text to the meta classifier below.
-                          or ('"assistant"' in line and _NO_SKILL_ANY_CASE.search(line))
-                          or ('"attachment"' in line and ("SKILL-FIRST" in line or "CONSULT-ROUTE" in line)))
+                          # Widened only on assistant lines: a line admitted here also feeds a
+                          # user record's text to the meta classifier below. (Every enforcer output
+                          # contains USING or SKILL-CHECK:, so it passes already.)
+                          or ('"assistant"' in line and _NO_SKILL_ANY_CASE.search(line)))
             if not (has_marker or (is_user and not is_list_content)):
                 continue
             # Count ONLY the enforcer's own authorization line: from its own hook output
@@ -425,6 +431,13 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                         m = _SKIPPING.search(txt)
                         if m:
                             n_skip += 1
+                            n_skip_new += bool(m.group("new"))
+                            if not cur["saw_skip"]:
+                                # What the agent had been told when it ruled: a SKILL-CHECK: or an offer
+                                # that arrives later in the turn (a queued notification) cannot
+                                # authorize a skip already written.
+                                cur["marker_at_skip"] = cur["saw_marker"]
+                                cur["hook_at_skip"] = cur["saw_hook"]
                             cur["saw_skip"] = True
                             # H1: capture ONLY the SKIPPING clause line WHILE `txt` is valid
                             # (Red-Team F5: `txt` is stale/unbound at flush). Cap to the clause —
@@ -434,7 +447,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                             cur["skip_text"] = txt[ls: le if le != -1 else len(txt)].strip()
         if cur["active"] and cur["saw_skip"]:  # flush the file's last turn
             turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
-                          "saw_marker": cur["saw_marker"], "saw_hook": cur["saw_hook"], "skip_text": cur["skip_text"],
+                          "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                           "sid": cur["sid"], "sub": is_sub})
         if file_dispatch and file_sid:
             dispatch_sessions.add(file_sid)
@@ -453,7 +466,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                      if any(kw in t for kw in meta_keywords)} | dispatch_sessions
     return {
         "skill_tool": skill_tool, "slash": slash_skill, "using": +using, "rerules": rerules,
-        "n_search": n_search, "n_skip": n_skip,
+        "n_search": n_search, "n_skip": n_skip, "n_skip_new": n_skip_new,
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
         "enforcer_verdicts": enforcer_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
@@ -547,7 +560,7 @@ def main():
         _tally(["sk-b"], ["sk-a"], "S", _u, _raw, _rr)
         rerule_ok = rerule_ok and +_u == Counter({"sk-b": 1})   # same session: undone
         # Both skip forms are rulings; prose opening "No skill" is not; a hook authorization counts
-        # only from a hook-written record.
+        # only from the enforcer's own output.
         auth = AUTHORIZED_SKIP_MARKER + " the intent-margin classifier judged this turn conversational."
 
         def _att(event, text, kind="hook_additional_context"):
@@ -561,6 +574,8 @@ def main():
             and bool(_SKIPPING.search("No skill: trivial"))               # any case, with colon
             and bool(_SKIPPING.search("`NO SKILL: nothing fits`"))         # backtick-wrapped
             and bool(_USING.search("**USING: ak-git**"))
+            and _declared("**USING: b (re-rule: a)**") == (["b"], ["a"])   # a bold re-rule retracts
+            and not _SEARCH.search("**Search results**")                    # a bold heading is prose
             and _enforcer_output(_att("UserPromptSubmit", auth)) == [auth]
             and _enforcer_output(_att("UserPromptSubmit", "CONSULT-ROUTE · x")) == ["CONSULT-ROUTE · x"]
             and not _enforcer_output(_att("PostToolUse", auth))           # a file-echo hook quoting it
@@ -606,7 +621,8 @@ def main():
     print(f"  Skill-tool: {sum(st.values())}   /slash: {sum(sl.values())}   combined: {tot_counter}")
     print("INLINE signal (the operator's metric — invisible to both counters):")
     print(f"  USING <skill> declarations: {sum(us.values())}  (distinct {len(us)})")
-    print(f"  SEARCH declarations: {r['n_search']}   skip rulings (NO SKILL: / SKIPPING): {r['n_skip']}")
+    print(f"  SEARCH declarations: {r['n_search']}   skip rulings: {r['n_skip']} "
+          f"(NO SKILL: {r['n_skip_new']}, old SKIPPING {r['n_skip'] - r['n_skip_new']})")
     print(f"  re-rules: {sum(r['rerules'].values())}  (a USING switched away from under doctrine "
           "rule 3 — excluded from USING above)")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
@@ -623,7 +639,7 @@ def main():
     efs, els, eaz = r["enforcer_verdicts"]
     if efs + els + eaz:
         print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "
-              f"(lawful {els}; hook-authorized {eaz}) — the doctrine's own population")
+              f"(lawful {els}; hook-authorized {eaz}) — turns where the enforcer injected")
     print("  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")
 
     meta = r["meta_sessions"]

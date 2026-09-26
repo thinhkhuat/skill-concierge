@@ -497,6 +497,8 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args not in ([], ["--stats"]):
         # Anything else prints usage and stops: a bare run rewrites the private corpus.
-        print(__doc__.strip().splitlines()[-1].strip() + "\n(no argument: extract; --stats: summary)")
-        sys.exit(0 if args in (["-h"], ["--help"]) else 2)
+        ok = args in (["-h"], ["--help"])
+        print(__doc__.strip().splitlines()[-1].strip() + "\n(no argument: extract; --stats: summary)",
+              file=sys.stdout if ok else sys.stderr)
+        sys.exit(0 if ok else 2)
     stats() if args else extract()
