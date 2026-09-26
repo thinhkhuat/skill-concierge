@@ -103,6 +103,19 @@ _deployed_ver() {
 VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
 echo "    SSOT version: v$VERSION"
 
+# A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
+# uncommitted version change would put HEAD's content in a dir named for the new version: refuse
+# before any CLI call or write.
+if [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$ROOT" && pwd -P)" ]; then
+  HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
+    | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
+  if [ "$HEAD_VERSION" != "$VERSION" ]; then
+    echo "!! .claude-plugin/plugin.json says v$VERSION but HEAD carries v${HEAD_VERSION:-none}; this installer" >&2
+    echo "   installs HEAD. Commit the version change (or restore the file), then re-run." >&2
+    exit 1
+  fi
+fi
+
 if [ ! -f "$CLAUDE_PLUGINS_JSON" ] || ! grep -q "\"$PLUGIN_ID\"" "$CLAUDE_PLUGINS_JSON"; then
   echo "!! no skill-concierge@skill-concierge entry in $CLAUDE_PLUGINS_JSON" >&2
   echo "   Install it once via:" >&2

@@ -59,32 +59,41 @@ _USING = re.compile(r'(?im)' + _LEAD.format(w='USING')
 # Rule 3's continuation (ADR-0063/0064): `USING: <name> (continuing)`, and the forms agents write —
 # `(continuing the earlier work)`, `(continued …)`, `(continuation …)`, several names joined by + , &.
 # The bare `USING <name> (continuing)` reads in capitals only, as `_USING` reads it ("Using rg
-# (continuing …)" is prose). A parenthetical that negates the word itself — "(not continuing x)",
-# "(instead of continuing x)" — or names a new task or new work, as an agent obeying the red-flags
-# row writes, is a fresh ruling. A negation elsewhere in the note ("same task, no new search —
-# continuing", "not a new task — continuing") is the doctrine's own justification and still reads.
-_NEGATED_NOTE = (r"[^)\n]*?(?:\b(?:not|no|never)\s+(?:a\s+|an\s+)?continu|n't\s+continu"
-                 r"|\b(?:instead\s+of|rather\s+than|without)\s+continu"
-                 r"|(?<!not a )(?<!no )\bnew\s+(?:task|work)\b)")
+# (continuing …)" is prose). The note in the parentheses is checked by `_negated`.
 _CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
                          + r'(?:USING:[*`]*\s+|(?-i:USING)\s+)([^\n(]*?)[`*\s]*\('
-                         + r'(?!' + _NEGATED_NOTE + r')'
-                         + r'[^)\n]*\bcontinu(?:ing|ed|ation)\b[^)\n]*\)')
+                         + r'([^)\n]*\bcontinu(?:ing|ed|ation)\b[^)\n]*)\)')
+# A note that negates the continuation word itself — "(not continuing x)", "(no longer continuing)",
+# "(instead of a continuation)" — or names a new task or new work, as an agent obeying the red-flags
+# row writes, is a fresh ruling. A negated new task ("not a new task", "isn't really new work") and a
+# negation elsewhere ("same task, no new search — continuing") are the doctrine's own justification.
+_NEGATED_WORD = re.compile(r"\b(?:not|no|never)\s+(?:longer\s+|really\s+)?(?:a\s+|an\s+)?continu"
+                           r"|n[’']t\s+(?:\w+\s+)?continu"
+                           r"|\b(?:instead\s+of|rather\s+than|without)\s+(?:a\s+|an\s+)?continu", re.I)
+_NEW_TASK = re.compile(r"(\b(?:not|no|never|\w+n[’']t)\s+(?:\w+\s+)?(?:a\s+|an\s+)?)?\bnew\s+(?:task|work)\b",
+                       re.I)
+
+
+def _negated(note):
+    """True when a continuation note makes the ruling a fresh one (see `_NEGATED_WORD`)."""
+    return bool(_NEGATED_WORD.search(note)) or any(not m.group(1) for m in _NEW_TASK.finditer(note))
 _FILLER = {"then", "and", "also", "plus", "with", "for", "name", "skill"}
 _SKILL_NAME = re.compile(r'[a-z0-9][a-z0-9:_\-]*', re.I)
 STALE_TURNS = 5   # a continuation whose skill was last used more turns ago than this is likelier new work
 
 
-def _continued_names(txt):
+def _continued_names(txt, known=()):
     """The skill names an assistant text continues, in order, without repeats. The first part
     names its skill in its first word ("ak-cook for the build"). A later part names one when it is a
-    single word after filler ("then study") or opens with a hyphenated or namespaced name
-    ("+ ak-git for the commit"), so prose after a comma ("then run the tests") is not read."""
+    single word after filler ("then study") or opens with a skill in `known` ("+ ak-git for the
+    commit"), so prose after a comma ("then re-run the tests") is not read."""
     out = []
-    for grp in _CONTINUING.findall(txt):
+    for grp, note in _CONTINUING.findall(txt):
+        if _negated(note):
+            continue
         for i, part in enumerate(re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp)):
             words = [w.strip("`*") for w in part.split() if w.strip("`*").lower() not in _FILLER]
-            if not words or (i and len(words) > 1 and not re.search(r"[-:]", words[0])):
+            if not words or (i and len(words) > 1 and norm(words[0]) not in known):
                 continue
             m = _SKILL_NAME.match(words[0])   # anchored: the quoted `<name>` placeholder never matches
             n = norm(m.group(0)) if m else None
@@ -109,7 +118,10 @@ _NOT_WORK_BRACKETS = ("[Request interrupted", "[Scheduled Task", "[Cross-session
                       "[SYSTEM NOTIFICATION")
 _NOT_WORK_TEXT = ("Another Claude session", "/compact",
                   # a team runner's inbox relays and scaffolding (no origin fields of their own)
-                  "## New Messages", "## Team Governance", "## Turn Context", 'Team: "')
+                  "## New Messages", "## Team Governance", "## Turn Context", 'Team: "',
+                  # a bot framework's scheduler, which the harness records as typed by a person
+                  "Meanwhile, Heartbeat check", "Meanwhile, reply to your human partner",
+                  "Meanwhile, System health check", "Meanwhile, Component upgrades available")
 # The harness's own record fields, where present, decide before the text does: an origin other than
 # a human (a task notification, an auto-continuation), a system prompt, or an SDK prompt sent by a
 # program (`sdk-ts`/`sdk-cli` entrypoints: summarizers, probes, evals) is not work. A typed prompt
@@ -486,6 +498,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 "cont": {}, "loads": set(), "used_before": {},
                 "active": active, "skip_text": "", "sid": None}
 
+    catalogue = build_catalogue()   # a later name in a continuation must be a known skill
     for fp in sorted(glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True)):   # fixed order
         # H3: subagent (Task sidechain) transcripts sit under a `subagents/` dir but carry the
         # PARENT's sid — flag them per FILE (not sid) so the parent's organic turns survive.
@@ -538,16 +551,23 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     continue
                 file_uuids.add(uid)
             opens = role_is_user_prompt(rec, rec.get("message")) or _hands_over_work(rec)
-            if opens:   # a user prompt -> new turn
+            # A harness record in list form (a team relay, a program's prompt, an interrupt) starts
+            # a turn that is never scored: its rulings answer the harness, not a person, and must not
+            # merge into the turn before it.
+            msg_ = rec.get("message")
+            unscored = (not opens and rec.get("type") == "user" and not rec.get("isMeta")
+                        and isinstance(msg_, dict) and isinstance(msg_.get("content"), list)
+                        and _prompt_text(rec) is not None)
+            if opens or unscored:   # a user prompt -> new turn
                 _close_continuations(cur)
                 if cur["active"] and cur["saw_skip"]:
                     turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
                                   "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                                   "sid": cur["sid"], "sub": is_sub})
-                cur = _new_turn(True)
+                cur = _new_turn(opens)
                 turn_no += _hands_over_work(rec)   # the stale gap counts work turns only
                 cur["used_before"] = dict(last_used)   # "earlier use" means before this turn
-            elif not has_marker:
+            if not opens and not has_marker:
                 continue
             # Count ONLY the enforcer's own authorization line: from its own hook output
             # (_enforcer_output), anchored on its message signatures (_is_authorized_skip_line) —
@@ -614,7 +634,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     if role == "assistant":
                         used, retracted = _declared(txt)
                         if not (subagent_stop and is_sub):
-                            for c in _continued_names(txt):
+                            for c in _continued_names(txt, catalogue | set(last_used)):
                                 if c not in cur["cont"]:
                                     last = [t for n, t in cur["used_before"].items() if _same_skill(c, n)]
                                     gap = (turn_no - max(last)) if last else None
@@ -661,7 +681,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
 
     # Exclude builtin slashes (/clear, /compact, /plugin, ...) by catalogue membership so
     # they don't inflate "skill usage" — mirrors the skill-usage-tracker's known-skill filter.
-    known = build_catalogue() | set(skill_tool) | set(using)
+    known = catalogue | set(skill_tool) | set(using)
     slash_skill = Counter({n: c for n, c in slash.items() if n in known})
 
     # H3: real-usage denominator drops self/meta (keyword) + dispatched team sessions (dispatch
@@ -785,6 +805,8 @@ def main():
             and bool(_USING.search("**USING: ak-git**"))
             and _declared("**USING: b (re-rule: a)**") == (["b"], ["a"])   # a bold re-rule retracts
             and _continued_names("USING: ak-cook for the build, then ak-git (continuing the work)") == ["ak-cook", "ak-git"]
+            and _continued_names("USING: ak-cook, then re-run the tests (continuing)", {"ak-git"}) == ["ak-cook"]
+            and _continued_names("USING: ak-cook + ak-git for the commit (continuing)", {"ak-git"}) == ["ak-cook", "ak-git"]
             and _continued_names("Using rg (continuing the search)") == []            # prose, no colon
             and _continued_names("USING: <name> (continuing)") == []                 # the quoted placeholder
             and _continued_names("USING: ak-debug (new task, not continuing ak-cook)") == []   # negated

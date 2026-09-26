@@ -67,10 +67,13 @@ chat message, pasted content, a slash command with arguments, or a typed prompt 
 and image blocks. Stop-hook feedback, notifications, scheduled tasks, cross-session messages,
 local-command output, session builtins (`/compact`, `/plugin`, `/model` …) and compaction summaries do
 not count (since `0.52.4`, by prompt shape since `0.52.5`). Since `0.52.6` the harness's own record
-fields decide first: an `origin.kind` other than `human`, a `system` prompt, or an SDK prompt a program
-sent (entrypoint `sdk-…`) is not work, and neither is a team runner's inbox relay or scaffolding
-(`## New Messages`, `## Team Governance`, `## Turn Context`, `Team: "…"`). A "turn" for the verdicts is
-every string-content user record plus a list-form prompt that hands over work. A record line the store
+fields decide first: an `origin.kind` other than `human`, a `system` prompt, or a `promptSource: sdk`
+prompt from a program entrypoint (`sdk-…`) is not work — including the few a person typed through an
+SDK app, a recorded trade-off (ADR-0071) — and neither is a team runner's inbox relay or scaffolding
+(`## New Messages`, `## Team Governance`, `## Turn Context`, `Team: "…"`) or a bot scheduler's message
+(`Meanwhile, Heartbeat check` and three siblings). A "turn" for the verdicts is every string-content user
+record plus a list-form prompt that hands over work; a list-form harness record opens a turn that is
+never scored (since `0.52.8`). A record line the store
 wrote twice is read once. Files are read in sorted order; a resumed session usually rewrites the copied
 records' session id, so that order decides which copy of a continuation counts (when a copy keeps the
 original id, the session's own file wins). A note that negates the continuation word itself ("(not

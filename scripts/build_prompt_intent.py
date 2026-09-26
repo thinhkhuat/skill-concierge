@@ -55,7 +55,10 @@ EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 MIN_TOOLS_ACTIONABLE = 3
 
 # A team runner's inbox relays and scaffolding: no origin fields of their own, and they hand work.
-_TEAM_HEADS = ("## New Messages", "## Team Governance", "## Turn Context", 'Team: "')
+_TEAM_HEADS = ("## New Messages", "## Team Governance", "## Turn Context", 'Team: "',
+               # a bot framework's scheduler, which the harness records as typed by a person
+               "Meanwhile, Heartbeat check", "Meanwhile, reply to your human partner",
+               "Meanwhile, System health check", "Meanwhile, Component upgrades available")
 # Injection markers — text that arrives as a `user` event but is NOT a typed user prompt
 # (skill bodies, hook output, system notices). Excluded so labels reflect real intent.
 _BAD_PREFIX = ("Base directory for this skill:", "Stop hook feedback", "Caveat:", "## Session",
@@ -125,9 +128,13 @@ def _new_stimulus(ev):
 
 def mine():
     """(prompt, label) for clear-label turns across the transcript store. A turn opens on a
-    genuine user prompt and closes at the next one; the label is the agent's action between."""
+    genuine user prompt and closes at the next one; the label is the agent's action between.
+    Subagent transcripts are skipped (their prompts are written by the parent agent), and files are
+    read in sorted order, so `balance()` picks the same rows on every machine."""
     rows = []
-    for fp in glob.glob(str(PROJECTS / "**" / "*.jsonl"), recursive=True):
+    for fp in sorted(glob.glob(str(PROJECTS / "**" / "*.jsonl"), recursive=True)):
+        if os.sep + "subagents" + os.sep in fp:
+            continue
         try:
             lines = Path(fp).read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeError) as exc:
@@ -274,6 +281,26 @@ def _selftest():
     assert _prompt_text(say("fix the parser bug now", promptSource="sdk", entrypoint="claude-desktop-3p"))
     assert _prompt_text(say("resume the queued task now", promptSource="system")) is None
     assert _prompt_text(say("## New Messages – From lead [message] do x", origin=None)) is None
+    # Subagent files are skipped, and the corpus does not depend on the directory listing.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "sess" / "subagents").mkdir(parents=True)
+        (Path(d) / "sess" / "subagents" / "agent-x.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in [say("audit the three config files"), tool, tool, tool]))
+        (Path(d) / "b.jsonl").write_text("\n".join(json.dumps(e) for e in [say("fix the parser bug please"), tool, tool, tool]))
+        (Path(d) / "a.jsonl").write_text("\n".join(json.dumps(e) for e in [say("thanks, that is all for now")]))
+        real_glob = glob.glob
+        got = []
+        for rev in (False, True):
+            glob.glob = lambda *a, rev=rev, **k: sorted(real_glob(*a, **k), reverse=rev)
+            PROJECTS = Path(d)
+            try:
+                got.append(mine())
+            finally:
+                PROJECTS, glob.glob = saved, real_glob
+        assert got[0] == got[1] == [("thanks, that is all for now", "conversational"),
+                                    ("fix the parser bug please", "actionable")], got
+    assert _prompt_text(say("Meanwhile, Heartbeat check. [phase=primary] ack via node x",
+                            origin={"kind": "human"}, promptSource="typed")) is None
     b = balance([("a", "actionable"), ("b", "actionable"),
                  ("c", "actionable"), ("d", "conversational")])
     assert Counter(l for _, l in b) == {"actionable": 1, "conversational": 1}, b

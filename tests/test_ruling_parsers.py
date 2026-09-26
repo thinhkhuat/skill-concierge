@@ -452,7 +452,7 @@ def test_a_justified_continuation_reads_and_a_negated_one_does_not():
                  "USING: ak-debug (without continuing ak-cook)", "USING: ak-debug (new work, continuing nothing)",
                  "USING: ak-cook — fit (not a continuation of earlier work)"):
         assert A._continued_names(line) == [], line
-    assert A._continued_names("USING: ak-cook + ak-git for the commit (continuing)") == ["ak-cook", "ak-git"]
+    assert A._continued_names("USING: ak-cook + ak-git for the commit (continuing)", {"ak-git"}) == ["ak-cook", "ak-git"]
 
 
 def test_the_audit_reads_files_in_a_fixed_order(tmp_path, monkeypatch):
@@ -466,3 +466,50 @@ def test_the_audit_reads_files_in_a_fixed_order(tmp_path, monkeypatch):
         monkeypatch.setattr(A.glob, "glob", lambda *x, rev=rev, **k: sorted(real_glob(*x, **k), reverse=rev))
         got.append(_audit_files(tmp_path / str(rev), monkeypatch, {"p/s1.jsonl": a, "p/s2.jsonl": b})["continuations"])
     assert got[0] == got[1] == (1, 0, 0, 0)
+
+
+def test_negations_are_read_by_meaning():
+    for line in ("USING: ak-cook (not new work — continuing)", "USING: ak-cook (isn't a new task — continuing)",
+                 "USING: ak-cook (not really a new task; continuing)", "USING: ak-cook (no new task — continuing)",
+                 "USING: ak-cook (didn't stop, continuing)"):
+        assert A._continued_names(line) == ["ak-cook"], line
+    for line in ("USING: ak-debug (no longer continuing ak-cook)", "USING: ak-debug (instead of a continuation of x)",
+                 "USING: ak-debug (rather than a continuation)", "USING: ak-debug (won\u2019t be continuing ak-cook)"):
+        assert A._continued_names(line) == [], line
+
+
+def test_a_later_part_needs_a_known_skill_unless_it_is_one_word():
+    assert A._continued_names("USING: ak-cook, then re-run the tests (continuing)", {"ak-git"}) == ["ak-cook"]
+    assert A._continued_names("USING: ak-cook + follow-up fixes (continuing)", {"ak-git"}) == ["ak-cook"]
+    assert A._continued_names("USING: ak-cook, then study (continuing)") == ["ak-cook", "study"]
+
+
+def test_the_trade_offs_are_pinned():
+    """A typed source alone makes a list prompt typed; a program's SDK prompt is not work even when a
+    person typed it through an SDK app (a recorded trade-off, ADR-0071); a bot scheduler's heartbeat
+    is not work though the harness marks it typed."""
+    assert A._hands_over_work({**_listed({"type": "text", "text": "[Image #1] what is this"}), "promptSource": "typed"})
+    assert not A._hands_over_work({**_listed({"type": "text", "text": "fix the parser please"}),
+                                   "promptSource": "sdk", "entrypoint": "sdk-ts"})
+    assert not A._hands_over_work({**_user("Meanwhile, Heartbeat check. [phase=primary]"),
+                                   "origin": {"kind": "human"}, "promptSource": "typed"})
+
+
+def test_a_team_relay_after_harness_output_is_not_scored(tmp_path, monkeypatch):
+    """A list-form relay starts its own unscored turn, so its ruling is not charged to the harness
+    record before it."""
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _say("USING: study"),
+        _user("<local-command-stdout>done</local-command-stdout>"),
+        _listed({"type": "text", "text": "## New Messages – From lead [message] do x"}),
+        _say("NO SKILL: hook-cleared — team relay"),
+    ])
+    assert r["n_skip"] == 1 and (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (0, 0, 0)
+
+
+def test_a_typed_list_prompt_opens_a_scored_turn(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _say("USING: study"),
+        _listed({"type": "text", "text": "fix the parser please"}), _say("NO SKILL: nothing fits"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)

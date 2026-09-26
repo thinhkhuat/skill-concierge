@@ -13,6 +13,13 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.8 — unscored harness turns; clean miner corpus (ADR-0071)
+
+**Starts per harness** when its plugin cache reaches `0.52.8`. No standing-order change, so no new trail
+epoch: W25-W28 keep reading from the 0.52.3 deploy. The audit reader changed (list-form harness records
+open unscored turns): compare skip-turn counts only within one reader version. Since 2026-09-19 the
+0.52.7 and 0.52.8 readers agree.
+
 ## v0.52.7 — Codex and Claude Code installers (ADR-0069)
 
 **No new epoch for any watch item.** The release adds installers and a doctor row; the standing order,
@@ -22,7 +29,8 @@ the enforcer and the engine are unchanged. W25-W28 keep reading from the 0.52.3 
 
 **Starts per harness** when its plugin cache reaches `0.52.6`. No standing-order change, so no new trail
 epoch: W25-W28 keep reading from the 0.52.3 deploy (Claude Code 2026-09-26 21:20:20). The audit reader
-changed again (team relays and programmatic records out of the verdict turns and the work count):
+changed again (team relays and programmatic records out of the work count; their verdict turns moved into the
+previous turn until 0.52.8 — ADR-0071):
 compare skip-turn and continuation counts only within one reader version. Since 2026-09-19 all three
 0.52.4-0.52.6 readers give the same headline.
 

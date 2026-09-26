@@ -3,6 +3,29 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.8] — 2026-09-27
+
+### Fixed — ADR-0071: unscored harness turns; clean miner corpus; installers install HEAD's version
+- **Audit** (review of 0.52.6: 3 Medium, 4 Low). A list-form harness record — a team relay, a program's
+  prompt, an interrupt — opens a turn that is never scored, so its skip ruling is no longer charged to the
+  turn before it. Since 2026-07-04: skip turns 976 → 963, false 603 → 591; since 2026-09-19 unchanged.
+- **Continuations** are read by meaning: "(no longer continuing x)" and "(instead of a continuation)" are
+  fresh rulings; "(not really a new task; continuing)" reads. A later name after a comma must be a known
+  skill, so "then re-run the tests" is not read.
+- **Bot scheduler messages** ("Meanwhile, Heartbeat check" and three siblings), which the harness marks
+  as typed, are not work and not miner prompts.
+- **Prompt-intent miner** skips subagent transcripts (945 rows) and reads files in sorted order; its
+  selftest checks both orders. Labelled rows 3,514 → 2,534, balanced 396 + 396. Not rebuilt.
+- **Installers** (Codex, Claude Code, OMP, ZCode) refuse, before any CLI call or write, when the working
+  tree's plugin version differs from HEAD's; the installer tests therefore need the version change
+  committed.
+- **Correction.** ADR-0068 said every `sdk-…` SDK prompt comes from a program; at least 25 were typed by
+  a person through an SDK app. The rule stays as a recorded trade-off (8 audit-window prompts, 15 miner
+  rows). Its "team relays out of the verdict turns" was false until this release.
+- **Tests.** Negation lines, known later names, the trade-offs, unscored and scored list turns, the
+  installers' version check against a fixture repo (fails on 0.52.7), the miner's order and subagent
+  rules. 21 audit mutations and 3 miner mutations, each caught.
+
 ## [0.52.7] — 2026-09-27
 
 ### Added — ADR-0069: Codex and Claude Code installers (owner decision D9)
