@@ -13,6 +13,14 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.3 — continuation counter reads every form; stale-continuation red flag (ADR-0065)
+
+**Starts per harness** when its plugin cache reaches `0.52.3` and a session restarts. A **trail epoch**
+(the standing order changed); W25-W28 are read from the 0.52.3 deploy. 0.52.2 was installed on Claude
+Code at 2026-09-26 20:51:46. The continuation counter changed (every form; earlier use before the turn;
+stale flag; organic split): continuation counts across the reader change are not comparable — the 0.52.2
+baselines were form-limited. W28 now also watches the stale count.
+
 ## v0.52.2 — continuations for the same task; continuation counter (ADR-0064)
 
 **Starts per harness** when its plugin cache reaches `0.52.2` and a session restarts. A **trail epoch**
@@ -32,7 +40,7 @@ so W25-W27 below are read from the 0.52.1 deploy, not the 0.52.0 one. The audit 
 
 | # | Watch | Command | Trigger | Action |
 |---|-------|---------|---------|--------|
-| W28 | Continuations re-read | `audit_skill_usage.py --since "<deploy>"` → the continuations line (total; re-read in the same turn; no earlier use of that skill this session) | continuations without the re-read, more than a stray one per week | the rule 3 paragraph is not landing — make the re-read the first clause, or have the enforcer name the last-used skill on short turns |
+| W28 | Continuations re-read and scoped | `audit_skill_usage.py --since "<deploy>" --continuations` → the continuations line, organic part (total; re-read in the turn; no earlier use; last used > 5 turns ago) and the listed units for hand review | continuations without the re-read, more than a stray one per week | the rule 3 paragraph is not landing — make the re-read the first clause, or have the enforcer name the last-used skill on short turns |
 
 ## v0.52.0 — `NO SKILL:` ruling, whole-shelf label, shorter standing order (ADR-0062)
 

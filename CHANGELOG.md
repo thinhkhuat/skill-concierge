@@ -3,6 +3,30 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.3] — 2026-09-26
+
+### Changed — ADR-0065: the continuation counter reads every form; a red flag for stale continuations
+- **Continuation counter** (review of 0.52.2: 3 Medium, 9 Low). It now reads `(continuing …)`,
+  `(continued …)`, `(continuation …)` and several names on one line — the exact `(continuing)` form alone
+  was about a third of them. Earlier use is judged from the session before the turn (a load, a `USING:`
+  line or the user's slash command), any load of the skill in the turn is the re-read, name forms
+  (`plugin:name`, `name`) match, and only skill-search's own `get_skill`/`search_skills` count. New:
+  continuations of a skill last used more than 5 turns earlier (the proxy for "not the same task"), an
+  organic split (self/meta excluded) and `--continuations` to list each one for hand review. Since
+  2026-09-19: 14 continuations (organic 5), 4 re-read, 4 stale.
+- **Red-flags row** (owner-approved): "I'm still in <skill> — continuing." → "Only for the same task; new
+  work: SEARCH (3)." Standing order 697 → 715 words.
+- **Harness-message lane.** `[Cross-session idle notice]` prompts are harness-generated: the ledger held 3,
+  none on the lane (2 full offers, 1 intent skip). Added to `_HARNESS_MSG_RE` and its twin in
+  `scripts/build_keep_off.py`.
+- **Text fixes.** `doctrine.py` no longer says a harness rewrites `get_skill("<name>")`; the audit SKILL.md
+  puts the authorized-skip sentence back beside its subject and documents the case-sensitive pre-filter
+  and the queued-prompt split. ADR-0064's figures missed the enforcer-run line (302/644 → 309/644) and
+  its baselines were form-limited (28 → 92 since 2026-07-04 on the new reader).
+- **Tests.** Every continuation form, a same-turn load, name forms, a foreign `get_skill`, a slash command,
+  a stale continuation, earlier use before the window and the subagent exclusion (the last two proven by
+  breaking the code).
+
 ## [0.52.2] — 2026-09-26
 
 ### Changed — ADR-0064: continuations are for the same task, and the audit counts them

@@ -39,7 +39,8 @@ ENRICH_SINCE = os.environ.get("KEEPOFF_SINCE", "2026-09-15 00:00:00")
 _HARNESS_MSG_RE = re.compile(
     r"^\s*(?:<task-notification>|<system-reminder>|<cross-session-message\b|<teammate-message\b"
     r"|Another Claude session sent a message|\[Request interrupted by user"
-    r"|\[SYSTEM NOTIFICATION\b|This session is being continued from a previous conversation"
+    r"|\[SYSTEM NOTIFICATION\b|\[Cross-session idle notice\]"
+    r"|This session is being continued from a previous conversation"
     r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
 MIN_OFFERS = int(os.environ.get("KEEPOFF_MIN_OFFERS", "15"))
 MAX_TAKE_RATE = float(os.environ.get("KEEPOFF_MAX_TAKE_RATE", "0.05"))

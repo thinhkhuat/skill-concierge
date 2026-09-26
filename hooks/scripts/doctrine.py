@@ -120,9 +120,9 @@ def _harness_adapt(doctrine: str) -> str:
     `mcp__<serverName>__<rawName>`. The skill-search server has no plugin namespace
     prefix in DSH (it rides the plain `dsh-mcp-client` entry, not a plugin manifest).
     So the tool name is `mcp__skill-search__search_skills` — same as commandcode.
-    DSH has no slash-commands; the hint is rewritten to reference the skill tool
-    instead (`skill` + skill name lookup). The rule-5 `get_skill("<name>")` hint is left as
-    written: it names the tool by its short name, which the agent resolves to the bridged form.
+    DSH has no slash-commands; both slash hints are rewritten to that search tool. The rule-5
+    `get_skill("<name>")` hint is left as written: it names the tool by its short name, which the
+    agent resolves to the bridged form.
     """
     harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if harness in ("omp", "oh-my-pi"):
@@ -178,8 +178,8 @@ def _harness_adapt(doctrine: str) -> str:
                 break
     if harness == "dsh":
         # DSH's MCP client bridges as `mcp__<serverName>__<rawName>` — same naming
-        # as Command Code. No slash-commands in DSH; rewrite to reference the skill
-        # tool and the MCP-bridged get_skill form.
+        # as Command Code. No slash-commands in DSH; rewrite both slash hints to the bridged
+        # search tool. get_skill("<name>") is left as written (no harness rewrites it).
         return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
             "mcp__skill-search__search_skills"
@@ -317,7 +317,7 @@ def _selftest() -> int:
     except OSError:
         _sample = ""
     if "get_skill(\"<name>\")" not in _sample or "mcp__plugin_skill-concierge_skill-search__search_skills" not in _sample:
-        bad.append("doctrine body must carry the claude-form search tool and the get_skill(\"<name>\") hint the harness rewrites target")
+        bad.append("doctrine body must carry the claude-form search tool (the harness rewrites' target) and the rule-5 get_skill(\"<name>\") hint")
     _saved_env = os.environ.get("SKILL_CONCIERGE_HARNESS")
     os.environ["SKILL_CONCIERGE_HARNESS"] = "omp"
     try:

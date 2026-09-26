@@ -56,9 +56,44 @@ _LEAD = r'^(?:[ \t]*|[ \t`*>]*[`*>][ \t]*(?={w}:))'
 # A name wrapped in markdown (`USING: `x``) reads only after the colon: "Using `rg` to …" is prose.
 _USING = re.compile(r'(?im)' + _LEAD.format(w='USING')
                     + r'USING(?::[*`]*\s+[`*]*|\s+)([a-z0-9][a-z0-9:_\-]*)')
-# Rule 3's continuation form (ADR-0063/0064): `USING: <name> (continuing)`.
+# Rule 3's continuation (ADR-0063/0064): `USING: <name> (continuing)`, and the forms agents write —
+# `(continuing the earlier work)`, `(continued …)`, `(continuation …)`, several names joined by + , &.
 _CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
-                         + r'USING(?::[*`]*\s+[`*]*|\s+)([a-z0-9][a-z0-9:_\-]*)[`*]*\s*\(continuing\)')
+                         + r'USING(?::[*`]*\s+|\s+)([^\n(]*?)[`*\s]*\(continu(?:ing|ed|ation)\b[^)\n]*\)')
+_SKILL_NAME = re.compile(r'[a-z0-9][a-z0-9:_\-]*', re.I)
+STALE_TURNS = 5   # a continuation whose skill was last used more turns ago than this is likelier new work
+
+
+def _continued_names(txt):
+    """The skill names an assistant text continues, in order, without repeats."""
+    out = []
+    for grp in _CONTINUING.findall(txt):
+        for tok in re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp):
+            m = _SKILL_NAME.search(tok.strip("`* "))
+            n = norm(m.group(0)) if m else None
+            if n and n not in _NOT_A_SKILL and n not in out:
+                out.append(n)
+    return out
+
+
+def _continuation_counts(units):
+    """(total, re-read in the turn, no earlier use this session, last used > STALE_TURNS turns ago)."""
+    return (len(units), sum(1 for u in units if u[3]), sum(1 for u in units if u[4] is None),
+            sum(1 for u in units if u[4] is not None and u[4] > STALE_TURNS))
+
+
+def _same_skill(a, b):
+    """Name forms of one skill: `plugin:name` (normalized `plugin-name`) and bare `name`."""
+    return a == b or a.endswith("-" + b) or b.endswith("-" + a)
+
+
+def _loaded_skill(blk):
+    """The skill a tool_use block loads — the Skill tool or skill-search's own get_skill — or None."""
+    nm = blk.get("name") or ""
+    if nm != "Skill" and not (("skill-search" in nm or "skill_search" in nm) and nm.endswith("get_skill")):
+        return None
+    inp = blk.get("input") or {}
+    return norm(inp.get("skill") or inp.get("name") or inp.get("skill_name") or inp.get("command"))
 _SEARCH = re.compile(r'(?im)' + _LEAD.format(w='SEARCH') + r'SEARCH:?[*`]*\s+')
 # The skip ruling. `NO SKILL: <why>` since v0.52.0 (ADR-0062); the old `SKIPPING: none` still
 # reads, so transcripts from before the rename stay comparable. The new form needs its colon —
@@ -83,22 +118,25 @@ _SEARCH_SLUGS = {"skill-search", "skill-concierge-skill-search"}
 AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
 
 
-def _note_used(rec, used):
-    """Add the skills an assistant record uses (Skill / get_skill calls, USING lines) to `used`."""
+def _note_used(rec, line, last_used, turn_no):
+    """Record in `last_used` (name -> turn number) the skills a record uses: Skill / get_skill calls,
+    USING lines, a user's slash command."""
+    for m in _CMD.findall(line):
+        if norm(m):
+            last_used[norm(m)] = turn_no
     msg = rec.get("message")
     if rec.get("type") != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("content"), list):
         return
     for blk in msg["content"]:
         if not isinstance(blk, dict):
             continue
-        if blk.get("type") == "tool_use" and ((blk.get("name") or "") == "Skill"
-                                               or (blk.get("name") or "").endswith("get_skill")):
-            inp = blk.get("input") or {}
-            n = norm(inp.get("skill") or inp.get("name"))
+        if blk.get("type") == "tool_use":
+            n = _loaded_skill(blk)
             if n:
-                used.add(n)
+                last_used[n] = turn_no
         elif blk.get("type") == "text":
-            used.update(_declared(blk.get("text", ""))[0])
+            for n in _declared(blk.get("text", ""))[0]:
+                last_used[n] = turn_no
 
 
 # How every enforcer output string begins (hooks/scripts/enforcer.py: MANDATE / _ranked_mandate,
@@ -331,13 +369,12 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     rerules = Counter()   # retracted USING declarations, moved out of `using`
     sess_raw = defaultdict(Counter)   # every USING per session (subagent files included) — the undo base
     n_search = n_skip = n_skip_new = 0
-    cont = Counter()   # continuations: total, re-read in the same turn, no earlier use this session
+    cont_units = []    # one per continued skill per turn: (sid, ts, name, re-read, turns since last use)
 
     def _close_continuations(turn):
-        for prior, reread in turn["cont"].values():
-            cont["total"] += 1
-            cont["reread"] += reread
-            cont["no_prior"] += not prior
+        for name, (gap, sid_, ts_) in turn["cont"].items():
+            reread = any(_same_skill(name, x) for x in turn["loads"])
+            cont_units.append((sid_, ts_, name, reread, gap))
     # per-session prompt text, to flag self/meta sessions
     sess_text = defaultdict(str)
     sess_skill = defaultdict(Counter)
@@ -348,7 +385,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     def _new_turn(active):
         return {"saw_search": False, "saw_skip": False, "saw_marker": False, "saw_hook": False,
                 "marker_at_skip": False, "hook_at_skip": False, "search_at_skip": False,
-                "cont": {},
+                "cont": {}, "loads": set(), "used_before": {},
                 "active": active, "skip_text": "", "sid": None}
 
     for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
@@ -357,7 +394,8 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         is_sub = _SUBAGENT_PATH in fp
         file_dispatch = False   # a team/dispatched scaffolding marker seen in this file
         file_sid = None
-        used_here = set()   # skills this session already used (Skill, get_skill or a USING line)
+        last_used = {}      # skill -> turn number of its last use this session (Skill, get_skill, USING, slash)
+        turn_no = 0
         # Turn segmentation: a genuine user prompt (string `content`) opens a turn; a
         # tool_result user record (`content` is a LIST) does not. We accumulate, per turn,
         # whether a SKIPPING was declared and whether a real search_skills call fired in the
@@ -379,6 +417,8 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                   "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
                                   "sid": cur["sid"], "sub": is_sub})
                 cur = _new_turn(True)
+                turn_no += 1
+                cur["used_before"] = dict(last_used)   # "earlier use" means before this turn
             # Genuine user-prompt lines must always reach sess_text below for meta
             # classification, even when they carry none of these tool/doctrine markers
             # (e.g. "review the skill-concierge gate" has no USING/SEARCH/SKIPPING token).
@@ -389,7 +429,8 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                           # also feeds a user record's text to the meta classifier below. The
                           # attachment clause is load-bearing: the June 2026 enforcer head
                           # "SKILL-FIRST (standing …" carries neither USING nor SKILL-CHECK:.
-                          or ('"assistant"' in line and (_NO_SKILL_ANY_CASE.search(line) or "get_skill" in line))
+                          or (('"type":"assistant"' in line or '"type": "assistant"' in line)
+                              and (_NO_SKILL_ANY_CASE.search(line) or "get_skill" in line))
                           or ('"attachment"' in line and ("SKILL-FIRST" in line or "CONSULT-ROUTE" in line)))
             if not (has_marker or (is_user and not is_list_content)):
                 continue
@@ -411,7 +452,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             if since is not None:
                 e = ts_epoch(rec)
                 if e is None or e < since:
-                    _note_used(rec, used_here)   # a continuation inside the window may lean on it
+                    _note_used(rec, line, last_used, turn_no)   # a continuation in the window may lean on it
                     continue
             sid = rec.get("sessionId") or fp
             cur["sid"] = file_sid = sid  # file = one session; thread onto the turn for the sid-join
@@ -421,6 +462,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 n = norm(m)
                 if n:
                     slash[n] += 1
+                    last_used[n] = turn_no   # the user invoked it
                     if n in _SEARCH_SLUGS:
                         cur["saw_search"] = True
             msg = rec.get("message")
@@ -437,13 +479,10 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     continue
                 if blk.get("type") == "tool_use":
                     nm = blk.get("name") or ""
-                    if nm == "Skill" or nm.endswith("get_skill"):
-                        inp = blk.get("input") or {}
-                        n0 = norm(inp.get("skill") or inp.get("name"))
-                        if n0 in cur["cont"]:
-                            cur["cont"][n0] = (cur["cont"][n0][0], True)
-                        if n0:
-                            used_here.add(n0)
+                    n0 = _loaded_skill(blk)
+                    if n0:
+                        cur["loads"].add(n0)   # a load anywhere in the turn is the continuation's re-read
+                        last_used[n0] = turn_no
                     if nm == "Skill":
                         n = norm((blk.get("input") or {}).get("skill"))
                         if n:
@@ -454,7 +493,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                 sess_skill[sid][n] += 1
                             if n in _SEARCH_SLUGS:
                                 cur["saw_search"] = True
-                    elif "search_skills" in nm:  # the MCP retriever call
+                    elif ("skill-search" in nm or "skill_search" in nm) and nm.endswith("search_skills"):
                         cur["saw_search"] = True
                 if blk.get("type") == "text":
                     txt = blk.get("text", "")
@@ -463,10 +502,13 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     if role == "assistant":
                         used, retracted = _declared(txt)
                         if not (subagent_stop and is_sub):
-                            for c in (norm(x) for x in _CONTINUING.findall(txt)):
-                                if c and c not in cur["cont"]:
-                                    cur["cont"][c] = (c in used_here, False)
-                        used_here.update(used)
+                            for c in _continued_names(txt):
+                                if c not in cur["cont"]:
+                                    last = [t for n, t in cur["used_before"].items() if _same_skill(c, n)]
+                                    gap = (turn_no - max(last)) if last else None
+                                    cur["cont"][c] = (gap, sid, rec.get("timestamp") or "")
+                        for n in used:
+                            last_used[n] = turn_no
                         undone = _tally(used, retracted, sid, using, sess_raw, rerules)
                         if not (subagent_stop and is_sub):  # H3: organic denominator only
                             for n in used:
@@ -517,7 +559,9 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     return {
         "skill_tool": skill_tool, "slash": slash_skill, "using": +using, "rerules": rerules,
         "n_search": n_search, "n_skip": n_skip, "n_skip_new": n_skip_new,
-        "continuations": (cont["total"], cont["reread"], cont["no_prior"]),
+        "continuations": _continuation_counts(cont_units),
+        "continuations_organic": _continuation_counts([u for u in cont_units if u[0] not in meta_sessions]),
+        "continuation_units": cont_units,
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
         "enforcer_verdicts": enforcer_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
@@ -536,6 +580,8 @@ def main():
                          "replaces the default set)")
     ap.add_argument("--selftest", action="store_true",
                     help="run the false-SKIPPING verdict + H1 harvest-filter self-check and exit")
+    ap.add_argument("--continuations", action="store_true",
+                    help="also list each continuation (session id prefix, time, skill, re-read, turns since last use)")
     ap.add_argument("--harvest", nargs="?", const="", default=None, metavar="PATH",
                     help="H1: write the deduped false-skip rationalization corpus to PATH and exit "
                          f"(default: ./{DEFAULT_HARVEST_SINK}; gitignored + scrubbed, local-only)")
@@ -687,10 +733,16 @@ def main():
               f"hook-authorized skips: {az})")
     else:
         print("  no skip-ruling turns in window")
-    ct, cr, cn = r["continuations"]
+    ct, cr, cn, cs = r["continuations"]
     if ct:
-        print(f"  continuations (`USING: <x> (continuing)`, rule 3): {ct} — re-read in the same turn {cr}; "
-              f"no earlier use of that skill this session {cn}")
+        ot, orr, on, os_ = r["continuations_organic"]
+        print(f"  continuations (`USING: <x> (continuing …)`, rule 3): {ct} — re-read in the turn {cr}; "
+              f"no earlier use this session {cn}; last used > {STALE_TURNS} turns ago {cs}  "
+              f"[organic, self/meta excluded: {ot} — {orr} / {on} / {os_}]")
+        if args.continuations:
+            for sid_, ts_, name, reread, gap in r["continuation_units"]:
+                print(f"    {str(sid_)[:8]} {ts_[:19]} {name} re-read={'yes' if reread else 'no'} "
+                      f"turns-since-last-use={gap if gap is not None else 'never'}")
     efs, els, eaz = r["enforcer_verdicts"]
     if efs + els + eaz:
         print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "

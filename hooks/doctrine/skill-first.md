@@ -9,8 +9,8 @@
 > would miscount real dodges as authorized. Pinned by `tests/test_doctrine_text.py`.
 > The claude-form search tool name (and the slash forms) are harness-rewrite targets in
 > `doctrine.py` (`_harness_adapt`) and must stay byte-exact. `get_skill("<name>")` is rewritten by
-> no harness; it appears exactly once, in rule 5 (pinned by `tests/test_doctrine_text.py` and the
-> doctrine selftest, which checks the OMP rendering keeps it).
+> no harness; it appears exactly once, in rule 5 (the count is pinned by `tests/test_doctrine_text.py`;
+> the doctrine selftest checks it is present, in the OMP rendering too).
 > EFFORT ("work to done-and-proven") lives in the standalone effort-gate plugin since v0.4.0; this
 > order governs *which / whether a skill* only.
 > The skip ruling is `NO SKILL: <why>` since v0.52.0 (ADR-0062); it replaced the older `SKIPPING` token.
@@ -69,6 +69,7 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
    |---|---|
    | "No skill governs this — it's mechanical / trivial / I can handle it unaided / I'm confident none fit." | Your judgment is not a skip source: SEARCH. |
    | "I searched earlier." | That search is spent: SEARCH here. |
+   | "I'm still in <skill> — continuing." | Only for the same task; new work: SEARCH (3). |
    | "You told me to use `<tool>`." | A named tool is not a ruling against skills: SEARCH. |
    | "The name matches." | A name is a label: load the body and quote the covering line (3). |
 

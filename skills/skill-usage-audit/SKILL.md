@@ -44,7 +44,8 @@ declared with NO same-turn `search_skills` call (the doctrine's hardest rule). A
 enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enforcer's five
 authorized-skip legs — getaway, intent_skip, selfref, the harness-message lane (ADR-0054) and the
 router's no-fit leg (ADR-0061) — see `hooks/scripts/enforcer.py`) is a **lawful, hook-pre-authorized
-skip**. Since `0.52.0` the marker counts only from the enforcer's own output (`_enforcer_output`: a
+skip**: it is excluded from the false-skip count and tallied separately as `authorized_skip`, reported
+alongside the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.52.0` the marker counts only from the enforcer's own output (`_enforcer_output`: a
 UserPromptSubmit `hook_additional_context` attachment whose text starts with `SKILL-FIRST`,
 `SKILL-CHECK:` or `CONSULT-ROUTE`) — never from the agent's own text, a tool result, a file echo, a
 memory or instructions attachment, another hook or the session-start standing order, so a copied line
@@ -52,14 +53,21 @@ cannot authorize a skip (ADR-0062). The report adds an **enforcer-run turns only
 same verdict over turns where the enforcer's offer, consult route or `SKILL-CHECK:` line reached the agent
 before it ruled (Stop-hook feedback, subagent prompts, and short or slash prompts get no offer, though the
 doctrine still binds the last two). Since `0.52.1` a line that arrives after the ruling — a queued
-notification — neither authorizes the skip nor marks the turn enforcer-run (ADR-0063). Since `0.52.2` the same holds for
-the search: a skip is search-backed only by a `search_skills` call made before the ruling (rule 4). The
-report also counts continuations (`USING: <name> (continuing)`, rule 3): how many re-read the skill in the
-same turn and how many name a skill the session had not used before (ADR-0064; epoch-watch W28). The
-`SEARCH` declaration count is display-only and includes bare title-case prose lines ("Search …"); the
-verdicts come from tool calls. Such a turn is
-excluded from the false-skip count and tallied separately as `authorized_skip`, reported alongside
-the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.49.0`
+notification — neither authorizes the skip nor marks the turn enforcer-run (ADR-0063). Since `0.52.2`
+the same holds for the search: a skip is search-backed only by a skill-search `search_skills` call made
+before the ruling (rule 4).
+
+The report also counts **continuations** (rule 3; ADR-0064, ADR-0065; epoch-watch W28): every
+`USING: <name> (continuing …)` — `(continued …)`, `(continuation …)` and several names included — per
+turn: whether the turn loads the skill (the Skill tool or skill-search's `get_skill`, before or after the
+line), whether the session used it before this turn (a load, a `USING:` line or the user's slash command,
+before the `--since` window too), and how many turns ago it was last used (more than 5 is flagged as
+likelier new work). Counts are shown for all sessions and for organic ones (self/meta excluded);
+`--continuations` lists each one (session id prefix, time, skill) for hand review. A queued user prompt
+splits a turn, so a re-read after it is missed. The `SEARCH` declaration count is display-only and
+includes bare title-case prose lines ("Search …"); the raw-line pre-filter is case-sensitive, so a
+lower- or title-case ruling that carries none of its tokens is not read. The verdicts come from tool
+calls. Since `0.49.0`
 ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §5), a `USING:`
 retracted by a same-reply re-rule (the doctrine's `USING:`/`SEARCH:` line ending
 `(re-rule: <old>)`, fired after `skill_exclusions.py` echoes a loaded skill's own "not for" lines

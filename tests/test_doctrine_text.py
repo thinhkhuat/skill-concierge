@@ -83,7 +83,9 @@ def test_doctrine_orders_off_list_read_before_using():
         assert phrase in cont, phrase
     rule5 = _section(body, "5. **", "6. **")
     assert "disabled_in" in rule5 and "switched off" in rule5
-    assert "The name matches" in _section(body, "6. **", "Worked example")
+    flags = _section(body, "6. **", "Worked example")
+    assert "The name matches" in flags
+    assert "I'm still in <skill> — continuing." in flags and "new work: SEARCH" in flags   # ADR-0065
     # One consumption literal: harness adapters rewrite the search-tool literals, and a second
     # get_skill copy would drift from them silently.
     assert body.count('get_skill("<name>")') == 1

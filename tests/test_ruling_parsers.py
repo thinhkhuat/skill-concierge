@@ -211,4 +211,79 @@ def test_continuations_are_counted_with_their_re_read(tmp_path, monkeypatch):
         _user("turn three"), _say("USING: study (continuing)"),
         _user("turn four"), _say("USING: ak-cook (continuing)"),
     ])
-    assert r["continuations"] == (3, 1, 1)   # total, re-read in the turn, no earlier use
+    assert r["continuations"] == (3, 1, 1, 0)   # total, re-read in the turn, no earlier use, stale
+
+
+def _audit_files(tmp_path, monkeypatch, files, since=None):
+    for rel, records in files.items():
+        f = tmp_path / "projects" / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+    monkeypatch.setattr(A, "PROJECTS", str(tmp_path / "projects"))
+    return A.audit(since=since, meta_keywords=[], subagent_stop=True)
+
+
+def _at(rec, ts):
+    return {**rec, "timestamp": ts}
+
+
+def test_every_continuation_form_is_counted(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("Skill", skill="study"), _tool("Skill", skill="ak-git"),
+        _user("turn two"), _say("USING: study (continuing the migration)"),
+        _user("turn three"), _say("**USING: ak-git (continued)**"),
+        _user("turn four"), _say("USING: study, ak-git (continuation of the rebase)"),
+    ])
+    assert r["continuations"][0] == 4
+
+
+def test_a_load_in_the_same_turn_is_the_re_read_not_an_earlier_use(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("mcp__plugin_skill-concierge_skill-search__get_skill", name="study"),
+        _say("USING: study (continuing)"),
+    ])
+    assert r["continuations"] == (1, 1, 1, 0)
+
+
+def test_name_forms_of_one_skill_match(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("Skill", skill="ak:cook"),
+        _user("turn two"), _say("USING: cook (continuing)"),
+        _tool("mcp__plugin_skill-concierge_skill-search__get_skill", name="ak:cook"),
+    ])
+    assert r["continuations"] == (1, 1, 0, 0)
+
+
+def test_only_skill_search_s_own_get_skill_is_a_re_read(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("Skill", skill="study"),
+        _user("turn two"), _say("USING: study (continuing)"), _tool("mcp__other-server__get_skill", name="study"),
+    ])
+    assert r["continuations"] == (1, 0, 0, 0)
+
+
+def test_a_slash_command_is_an_earlier_use(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("<command-name>/study</command-name>"),
+        _user("turn two"), _say("USING: study (continuing)"),
+    ])
+    assert r["continuations"][2] == 0
+
+
+def test_a_continuation_long_after_the_last_use_is_flagged_stale(tmp_path, monkeypatch):
+    recs = [_user("turn 0"), _tool("Skill", skill="study")]
+    for i in range(1, A.STALE_TURNS + 2):
+        recs.append(_user(f"turn {i}"))
+    recs.append(_say("USING: study (continuing)"))
+    r = _audit(tmp_path, monkeypatch, recs)
+    assert r["continuations"] == (1, 0, 0, 1)
+
+
+def test_earlier_use_before_the_window_counts_and_subagents_are_excluded(tmp_path, monkeypatch):
+    early, late = "2026-09-26T01:00:00Z", "2026-09-26T12:00:00Z"
+    main = [_at(_user("turn one"), early), _at(_tool("Skill", skill="study"), early),
+            _at(_user("turn two"), late), _at(_say("USING: study (continuing)"), late)]
+    sub = [_at(_user("brief"), late), _at(_say("USING: other (continuing)"), late)]
+    r = _audit_files(tmp_path, monkeypatch, {"p/s1.jsonl": main, "p/s1/subagents/a.jsonl": sub},
+                     since=A.parse_since("2026-09-26 10:00:00"))
+    assert r["continuations"] == (1, 0, 0, 0)

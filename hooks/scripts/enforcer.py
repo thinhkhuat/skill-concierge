@@ -1439,7 +1439,8 @@ HARNESS_SKIP = os.environ.get("ENFORCER_HARNESS_SKIP", "1") != "0"
 _HARNESS_MSG_RE = re.compile(
     r"^\s*(?:<task-notification>|<system-reminder>|<cross-session-message\b|<teammate-message\b"
     r"|Another Claude session sent a message|\[Request interrupted by user"
-    r"|\[SYSTEM NOTIFICATION\b|This session is being continued from a previous conversation"
+    r"|\[SYSTEM NOTIFICATION\b|\[Cross-session idle notice\]"
+    r"|This session is being continued from a previous conversation"
     r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
 HARNESS_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " this prompt is harness-generated, not a user task — the "
@@ -3765,6 +3766,7 @@ def _selftest() -> int:
         "This session is being continued from a previous conversation that ran out of context.",
         "<file name=\"/var/folders/vz/T/omp-msum-o650bgz2.txt\">\nSummarize the following agent turn",
         "  <task-notification> leading whitespace still matches",
+        "[Cross-session idle notice] \"peer\", which you asked to be notified about, is idle now",
     ]
     harness_off = [
         "please give a /progress-map of the build and track our implementation progress",
@@ -3773,6 +3775,7 @@ def _selftest() -> int:
         "commit & push pls and ensure a clean worktree afterwards",
         "which set of skills should we be using for this docx export task",
         "<file name=\"/Users/me/notes.txt\">\nsummarize my own notes file for me please",
+        "what does [Cross-session idle notice] mean when it shows up in my session?",
     ]
     for p in harness_fire:
         if not _HARNESS_MSG_RE.match(p):

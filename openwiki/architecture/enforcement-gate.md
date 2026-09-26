@@ -60,7 +60,9 @@ The standing order it injects — the **SKILL-FIRST doctrine**:
   (the harness skill tool only when that call is unavailable or cannot find the skill) before other
   work ([ADR-0063](../../docs/adr/0063-continuing-a-skill-and-audit-reader-fixes.md),
   [ADR-0064](../../docs/adr/0064-continuation-scope-and-counter.md)). The usage audit counts
-  continuations, re-read or not. A loaded
+  continuations in every written form — re-read or not, earlier use or not, and how many turns since
+  the skill was last used — and a red-flags row sends "I'm still in <skill>" on new work to SEARCH
+  ([ADR-0065](../../docs/adr/0065-continuation-counter-fixes-red-flag-idle-notice.md)). A loaded
   body that excludes the task — a hit's or not — forces an open re-rule in the same reply: a new
   `USING:`/`SEARCH:` line, one sentence quoting the excluding line, and telling the user the agent
   switched. A deterministic `PostToolUse(Skill|get_skill)` hook,
@@ -98,7 +100,8 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    imperative veto still sees 4–5-word commands; ≤3-word trivia is skipped before any embed).
 1b. **Harness-message lane (leg D, no I/O).** A prompt whose head is harness-generated —
    `<task-notification>`, `<system-reminder>`, `<cross-session-message`, `<teammate-message`,
-   interrupted/continued-session banners, an OMP `omp-msum` summarizer wrapper — is not a user
+   `[Cross-session idle notice]` (since 0.52.3), interrupted/continued-session banners, an OMP
+   `omp-msum` summarizer wrapper — is not a user
    task: authorize the skip and stop here (`ENFORCER_HARNESS_SKIP`, ledger band `harness_skip`,
    no chain hint — [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md)).
    Anchored at the head, so a pasted block mid-prompt still routes normally.
