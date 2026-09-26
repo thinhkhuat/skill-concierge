@@ -431,3 +431,20 @@ plugin-level customization layer and these engine patches.
   `tests/test_query_embed.py` covers each path. The owner also answers
   `GET /collections/{c}/exists`, which engines older than the owner call on every reindex.
   Not upstream: re-apply on re-vendor.
+- **`/jev` relay ported from the retired Docker embed shim (ADR-0061, vector-store Track B):**
+  `index_owner.py` adds `_jev_relay()` and `Handler._jev()` on the embed port — a straight port of
+  `scripts/embed_server.py`'s `_jev_relay`/`Handler._jev`, byte-identical contract, so the Jev skill
+  router's warm connection to `api.typesafe.ai/v1/systemone` survives the shim's retirement. A pooled
+  `http.client.HTTPSConnection` (module-level `_JEV_POOL`, a `queue.LifoQueue` — thread-safe under the
+  owner's per-request threads with no extra lock) is reused across requests; a pooled connection the
+  server has since closed retries ONCE on a fresh connection (never a second pooled one); a timeout is
+  never retried (the request may already be billed). `POST /jev` requires `Authorization: Bearer …`
+  (401 otherwise) and forwards it verbatim to TypeSafe — never stored, never logged, and never touched
+  by the owner's generic error logger, since `_jev()` maps every relay failure to a 502
+  `{"error": "<ExceptionClassName>"}` itself. `X-Jev-Timeout` (capped at `JEV_MAX_TIMEOUT`, 10s) sets
+  the per-call socket timeout, same as the shim. The route needs neither the store nor the model, so
+  it answers even while `owner.ready` is `False`. Covered by
+  `tests/test_owner_jev_relay.py`: the shim's four pool/retry/timeout cases against `_jev_relay`
+  directly, plus an end-to-end POST /jev against a real `Handler` on a real loopback socket (not
+  `owner_factory`/`OwnerProc`, which run the owner in a subprocess an in-process HTTPS mock cannot
+  reach — see that test file's module docstring). Not upstream: re-apply on re-vendor.

@@ -17,7 +17,10 @@ loopback):
         POST /collections/{c}/points/delete     by ids or filter
         POST /collections/{c}/points/query      top-k points
         POST /collections/{c}/points/query/groups   best point per group_by value
-  embed port (SKILL_OWNER_EMBED_PORT, default 6363) — POST /embed, GET /health.
+  embed port (SKILL_OWNER_EMBED_PORT, default 6363) — POST /embed, GET /health,
+      POST /jev (ADR-0061: a fixed-destination warm-connection relay to TypeSafe for
+      the Jev skill router, ported from the retired Docker embed shim — see
+      VENDORED.md).
 
 Storage: one SQLite file (SKILL_INDEX_DB, default ~/.cache/skill-search/index.sqlite).
 This process is its only writer, enforced by an exclusive fcntl lock on `<db>.lock`.
@@ -55,10 +58,12 @@ import fcntl
 import http.client
 import json
 import os
+import queue
 import re
 import signal
 import socket
 import sqlite3
+import ssl
 import sys
 import threading
 import time
@@ -604,6 +609,59 @@ OWNER: Owner | None = None
 
 
 # ---------------------------------------------------------------------------
+# ADR-0061 /jev relay, ported verbatim from the retired Docker embed shim
+# (scripts/embed_server.py) so the Jev skill router keeps its warm connection once the
+# shim is gone — see VENDORED.md. Fixed destination: the owner never takes a URL from
+# the request. The caller's Authorization header is forwarded and never stored or
+# logged; the owner itself holds no key.
+
+JEV_HOST = "api.typesafe.ai"
+JEV_PATH = "/v1/systemone"
+JEV_MAX_TIMEOUT = 10.0
+_JEV_TLS = ssl.create_default_context()
+_JEV_POOL = queue.LifoQueue(maxsize=8)   # warm connections, most recently used first; thread-safe
+
+
+def _jev_relay(body: bytes, auth: str, timeout: float):
+    """POST body to TypeSafe on a pooled warm connection -> (status, response bytes). A pooled
+    connection the server has since closed fails at once (reset / remote closed); that case alone
+    retries once on a fresh connection. A timeout is never retried: the request may already be
+    billed and the caller has stopped waiting. A connection returns to the pool only after a
+    complete exchange. `_JEV_POOL` is a `queue.LifoQueue`, safe under the owner's concurrent
+    per-request threads without an extra lock."""
+    for attempt in (0, 1):
+        try:
+            if attempt:   # the retry never takes a second pooled connection: after an idle spell
+                raise queue.Empty   # every pooled one may be stale
+            conn, reused = _JEV_POOL.get_nowait(), True
+        except queue.Empty:
+            conn, reused = http.client.HTTPSConnection(JEV_HOST, context=_JEV_TLS), False
+        conn.timeout = timeout
+        if conn.sock is not None:
+            conn.sock.settimeout(timeout)
+        try:
+            conn.request("POST", JEV_PATH, body=body,
+                         headers={"Authorization": auth, "Content-Type": "application/json"})
+            resp = conn.getresponse()
+            out = resp.status, resp.read()
+        except (ConnectionResetError, BrokenPipeError, http.client.RemoteDisconnected,
+                http.client.BadStatusLine):
+            conn.close()
+            if attempt or not reused:
+                raise
+            continue
+        except (http.client.HTTPException, OSError):
+            conn.close()
+            raise
+        try:
+            _JEV_POOL.put_nowait(conn)
+        except queue.Full:
+            conn.close()
+        return out
+    raise RuntimeError("unreachable")
+
+
+# ---------------------------------------------------------------------------
 # HTTP layer.
 
 class Handler(BaseHTTPRequestHandler):
@@ -720,6 +778,8 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "not found")
 
     def _embed_route(self, owner: Owner, method: str, path: str, t0) -> None:
+        if path == "/jev" and method == "POST":
+            return self._jev()
         if path == "/health" and method == "GET":
             owner.check_stamp()
             if not owner.ready:
@@ -735,6 +795,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "missing 'text'"})
             return self._send(200, {"vector": owner.embed(text)})
         return self._send(404, {"error": "not found"})
+
+    def _jev(self) -> None:
+        """ADR-0061 relay: forward to TypeSafe on a pooled connection, reply with its status
+        and body verbatim. Never requires the index or the model to be loaded."""
+        auth = self.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return self._send(401, {"error": "missing bearer token"})
+        try:
+            timeout = min(float(self.headers.get("X-Jev-Timeout", "5") or 5), JEV_MAX_TIMEOUT)
+            n = int(self.headers.get("Content-Length", 0) or 0)
+            status, raw = _jev_relay(self.rfile.read(n), auth, timeout)
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            return self._send(502, {"error": type(exc).__name__})
+        return self._send(status, raw)
 
     def do_GET(self):
         self._handle("GET")
