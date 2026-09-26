@@ -45,6 +45,9 @@ All notable changes to **skill-concierge**. Format loosely follows
   `tests/test_jev_router.py` (replaces `test_jev_gate.py`) and `tests/test_jev_relay.py`.
 - **Data sent to TypeSafe per English turn:** the prompt (≤ 4 000 chars), the last assistant message tail
   (≤ 1 500 chars), and the catalogue's names and short descriptions (~25-30k input tokens, ~$0.001).
+- **Fixed — vendored engine capped at `mcp<2`** (`vendor/skill-search/pyproject.toml`, logged in `VENDORED.md`):
+  a fresh install resolved `mcp` 2.x, which removed `mcp.server.fastmcp` (imported by `server.py`), so the
+  embed-shim image build failed at its model-bake step. Existing venvs (1.29.0) were unaffected.
 - `ENFORCER_JEV_ROUTER=0` (or the ADR-0060 `ENFORCER_JEV_GATE=0`) restores the pre-v0.50.0 path.
   EPOCH v0.51.0 (`docs/epoch-watch.md` W21-W24; W18-W20 retired).
 

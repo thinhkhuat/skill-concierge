@@ -15,6 +15,11 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ## v0.51.0 — the Jev skill router (ADR-0061; supersedes the v0.50.0 yes/no leg)
 
+**Deployed on Claude Code 2026-09-26 10:03 +07:** commits `0b03c88` + `179cec0` pushed; plugin cache 0.51.0
+(installed copy byte-identical to source); embed shim rebuilt with `/jev` (health lists `jev`). The
+Claude Code window starts when each session restarts onto 0.51.0. Other harness caches were already stale
+(OMP/ZCode 0.47.1, Codex 0.45.0) and start their own windows when updated.
+
 **Starts per harness** when its plugin cache reaches `0.51.0` AND the embed shim's `/health` lists
 `jev` (`setup.sh` rebuilds an older shim); ledger rows carry no version, but every routed row carries
 `jev.via` (`relay` / `direct`). On English turns Jev now composes the menu (top 5) and replaces the
