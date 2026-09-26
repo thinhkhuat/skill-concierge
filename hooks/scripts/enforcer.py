@@ -3,7 +3,7 @@
 skill-concierge — semantic skill-first enforcer (UserPromptSubmit hook).
 
 Supersedes the lexical ~/.claude/hooks/skill_first_nudge.py. On a non-trivial
-prompt it embeds the query via the warm embed shim, retrieves the top-k semantic
+prompt it embeds the query via the local index owner, retrieves the top-k semantic
 candidates from the SAME Qdrant index skill-search serves, and injects an
 enforcement mandate + those candidates (name · desc · score). It surfaces
 semantically-relevant skills the old token-overlap scorer missed (e.g. an EN
@@ -1469,7 +1469,7 @@ HARNESS_SKIP_MSG = (
 JEV_ROUTER = (os.environ.get("ENFORCER_JEV_ROUTER", "1") != "0"
               and os.environ.get("ENFORCER_JEV_GATE", "1") != "0")
 JEV_URL = os.environ.get("ENFORCER_JEV_URL", "https://api.typesafe.ai/v1/systemone")
-# The warm-connection relay in the embed shim. The key rides that request in clear text, so the relay
+# The warm-connection relay in the local index owner. The key rides that request in clear text, so the relay
 # is used only over loopback; any other shim host means direct HTTPS calls.
 JEV_RELAY_URL = (f"http://{EMBED_HOST}:{EMBED_PORT}/jev"
                  if EMBED_HOST in ("127.0.0.1", "localhost", "::1") else None)
@@ -1662,7 +1662,7 @@ def _jev_decide(answers: dict, shortlist: list):
 
 
 def _jev_call(state: dict, questions: dict, key: str):
-    """One System One request -> (answers, via). Goes through the embed shim's warm relay; a shim
+    """One System One request -> (answers, via). Goes through the local index owner's warm relay; a shim
     without the route (404) or not listening falls back to one direct call. A timeout is not
     retried — the per-turn budget is spent."""
     body = {"model": JEV_MODEL, "state": state, "questions": questions}

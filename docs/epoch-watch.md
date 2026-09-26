@@ -109,8 +109,11 @@ one week, not a law. 129 organic `USING`. Compare only after the ≥ 100-turn fl
 Claude Code window starts when each session restarts onto 0.51.0. Other harness caches were already stale
 (OMP/ZCode 0.47.1, Codex 0.45.0) and start their own windows when updated.
 
-**Starts per harness** when its plugin cache reaches `0.51.0` AND the embed shim's `/health` lists
-`jev` (`setup.sh` rebuilds an older shim); ledger rows carry no version, but every routed row carries
+**Starts per harness** when its plugin cache reaches `0.51.0` AND its `/health` endpoint lists `jev` —
+the embed shim's `/health` before the harness's own copy reaches v0.54.0 (`setup.sh` rebuilds an older
+shim), the local index owner's `/health` (`"routes": ["embed", "jev"]`) from v0.54.0 on
+([ADR-0070](adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)); ledger rows carry no
+version, but every routed row carries
 `jev.via` (`relay` / `direct`). On English turns Jev now composes the menu (top 5) and replaces the
 getaway/actionability gates, so offer-level rates (take, hit@k, fallback) reset — never pool them with
 v0.50.0 or earlier. Vietnamese and other non-English turns keep the embedding path: their rates continue
@@ -154,7 +157,7 @@ report prints session and turn ids, never prompt text.
 |---|-------|---------|---------|--------|
 | W21 | False NO: a `jev_skip` turn that needed a skill | `live` → W21 line (lists each `jev_skip` turn where the agent then used a skill); read those sessions for a user correction | any confirmed case on a substantial task | lower `ENFORCER_JEV_FITS_FLOOR` (env), then re-run the calibrator on a fresh extract — never add the prompt to a hand-written set |
 | W22 | Offer quality on live traffic | `live` → W22 lines: used skill (USING + executed) in the offer, per slice (interactive = the replay population; SDK / `claude -p`; dev sessions), plus tail rows below p 0.01 | below ~65 % on ≥ 100 English turns (replay: 74.7 %) | re-run `calibrate_jev_gate.py replay --shelf wide` + `policy`; check `jev.ctx` (context missing?) and catalogue size `jev.n` |
-| W23 | Latency, errors and the relay | `live` → W23 line (`jev.ms` p50/p90, `jev.err` share, `jev.via` split) | p90 `ms` > 1500, `err` on > 5 % of rows, or `via=direct` on most rows | `curl localhost:6363/health` must list `jev` (else `setup.sh`); raise `ENFORCER_JEV_TIMEOUT` (the whole route stays capped at 3.0 s — a larger budget would get the hook killed at 5 s), or `ENFORCER_JEV_ROUTER=0` while TypeSafe is degraded |
+| W23 | Latency, errors and the relay | `live` → W23 line (`jev.ms` p50/p90, `jev.err` share, `jev.via` split) | p90 `ms` > 1500, `err` on > 5 % of rows, or `via=direct` on most rows | `curl localhost:6363/health` must list `jev` in `routes` (else `python3 scripts/doctor.py --fix` or `setup.sh`); raise `ENFORCER_JEV_TIMEOUT` (the whole route stays capped at 3.0 s — a larger budget would get the hook killed at 5 s), or `ENFORCER_JEV_ROUTER=0` while TypeSafe is degraded |
 | W24 | Catalogue drift | `live` → W24 line (`jev.n` on rows vs the replay's catalogue snapshot; also the cwd's catalogue now — project isolation makes `n` vary by cwd) | catalogue size moves > 10 % from the replay's | re-run the replay on the new catalogue before trusting W22 |
 
 ## v0.50.0 — the Jev needs-a-skill gate (ADR-0060; committed 2026-09-26) — SUPERSEDED by v0.51.0

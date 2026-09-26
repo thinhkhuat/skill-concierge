@@ -77,6 +77,9 @@ CODEX_PLUGIN_CACHE = CODEX_DIR / "plugins" / "cache" / "skill-concierge" / "skil
 # ~/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/<ver>/. WARN-only.
 ZCODE_DIR = Path.home() / ".zcode"
 ZCODE_PLUGIN_CACHE = ZCODE_DIR / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+# ZCode's own install registry (adapters/zcode/install.sh writes it) — a flat list keyed by
+# "id", unlike Claude Code's/OMP's map-of-scopes shape.
+ZCODE_PLUGINS_FILE = ZCODE_DIR / "cli" / "plugins" / "installed_plugins.json"
 # Claude Code harness surface — the reference harness, kept current by
 # adapters/claude-code/install.sh (a CLI refresh, falling back to a git-archive sync).
 CLAUDE_PLUGINS_DIR = Path.home() / ".claude" / "plugins"
@@ -161,6 +164,11 @@ OWNER_PORTS = (str(urllib.parse.urlsplit(QURL).port or 6333),
 PARITY_TEXTS = ("find the right skill to deploy a web app",
                 "tìm kỹ năng phù hợp để triển khai ứng dụng web")
 PARITY_MIN_COSINE = 0.9999
+# In-process model load for the parity probe (fastembed onnx, cold-start can be slow on a
+# fresh cache) — bounded so a stuck load can never hang doctor forever (L6).
+EMBED_PARITY_LOAD_TIMEOUT_S = 60
+
+
 def read_server_records_dir():
     """Where live MCP servers publish their build id — resolved from `.mcp.json` FIRST.
 
@@ -881,7 +889,13 @@ def check_embed_parity():
     if not PY_BIN.exists():
         return {"id": "embed_parity", "label": "Embed parity", "status": WARN,
                 "detail": "venv missing — in-process side of the probe unavailable", "fix": "setup"}
-    r = _run([str(PY_BIN), "-c", _PARITY_SCRIPT, model, json.dumps(list(PARITY_TEXTS))])
+    try:
+        r = _run([str(PY_BIN), "-c", _PARITY_SCRIPT, model, json.dumps(list(PARITY_TEXTS))],
+                 timeout=EMBED_PARITY_LOAD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"id": "embed_parity", "label": "Embed parity", "status": WARN,
+                "detail": f"in-process embed load timed out after {EMBED_PARITY_LOAD_TIMEOUT_S}s "
+                          "(model load stuck?)", "fix": None}
     try:
         local = json.loads(r.stdout)
     except ValueError:
@@ -1463,12 +1477,6 @@ def _ver_tuple(s: str) -> tuple:
     return tuple(int(x) if x.isdigit() else 0 for x in s.split("."))
 
 
-
-
-
-
-
-
 # Harness rows whose installed copy must reach the switch-over release before the cutover.
 # Command Code, DSH and Cline launch from the dev repo path, not a versioned cache — no row.
 CUTOVER_HARNESSES = ("claude-code", "codex", "omp", "zcode")
@@ -1476,15 +1484,30 @@ CUTOVER = False     # set by --cutover
 
 
 def apply_cutover(results, release=None):
-    """--cutover: every Claude/Codex/OMP/ZCode row whose installed version is below the
-    switch-over release (the SSOT version this tree ships) turns FAIL. An old copy has no
-    owner start path, and its setup.sh would restart Docker on the owner's ports."""
+    """--cutover: every Claude/Codex/OMP/ZCode row turns FAIL when either its installed
+    version is below the switch-over release (the SSOT version this tree ships), or the
+    harness IS installed but the version could not be determined (a None/empty `version`
+    can't prove the copy is caught up, so it FAILs rather than silently passing — A3). An
+    old or unknown copy has no owner start path, and its setup.sh would restart Docker on
+    the owner's ports.
+
+    A harness that is simply not installed is left alone — there is no copy to hold back.
+    check_claude_code/check_codex/check_omp/check_zcode all key their "not installed" row
+    on that exact phrase in `detail` (their `version` field is inconsistent across harnesses
+    — some omit the key, Claude Code sets it to None — so the phrase is the one reliable
+    signal shared by all four)."""
     release = release or _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     if not release:
         return results
     for r in results:
+        if r.get("id") not in CUTOVER_HARNESSES or "not installed" in r.get("detail", ""):
+            continue
         ver = r.get("version")
-        if r.get("id") in CUTOVER_HARNESSES and ver and _ver_tuple(ver) < _ver_tuple(release):
+        if not ver:
+            r["status"] = FAIL
+            r["detail"] = ("CUTOVER: installed version unknown — cannot confirm it is at or "
+                           f"above the switch-over release v{release}; " + r["detail"])
+        elif _ver_tuple(ver) < _ver_tuple(release):
             r["status"] = FAIL
             r["detail"] = (f"CUTOVER: v{ver} is below the switch-over release v{release} — "
                            f"update this harness's plugin copy first; " + r["detail"])
@@ -1752,6 +1775,22 @@ def check_commandcode():
             "fix": None}
 
 
+def _zcode_installed_path():
+    """installPath of skill-concierge@skill-concierge from ZCode's own install registry
+    (~/.zcode/cli/plugins/installed_plugins.json), or None when there is no record. Unlike
+    Codex — proven live to always load the semver-newest cache dir regardless of any
+    registry — ZCode's registry is the one signal that names which cache copy is actually
+    active, so it is preferred over the newest-by-name heuristic (L10)."""
+    try:
+        data = json.loads(ZCODE_PLUGINS_FILE.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
+        return None
+    for p in data.get("plugins", []):
+        if isinstance(p, dict) and p.get("id") == "skill-concierge@skill-concierge":
+            return p.get("installPath") or None
+    return None
+
+
 def check_zcode():
     """ZCode harness install state — cache presence, version parity, exec bits (ADR-0042).
 
@@ -1767,6 +1806,13 @@ def check_zcode():
          (the exact cause of a dead MCP). The .mcp.json interpreter form makes the bit
          cosmetic, but the row keeps the regression visible.
     WARN-only — no ZCode install is one 'zcode: not installed' row, never a failure.
+
+    Version resolution (L10): ZCode's own install registry names which cache copy is
+    active (`installPath`) — read that copy's OWN .claude-plugin/plugin.json first, since
+    trusting "newest dir by name" could report a version ZCode isn't actually running (a
+    manually-dropped or half-synced newer dir would outrank the active one). Fall back to
+    the newest-cache-dir heuristic only when the registry has no usable record — the
+    pre-L10 behavior, kept as a safety net rather than reporting nothing.
     """
     if not ZCODE_DIR.exists():
         return {"id": "zcode", "label": "ZCode integration", "status": WARN,
@@ -1775,21 +1821,29 @@ def check_zcode():
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     cached_ver = None
-    try:
-        if ZCODE_PLUGIN_CACHE.is_dir():
-            versions = sorted((d for d in ZCODE_PLUGIN_CACHE.iterdir() if d.is_dir()),
-                              key=lambda d: _ver_tuple(d.name), reverse=True)
-            if versions:
-                cached_ver = versions[0].name
-    except (OSError, ValueError):
-        pass
+    install_path = _zcode_installed_path()
+    if install_path:
+        cached_ver = _descriptor_version(Path(install_path) / ".claude-plugin" / "plugin.json")
+    if cached_ver is None:
+        try:
+            if ZCODE_PLUGIN_CACHE.is_dir():
+                versions = sorted((d for d in ZCODE_PLUGIN_CACHE.iterdir() if d.is_dir()),
+                                  key=lambda d: _ver_tuple(d.name), reverse=True)
+                if versions:
+                    cached_ver = versions[0].name
+        except (OSError, ValueError):
+            pass
     if cached_ver is None:
         findings.append("no ZCode plugin cache found (never installed via the skill-concierge marketplace)")
     else:
         if ssot and cached_ver != ssot:
             findings.append(f"ZCode cache v{cached_ver} != SSOT v{ssot} — update via "
                             "Settings → Plugin Management (skill-concierge marketplace)")
-        launcher = ZCODE_PLUGIN_CACHE / cached_ver / "bin" / "skill-search-mcp"
+        # Anchor the launcher check on the registry's OWN installPath when we have one — the
+        # copy ZCode actually runs — rather than reconstructing a path from cached_ver, which
+        # could point at a differently-named dir if the two ever disagree.
+        active_dir = Path(install_path) if install_path else ZCODE_PLUGIN_CACHE / cached_ver
+        launcher = active_dir / "bin" / "skill-search-mcp"
         if not launcher.is_file():
             findings.append(f"bin/skill-search-mcp missing from the ZCode cache v{cached_ver} — "
                             "the MCP server cannot start; re-run adapters/zcode/install.sh")
@@ -2074,7 +2128,9 @@ def fix_containers():
     if not docker or not ours:
         return fix_owner_start()
     for name in ours:
-        _run([docker, "update", "--restart=no", name])
+        r = _run([docker, "update", "--restart=no", name])
+        if r.returncode != 0:
+            return False, f"docker update --restart=no {name} failed: {r.stderr.strip()}"
         r = _run([docker, "stop", name])
         if r.returncode != 0:
             return False, f"docker stop {name} failed: {r.stderr.strip()}"

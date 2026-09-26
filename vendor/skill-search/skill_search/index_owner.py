@@ -5,8 +5,9 @@ Run it as `python -m skill_search.index_owner` from the shared engine venv.
 
 Two ports, both bound on 127.0.0.1 and ::1 (IPv4 only when the host has no IPv6
 loopback):
-  query port (SKILL_OWNER_QUERY_PORT, default 6333) — the Qdrant REST subset the
-      callers use, in Qdrant's JSON shape ({"result", "status", "time"}):
+  query port (SKILL_OWNER_QUERY_PORT, else SKILL_QDRANT_URL's port, else 6333 — the
+      same derivation every caller and doctor already use) — the Qdrant REST subset
+      the callers use, in Qdrant's JSON shape ({"result", "status", "time"}):
         GET  /  ·  GET /healthz
         GET | PUT | DELETE /collections/{c}
         GET  /collections/{c}/exists            {"exists": bool}
@@ -17,7 +18,7 @@ loopback):
         POST /collections/{c}/points/delete     by ids or filter
         POST /collections/{c}/points/query      top-k points
         POST /collections/{c}/points/query/groups   best point per group_by value
-  embed port (SKILL_OWNER_EMBED_PORT, default 6363) — POST /embed, GET /health,
+  embed port (SKILL_OWNER_EMBED_PORT, else EMBED_SHIM_PORT, else 6363) — POST /embed, GET /health,
       POST /jev (ADR-0061: a fixed-destination warm-connection relay to TypeSafe for
       the Jev skill router, ported from the retired Docker embed shim — see
       VENDORED.md).
@@ -71,7 +72,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 TITLE = "skill-concierge index owner (Qdrant-compatible subset)"
 MAX_BODY = 16 * 1024 * 1024
@@ -79,10 +80,17 @@ LOCK_RETRY_S = 5.0
 
 DB_PATH = Path(os.environ.get("SKILL_INDEX_DB")
                or Path.home() / ".cache" / "skill-search" / "index.sqlite").expanduser()
-QUERY_PORT = int(os.environ.get("SKILL_OWNER_QUERY_PORT", "6333"))
-EMBED_PORT = int(os.environ.get("SKILL_OWNER_EMBED_PORT", "6363"))
+# Port defaults mirror every caller (doctor.py, the launcher, the enforcer): a configured
+# SKILL_QDRANT_URL/EMBED_SHIM_PORT is honored before falling back to the Qdrant/embed-shim
+# well-known ports, so an owner started standalone lands on the same port its callers expect.
+QUERY_PORT = int(os.environ.get("SKILL_OWNER_QUERY_PORT")
+                 or urlsplit(os.environ.get("SKILL_QDRANT_URL", "")).port or 6333)
+EMBED_PORT = int(os.environ.get("SKILL_OWNER_EMBED_PORT")
+                 or os.environ.get("EMBED_SHIM_PORT") or 6363)
 LOG_PATH = Path(os.environ.get("SKILL_OWNER_LOG")
-                or Path.home() / ".claude" / "skill-concierge" / "logs" / "index-owner.log").expanduser()
+                or Path(os.environ.get("SKILL_CONCIERGE_LOG",
+                                        Path.home() / ".claude" / "skill-concierge" / "logs"))
+                / "index-owner.log").expanduser()
 STAMP_PATH = Path(os.environ.get("SKILL_OWNER_STAMP")
                   or Path(sys.prefix) / ".engine-plugin-version").expanduser()
 STAMP_INTERVAL_S = float(os.environ.get("SKILL_OWNER_STAMP_INTERVAL", "60"))
@@ -90,15 +98,28 @@ NO_MODEL = os.environ.get("SKILL_OWNER_NO_MODEL", "0") == "1"
 _COLL_RE = re.compile(r"^[A-Za-z0-9_.-]{1,255}$")
 
 
+def _stderr_is_log_file() -> bool:
+    """True when fd 2 is already LOG_PATH — a launcher/doctor that redirects the owner's
+    stderr into the same log file would otherwise get every line twice (once from the
+    explicit file write below, once from the redirected stderr print)."""
+    try:
+        err = os.fstat(sys.stderr.fileno())
+        cur = LOG_PATH.stat()
+    except (OSError, ValueError, AttributeError):
+        return False
+    return (err.st_dev, err.st_ino) == (cur.st_dev, cur.st_ino)
+
+
 def log(msg: str) -> None:
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} {msg}"
-    print(line, file=sys.stderr, flush=True)
     try:
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with LOG_PATH.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
         pass
+    if not _stderr_is_log_file():
+        print(line, file=sys.stderr, flush=True)
 
 
 class ApiError(Exception):
@@ -423,10 +444,10 @@ class Store:
         with self.wlock:
             if self.colls.get(name) is not c:
                 raise ApiError(404, f"Not found: Collection `{name}` doesn't exist!")
-            self.db.executemany(
-                "INSERT OR REPLACE INTO points VALUES (?,?,?,?)",
-                [(name, json.dumps(pid), v.tobytes(), json.dumps(pl)) for pid, v, pl in rows])
-            self.db.commit()
+            with self.db:   # atomic: a failed executemany rolls back, never leaves partial rows
+                self.db.executemany(
+                    "INSERT OR REPLACE INTO points VALUES (?,?,?,?)",
+                    [(name, json.dumps(pid), v.tobytes(), json.dumps(pl)) for pid, v, pl in rows])
             for row in rows:
                 c.rows[row[0]] = row
             c.changed()
@@ -445,9 +466,9 @@ class Store:
             ids = [i for i in ids if i in c.rows]
             if not ids:
                 return
-            self.db.executemany("DELETE FROM points WHERE collection=? AND id=?",
-                                [(name, json.dumps(i)) for i in ids])
-            self.db.commit()
+            with self.db:   # atomic: a failed executemany rolls back, never leaves partial rows
+                self.db.executemany("DELETE FROM points WHERE collection=? AND id=?",
+                                    [(name, json.dumps(i)) for i in ids])
             for i in ids:
                 del c.rows[i]
             c.changed()
@@ -562,6 +583,13 @@ class Owner:
         self.model = None
         self.dim = None
         self.stamp = _read_stamp()
+        # The version actually running never changes for the life of the process — only a
+        # restart runs new code. `self.stamp` below is mutable bookkeeping for check_stamp's
+        # own change-detection (including the intentional downgrade dedup), so `/health`
+        # must report THIS field, not `self.stamp`, or a downgrade makes code_version lie
+        # about which code answered the request (L1: doctor's check_owner compares
+        # /health's code_version against the venv stamp file to catch exactly this drift).
+        self.loaded_version = self.stamp[0] if self.stamp else None
         self.stop = threading.Event()
         self.stop_reason = ""
         self._stamp_lock = threading.Lock()
@@ -590,6 +618,12 @@ class Owner:
 
     @property
     def code_version(self):
+        return self.loaded_version
+
+    @property
+    def stamp_version(self):
+        """The version currently on disk, as last observed by check_stamp — differs from
+        code_version exactly when an older harness copy downgraded the venv stamp."""
         return self.stamp[0] if self.stamp else None
 
 
@@ -785,7 +819,9 @@ class Handler(BaseHTTPRequestHandler):
             if not owner.ready:
                 return self._send(503, {"status": "loading", "code_version": owner.code_version})
             return self._send(200, {"status": "ok", "model": owner.model, "dim": owner.dim,
-                                    "code_version": owner.code_version})
+                                    "code_version": owner.code_version,
+                                    "stamp_version": owner.stamp_version,
+                                    "routes": ["embed", "jev"]})
         if path == "/embed" and method == "POST":
             if not owner.ready or owner.embed is None:
                 return self._send(503, {"error": "model not loaded"})
@@ -842,7 +878,10 @@ class _Server6(_Server4):
 
 
 def _probe(port: int) -> str | None:
-    """Who answers on this port: None (nobody), 'owner', or 'other'."""
+    """Who answers on this port: None (nobody), 'owner', or 'other'. A connection the
+    listener ACCEPTS and then resets/closes before a usable response still proves someone
+    is there (e.g. a foreign wildcard listener still warming up) — that counts as 'other',
+    never 'nobody'. Only a refused connection (nothing accepted it) means nobody."""
     seen = None
     for host in ("127.0.0.1", "::1"):
         conn = http.client.HTTPConnection(host, port, timeout=0.5)
@@ -856,9 +895,10 @@ def _probe(port: int) -> str | None:
             if title == TITLE:
                 return "owner"
             seen = "other"
-        except (ConnectionRefusedError, OSError) as e:
-            if isinstance(e, (socket.timeout, TimeoutError)):
-                seen = "other"
+        except ConnectionRefusedError:
+            pass                                  # nobody listening on this host/family
+        except (OSError, http.client.HTTPException):
+            seen = "other"                        # accepted then reset/closed/malformed
         finally:
             conn.close()
     return seen

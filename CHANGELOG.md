@@ -34,7 +34,8 @@ All notable changes to **skill-concierge**. Format loosely follows
   `plans/260925-2349-vector-store-hardening-and-migration/architecture-vector-store-3.md`): stop the Qdrant and
   embed-shim containers, move the migrated SQLite store into place, update Claude Code, start the owner, then
   update the OMP, Codex and ZCode copies and restart every session. An older engine can still search the
-  owner, but it cannot build its index there, so every session moves to this release (D6). Skill search is
+  owner and incrementally reindex against it, but it cannot create a collection or a payload index there,
+  so every session moves to this release (D6). Skill search is
   dark for a few minutes during the switch.
 - Do not run an older `setup.sh` or `doctor.py --fix` after the switch: they start the Qdrant container again.
 

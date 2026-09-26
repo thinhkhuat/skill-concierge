@@ -3,10 +3,12 @@
 # Mirrors bin/skill-search-mcp: EXECS the STABLE venv built by setup.sh
 # ($HOME/.claude/skill-concierge/venv) so it survives plugin reinstalls.
 #
-# The DEPLOYED server tier runs the shim as a Docker sidecar next to the Qdrant
-# container (see Dockerfile + setup.sh). This launcher covers local dev,
-# the cosine-parity check, and the no-Docker embedded tier. Both run the same
-# scripts/embed_server.py, so parity holds across launch modes.
+# This shim is retired from the deployed path by ADR-0070 — the local index owner
+# (vendor/skill-search/skill_search/index_owner.py) now serves /embed, /health and
+# /jev in-process, and nothing starts this shim as a Docker sidecar anymore. This
+# launcher stays for standalone use: local dev and the cosine-parity check. It
+# runs scripts/embed_server.py, the code index_owner.py was grown from, so parity
+# holds against the owner.
 set -euo pipefail
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
 PY="$VENV/bin/python"

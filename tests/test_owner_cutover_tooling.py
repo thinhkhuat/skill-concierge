@@ -7,6 +7,7 @@ import http.server
 import importlib.util
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -87,6 +88,41 @@ def test_cutover_fails_harness_rows_below_release(dr):
     assert out["ledger"]["status"] == "ok"           # not a harness row
 
 
+def test_cutover_fails_installed_row_with_unknown_version(dr):
+    """A3: an installed harness whose version could not be determined (None/empty) must
+    FAIL under --cutover — it cannot prove it is at or above the release."""
+    rows = [
+        {"id": "claude-code", "status": "warn", "version": None,
+         "detail": "skill-concierge has no Claude Code install record (installed_plugins.json)"},
+        {"id": "omp", "status": "warn", "version": "",
+         "detail": "skill-concierge has no OMP install record (installed_plugins.json)"},
+    ]
+    out = {r["id"]: r for r in dr.apply_cutover(rows, release="0.50.0")}
+    assert out["claude-code"]["status"] == "fail" and "unknown" in out["claude-code"]["detail"]
+    assert out["omp"]["status"] == "fail" and "unknown" in out["omp"]["detail"]
+
+
+def test_cutover_leaves_not_installed_rows_from_the_real_checks_unchanged(dr, tmp_path, monkeypatch):
+    """A3: the real "not installed" rows from every cutover harness's own check function
+    (empty machine, none of the four dirs exist) must survive --cutover untouched, even
+    though Claude Code's own row sets version=None just like the "unknown version" case."""
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_DIR", tmp_path / "no-claude-plugins")
+    monkeypatch.setattr(dr, "OMP_DIR", tmp_path / "no-omp")
+    monkeypatch.setattr(dr, "CODEX_DIR", tmp_path / "no-codex")
+    monkeypatch.setattr(dr, "ZCODE_DIR", tmp_path / "no-zcode")
+    rows = [dr.check_claude_code(), dr.check_omp(), dr.check_codex(), dr.check_zcode()]
+    assert all("not installed" in r["detail"] for r in rows)
+    out = {r["id"]: r for r in dr.apply_cutover(list(rows), release="0.50.0")}
+    for r in rows:
+        assert out[r["id"]]["status"] == r["status"] == "warn"
+
+
+def test_cutover_leaves_at_release_row_unchanged(dr):
+    rows = [{"id": "codex", "status": "ok", "detail": "d", "version": "0.50.0"}]
+    out = dr.apply_cutover(list(rows), release="0.50.0")
+    assert out[0]["status"] == "ok"
+
+
 def test_cutover_off_by_default_and_wired_through_run_all(dr, monkeypatch):
     assert dr.CUTOVER is False
     monkeypatch.setattr(dr, "CHECKS", [lambda: {"id": "omp", "label": "OMP", "status": "warn",
@@ -123,6 +159,44 @@ def test_claude_version_row(dr, tmp_path, monkeypatch):
     assert row["id"] == "claude-code" and row["version"] == "0.47.1"
     assert row["status"] == "warn"        # below SSOT, but only --cutover turns it FAIL
     assert dr.check_claude_code in dr.CHECKS
+
+
+def test_zcode_version_prefers_registry_install_path_over_newest_dir(dr, tmp_path, monkeypatch):
+    """L10: ZCode's own install registry names the ACTIVE copy — read that copy's version
+    instead of trusting whichever cache dir happens to sort newest by name."""
+    zcode_dir = tmp_path / "zcode"
+    cache = zcode_dir / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+    active = cache / "0.40.0"
+    newer_unused = cache / "0.99.0"           # sorts newest by name, but is NOT the active copy
+    for d, ver in ((active, "0.40.0"), (newer_unused, "0.99.0")):
+        (d / ".claude-plugin").mkdir(parents=True)
+        (d / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": ver}))
+        (d / "bin").mkdir()
+        (d / "bin" / "skill-search-mcp").write_text("#!/bin/sh\n")
+        (d / "bin" / "skill-search-mcp").chmod(0o755)
+    registry = zcode_dir / "cli" / "plugins" / "installed_plugins.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps({"plugins": [
+        {"id": "skill-concierge@skill-concierge", "version": "0.40.0", "installPath": str(active)}]}))
+    monkeypatch.setattr(dr, "ZCODE_DIR", zcode_dir)
+    monkeypatch.setattr(dr, "ZCODE_PLUGIN_CACHE", cache)
+    monkeypatch.setattr(dr, "ZCODE_PLUGINS_FILE", registry)
+    assert dr._zcode_installed_path() == str(active)
+    row = dr.check_zcode()
+    assert row["version"] == "0.40.0"        # the registry's active copy, not "0.99.0"
+
+
+def test_zcode_version_falls_back_to_newest_dir_without_a_registry_record(dr, tmp_path, monkeypatch):
+    zcode_dir = tmp_path / "zcode"
+    cache = zcode_dir / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+    for v in ("0.9.0", "0.40.0"):
+        (cache / v).mkdir(parents=True)
+    monkeypatch.setattr(dr, "ZCODE_DIR", zcode_dir)
+    monkeypatch.setattr(dr, "ZCODE_PLUGIN_CACHE", cache)
+    monkeypatch.setattr(dr, "ZCODE_PLUGINS_FILE", zcode_dir / "cli" / "plugins" / "installed_plugins.json")
+    assert dr._zcode_installed_path() is None
+    row = dr.check_zcode()
+    assert row["version"] == "0.40.0"        # numeric sort, not lexical ("0.9.0" > "0.40.0")
 
 
 # ---------- owner port / container rows ----------
@@ -199,6 +273,36 @@ def test_fix_containers_stops_disables_then_starts_owner(dr, tmp_path, monkeypat
                      ["stop", "skill-concierge-embed-shim"]]
     assert "docker" not in dr.AUTO_FIXERS            # the docker start path is gone
     assert dr.AUTO_FIXERS["containers"] is dr.fix_containers
+
+
+def test_fix_containers_reports_failure_when_docker_update_fails(dr, tmp_path, monkeypatch):
+    """L5: a failed `docker update --restart=no` must be reported as a failure, never
+    papered over as "disabled" — the container could still restart on its own."""
+    db = tmp_path / "index.sqlite"
+    db.write_bytes(b"")
+
+    class Fail:
+        returncode, stderr, stdout = 1, "permission denied", ""
+
+    class Ok:
+        returncode, stderr, stdout = 0, "", ""
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd[1:])
+        return Fail() if cmd[1] == "update" else Ok()
+
+    monkeypatch.setattr(dr, "INDEX_DB", db)
+    monkeypatch.setattr(dr.shutil, "which", lambda _n: "/usr/bin/docker")
+    monkeypatch.setattr(dr, "_publishing_containers", lambda: [("skill-search-qdrant", "6333")])
+    monkeypatch.setattr(dr, "_run", fake_run)
+    ok, msg = dr.fix_containers()
+    assert ok is False
+    assert "disabled" not in msg
+    assert "update --restart=no" in msg and "permission denied" in msg
+    # never proceeded to `stop` once `update` failed
+    assert calls == [["update", "--restart=no", "skill-search-qdrant"]]
 
 
 # ---------- owner row ----------
@@ -328,35 +432,149 @@ def test_enforcer_kill_switch_reads_env(tmp_path, monkeypatch):
     assert _load("enforcer_owner_env_t", ROOT / "hooks" / "scripts" / "enforcer.py").OWNER_AUTOSTART is False
 
 
+# ---------- embed parity ----------
+
+class _FakeEmbedResp:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_check_embed_parity_reports_a_clean_timeout_instead_of_hanging(dr, monkeypatch, tmp_path):
+    """L6: the in-process model-load subprocess must be bounded — a stuck load reports a
+    WARN row instead of hanging doctor forever."""
+    monkeypatch.setattr(dr, "_owner_health", lambda: {"status": "ok", "model": "test-model"})
+    monkeypatch.setattr(dr.urllib.request, "urlopen",
+                        lambda req, timeout=10: _FakeEmbedResp(json.dumps({"vector": [0.1, 0.2]}).encode()))
+    real_file = tmp_path / "fake-python"
+    real_file.write_text("")
+    monkeypatch.setattr(dr, "PY_BIN", real_file)
+
+    def fake_run(cmd, **kw):
+        assert kw.get("timeout") == dr.EMBED_PARITY_LOAD_TIMEOUT_S
+        raise dr.subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(dr, "_run", fake_run)
+    row = dr.check_embed_parity()
+    assert row["status"] == "warn"
+    assert "timed out" in row["detail"]
+
+
 # ---------- MCP launcher autostart ----------
 
 def _fake_venv(tmp_path):
+    """A fake venv whose `python` answers the two `-c` shapes the launcher/setup.sh use
+    (H2's owner-start Popen call, and the deployed-version JSON read) plus the legacy `-m`
+    form some other caller might still use. The owner-start branch is emulated with a REAL
+    background job under `set -m` (job control) so it lands in its OWN process group — the
+    same property `start_new_session=True` buys in production — recorded to `pgid_file` so
+    tests can assert on it instead of trusting the launcher's word for it.
+    """
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
     marker = tmp_path / "owner-started"
+    pgid_file = tmp_path / "owner-pgid"
     py = venv / "bin" / "python"
-    py.write_text(f'#!/bin/sh\n[ "$1" = "-m" ] && echo "$2" >> "{marker}"\nexit 0\n')
+    # macOS ships bash 3.2, which has no $BASHPID (RULES [37]) — `exec sh -c '...'` inside
+    # the backgrounded job replaces that subshell's own image, so its freshly-started `$$`
+    # is trustworthy, and it inherits the job's pgid (set once, at the top-level fork, by
+    # `set -m`) regardless.
+    py.write_text(f'''#!/bin/bash
+set -m
+if [ "$1" = "-m" ]; then
+  echo "$2" >> "{marker}"
+  exit 0
+fi
+if [ "$1" = "-c" ]; then
+  case "$2" in
+    *Popen*)
+      (exec sh -c 'ps -o pgid= -p $$ | tr -d " " >> "{pgid_file}"; echo "skill_search.index_owner" >> "{marker}"') &
+      exit 0
+      ;;
+    *)
+      f="$3"
+      [ -f "$f" ] || exit 1
+      ver=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" | head -1 | sed -E 's/.*"([^"]*)"[[:space:]]*$/\\1/')
+      [ -n "$ver" ] || exit 1
+      printf '%s' "$ver"
+      exit 0
+      ;;
+  esac
+fi
+exit 0
+''')
     ss = venv / "bin" / "skill-search"
     ss.write_text("#!/bin/sh\nexit 0\n")
     py.chmod(0o755)
     ss.chmod(0o755)
-    return venv, marker
+    return venv, marker, pgid_file
 
 
 @pytest.mark.parametrize("switch,started", [("1", True), ("0", False)])
 def test_launcher_starts_owner_when_health_fails(tmp_path, switch, started):
-    venv, marker = _fake_venv(tmp_path)
+    venv, marker, pgid_file = _fake_venv(tmp_path)
     env = dict(os.environ, SKILL_CONCIERGE_VENV=str(venv), SKILL_OWNER_AUTOSTART=switch,
                EMBED_SHIM_PORT=str(_free_port()), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"))
     r = subprocess.run(["bash", str(ROOT / "bin" / "skill-search-mcp")], env=env,
                        capture_output=True, text=True, timeout=30, check=False)
     assert r.returncode == 0, r.stderr
     deadline = time.time() + 5
-    while started and not marker.exists() and time.time() < deadline:
+    while started and not (marker.exists() and pgid_file.exists()) and time.time() < deadline:
         time.sleep(0.1)
     assert marker.exists() is started
     if started:
         assert marker.read_text().strip() == "skill_search.index_owner"
+        # H2: the owner must land in its OWN process group, never the launcher's (bash
+        # `subprocess.run` here shares this test process's pgid, since it is not itself
+        # started with a new session) — a `nohup ... &` regression would put the child
+        # back in that shared group.
+        child_pgid = int(pgid_file.read_text().strip())
+        assert child_pgid != os.getpgrp()
+
+
+def test_engine_version_read_handles_apostrophe_in_root(tmp_path):
+    """A1/A2: $ROOT (and $PLUGIN_JSON built from it) must never be spliced into a Python
+    string literal — an apostrophe in the path used to break the embedded `open('...')`
+    call. The launcher passes the path via argv instead, so it must survive unmodified."""
+    root = tmp_path / "root's project"
+    (root / "bin").mkdir(parents=True)
+    shutil.copy(ROOT / "bin" / "skill-search-mcp", root / "bin" / "skill-search-mcp")
+    (root / "bin" / "skill-search-mcp").chmod(0o755)
+    (root / ".claude-plugin").mkdir()
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "vendor" / "skill-search").mkdir(parents=True)
+    venv, _marker, _pgid_file = _fake_venv(tmp_path)
+    env = dict(os.environ, SKILL_CONCIERGE_VENV=str(venv), SKILL_OWNER_AUTOSTART="0")
+    r = subprocess.run(["bash", str(root / "bin" / "skill-search-mcp")], env=env,
+                       capture_output=True, text=True, timeout=30, check=False)
+    assert r.returncode == 0, r.stderr
+    assert "could not read version" not in r.stderr
+
+
+def test_engine_version_read_fails_open_and_reports_on_bad_json(tmp_path):
+    """A2: a readable-but-unparseable plugin.json must print one clear stderr line and
+    still let the launcher continue (fail-open, not silent)."""
+    root = tmp_path / "root"
+    (root / "bin").mkdir(parents=True)
+    shutil.copy(ROOT / "bin" / "skill-search-mcp", root / "bin" / "skill-search-mcp")
+    (root / "bin" / "skill-search-mcp").chmod(0o755)
+    (root / ".claude-plugin").mkdir()
+    (root / ".claude-plugin" / "plugin.json").write_text("not json")
+    (root / "vendor" / "skill-search").mkdir(parents=True)
+    venv, _marker, _pgid_file = _fake_venv(tmp_path)
+    env = dict(os.environ, SKILL_CONCIERGE_VENV=str(venv), SKILL_OWNER_AUTOSTART="0")
+    r = subprocess.run(["bash", str(root / "bin" / "skill-search-mcp")], env=env,
+                       capture_output=True, text=True, timeout=30, check=False)
+    assert r.returncode == 0, r.stderr  # fail-open: the launcher still execs the engine
+    assert "could not read version" in r.stderr
 
 
 # ---------- setup.sh ----------
@@ -365,7 +583,13 @@ def test_setup_has_no_docker_start_path_and_starts_owner():
     text = (ROOT / "setup.sh").read_text()
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     assert "docker" not in code
-    assert "-m skill_search.index_owner" in code
+    # H2: started via argv, not "-m skill_search.index_owner" string-glued on one nohup line
+    assert '"skill_search.index_owner"' in code
+    assert "start_new_session=True" in code
     # the stop is guarded by the owner title, so it can never signal a container's process
     assert "index owner (Qdrant-compatible subset)" in code
+    # M4: the engine resync takes the SAME mkdir lock bin/skill-search-mcp's background
+    # resync uses, so the two can never race pip against the shared venv.
+    assert ".engine-resync.lock" in code
+    assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0
     assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0

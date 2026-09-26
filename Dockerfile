@@ -1,5 +1,7 @@
 # skill-concierge — warm embed shim, run as a Docker sidecar next to the
-# skill-search-qdrant container (owner decision, Validation S1).
+# skill-search-qdrant container (owner decision, Validation S1). Retired from the
+# deployment path by ADR-0070 (the local index owner replaces both containers);
+# kept for standalone use.
 #
 # PARITY: pins fastembed==0.8.0 — the exact version the live Qdrant index was
 # built with. A different fastembed can change pooling (mean vs CLS) and silently
@@ -9,7 +11,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install the vendored engine (brings mcp/qdrant-client/requests) with fastembed
+# Install the vendored engine (brings mcp/requests — qdrant-client is gone, ADR-0070) with fastembed
 # pinned to the index's build version. Reusing the engine gives the shim the same
 # embed() code path the index was built with.
 COPY vendor/skill-search /app/skill-search

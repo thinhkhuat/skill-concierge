@@ -57,7 +57,11 @@ STAMP="$VENV/.engine-plugin-version"
 VENDOR="$ROOT/vendor/skill-search"
 PLUGIN_JSON="$ROOT/.claude-plugin/plugin.json"
 if [ -f "$PLUGIN_JSON" ] && [ -d "$VENDOR" ]; then
-  deployed_ver="$("$VENV/bin/python" -c "import json;print(json.load(open('$PLUGIN_JSON'))['version'])" 2>/dev/null || true)"
+  if ! deployed_ver="$("$VENV/bin/python" -c 'import json,sys
+print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON" 2>/dev/null)"; then
+    echo "skill-concierge: could not read version from $PLUGIN_JSON — skipping engine self-heal this spawn (existing engine still serves)." >&2
+    deployed_ver=""
+  fi
   installed_ver="$(cat "$STAMP" 2>/dev/null || true)"
   if [ -n "$deployed_ver" ] && [ "$deployed_ver" != "$installed_ver" ]; then
     if [ -z "$installed_ver" ] || _ver_ge "$deployed_ver" "$installed_ver"; then
@@ -119,7 +123,15 @@ if [ "${SKILL_OWNER_AUTOSTART:-1}" != "0" ] \
    && ! curl -s -m 1 "http://127.0.0.1:${EMBED_SHIM_PORT:-6363}/health" >/dev/null 2>&1; then
   OWNER_LOG="${SKILL_CONCIERGE_LOG:-$HOME/.claude/skill-concierge/logs}/index-owner.log"
   mkdir -p "$(dirname "$OWNER_LOG")" 2>/dev/null || true
-  nohup "$VENV/bin/python" -m skill_search.index_owner </dev/null >>"$OWNER_LOG" 2>&1 &
+  # Own session (start_new_session=True, like enforcer.py/doctor.py) so the owner never
+  # shares this MCP server's process group — a plain `nohup ... &` here left the child in
+  # this script's pgid, so killing the MCP server's group used to take the owner down too.
+  # Path passed via argv, never interpolated into the code string.
+  "$VENV/bin/python" -c 'import subprocess,sys
+subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
+                  start_new_session=True, stdin=subprocess.DEVNULL,
+                  stdout=open(sys.argv[1], "ab"), stderr=subprocess.STDOUT)' \
+    "$OWNER_LOG"
 fi
 
 exec "$BIN"

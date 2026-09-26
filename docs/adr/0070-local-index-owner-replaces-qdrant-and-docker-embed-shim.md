@@ -23,9 +23,10 @@ tags carry a `v` prefix, so the pin never matched). Both containers together cos
 and Docker itself as a hard install requirement, for an index that a warm numpy process searches in
 under a millisecond.
 
-Benchmarked at real scale, a warm in-process brute-force search (43,146 × 768 float32) took 0.7 ms at
-p90 against Qdrant's own 87 ms p90 approximate search — the vector store's job did not need a server,
-concurrent-writer locking, or a network protocol; it needed one process holding the vectors in memory.
+Benchmarked at real scale (43,146 × 768 float32), the owner's hook-shaped search measured over HTTP
+came to p99 6.77 ms against Qdrant's own 87 ms p90 approximate search — the vector store's job did not
+need a server, concurrent-writer locking, or a network protocol; it needed one process holding the
+vectors in memory.
 
 ## Decision
 
@@ -125,7 +126,7 @@ concurrent-writer locking, or a network protocol; it needed one process holding 
   engine against Docker Qdrant.
 - **What is kept (D2).** `SKILL_QDRANT_URL` and port 6333 remain the permanent compatibility names —
   no harness, adapter, or installed config anywhere needed to change.
-- **A small, epoch-noted behavior change (REQ-004).** Search is now always exact (no more HNSW
+- **A small behavior change, to be epoch-noted at the switch (TASK-022, REQ-004).** Search is now always exact (no more HNSW
   approximate search — recall can only improve; the parity replay never found an approximate score
   beating an exact one), and the deterministic tie-break is score descending, then skill name
   ascending, replacing Qdrant's own arbitrary tie order.
@@ -137,7 +138,11 @@ concurrent-writer locking, or a network protocol; it needed one process holding 
 
 Stop the index owner; `docker start` both containers; `docker update --restart=unless-stopped` on both;
 restore the previous `setup.sh` and `scripts/doctor.py` from git; run a reindex so Qdrant catches up on
-anything written to the owner in between. Until the Phase 6 cleanup (removing `qdrant-client` from
-`pyproject.toml`, deleting `Dockerfile`/`.dockerignore`, and deleting the retired containers/images)
-runs, both container images and the vendored `Dockerfile` remain on disk, so a revert needs no
-re-provisioning step beyond restarting them.
+anything written to the owner in between. `qdrant-client` is already removed from
+`vendor/skill-search/pyproject.toml` (this branch), so a revert to Docker Qdrant needs no engine
+downgrade: the engine's `_Store` (`vendor/skill-search/skill_search/server.py`) speaks the same plain
+Qdrant REST paths (`/collections/{c}`, `points/scroll`, `points/query/groups`, …) against
+`SKILL_QDRANT_URL` whether the answerer is the owner or a real Qdrant server. The Phase 6 cleanup
+(deleting `Dockerfile`/`.dockerignore` and the retired containers/images) has not run, so both
+container images and the vendored `Dockerfile` remain on disk — a revert needs no re-provisioning step
+beyond restarting them.

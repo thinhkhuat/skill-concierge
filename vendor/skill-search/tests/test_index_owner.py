@@ -4,7 +4,12 @@ exercised over HTTP against owners started on free ports with temp SQLite files.
 import http.client
 import json
 import math
+import os
 import random
+import socket
+import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -13,6 +18,13 @@ from pathlib import Path
 import pytest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "qdrant_exact_groups.json"
+SRC = Path(__file__).resolve().parents[1]   # vendor/skill-search: PYTHONPATH for raw subprocess tests
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def api(owner, method, path, body=None, headers=None, host=None):
@@ -401,3 +413,304 @@ def test_stamp_rewrite_triggers_exit_and_downgrade_does_not(owner_factory, tmp_p
     # the lock was released: the next owner starts on the same file with the data intact
     o2 = owner_factory(db).wait_ready()
     assert [n for n, _ in groups(o2, vec(1))] == ["keep"]
+
+
+# -- track B review fixes --------------------------------------------------------------
+
+def test_health_reports_routes_for_setup_sh_parity(owner):
+    """M3: an old harness copy's setup.sh greps /health for '"jev"' to decide whether the
+    Docker embed shim is still needed. The owner must keep answering that probe."""
+    conn = http.client.HTTPConnection("127.0.0.1", owner.eport, timeout=5)
+    conn.request("GET", "/health", headers={"Host": f"127.0.0.1:{owner.eport}"})
+    r = conn.getresponse()
+    body = json.loads(r.read())
+    conn.close()
+    assert r.status == 200
+    assert body["routes"] == ["embed", "jev"]
+
+
+def test_code_version_survives_a_stamp_downgrade(owner_factory, tmp_path):
+    """L1: /health's code_version must report the RUNNING code even after an older
+    harness copy downgrades the venv stamp on disk — only stamp_version should move."""
+    db = tmp_path / "downgrade.sqlite"
+    Path(f"{db}.stamp").write_text("0.54.0")
+    o = owner_factory(db, env={"SKILL_OWNER_STAMP_INTERVAL": "0.1"}).wait_ready()
+
+    def health():
+        conn = http.client.HTTPConnection("127.0.0.1", o.eport, timeout=5)
+        conn.request("GET", "/health", headers={"Host": f"127.0.0.1:{o.eport}"})
+        body = json.loads(conn.getresponse().read())
+        conn.close()
+        return body
+
+    before = health()
+    assert before["code_version"] == "0.54.0"
+    assert before["stamp_version"] == "0.54.0"
+
+    o.stamp.write_text("0.52.9")               # an older harness copy downgraded the venv
+    time.sleep(0.6)
+
+    after = health()
+    assert after["code_version"] == "0.54.0"    # still the code that is actually running
+    assert after["stamp_version"] == "0.52.9"    # the on-disk value the owner last observed
+    assert "downgraded" in o.read_log()
+
+
+def test_probe_treats_accept_then_reset_as_other(tmp_path):
+    """L2: a foreign listener that ACCEPTS a connection and then resets it (a wildcard
+    port proxy still warming up) must be reported as 'other', never as 'nobody' —
+    otherwise the owner's startup probe binds right over it (bindtest.py)."""
+    from skill_search import index_owner as io_
+
+    port = _free_port()
+    f = socket.socket()
+    f.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    f.bind(("127.0.0.1", port))
+    f.listen(16)
+    stop = threading.Event()
+
+    def rst():
+        f.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                c, _addr = f.accept()
+                c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+                c.close()
+            except OSError:
+                pass
+
+    t = threading.Thread(target=rst, daemon=True)
+    t.start()
+    try:
+        assert io_._probe(port) == "other"
+    finally:
+        stop.set()
+        t.join(2)
+        f.close()
+
+
+def test_probe_treats_a_refused_port_as_nobody(tmp_path):
+    """Control for L2: an actually-free port (nothing accepted the connection) must
+    still report None, so the fix does not turn every free port into 'other'."""
+    from skill_search import index_owner as io_
+    port = _free_port()
+    assert io_._probe(port) is None
+
+
+class _FlakyDB:
+    """Proxies a real sqlite3.Connection but fails partway through the FIRST
+    executemany() called on it, after really applying its first row/param-set —
+    simulating a genuinely partial batch, uncommitted. `with self.db:` (the context
+    manager protocol) still forwards to the real connection, so its commit/rollback
+    on __exit__ is the real thing under test."""
+
+    def __init__(self, real):
+        self._real = real
+        self._armed = True
+
+    def executemany(self, sql, seq):
+        if not self._armed:
+            return self._real.executemany(sql, seq)
+        self._armed = False
+        seq = list(seq)
+        self._real.executemany(sql, seq[:1])   # really applied, still uncommitted
+        raise sqlite3.OperationalError("simulated mid-batch failure")
+
+    def __enter__(self):
+        return self._real.__enter__()
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_failed_upsert_batch_rolls_back_and_leaves_no_partial_rows(tmp_path):
+    """L3: Store.upsert's executemany must be atomic. Without `with self.db:`, a row
+    genuinely applied before a mid-batch failure stays uncommitted-but-present in the
+    connection's implicit transaction, and a LATER unrelated successful write's commit()
+    would persist it."""
+    from skill_search import index_owner as io_
+    st = io_.Store(tmp_path / "t.sqlite")
+    st.create("c", {"vectors": {"size": 2, "distance": "Cosine"}})
+
+    real_db = st.db
+    st.db = _FlakyDB(real_db)
+    with pytest.raises(sqlite3.OperationalError):
+        st.upsert("c", {"points": [
+            {"id": 1, "vector": [1.0, 0.0], "payload": {}},
+            {"id": 2, "vector": [0.0, 1.0], "payload": {}},
+        ]})
+    st.db = real_db
+
+    st.upsert("c", {"points": [{"id": 99, "vector": [1.0, 1.0], "payload": {}}]})
+    st.close()
+
+    st2 = io_.Store(tmp_path / "t.sqlite")
+    ids = sorted(r[0] for r in st2.colls["c"].rows.values())
+    assert ids == [99]      # row 1's partial insert never survived to the later commit
+    st2.close()
+
+
+def test_failed_delete_batch_rolls_back_and_leaves_no_partial_state(tmp_path):
+    """L3, delete_points side: same atomicity requirement for the DELETE executemany."""
+    from skill_search import index_owner as io_
+    st = io_.Store(tmp_path / "t.sqlite")
+    st.create("c", {"vectors": {"size": 2, "distance": "Cosine"}})
+    st.upsert("c", {"points": [
+        {"id": 1, "vector": [1.0, 0.0], "payload": {}},
+        {"id": 2, "vector": [0.0, 1.0], "payload": {}},
+    ]})
+
+    real_db = st.db
+    st.db = _FlakyDB(real_db)
+    with pytest.raises(sqlite3.OperationalError):
+        st.delete_points("c", {"points": [1, 2]})
+    st.db = real_db
+
+    st.upsert("c", {"points": [{"id": 99, "vector": [1.0, 1.0], "payload": {}}]})
+    st.close()
+
+    st2 = io_.Store(tmp_path / "t.sqlite")
+    ids = sorted(r[0] for r in st2.colls["c"].rows.values())
+    assert ids == [1, 2, 99]      # id 1's partial delete never survived to the later commit
+    st2.close()
+
+
+def _spawn_owner(env_overrides, extra_env_pop=()):
+    env = dict(os.environ, PYTHONPATH=str(SRC))
+    for k in extra_env_pop:
+        env.pop(k, None)
+    env.update(env_overrides)
+    return subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _stop(proc):
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def test_ports_derive_from_qdrant_url_and_embed_shim_port_when_unset(tmp_path):
+    """L4: with SKILL_OWNER_QUERY_PORT/SKILL_OWNER_EMBED_PORT unset, the owner must land
+    on the ports every caller (doctor.py, the launcher, the enforcer) already derives
+    from SKILL_QDRANT_URL / EMBED_SHIM_PORT, not the hardcoded 6333/6363."""
+    qport, eport = _free_port(), _free_port()
+    db = tmp_path / "portderive.sqlite"
+    proc = _spawn_owner(
+        {"SKILL_INDEX_DB": str(db), "SKILL_OWNER_NO_MODEL": "1",
+         "SKILL_OWNER_LOG": f"{db}.log", "SKILL_OWNER_STAMP": f"{db}.stamp",
+         "SKILL_QDRANT_URL": f"http://127.0.0.1:{qport}", "EMBED_SHIM_PORT": str(eport)},
+        extra_env_pop=("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT"))
+    try:
+        end = time.monotonic() + 20
+        ready = False
+        while time.monotonic() < end:
+            if proc.poll() is not None:
+                raise RuntimeError(f"owner exited {proc.returncode}")
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", qport, timeout=0.5)
+                try:
+                    conn.request("GET", "/", headers={"Host": f"127.0.0.1:{qport}"})
+                    ready = conn.getresponse().status == 200
+                finally:
+                    conn.close()
+                if ready:
+                    break
+            except OSError:
+                pass
+            time.sleep(0.05)
+        assert ready, "owner never bound the SKILL_QDRANT_URL-derived query port"
+
+        conn = http.client.HTTPConnection("127.0.0.1", eport, timeout=5)
+        conn.request("GET", "/health", headers={"Host": f"127.0.0.1:{eport}"})
+        assert conn.getresponse().status == 200   # EMBED_SHIM_PORT-derived embed port
+        conn.close()
+    finally:
+        _stop(proc)
+
+
+def test_default_ports_fall_back_to_6333_6363_with_nothing_configured(tmp_path):
+    """L4 control: with every port env var unset, 6333/6363 remain the final fallback."""
+    from skill_search import index_owner as io_
+    env = dict(os.environ)
+    for k in ("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT", "SKILL_QDRANT_URL", "EMBED_SHIM_PORT"):
+        env.pop(k, None)
+    script = (
+        "import os, json, sys\n"
+        "from skill_search import index_owner as io_\n"
+        "print(json.dumps([io_.QUERY_PORT, io_.EMBED_PORT]))\n")
+    script_path = tmp_path / "port_defaults_probe.py"
+    script_path.write_text(script, encoding="utf-8")
+    env["PYTHONPATH"] = str(SRC)
+    r = subprocess.run([sys.executable, str(script_path)], env=env,
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [6333, 6363]
+
+
+def test_log_lines_are_not_duplicated_when_stderr_shares_the_log_file(tmp_path):
+    """L9: a launcher (doctor.start_owner, the enforcer, setup.sh) that redirects the
+    owner's stderr into the SAME file as SKILL_OWNER_LOG must not see every line twice."""
+    db = tmp_path / "dup.sqlite"
+    log_path = tmp_path / "dup.log"
+    env = dict(os.environ, PYTHONPATH=str(SRC), SKILL_INDEX_DB=str(db),
+               SKILL_OWNER_QUERY_PORT=str(_free_port()), SKILL_OWNER_EMBED_PORT=str(_free_port()),
+               SKILL_OWNER_NO_MODEL="1", SKILL_OWNER_LOG=str(log_path),
+               SKILL_OWNER_STAMP=f"{db}.stamp")
+    with open(log_path, "ab") as f:
+        proc = subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
+                                env=env, stdin=subprocess.DEVNULL, stdout=f, stderr=f)
+    try:
+        end = time.monotonic() + 20
+        text = ""
+        while time.monotonic() < end:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+            if "ready:" in text or proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert "ready:" in text, text
+        ready_lines = [ln for ln in text.splitlines() if "ready:" in ln]
+        listening_lines = [ln for ln in text.splitlines() if "listening query=" in ln]
+        assert len(ready_lines) == 1, ready_lines            # not doubled by the shared redirect
+        assert len(listening_lines) == 1, listening_lines
+    finally:
+        _stop(proc)
+
+
+def test_log_still_reaches_stderr_when_it_is_not_the_log_file(tmp_path):
+    """L9 control: stderr must keep receiving log lines when it is NOT redirected into
+    LOG_PATH (e.g. an interactive run) — the fix must only suppress the true duplicate."""
+    db = tmp_path / "nodup.sqlite"
+    log_path = tmp_path / "nodup.log"
+    env = dict(os.environ, PYTHONPATH=str(SRC), SKILL_INDEX_DB=str(db),
+               SKILL_OWNER_QUERY_PORT=str(_free_port()), SKILL_OWNER_EMBED_PORT=str(_free_port()),
+               SKILL_OWNER_NO_MODEL="1", SKILL_OWNER_LOG=str(log_path),
+               SKILL_OWNER_STAMP=f"{db}.stamp")
+    proc = subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
+                            env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    try:
+        end = time.monotonic() + 20
+        err = ""
+        while time.monotonic() < end:
+            if proc.poll() is not None:
+                break
+            try:
+                err = log_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                err = ""
+            if "ready:" in err:
+                break
+            time.sleep(0.05)
+        assert "ready:" in err, err
+    finally:
+        _stop(proc)
+        stderr_out = proc.stderr.read() if proc.stderr else ""
+        assert "ready:" in stderr_out, stderr_out   # still echoed — stderr is not the log file

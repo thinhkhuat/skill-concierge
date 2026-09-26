@@ -97,7 +97,7 @@ indirection fire.
 | Aspect | Value |
 |---|---|
 | Package | `skill-search-mcp` 0.1.0 via `pipx` on **Python 3.12.11** (console scripts `skill-search`, `skill-search-overrides`) |
-| Vector store | **Qdrant server** (Docker container `skill-search-qdrant`, image `qdrant/qdrant` 1.18.2) at `http://localhost:6333` |
+| Vector store | **Local index owner** (`python -m skill_search.index_owner`, no Docker/container — [ADR-0070](adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) speaking Qdrant's REST subset at `http://localhost:6333` |
 | Embedder | **`fastembed`** (in-process, no daemon) · `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` · **768-dim** |
 | Index | 508 points (507 skills + router), `health` ok, 0 dark / 0 stale |
 | Budget override | **global** `~/.claude/settings.json` (`skillOverrides`) → **477 `name-only`, 31 `on`** (20 core `ck:*` + 6 core `vn-*` + 4 discipline guardrails + `skill-search`) |
@@ -120,8 +120,8 @@ namespaced `plugin:skill`).
                               skill-search MCP server (stdio, user scope)
                                   │                         │
                        embed query (fastembed,      query top-k vectors
-                       mpnet 768-dim, in-process)   ──────────────► Qdrant server
-                                  │                         (Docker :6333)
+                       mpnet 768-dim, in-process)   ──────────────► local index owner
+                                  │                         (no Docker — ADR-0070, :6333)
                                   ▼
                        returns top-k {name, command, description, score}
                                   │
@@ -130,9 +130,11 @@ namespaced `plugin:skill`).
                   (they are name-only → name stays invocable)
 ```
 
-Two persistent processes matter: the **MCP server** (spawned per Claude session) and
-the **Qdrant container** (shared, long-lived). Because the store is a *server* (not the
-embedded single-process file), multiple concurrent Claude sessions can all query it.
+Two processes matter: the **MCP server** (spawned per Claude session) and the **local
+index owner** (shared, autostarted on demand by the launcher/hook/`setup.sh`, no Docker —
+[ADR-0070](adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)). Because
+the store is a *server process* (not the embedded single-process file), multiple concurrent
+Claude sessions can all query it.
 
 ## The arc & decision log
 
@@ -154,8 +156,11 @@ to forget.
 After a Claude Code restart, it just works: the router skill calls `search_skills`,
 relevant skills come back ranked, Claude invokes them by name. Nothing to do per-turn.
 
-**Prerequisite every session:** the Qdrant container must be running (Docker/OrbStack
-up). If it's down, search returns nothing → at `name-only`, skills are invisible.
+**Prerequisite every session:** the local index owner must be running — no Docker/OrbStack
+involved. It autostarts on demand (the MCP launcher on a failed `/health`, the enforcer hook
+on a refused connection), so normally nothing to do. If it's down, search returns nothing →
+at `name-only`, skills are invisible. Check with `curl -s http://127.0.0.1:6363/health`;
+repair with `python3 scripts/doctor.py --fix`, or start it by hand with `./setup.sh`.
 
 ### After adding / editing / removing skills
 The index must be refreshed or new skills aren't searchable.
@@ -182,11 +187,13 @@ Reports embedder + Qdrant reachability, indexed-vs-disk counts, and lists **dark
 (on-disk but unindexed) and **stale** (indexed but deleted) skills.
 
 ### Reboot behavior
-The container is `--restart unless-stopped`, so it returns after a reboot **provided the
-Docker provider (OrbStack) auto-starts**. Verify after a reboot:
+The local index owner is not a persistent service and nothing starts it at boot — no
+launchd agent, no Docker restart policy ([ADR-0070](adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)).
+It autostarts the first time something needs it after a reboot: the MCP launcher starts
+it when `/health` doesn't answer, or the enforcer hook starts it on a refused connection.
+Verify after a reboot:
 ```bash
-docker ps --filter name=skill-search-qdrant      # should show "Up"
-orb start                                         # if OrbStack isn't running
+curl -s http://127.0.0.1:6363/health              # should answer; empty/refused = not started yet
 ```
 
 ### Re-measure the token savings
@@ -272,7 +279,7 @@ rebuild. Cost: a second always-on daemon.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Search returns nothing / skills invisible | Qdrant container down | `docker ps`; `orb start`; `docker start skill-search-qdrant` |
+| Search returns nothing / skills invisible | Local index owner down | `curl -s http://127.0.0.1:6363/health`; repair with `python3 scripts/doctor.py --fix`; or start it by hand with `./setup.sh` |
 | CLI `--reindex` wrote to the wrong store / wrong dim | Env not exported for the CLI | Export `SKILL_QDRANT_URL` + `SKILL_EMBED_MODEL`, or use the `reindex` MCP tool |
 | `embedding dimension changed (X -> Y)` | Embedder swapped under an existing collection | `skill-search --rebuild` |
 | `pipx install` fails on wheels | Python too new/old | Pin `--python python3.12` |
@@ -295,9 +302,12 @@ cp ~/.claude.json.bak-skillsearch-server-260625-233755 ~/.claude.json
 #   or unregister directly:
 claude mcp remove skill-search -s user
 
-# 3. Qdrant server
-docker rm -f skill-search-qdrant
-rm -rf ~/.cache/skill-search/qdrant-server                         # server data (optional)
+# 3. Vector store — since ADR-0070 this is the local index owner, not a container
+lsof -ti :6333 | xargs -r kill                                     # stop the owner
+rm -f ~/.cache/skill-search/index.sqlite*                          # owner data (optional)
+# Legacy install only — remove a leftover Qdrant container if one still exists:
+docker rm -f skill-search-qdrant 2>/dev/null
+rm -rf ~/.cache/skill-search/qdrant-server                         # legacy server data (optional)
 
 # 4. Router skill + embedded index + package
 rm -rf ~/.claude/skills/skill-search ~/.cache/skill-search/qdrant
@@ -329,7 +339,8 @@ targeted MCP changes.)
 |---|---|
 | `~/.local/bin/skill-search`, `skill-search-overrides` | console scripts (pipx) |
 | `~/.local/pipx/venvs/skill-search-mcp/` | the pipx venv (Python 3.12) |
-| `~/.cache/skill-search/qdrant-server/` | Qdrant **server** data volume (active) |
+| `~/.cache/skill-search/index.sqlite` (`SKILL_INDEX_DB`) | the local index owner's one SQLite file (active — [ADR-0070](adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) |
+| `~/.cache/skill-search/qdrant-server/` | legacy Qdrant **server** data volume (superseded; safe to delete) |
 | `~/.cache/skill-search/qdrant/` | old **embedded** index (orphaned; safe to delete) |
 | `~/.cache/skill-search/index_meta.json` | drift-detection manifest |
 | `~/.claude/skills/skill-search/SKILL.md` | router skill |
@@ -355,8 +366,9 @@ targeted MCP changes.)
   `package_or_url` is now `skill-search-mcp` (was the session-temp clone path). Note:
   plain `pipx install --force <name>` does NOT repoint an existing local-path venv — it
   reuses the recorded source; the uninstall+install is required.
-- ✅ **OrbStack auto-start — CONFIRMED:** OrbStack is a macOS login item, so the Qdrant
-  container returns on boot.
+- ⚠ **OrbStack auto-start — SUPERSEDED by ADR-0070:** the Qdrant container this item
+  described is gone. The local index owner has no restart policy and no launchd agent; it
+  autostarts on demand instead (see Reboot behavior above).
 - ✅ **Restart + live verification — DONE:** post-restart, in-session MCP `health` ok,
   `search_skills` returns (Vietnamese query → `vn-editor` #1), `get_skill` deep-pull works.
 - **No custom recall eval yet:** retrieval validated by eyeballing real queries. A

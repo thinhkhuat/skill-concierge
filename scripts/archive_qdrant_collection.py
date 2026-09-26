@@ -129,8 +129,19 @@ def verify(dest: Path, expect: int) -> int:
 
 
 def delete(base: str, collection: str, dest: Path, expect: int) -> int:
+    manifest = json.loads((dest / "manifest.json").read_text())
+    if manifest.get("collection") != collection:
+        print(f"refusing to delete {collection}: archive manifest is for collection "
+              f"{manifest.get('collection')!r}, not {collection!r}", file=sys.stderr)
+        return 1
     if verify(dest, expect) != 0:
         print(f"refusing to delete {collection}: archive verification failed", file=sys.stderr)
+        return 1
+    live_count = _req(f"{base}/collections/{collection}")["result"].get("points_count")
+    if live_count != manifest["points_exported"]:
+        print(f"refusing to delete {collection}: live points_count={live_count} does not "
+              f"match archived points_exported={manifest['points_exported']} "
+              "(collection changed since export)", file=sys.stderr)
         return 1
     res = _req(f"{base}/collections/{collection}", "DELETE")
     print(f"deleted {collection}: {json.dumps(res.get('result'))}")

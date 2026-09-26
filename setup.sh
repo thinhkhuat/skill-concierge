@@ -29,7 +29,8 @@ fi
 
 # Single source of truth for embedder + store = .mcp.json (so the built index can't
 # diverge from the model the live MCP uses). Env overrides win.
-read_mcp() { "$PYTHON" -c "import json,sys;print(json.load(open('$ROOT/.mcp.json'))['mcpServers']['skill-search']['env'].get(sys.argv[1],''))" "$1"; }
+read_mcp() { "$PYTHON" -c "import json,sys
+print(json.load(open(sys.argv[1]))['mcpServers']['skill-search']['env'].get(sys.argv[2],''))" "$ROOT/.mcp.json" "$1"; }
 QURL="${SKILL_QDRANT_URL:-$(read_mcp SKILL_QDRANT_URL)}"
 MODEL="${SKILL_EMBED_MODEL:-$(read_mcp SKILL_EMBED_MODEL)}"
 echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  model=$MODEL"
@@ -49,15 +50,47 @@ mkdir -p "$(dirname "$VENV")"
 [ -d "$VENV" ] || "$PYTHON" -m venv "$VENV"
 "$VENV/bin/pip" -q install --upgrade pip >/dev/null
 "$VENV/bin/pip" -q install "$VENDOR" tiktoken   # deps (mcp, fastembed, requests) + tiktoken into the STABLE venv
-# Force the ENGINE copy fresh. The vendored package version is a static 0.1.0 (pyproject), so a
-# plain `pip install` sees "already satisfied" and SKIPS re-copying changed code on a re-run —
-# the exact stale-engine trap (ADR-0018). --force-reinstall --no-deps guarantees the current
-# engine code lands without re-resolving the (already-present) heavy deps.
+# Force the ENGINE copy fresh, under the SAME mkdir lock bin/skill-search-mcp's background
+# resync uses (.engine-resync.lock) — a concurrent launcher resync and this setup run must
+# never race pip against the shared venv. Wait/timeout mirrors the launcher: up to 10
+# attempts, 1s apart, stealing a lock whose owner pid is gone. Unlike the launcher's
+# best-effort background heal, this reinstall is mandatory, so a failed acquire is fatal
+# instead of a silent skip.
+ENGINE_LOCK="$VENV/.engine-resync.lock"
+_acquire_engine_lock() {
+  self_pid="$(sh -c 'echo $PPID')"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if mkdir "$ENGINE_LOCK" 2>/dev/null; then
+      echo "$self_pid" > "$ENGINE_LOCK/pid"
+      return 0
+    fi
+    old_pid="$(cat "$ENGINE_LOCK/pid" 2>/dev/null || true)"
+    if [ -z "$old_pid" ] || ! kill -0 "$old_pid" 2>/dev/null; then
+      rm -rf "$ENGINE_LOCK"
+      if mkdir "$ENGINE_LOCK" 2>/dev/null; then
+        echo "$self_pid" > "$ENGINE_LOCK/pid"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+_acquire_engine_lock \
+  || { echo "! could not acquire $ENGINE_LOCK (held by a concurrent resync) — rerun setup.sh" >&2; exit 1; }
+trap 'rm -f "$ENGINE_LOCK/pid" 2>/dev/null; rmdir "$ENGINE_LOCK" 2>/dev/null' EXIT
+# The vendored package version is a static 0.1.0 (pyproject), so a plain `pip install` sees
+# "already satisfied" and SKIPS re-copying changed code on a re-run — the exact stale-engine
+# trap (ADR-0018). --force-reinstall --no-deps guarantees the current engine code lands
+# without re-resolving the (already-present) heavy deps.
 "$VENV/bin/pip" -q install --no-cache-dir --force-reinstall --no-deps "$VENDOR"
 # Stamp the deployed plugin version so bin/skill-search-mcp can detect a future /plugin update
 # and AUTO-resync the engine (ADR-0018) instead of silently serving stale code.
-PLUGIN_VER="$("$PYTHON" -c "import json;print(json.load(open('$ROOT/.claude-plugin/plugin.json'))['version'])")"
+PLUGIN_VER="$("$PYTHON" -c "import json,sys
+print(json.load(open(sys.argv[1]))['version'])" "$ROOT/.claude-plugin/plugin.json")"
 printf '%s' "$PLUGIN_VER" > "$VENV/.engine-plugin-version"
+rm -f "$ENGINE_LOCK/pid" 2>/dev/null; rmdir "$ENGINE_LOCK" 2>/dev/null
+trap - EXIT
 echo "  engine forced-fresh + stamped @ plugin v$PLUGIN_VER"
 
 echo "[2/4] local index owner (store @ $QURL, embed @ 127.0.0.1:$EPORT)"
@@ -78,9 +111,17 @@ if curl -s -m 2 "http://127.0.0.1:$store_port/" 2>/dev/null | grep -qF "$OWNER_T
   done
   echo "  stopped the running index owner (reinstalled code)"
 fi
-# Detached: it outlives this shell, the harness and the MCP servers. A duplicate start is
-# harmless — the second owner loses the file lock and exits.
-nohup "$VENV/bin/python" -m skill_search.index_owner </dev/null >>"$OWNER_LOG" 2>&1 &
+# Detached in its OWN session (start_new_session=True, like enforcer.py/doctor.py) so it
+# outlives this shell, the harness and the MCP servers rather than sharing this script's
+# process group — a plain `nohup ... &` still leaves the child in the caller's pgid, so a
+# kill of that group takes the owner down with it. A duplicate start is harmless — the
+# second owner loses the file lock and exits. Path is passed via argv, never interpolated
+# into the code string.
+"$VENV/bin/python" -c 'import subprocess,sys
+subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
+                  start_new_session=True, stdin=subprocess.DEVNULL,
+                  stdout=open(sys.argv[1], "ab"), stderr=subprocess.STDOUT)' \
+  "$OWNER_LOG"
 for _ in $(seq 1 90); do
   curl -s -m 1 "http://127.0.0.1:$EPORT/health" 2>/dev/null | grep -q '"ok"' && break
   sleep 1

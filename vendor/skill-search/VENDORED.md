@@ -448,3 +448,25 @@ plugin-level customization layer and these engine patches.
   directly, plus an end-to-end POST /jev against a real `Handler` on a real loopback socket (not
   `owner_factory`/`OwnerProc`, which run the owner in a subprocess an in-process HTTPS mock cannot
   reach — see that test file's module docstring). Not upstream: re-apply on re-vendor.
+
+- **Track B review fixes (M3, L1-L4, L7, L9):** `/health`'s 200 response regained
+  `"routes": ["embed", "jev"]` (an old harness copy's `setup.sh` greps for `"jev"` to decide
+  whether the Docker embed shim is still needed) and a new `stamp_version` field. `Owner` now
+  keeps `loaded_version` (set once at startup, immutable) separately from `self.stamp` (mutable
+  change-detection bookkeeping, including the intentional downgrade dedup); `code_version` reports
+  `loaded_version` — the code actually running — so doctor's `check_owner` (which compares
+  `/health`'s `code_version` against the on-disk venv stamp) still catches a downgrade instead of
+  reading `code == stamp` as healthy by construction. `_probe` now counts a connection the foreign
+  listener ACCEPTS and then resets/closes as `"other"`, never `"nobody"` — only `ConnectionRefusedError`
+  means nobody, closing the shadow-listener gap `bindtest.py`/probe `[4]` demonstrated.
+  `Store.upsert`/`delete_points` wrap their `executemany` in `with self.db:`, so a mid-batch
+  failure rolls back instead of leaving rows a later unrelated `commit()` would persist.
+  `QUERY_PORT`/`EMBED_PORT` now derive from `SKILL_QDRANT_URL`'s port / `EMBED_SHIM_PORT` before
+  falling back to 6333/6363 — the same derivation doctor.py, the launcher and the enforcer already
+  use — so a non-default configured port is honored on a standalone owner start. `log()` skips the
+  stderr echo when fd 2 is already `LOG_PATH` (compares `os.fstat`'s dev/inode), so a launcher that
+  redirects the owner's stderr into the same log file no longer sees every line twice; `LOG_PATH`
+  also now follows `SKILL_CONCIERGE_LOG` (a directory), matching doctor's `OWNER_LOG` rule exactly,
+  with `SKILL_OWNER_LOG` (a full path) still winning when set. Removed the unused `parse_qs` import.
+  Covered by `tests/test_index_owner.py`'s "track B review fixes" section. Not upstream: re-apply
+  on re-vendor.

@@ -172,15 +172,20 @@ def stop_owner() -> None:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         print(f"staging owner pid={pid} already gone")
-    else:
-        for _ in range(60):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.25)
-        print(f"staging owner pid={pid} stopped")
-    PIDFILE.unlink(missing_ok=True)
+        PIDFILE.unlink(missing_ok=True)
+        return
+    for _ in range(60):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            print(f"staging owner pid={pid} stopped")
+            PIDFILE.unlink(missing_ok=True)
+            return
+        time.sleep(0.25)
+    # Still alive after 15s of SIGTERM: keep the pid file so a retry (or a human) can find
+    # and finish stopping it, instead of silently claiming "stopped" and orphaning it.
+    sys.exit(f"staging owner pid={pid} did not stop within 15s of SIGTERM — pid file kept "
+             f"at {PIDFILE}")
 
 
 # ---------------------------------------------------------------------------
