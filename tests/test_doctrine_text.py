@@ -6,6 +6,7 @@ enforcer's leg messages. A copy of a signature inside the doctrine would miscoun
 as authorized, so the body must never carry one. The body must also point only at things that
 exist (no phantom skill names) and cache nothing the environment can answer (no catalogue count).
 """
+import ast
 import re
 from pathlib import Path
 
@@ -81,3 +82,16 @@ def test_doctrine_orders_off_list_read_before_using():
     assert body.count('get_skill("<name>")') == 1
     assert "RETRACT" not in body
     assert len(body) <= 4217 + 900, f"doctrine body grew to {len(body)} chars"
+
+
+def test_one_skip_token_everywhere_agents_are_told_it():
+    """Agents are told `NO SKILL: <why>` (ADR-0062) — by the standing order and by every enforcer
+    message; the old `SKIPPING` token survives only in the readers that parse old transcripts."""
+    body = _body()
+    assert "NO SKILL: <why>" in body and "SKIPPING" not in body
+    # Every string literal in the enforcer, however it is laid out (implicit concatenation folds
+    # into one constant; docstrings included — none may teach the old token either).
+    strings = [n.value for n in ast.walk(ast.parse(ENFORCER.read_text(encoding="utf-8")))
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    assert not [s for s in strings if "SKIPPING" in s]
+    assert any("NO SKILL: <why>" in s for s in strings)

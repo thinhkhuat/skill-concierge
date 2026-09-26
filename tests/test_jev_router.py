@@ -37,6 +37,8 @@ CATALOG = [("update-config", "Configure the Claude Code harness via settings.jso
 
 def _load(tmp_path, **env):
     old = dict(os.environ)
+    for k in ("ENFORCER_JEV_ROUTER", "ENFORCER_JEV_GATE"):   # the router is read at import: an
+        os.environ.pop(k, None)                              # exported off switch must not leak in
     os.environ.update({"SKILL_CONCIERGE_LOG": str(tmp_path), **env})
     try:
         spec = importlib.util.spec_from_file_location(f"enforcer_router_{abs(hash((str(tmp_path), str(env))))}", ENFORCER)
@@ -117,6 +119,7 @@ def test_confident_choice_still_offers_the_ranked_rows(tmp_path, monkeypatch):
     assert [r[0] for r in rows[-1]["offered"]] == ["update-config", "ak-git", "session-handoff", "tk-research"]
     assert rows[-1]["band"] == "offer" and out.index("update-config") < out.index("ak-git")
     assert rows[-1]["jev"]["lead"] == "update-config" and rows[-1]["jev"]["via"] == "relay"
+    assert mod.WHOLE_SHELF_HEAD.strip() in out and mod.PREVIEW_HEAD.strip() not in out   # the agent is told what it holds
 
 
 def test_offer_is_capped_and_in_choice_order(tmp_path, monkeypatch):
@@ -172,6 +175,7 @@ def test_jev_failure_leaves_the_embedding_path_to_decide(tmp_path, monkeypatch):
         out, calls, embed, rows = _run(mod, monkeypatch, jev_error=err)
         assert calls and embed
         assert "Jev needs-a-skill gate" not in out and "tk-research" in out    # retrieval's menu
+        assert mod.PREVIEW_HEAD.strip() in out and mod.WHOLE_SHELF_HEAD.strip() not in out   # labelled as a preview
         assert rows[-1]["band"] == "offer" and rows[-1]["jev"]["err"] == type(err).__name__
         assert rows[-1]["jev"]["leg"] == "router"   # tells it from the v0.50.0 leg's unmarked {err, ms}
 
@@ -196,7 +200,7 @@ def test_embed_down_still_served_by_jev(tmp_path, monkeypatch):
     mod = _load(tmp_path)
     out, _, _, rows = _run(mod, monkeypatch, rerank=CONFIDENT, embed_error=OSError("shim down"))
     assert "update-config" in out and rows[-1]["band"] == "offer"
-    assert rows[-1]["offered"][0][0] == "update-config"
+    assert rows[-1]["offered"][0][0] == "update-config" and mod.WHOLE_SHELF_HEAD.strip() in out
 
 
 def test_context_comes_from_the_transcript_tail(tmp_path, monkeypatch):

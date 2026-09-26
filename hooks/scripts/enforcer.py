@@ -1316,9 +1316,9 @@ except ValueError:
 # (EFFORT was decoupled to the standalone effort-gate plugin in v0.4.0; this hook
 # now governs which/whether a skill only.)
 MANDATE = (
-    "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | SKIPPING: none.\n"
+    "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | NO SKILL: <why>.\n"
     "No preview this turn. A task turn → run search_skills THIS reply with 2–3 intent+domain "
-    "phrasings, then USING the fit, or SKIPPING none only when that search finds nothing "
+    "phrasings, then USING the fit, or NO SKILL: <why> only when that search finds nothing "
     "adaptable (query shown). [full order: session start]"
 )
 
@@ -1400,14 +1400,14 @@ def _inject(text: str) -> None:
 # skip outright (the raw prompt is what just scored below the floor).
 GETAWAY_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " full-catalogue retrieval ran (top {top:.2f} < floor {floor:.2f}); "
-    "nothing cleared the floor. SKIPPING: none is pre-authorized ONLY if this turn is genuinely "
+    "nothing cleared the floor. NO SKILL: hook-cleared is pre-authorized ONLY if this turn is genuinely "
     "non-task or conversational. Real or ambiguous work → SEARCH: run search_skills with 2–3 intent+domain "
     "phrasings (the raw prompt is what scored below the floor); burden of proof is on SKIP. If a "
     "hit's fit is unclear from its description, get_skill(<name>) before ruling."
 )
 INTENT_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " the intent-margin classifier judged this turn conversational/"
-    "non-task. SKIPPING: none is pre-authorized; no search_skills needed. If the turn does hand "
+    "non-task. NO SKILL: hook-cleared is pre-authorized; no search_skills needed. If the turn does hand "
     "you work, that is the task: route it (SEARCH/USING)."
 )
 # H5 (ADR-0019): the 3rd AUTHORIZED-SKIP leg. Its signature phrase "self-referential recap lane" is
@@ -1417,7 +1417,7 @@ INTENT_SKIP_MSG = (
 SELFREF_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " this turn only asks you to explain/rephrase your own "
     "immediately-prior message — the self-referential recap lane — with no external task, so no "
-    "skill applies. SKIPPING: none is pre-authorized; no search_skills needed. Any task tail "
+    "skill applies. NO SKILL: hook-cleared is pre-authorized; no search_skills needed. Any task tail "
     "beyond the recap is a task: route it (SEARCH/USING)."
 )
 
@@ -1443,7 +1443,7 @@ _HARNESS_MSG_RE = re.compile(
     r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
 HARNESS_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " this prompt is harness-generated, not a user task — the "
-    "harness-message lane. SKIPPING: none is pre-authorized; no search_skills needed. If the "
+    "harness-message lane. NO SKILL: hook-cleared is pre-authorized; no search_skills needed. If the "
     "message itself hands you work to do, that is the task: route it (SEARCH/USING)."
 )
 
@@ -1491,7 +1491,7 @@ JEV_CHOICE_INSTRUCTIONS = ("Which of these skills, if any, is the right one to l
                            "user's latest request?")
 JEV_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " the Jev needs-a-skill gate checked the skills that could apply and found "
-    "none that does what this turn asks (best fit {fit:.2f} < {floor:.2f}). SKIPPING: none is "
+    "none that does what this turn asks (best fit {fit:.2f} < {floor:.2f}). NO SKILL: hook-cleared is "
     "pre-authorized; no search_skills needed. If the turn does hand you a substantial task in a "
     "skill's domain, route it (SEARCH/USING)."
 )
@@ -1759,7 +1759,7 @@ def _jev_serve(sid: str, prompt: str, jev, offered: list, outage: str, **ledger)
         _append_offer(sid, "jev_skip", offered, "jev_no_fit", prompt, **ledger)
         _authorized_skip_inject("jev", sid, fit=best, floor=JEV_FITS_FLOOR)
         return True
-    _inject(_ranked_mandate(rows) + _chain_hint(sid))
+    _inject(_ranked_mandate(rows, whole_shelf=True) + _chain_hint(sid))
     _append_offer(sid, "offer", [[n, round(p, 4)] for (n, _d, p) in rows], outage, prompt, **ledger)
     return True
 
@@ -2155,8 +2155,15 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
     return route if len(route) >= 2 else []
 
 
+PREVIEW_HEAD = "Preview for this task (the top few of a shelf of hundreds, not the shelf):\n"
+PREVIEW_TAIL = "None fit → run search_skills THIS reply before any NO SKILL; show the query. "
+WHOLE_SHELF_HEAD = "Whole-shelf ranking for this task (every skill you can use judged):\n"
+WHOLE_SHELF_TAIL = ("None fit → run search_skills THIS reply with terms this ranking may have missed "
+                    "(a tool, a file type, a domain name) before any NO SKILL; show the query. ")
+
+
 def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None,
-                    takes: dict | None = None) -> str:
+                    takes: dict | None = None, whole_shelf: bool = False) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
     # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
@@ -2231,12 +2238,14 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
             "invocable here — consume via get_skill):\n"
             + "\n".join(flines) +
             "\nTo use one: `USING: <name>` then get_skill(\"<name>\") and follow its SKILL.md inline.")
+    # A router turn (`whole_shelf`) ranked every skill this session can use;
+    # saying "the top few, not the shelf" there would misinform the agent. Its no-fit advice is to
+    # search with terms the ranking could have missed, not to repeat its question.
+    head, tail = ((WHOLE_SHELF_HEAD, WHOLE_SHELF_TAIL) if whole_shelf else (PREVIEW_HEAD, PREVIEW_TAIL))
     return (
-        "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | SKIPPING: none.\n"
-        "Preview for this task (the top few of a shelf of hundreds, not the shelf):\n"
-        + "\n".join(lines) + note + route_line + annex_block + foreign_block + "\n"
-        "None fit → run search_skills THIS reply before any SKIPPING; show the query. "
-        "A loosely-adaptable fit is a USING. [full order: session start]"
+        "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | NO SKILL: <why>.\n"
+        + head + "\n".join(lines) + note + route_line + annex_block + foreign_block + "\n"
+        + tail + "A loosely-adaptable fit is a USING. [full order: session start]"
     )
 
 
@@ -2538,8 +2547,8 @@ def main() -> int:
             shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
             shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
         _ext_takes = _external_takes() if (ANNEX_COMPLEMENT and _external) else None
-        _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes)
-                + _chain_hint(sid))
+        _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes,
+                                whole_shelf=bool(_jev_rows)) + _chain_hint(sid))
         # ADR-0041 telemetry — computed from the same pure helpers the renderer used, so
         # the ledger row and the injected text can never disagree.
         _ni = 1

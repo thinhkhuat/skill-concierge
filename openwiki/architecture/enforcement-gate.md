@@ -28,23 +28,26 @@ Per-harness subagent doctrine scope — whether a delegated subagent receives th
 
 The standing order it injects — the **SKILL-FIRST doctrine**:
 
-- **Line-1 token protocol.** Every task-bearing reply opens with one of
-  `USING: <skill>` | `SEARCH: <query>` | `SKIPPING: none`, written *before* anything else.
-- **The preview is not the shelf.** The shown skills are the top few of a shelf of hundreds;
-  "the previewed few don't fit" triggers **SEARCH of the full index**, queried by intent + domain
-  terms (2–3 phrasings via `extra_queries`), never by the raw user sentence. A `SEARCH:` token is a
-  promise that the `search_skills` call appears **this reply**; narrating an un-run search is a
-  FALSE REPORT.
+- **Line-1 ruling.** Every task-bearing reply opens with one of
+  `USING: <skill>` | `SEARCH: <query>` | `NO SKILL: <why>` (the skip, its reason on the same line;
+  the older `SKIPPING` token before `0.52.0`), written *before* anything else.
+- **Know which offer you hold.** A *whole-shelf ranking* (the router judged every skill you can use
+  for this turn) or a *preview* (the top few of a far larger shelf). A fitting row is a `USING:`;
+  when none fits, **SEARCH the full index** — after a whole-shelf ranking, with terms it may have
+  missed — by intent + domain terms (2–3 phrasings via `extra_queries`), never by the raw user
+  sentence. A `SEARCH:` token is a promise that the `search_skills` call appears **this reply**;
+  narrating an un-run search is a FALSE REPORT. The per-turn offer says which kind it is.
 - **Rule on the hits — the take-bar equals the skip-bar.** A loosely-adaptable fit is a `USING:`;
-  `SKIPPING: none` after a search is lawful only when the agent can state, for the top hit, what it
-  does and why the task lies outside it. Naming an unfit skill just to pass the gate is the mirror
-  failure — a FALSE REPORT.
+  `NO SKILL:` after a search states the query and, for the top hit, what it does and why the task
+  lies outside it. Naming an unfit skill just to pass the gate is the mirror failure — a FALSE
+  REPORT.
 - **A lawful skip has exactly two sources** (rule 4, the single definition every other line points
   at): a shown search whose hits are not even loosely adaptable, or an enforcer `SKILL-CHECK:` line
-  that itself states the turn is non-task / conversational / harness-generated / a self-recap. The
+  that itself states the turn is non-task / conversational / harness-generated / a self-recap, or
+  that no installed skill does what it asks (the router's no-fit leg). The
   line authorizes the ruling it states; when it says the turn may be real work it is an order to
-  SEARCH. Anything that hands the agent work is a task: a notification's content, a message's
-  content, work dispatched to another agent, a preview that arrived with candidates.
+  SEARCH; the agent writes `NO SKILL: hook-cleared — <its reason>`. Anything that hands the agent
+  work is a task: a notification's content, a message's content, work dispatched to another agent.
 - **A hit your harness does not list still counts** — whatever its `origin` or `external` marker —
   while it stays switched on for you: a hit whose `disabled_in` names your harness, or that your
   harness has switched off, is not a hit. Taken via `get_skill` + following its SKILL.md inline —
@@ -63,14 +66,16 @@ The standing order it injects — the **SKILL-FIRST doctrine**:
   payload it builds for `ledger.py`; the hook reads the loaded text from the tool's own response
   first, so the echo quotes the copy the agent actually read rather than a same-named copy from
   another root.
-- **Red Flags** — seven symptom → refutation rows for the standing rationalizations, and the
-  **library doctrine**: a skip is a *ruling on what kind of turn this is*, never a score; declaring
-  "nothing fits" with the shelf unsearched is the top-severity failure; **burden of proof is on SKIP.**
+- **Red Flags** — a four-row table of the thoughts that skip without a source (merged from the
+  earlier eight rows; "mechanical", "trivial", "I can handle it unaided" and "I'm confident none
+  fit" stay named), and **burden of proof is on the skip.**
 
 [ADR-0056](../../docs/adr/0056-doctrine-rewrite-writing-for-agents.md) (v0.47.1) rewrote the body
 under the writing-for-agents levers: it resolved the contradiction where the library section let the
 agent's own "trivial" judgment earn a no-search skip that rule 4 forbade, retired the phantom
 `find-skills` escalation target, and halved the injected body.
+[ADR-0062](../../docs/adr/0062-no-skill-ruling-and-whole-shelf-label.md) (v0.52.0) renamed the skip
+ruling to `NO SKILL: <why>`, taught the two offer kinds, and cut the body a further 28 %.
 
 > EFFORT (the "work to done-and-proven" doctrine) was **decoupled in v0.4.0** into the standalone
 > [`effort-gate`](https://github.com/thinhkhuat/effort-gate) plugin; the note no longer rides in
@@ -193,7 +198,8 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    **open** (offers) on any error. On suppress → **silent verdict leg B**.
 10. **Offer.** Keep candidates `≥ ITEM_FLOOR = 0.18` (or fall back to top-1) and inject a ranked
    SKILL-FIRST mandate: a ranked preview with relative %-share (shown for 2+ candidates) plus the
-   line-1 `USING/SEARCH/SKIPPING` instruction. Ledger band `offer`.
+   line-1 `USING/SEARCH/NO SKILL` instruction. A router turn's offer is headed "Whole-shelf ranking
+   for this task" instead of "Preview … not the shelf". Ledger band `offer`.
 
 ### The AUTHORIZED-SKIP tier (three legs, two formerly silent)
 
@@ -202,7 +208,7 @@ the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdic
 *already made*. So (default ON, `ENFORCER_AUTHORIZED_SKIP=1`) each leg now injects a one-line
 **`SKILL-CHECK:`** authorization instead of nothing ([ADR-0015](../../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md)):
 
-- **Getaway leg** keeps the burden of proof on SKIP — it authorizes `SKIPPING: none` *only if the
+- **Getaway leg** keeps the burden of proof on SKIP — it authorizes `NO SKILL: hook-cleared` *only if the
   turn is genuinely trivial*, else it orders a term-rich `search_skills` call (the raw prompt is
   what just scored below the floor) and a `get_skill` read when a hit's fit is unclear.
 - **Intent leg** flatly pre-authorizes the skip (the turn was classified conversational).
@@ -225,9 +231,9 @@ imperative verb (English or Vietnamese) appears **anywhere** in the prompt, not 
 token — the Red-Team fix for a task-tail bypass ("explain your answer and implement X"); (3) no
 new-clause connector introduces an external object. Fails toward **not** firing: a missed case
 costs one harmless forced search, a false-fire would bless real work. Default ON,
-`ENFORCER_SELFREF_SKIP=0` reverts. The doctrine's Red Flags table (below) carries a matching row
-so the agent doesn't mistake its own recap turns for a self-authorized skip on a turn that
-actually carries a task tail.
+`ENFORCER_SELFREF_SKIP=0` reverts. The doctrine's rule 4 names the recap as lawful only with the
+enforcer's `SKILL-CHECK:` line for it, so the agent doesn't mistake its own recap turns for a
+self-authorized skip on a turn that actually carries a task tail.
 
 > **Two enforcer levers are default-INERT and env-gated** — per-skill tau
 > (`ENFORCER_PER_SKILL_TAU`) and the P6 runner-up dominance collapse (`ENFORCER_DOMINANCE_RATIO`).
@@ -289,7 +295,7 @@ the ledger measures almost daily, so a rate pooled across config changes describ
 configuration; (2) an *inline* SKILL-FIRST use (the agent reads a skill's doctrine and acts
 without firing the `Skill` tool) fires no PostToolUse event, so both the ledger and any tool-call
 tracker miss it. **Real usage lives in the transcript SKILL-FIRST declaration trail** (the
-`USING`/`SEARCH`/`SKIPPING` line-1 tokens in `~/.claude/projects/**/*.jsonl`), which the
+`USING`/`SEARCH`/`NO SKILL` line-1 tokens — `SKIPPING` before `0.52.0` — in `~/.claude/projects/**/*.jsonl`), which the
 `skill-usage-audit` skill reads. Using the ledger to answer a usage question is the exact mistake
 that skill and [ADR guardrails](../../AGENTS.md) exist to stop. See
 [operations.md](../operations.md#reading-the-ledger-the-epoch-scoped-trap).

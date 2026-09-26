@@ -13,6 +13,25 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.52.0 — `NO SKILL:` ruling, whole-shelf label, shorter standing order (ADR-0062)
+
+**Starts per harness** when its plugin cache reaches `0.52.0` and a session restarts (the standing order
+is injected at session start). A **trail epoch**: ruling shares (USING / SEARCH / skip) and the false-skip
+rate reset — never pool them with v0.51.x. Retrieval, gates and the router are unchanged, so W21-W24
+(router) continue. Tuning orders carried over: `ENFORCER_ANNEX_MARGIN=0.0`, `ENFORCER_MULTI_INTENT=0`.
+
+Baseline (2026-09-26 19:05, `audit_skill_usage.py --since "2026-09-19 00:00:00"`, v0.51.x epoch, read
+with the 0.52.0 reader): skip turns 130, false 11 (8 %), search-backed 12, hook-authorized 107;
+**enforcer-run turns only: 4/123 (3 %)**. Thin: 4 events. Of the 7 false skips outside the enforcer's
+population (replies to Stop-hook feedback, where it never runs), 6 come from one session — a pattern of
+one week, not a law. 129 organic `USING`. Compare only after the ≥ 100-turn floor below.
+
+| # | Watch | Command | Trigger | Action |
+|---|-------|---------|---------|--------|
+| W25 | Doctrine effect on its own population | `audit_skill_usage.py --since "<deploy>"` → the "enforcer-run turns only" line, and organic `USING` | after ≥ 100 enforcer-run turns: false share clearly above the 3 % baseline, or organic `USING` per day clearly below the v0.51.x week | read the false-skip turns' `NO SKILL:` reasons (`--harvest`); tighten the red-flag rows that the excuses match — never restore the old length wholesale |
+| W26 | Router offers searched anyway | label corpus (`extract_turn_labels.py`): English turns with a whole-shelf offer where the agent searched although a row was then used | a large share of searches on turns whose used skill was already in the offer | the offer header or rule 1 wording is not landing; rewrite that line |
+| W27 | `NO SKILL:` form adoption | audit trail: skip rulings written as `NO SKILL:` vs the old `SKIPPING` | old form still dominant a week after every session restarted | a stale standing order in some harness — check its plugin cache version |
+
 ## v0.51.0 — the Jev skill router (ADR-0061; supersedes the v0.50.0 yes/no leg)
 
 **Deployed on Claude Code 2026-09-26 10:03 +07:** commits `0b03c88` + `179cec0` pushed; plugin cache 0.51.0

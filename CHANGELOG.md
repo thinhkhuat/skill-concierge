@@ -3,6 +3,46 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.52.0] — 2026-09-26
+
+### Changed — ADR-0062: `NO SKILL: <why>`, whole-shelf offers, a shorter standing order
+- **Why.** Asked whether the concierge is friction bolted on, the owner had the standing order and the
+  skip token reviewed. Three findings: on an English turn the router ranks the whole catalogue, yet
+  both the offer and the standing order told the agent it held "the top few … not the shelf";
+  `SKIPPING: none` read as "skipping nothing" and carried no reason; the standing order restated itself.
+- **Skip ruling.** Line 1 is `USING: <skill>` | `SEARCH: <query>` | `NO SKILL: <why>` — e.g.
+  `NO SKILL: hook-cleared — conversational turn`. Owner's choice. Every enforcer string that names the
+  token says it; the five locked `SKILL-CHECK:` signature phrases are unchanged.
+- **Offer label.** The router's offer is headed "Whole-shelf ranking for this task (every skill you can use
+  judged):" and, when nothing fits, asks for a search with terms the ranking may have missed; embedding,
+  fallback and non-English offers keep "Preview … not the shelf" (`_ranked_mandate(..., whole_shelf=)`).
+  The router is not named in agent-facing text.
+- **Standing order.** 853 → 614 injected words (−28 %): rule 1 teaches the two offer kinds; the library
+  doctrine becomes a clause of rule 4, which now also names the router's own skip ground (no installed
+  skill does what the turn asks); the red-flags table (ADR-0022) keeps four rows, with the live
+  excuses "mechanical", "trivial", "I can handle it unaided" and "I'm confident none fit" named.
+  A proposed extra skip source (skip on a whole-shelf ranking without a search) was withdrawn after
+  review: confounded evidence, and ADR-0056 rules out a new skip class.
+- **Readers.** `audit_skill_usage.py` and `extract_turn_labels.py` read `NO SKILL:` (any case, colon
+  required — prose opening "No skill…" is not a ruling), the old `SKIPPING` form, and rulings wrapped
+  in markdown (`` `NO SKILL: …` ``, `**USING: …**`). Both take a `SKILL-CHECK:` authorization only from
+  the enforcer's own output — one shared check, `_enforcer_output`: a UserPromptSubmit
+  `hook_additional_context` attachment whose text starts with the enforcer's own head. The agent's
+  text, tool results, file echoes, memory and instructions attachments, other hooks and the session-start
+  standing order can all quote the line; none of them counts, so copying a hook line cannot authorize a
+  skip. Re-measured 2026-09-26 19:05 against the 0.51.1 reader: the last 7 days are unchanged (130 skip
+  turns, 11 false, 107 authorized); since 2026-07-04 hook-authorized goes 270 → 265 while 25 more
+  markdown-wrapped or lower-case rulings are read (898 → 923 skip turns). A new report line scopes the
+  verdict to turns where the enforcer ran — its offer, consult route or `SKILL-CHECK:` line (baseline
+  4/123, 3 %; only 4 events): 7 of the 11 recent false skips were replies to Stop-hook feedback, 6 of
+  them in one session. `extract_turn_labels.py --help` now prints usage instead of rewriting the private
+  corpus.
+- **Tests.** `tests/test_ruling_parsers.py` (both forms, any case, markdown-wrapped, prose not a ruling,
+  no authorization from quoted lines — edited files, memory, PostToolUse, another hook, SessionStart,
+  `isMeta` — and enforcer-run scoping incl. the consult route); router-label assertions in
+  `tests/test_jev_router.py`, now independent of an exported `ENFORCER_JEV_ROUTER`; a doctrine pin, over
+  every string literal in the enforcer, that the old token is gone from agent-facing text.
+
 ## [0.51.1] — 2026-09-26
 
 ### Fixed — deterministic routes match whole words only

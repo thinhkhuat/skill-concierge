@@ -8,6 +8,8 @@
 > **Scope:** the *Enforce* organ of skill-concierge (whether the agent uses a skill), not retrieval.
 > **Role-model:** the `caveman` plugin — a proven, battle-tested governance plugin (tens of thousands
 > of GitHub stars) whose mechanisms we anchor to. File cites below are real, read at the source.
+> **History note (2026-09-26):** the standing order quoted in §10 is the v0.3.0 text. The live text is
+> `hooks/doctrine/skill-first.md`; since v0.52.0 its skip ruling is `NO SKILL: <why>` (ADR-0062).
 
 ---
 

@@ -26,7 +26,7 @@ invocations" is the exact failure this skill exists to stop.
 |---|---|---|---|
 | invocation-ledger | `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` | gate compliance (offer→take; `auto`/`manual`/`search`) | gate firing only — **NOT usage** |
 | skill-usage-tracker | transcripts → `~/.claude/audits/skill-usage-stats/` | usage frequency (Skill tool + `/slash`) | how often each skill actually ran |
-| **SKILL-FIRST trail** | assistant text in `~/.claude/projects/**/*.jsonl` | agent KNEW + chose a skill (`USING`/`SEARCH`/`SKIPPING` declarations) | **the operator's metric** |
+| **SKILL-FIRST trail** | assistant text in `~/.claude/projects/**/*.jsonl` | agent KNEW + chose a skill (`USING`/`SEARCH`/`NO SKILL` declarations; `SKIPPING` before `0.52.0` — both read) | **the operator's metric** |
 
 Inline SKILL-FIRST use (declare `USING: <skill>` → read its `SKILL.md` → execute) fires **no Skill
 tool**, so the ledger AND the usage-tracker both miss it. The declaration trail is the proxy that
@@ -39,11 +39,18 @@ python3 scripts/audit_skill_usage.py --since "<ship/commit time, e.g. 2026-06-29
 ```
 
 Outputs the scoped post-change counts (Skill-tool, `/slash`, and the `USING`/`SEARCH`/`SKIPPING`
-trail), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a `SKIPPING`
+trail), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a skip ruling (`NO SKILL:`, or the older `SKIPPING`)
 declared with NO same-turn `search_skills` call (the doctrine's hardest rule). A turn carrying the
-enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enforcer's four
-authorized-skip legs — getaway, intent_skip, selfref, and since ADR-0054 the harness-message
-lane — see `hooks/scripts/enforcer.py`) is a **lawful, hook-pre-authorized skip**: it is
+enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enforcer's five
+authorized-skip legs — getaway, intent_skip, selfref, the harness-message lane (ADR-0054) and the
+router's no-fit leg (ADR-0061) — see `hooks/scripts/enforcer.py`) is a **lawful, hook-pre-authorized
+skip**. Since `0.52.0` the marker counts only from the enforcer's own output (`_enforcer_output`: a
+UserPromptSubmit `hook_additional_context` attachment whose text starts with `SKILL-FIRST`,
+`SKILL-CHECK:` or `CONSULT-ROUTE`) — never from the agent's own text, a tool result, a file echo, a
+memory or instructions attachment, another hook or the session-start standing order, so a copied line
+cannot authorize a skip (ADR-0062). The report adds an **enforcer-run turns only** line — the
+same verdict over turns where the enforcer's offer, consult route or `SKILL-CHECK:` line reached the agent — the
+population the doctrine actually governs (Stop-hook feedback and subagent prompts get no offer). Such a turn is
 excluded from the false-skip count and tallied separately as `authorized_skip`, reported alongside
 the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.49.0`
 ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §5), a `USING:`

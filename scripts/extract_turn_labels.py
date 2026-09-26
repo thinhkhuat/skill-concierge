@@ -58,7 +58,18 @@ LEG_BY_SIG = {"full-catalogue retrieval ran": "getaway", "intent-margin classifi
               "Jev needs-a-skill gate": "jev"}
 assert set(LEG_BY_SIG) == set(A._AUTHORIZED_SIGNATURES), "signature drift vs audit script"
 
-RULING_RE = re.compile(r"^\W*(USING|SEARCH|SKIPPING)\b:?\s*(.*)$", re.I)
+# Line-1 rulings. The skip ruling is `NO SKILL: <why>` since v0.52.0 (ADR-0062) — any case, colon
+# required, so prose opening "No skill…" is not a ruling — and the old `SKIPPING` form still
+# reads. Both are reported as "SKIPPING", so label rules and older corpus rows stay comparable.
+RULING_RE = re.compile(r"^\W*(?:(?i:(USING|SEARCH|SKIPPING))\b:?|(?i:(NO SKILL)):)\s*(.*)$")
+
+
+def ruling_of(line):
+    """-> (kind, rest) for a ruling line, kind in USING / SEARCH / SKIPPING; None otherwise."""
+    m = RULING_RE.match(line)
+    if not m:
+        return None
+    return ("SKIPPING" if m.group(2) else m.group(1).upper()), m.group(3)
 VN_CHARS = set("ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ")
 SKILL_MD_RE = re.compile(r"([A-Za-z0-9][\w.\-]*)/(?:SKILL\.md\b|references/)")
 BASE_DIR_RE = re.compile(r"Base directory for this skill:\s*(\S+)")
@@ -70,7 +81,7 @@ CORRECTION_RES = [
     ("you-skipped", re.compile(r"\byou (?:just )?skipp?ed\b", re.I)),
     ("use-the-skill", re.compile(r"\b(?:use|invoke|load|run|apply) (?:the|a|that|this|your|my) [\w:\-]*\s*skills?\b", re.I)),
     ("why-no-skill", re.compile(r"\bwhy (?:didn'?t|did not|don'?t|no|not) (?:you )?(?:use|invoke|load|pick|search)\b", re.I)),
-    ("skip-doctrine", re.compile(r"\bfalse[- ]?skip|\bno search,? no skip|\bskill-first\b|\bSKIPPING\b", re.I)),
+    ("skip-doctrine", re.compile(r"\bfalse[- ]?skip|\bno search,? no skip|\bskill-first\b|\bSKIPPING\b|(?-i:NO SKILL:)", re.I)),
     ("dodge", re.compile(r"\bdodg(?:e|ed|ing)\b", re.I)),
     ("vn-dung-skill", re.compile(r"(?:dùng|gọi|xài|sử dụng) (?:cái |con )?skill|sao (?:không|ko|k) (?:dùng|gọi)", re.I)),
 ]
@@ -230,10 +241,10 @@ def scan_file(fp, meta_kw):
             if cur is None:
                 continue
             if typ == "attachment":
-                att = rec.get("attachment") or {}
-                if att.get("hookEvent") != "UserPromptSubmit" or cur["n_assistant"]:
+                own = A._enforcer_output(rec)   # the enforcer's own output only, as the audit reads it
+                if not own or cur["n_assistant"]:
                     continue
-                body = json.dumps(att.get("content"), ensure_ascii=False)
+                body = "\n".join(own)
                 if A.AUTHORIZED_SKIP_MARKER in body:
                     cur["legs"] |= {leg for s, leg in LEG_BY_SIG.items() if s in body}
                 if "SKILL-FIRST" in body:
@@ -279,22 +290,22 @@ def rule_turn(tn, loaded_before):
     """Ruling fields + candidate label for one genuine human turn. Every branch names its rule."""
     texts = tn["texts"]
     l1 = first_line(texts[0]) if texts else ""
-    m = RULING_RE.match(l1)
-    ruling = m.group(1).upper() if m else ("NONE" if texts else "NO_REPLY")
-    ruling_names = names_in(m.group(2)) if (m and ruling == "USING") else []
+    m = ruling_of(l1)
+    ruling = m[0] if m else ("NONE" if texts else "NO_REPLY")
+    ruling_names = names_in(m[1]) if (m and ruling == "USING") else []
     final, final_names = ruling, ruling_names
     if ruling == "SEARCH":   # final = first USING/SKIPPING line after the SEARCH line, anywhere in the turn
         final, final_names, seen = "SEARCH_ONLY", [], False
         for tx in texts:
             for ln in tx.splitlines():
-                mm = RULING_RE.match(ln.strip())
+                mm = ruling_of(ln.strip())
                 if not mm:
                     continue
-                k = mm.group(1).upper()
+                k = mm[0]
                 if k == "SEARCH":
                     seen = True
                 elif seen:
-                    final, final_names = k, (names_in(mm.group(2)) if k == "USING" else [])
+                    final, final_names = k, (names_in(mm[1]) if k == "USING" else [])
                     break
             if final != "SEARCH_ONLY":
                 break
@@ -483,4 +494,9 @@ def stats():
 
 
 if __name__ == "__main__":
-    stats() if "--stats" in sys.argv else extract()
+    args = sys.argv[1:]
+    if args not in ([], ["--stats"]):
+        # Anything else prints usage and stops: a bare run rewrites the private corpus.
+        print(__doc__.strip().splitlines()[-1].strip() + "\n(no argument: extract; --stats: summary)")
+        sys.exit(0 if args in (["-h"], ["--help"]) else 2)
+    stats() if args else extract()

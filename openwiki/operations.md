@@ -104,7 +104,7 @@ remember the ledger measures **gate compliance only** — for real *usage* use t
 ([enforcement-gate.md](architecture/enforcement-gate.md#ledger--usage-a-hard-line)). Its script
 (`skills/skill-usage-audit/scripts/audit_skill_usage.py`) also takes `--harvest [PATH]` (v0.14.0,
 H1, [ADR-0021](../docs/adr/0021-rationalization-harvest-loop.md)): writes the deduped, secret-
-scrubbed corpus of verbatim false-skip `SKIPPING:` excuses to a gitignored sink (default
+scrubbed corpus of verbatim false-skip excuses (`NO SKILL:` clauses, and `SKIPPING:` from before v0.52.0) to a gitignored sink (default
 `./logs/skill-rationalizations.txt`), to feed future doctrine authoring — never counts a lawful
 hook-authorized skip as a rationalization.
 

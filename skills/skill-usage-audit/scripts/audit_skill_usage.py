@@ -49,9 +49,14 @@ DEFAULT_META = ["skill-concierge", "enforcer", "gate floor", "getaway_floor",
                 "max_short_words", "dogfood", "threshold", "impact analysis",
                 "skill-usage-audit", "verify-as-claimed"]
 
-_USING = re.compile(r'(?im)^\s*USING:?\s+([a-z0-9][a-z0-9:_\-]*)')
-_SEARCH = re.compile(r'(?im)^\s*SEARCH:?\s+')
-_SKIPPING = re.compile(r'(?im)^\s*SKIPPING:?\s+')
+# A ruling may sit inside markdown on line 1 — `USING: x`, **SEARCH: y**, > NO SKILL: z.
+_USING = re.compile(r'(?im)^[\s`*>]*USING:?\s+([a-z0-9][a-z0-9:_\-]*)')
+_SEARCH = re.compile(r'(?im)^[\s`*>]*SEARCH:?\s+')
+# The skip ruling. `NO SKILL: <why>` since v0.52.0 (ADR-0062); the old `SKIPPING: none` still
+# reads, so transcripts from before the rename stay comparable. The new form needs its colon —
+# prose opening "No skill applies…" is not a ruling; `No skill: <why>` in any case is.
+_SKIPPING = re.compile(r'(?im)^[\s`*>]*(?:SKIPPING:?\s+|NO SKILL:)')
+_NO_SKILL_ANY_CASE = re.compile(r'(?i)NO SKILL:')   # raw-line prefilter for _SKIPPING's new form
 # Doctrine rule 3 (v0.49.0): a re-rule line — the reply switching away from a skill whose loaded
 # body excludes the task — ends `(re-rule: <old>)`. The old skill's USING is retracted, not uptake.
 _RERULE = re.compile(r'(?im)^\s*(?:USING|SEARCH):?\s+[^\n]*\(re-rule:\s*([a-z0-9][a-z0-9:_\-]*)\s*\)')
@@ -63,9 +68,31 @@ _CMD = re.compile(r"<command-name>\s*(/?[^<]+?)\s*</command-name>")
 _SEARCH_SLUGS = {"skill-search", "skill-concierge-skill-search"}
 # Cross-file contract with hooks/scripts/enforcer.py (Phase 1) — keep in sync. The enforcer
 # injects this literal marker on its two silent verdict legs (getaway skip, intent skip) to
-# pre-authorize a `SKIPPING: none`; a turn carrying it is a lawful hook-authorized skip, not
-# a false skip.
+# pre-authorize a skip ruling; a turn carrying it is a lawful hook-authorized skip, not a false
+# skip. Only the enforcer's own hook output may carry it (see _enforcer_output).
 AUTHORIZED_SKIP_MARKER = "SKILL-CHECK:"
+
+
+# How every enforcer output string begins (hooks/scripts/enforcer.py: MANDATE / _ranked_mandate,
+# the *_SKIP_MSG legs, CONSULT_MANDATE). Keep in sync with those constants.
+_ENFORCER_HEADS = ("SKILL-FIRST", AUTHORIZED_SKIP_MARKER, "CONSULT-ROUTE")
+
+
+def _enforcer_output(rec):
+    """The strings the enforcer itself injected in this record, or [] — its UserPromptSubmit
+    hook output, as the harness stores it: an `attachment` of type `hook_additional_context`
+    whose content string starts with one of _ENFORCER_HEADS. Nothing else counts: not the agent's
+    text, a tool result, a typed prompt, another hook's output (file echoes, memory recalls), an
+    instructions/memory/@-file attachment or the SessionStart standing order — any of those can
+    quote an authorization line, and counting it would let an agent authorize itself."""
+    a = rec.get("attachment")
+    if rec.get("type") != "attachment" or not isinstance(a, dict):
+        return []
+    if a.get("type") != "hook_additional_context" or a.get("hookEvent") != "UserPromptSubmit":
+        return []
+    c = a.get("content")
+    return [x for x in (c if isinstance(c, list) else [c])
+            if isinstance(x, str) and x.lstrip().startswith(_ENFORCER_HEADS)]
 
 # ── H3 subagent/dispatch scoping (ADR-0020) ───────────────────────────────────
 # Default-ON, one-var revert (mirrors ENFORCER_AUTHORIZED_SKIP / SKILL_BODY_TRIGGERS).
@@ -284,7 +311,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     dispatch_sessions = set()  # H3: team teammate / dispatched sessions (own sid), excluded when ON
 
     def _new_turn(active):
-        return {"saw_search": False, "saw_skip": False, "saw_marker": False,
+        return {"saw_search": False, "saw_skip": False, "saw_marker": False, "saw_hook": False,
                 "active": active, "skip_text": "", "sid": None}
 
     for fp in glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True):
@@ -310,7 +337,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             if is_user and not is_list_content:  # genuine user prompt -> new turn
                 if cur["active"] and cur["saw_skip"]:
                     turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
-                                  "saw_marker": cur["saw_marker"], "skip_text": cur["skip_text"],
+                                  "saw_marker": cur["saw_marker"], "saw_hook": cur["saw_hook"], "skip_text": cur["skip_text"],
                                   "sid": cur["sid"], "sub": is_sub})
                 cur = _new_turn(True)
             # Genuine user-prompt lines must always reach sess_text below for meta
@@ -318,19 +345,28 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             # (e.g. "review the skill-concierge gate" has no USING/SEARCH/SKIPPING token).
             has_marker = ('"Skill"' in line or "<command-name>" in line or "search_skills" in line
                           or "USING" in line or "SEARCH" in line or "SKIPPING" in line
-                          or AUTHORIZED_SKIP_MARKER in line)
+                          or "NO SKILL:" in line or AUTHORIZED_SKIP_MARKER in line
+                          # Widened only on the record kinds that need it: a line admitted here
+                          # also feeds a user record's text to the meta classifier below.
+                          or ('"assistant"' in line and _NO_SKILL_ANY_CASE.search(line))
+                          or ('"attachment"' in line and ("SKILL-FIRST" in line or "CONSULT-ROUTE" in line)))
             if not (has_marker or (is_user and not is_list_content)):
                 continue
-            # Count ONLY the enforcer's own authorization line (see _is_authorized_skip_line):
-            # anchored on its three message signatures, not the bare marker — the marker literal
-            # also appears in the skill-first.md doctrine and in prose discussing the feature.
-            if _is_authorized_skip_line(line):
-                cur["saw_marker"] = True
+            # Count ONLY the enforcer's own authorization line: from its own hook output
+            # (_enforcer_output), anchored on its message signatures (_is_authorized_skip_line) —
+            # the marker literal also appears in the doctrine, in files and in prose about it.
             try:
                 rec = json.loads(line.strip())
             except json.JSONDecodeError as exc:
                 print(f"warning: invalid JSON record in {fp}: {exc}", file=sys.stderr)
                 continue
+            own = _enforcer_output(rec)
+            if any(_is_authorized_skip_line(x) for x in own):
+                cur["saw_marker"] = True
+            # The enforcer ran this turn: its offer, consult route or SKILL-CHECK: line reached the
+            # agent. Turns without it (Stop-hook feedback, subagent prompts) measure other hooks.
+            if own:
+                cur["saw_hook"] = True
             if since is not None:
                 e = ts_epoch(rec)
                 if e is None or e < since:
@@ -398,12 +434,13 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                             cur["skip_text"] = txt[ls: le if le != -1 else len(txt)].strip()
         if cur["active"] and cur["saw_skip"]:  # flush the file's last turn
             turns.append({"saw_search": cur["saw_search"], "saw_skip": True,
-                          "saw_marker": cur["saw_marker"], "skip_text": cur["skip_text"],
+                          "saw_marker": cur["saw_marker"], "saw_hook": cur["saw_hook"], "skip_text": cur["skip_text"],
                           "sid": cur["sid"], "sub": is_sub})
         if file_dispatch and file_sid:
             dispatch_sessions.add(file_sid)
 
     false_skip, lawful_skip, authorized_skip = _skip_verdicts(turns)
+    enforcer_verdicts = _skip_verdicts([t for t in turns if t.get("saw_hook")])
 
     # Exclude builtin slashes (/clear, /compact, /plugin, ...) by catalogue membership so
     # they don't inflate "skill usage" — mirrors the skill-usage-tracker's known-skill filter.
@@ -418,6 +455,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         "skill_tool": skill_tool, "slash": slash_skill, "using": +using, "rerules": rerules,
         "n_search": n_search, "n_skip": n_skip,
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
+        "enforcer_verdicts": enforcer_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
         "meta_sessions": meta_sessions, "dispatch_sessions": dispatch_sessions,
         "turns": turns, "subagent_stop": subagent_stop,
@@ -508,11 +546,36 @@ def main():
         _tally(["sk-a"], [], "S", _u, _raw, _rr)
         _tally(["sk-b"], ["sk-a"], "S", _u, _raw, _rr)
         rerule_ok = rerule_ok and +_u == Counter({"sk-b": 1})   # same session: undone
-        ok = verdict_ok and harvest_ok and revert_ok and selfref_ok and rerule_ok
+        # Both skip forms are rulings; prose opening "No skill" is not; a hook authorization counts
+        # only from a hook-written record.
+        auth = AUTHORIZED_SKIP_MARKER + " the intent-margin classifier judged this turn conversational."
+
+        def _att(event, text, kind="hook_additional_context"):
+            return {"type": "attachment", "attachment": {"type": kind, "hookEvent": event, "content": [text]}}
+        ruling_ok = (
+            bool(_SKIPPING.search("NO SKILL: hook-cleared — conversational turn"))
+            and bool(_SKIPPING.search("intro\nSKIPPING: none - trivial"))
+            and bool(_SKIPPING.search("skipping: none"))                   # old form, any case
+            and not _SKIPPING.search("No skill applies here, so I answer directly.")
+            and not _SKIPPING.search("NO SKILL applies")                  # no colon -> not a ruling
+            and bool(_SKIPPING.search("No skill: trivial"))               # any case, with colon
+            and bool(_SKIPPING.search("`NO SKILL: nothing fits`"))         # backtick-wrapped
+            and bool(_USING.search("**USING: ak-git**"))
+            and _enforcer_output(_att("UserPromptSubmit", auth)) == [auth]
+            and _enforcer_output(_att("UserPromptSubmit", "CONSULT-ROUTE · x")) == ["CONSULT-ROUTE · x"]
+            and not _enforcer_output(_att("PostToolUse", auth))           # a file-echo hook quoting it
+            and not _enforcer_output(_att("UserPromptSubmit", "memory: " + auth))  # another hook quoting it
+            and not _enforcer_output(_att("UserPromptSubmit", auth, kind="edited_text_file"))
+            and not _enforcer_output(_att("UserPromptSubmit", auth, kind="nested_memory"))
+            and not _enforcer_output({"type": "user", "isMeta": True, "message": {"content": auth}})
+            and not _enforcer_output({"type": "assistant", "message": {"content": auth}}))
+        ok = verdict_ok and harvest_ok and revert_ok and selfref_ok and rerule_ok and ruling_ok
         print("audit --selftest",
-              "OK: false-SKIPPING verdict + H1 harvest filter + SELFREF parity + re-rule counting" if ok
+              "OK: false-SKIPPING verdict + H1 harvest filter + SELFREF parity + re-rule counting"
+              " + both skip-ruling forms + enforcer-output-only authorization" if ok
               else f"FAIL verdict={verdict_ok}(fs={fs} ls={ls} az={az}) "
-                   f"harvest={harvest_ok} revert={revert_ok} selfref={selfref_ok} rerule={rerule_ok}")
+                   f"harvest={harvest_ok} revert={revert_ok} selfref={selfref_ok} rerule={rerule_ok} "
+                   f"ruling={ruling_ok}")
         raise SystemExit(0 if ok else 1)
     since = parse_since(args.since)
     r = audit(since, args.meta_keyword)
@@ -543,7 +606,7 @@ def main():
     print(f"  Skill-tool: {sum(st.values())}   /slash: {sum(sl.values())}   combined: {tot_counter}")
     print("INLINE signal (the operator's metric — invisible to both counters):")
     print(f"  USING <skill> declarations: {sum(us.values())}  (distinct {len(us)})")
-    print(f"  SEARCH declarations: {r['n_search']}   SKIPPING declarations: {r['n_skip']}")
+    print(f"  SEARCH declarations: {r['n_search']}   skip rulings (NO SKILL: / SKIPPING): {r['n_skip']}")
     print(f"  re-rules: {sum(r['rerules'].values())}  (a USING switched away from under doctrine "
           "rule 3 — excluded from USING above)")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
@@ -552,11 +615,15 @@ def main():
     skip_turns = fs + ls + az
     print("\nFALSE-SKIPPING (doctrine's hardest rule — 'no search, no skip'):")
     if skip_turns:
-        print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  declared SKIPPING with NO search_skills "
+        print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  ruled a skip with NO search_skills "
               f"call in the same turn   (lawful, search-backed skips: {ls}; "
               f"hook-authorized skips: {az})")
     else:
-        print("  no SKIPPING turns in window")
+        print("  no skip-ruling turns in window")
+    efs, els, eaz = r["enforcer_verdicts"]
+    if efs + els + eaz:
+        print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "
+              f"(lawful {els}; hook-authorized {eaz}) — the doctrine's own population")
     print("  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")
 
     meta = r["meta_sessions"]
