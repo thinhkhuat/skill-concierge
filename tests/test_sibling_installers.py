@@ -326,6 +326,8 @@ def test_apostrophe_and_double_quote_in_root_path(tmp_path):
                         env=env, capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "SyntaxError" not in r.stderr, r.stderr
+    # An unquoted heredoc lets bash run the backticks inside the embedded Python's comments.
+    assert "command not found" not in r.stderr, r.stderr
 
     mcp = json.loads((home / ".commandcode" / "mcp.json").read_text())
     assert mcp["mcpServers"]["skill-search"]["command"] == f"{root}/bin/skill-search-mcp"
