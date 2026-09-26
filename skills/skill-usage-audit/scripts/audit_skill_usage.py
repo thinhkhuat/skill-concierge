@@ -67,33 +67,39 @@ _CONTINUING = re.compile(r'(?im)' + _LEAD.format(w='USING')
 # "(instead of a continuation)" — or names a new task or new work, as an agent obeying the red-flags
 # row writes, is a fresh ruling. A negated new task ("not a new task", "isn't really new work") and a
 # negation elsewhere ("same task, no new search — continuing") are the doctrine's own justification.
-_NEGATED_WORD = re.compile(r"\b(?:not|no|never)\s+(?:longer\s+|really\s+)?(?:a\s+|an\s+)?continu"
-                           r"|n[’']t\s+(?:\w+\s+)?continu"
+# Only an adverb (or "be") may stand between the negator and the word: "won't stop continuing" and
+# "didn't stop, continuing" keep the continuation.
+_ADVERBS = r"(?:(?:longer|really|actually|yet|strictly|quite|be)\s+){0,2}"
+_NEGATED_WORD = re.compile(r"(?:\b(?:not|no|never)\s+|n[’']t\s+)" + _ADVERBS + r"(?:a\s+|an\s+)?continu"
                            r"|\b(?:instead\s+of|rather\s+than|without)\s+(?:a\s+|an\s+)?continu", re.I)
-_NEW_TASK = re.compile(r"(\b(?:not|no|never|\w+n[’']t)\s+(?:\w+\s+)?(?:a\s+|an\s+)?)?\bnew\s+(?:task|work)\b",
-                       re.I)
+# "no need for a new task", "not a brand new task" and "new task? no" negate the new task.
+_NEW_TASK = re.compile(r"(\b(?:not|no|never|\w+n[’']t)\s+(?:\w+\s+){0,2}(?:a\s+|an\s+)?)?\bnew\s+(?:task|work)\b"
+                       r"(\s*\?\s*(?:no|nope)\b)?", re.I)
 
 
 def _negated(note):
     """True when a continuation note makes the ruling a fresh one (see `_NEGATED_WORD`)."""
-    return bool(_NEGATED_WORD.search(note)) or any(not m.group(1) for m in _NEW_TASK.finditer(note))
+    return bool(_NEGATED_WORD.search(note)) or any(not (m.group(1) or m.group(2)) for m in _NEW_TASK.finditer(note))
 _FILLER = {"then", "and", "also", "plus", "with", "for", "name", "skill"}
 _SKILL_NAME = re.compile(r'[a-z0-9][a-z0-9:_\-]*', re.I)
 STALE_TURNS = 5   # a continuation whose skill was last used more turns ago than this is likelier new work
 
 
-def _continued_names(txt, known=()):
+def _continued_names(txt, known=(), catalogue=()):
     """The skill names an assistant text continues, in order, without repeats. The first part
     names its skill in its first word ("ak-cook for the build"). A later part names one when it is a
-    single word after filler ("then study") or opens with a skill in `known` ("+ ak-git for the
-    commit"), so prose after a comma ("then re-run the tests") is not read."""
+    single word after filler ("then study"), or opens with a skill used this session (`known`) or a
+    hyphenated skill in `catalogue` ("+ ak-git for the commit"). So prose after a comma ("then
+    re-run the tests", "then run the tests") is not read, even where a skill is named `run`."""
     out = []
     for grp, note in _CONTINUING.findall(txt):
         if _negated(note):
             continue
         for i, part in enumerate(re.split(r"\s*(?:\+|,|&|\band\b)\s*", grp)):
             words = [w.strip("`*") for w in part.split() if w.strip("`*").lower() not in _FILLER]
-            if not words or (i and len(words) > 1 and norm(words[0]) not in known):
+            first = norm(words[0]) if words else None
+            if not words or (i and len(words) > 1 and first not in known
+                             and not ("-" in first and first in catalogue)):
                 continue
             m = _SKILL_NAME.match(words[0])   # anchored: the quoted `<name>` placeholder never matches
             n = norm(m.group(0)) if m else None
@@ -148,6 +154,17 @@ def _prompt_text(rec):
     if isinstance(c, list) and c and all(isinstance(b, dict) and b.get("type") in ("text", "image") for b in c):
         return " ".join(b.get("text", "") for b in c if b.get("type") == "text")
     return None
+
+
+def _from_program(rec):
+    """A program's prompt: the harness's fields name a program (a system prompt, or an SDK prompt from
+    a program entrypoint `sdk-…` — the field rule `_hands_over_work` applies), and the text is
+    prompt-shaped, i.e. work had a person sent it. The harness's own notifications and messages in an
+    SDK-launched session carry the same fields but are not a program's prompt."""
+    source = rec.get("promptSource")
+    if not (source == "system" or (source == "sdk" and str(rec.get("entrypoint") or "").startswith("sdk-"))):
+        return False
+    return _hands_over_work({k: v for k, v in rec.items() if k not in ("promptSource", "entrypoint", "origin")})
 
 
 def _hands_over_work(rec):
@@ -349,13 +366,18 @@ def _tally(used, retracted, sid, using, sess_raw, rerules):
     return undone
 
 
+_NOT_INSTALLED = {"tests", "fixtures", "marketplaces"}   # test fixtures, marketplace source clones
+
+
 def build_catalogue():
-    """Every SKILL.md-backed skill name (normalized) — used to exclude builtin slashes
+    """Every installed SKILL.md-backed skill name (normalized) — used to exclude builtin slashes
     (/clear, /compact, /plugin, ...) from the user channel so they don't inflate usage."""
     cat = set()
     for base in (os.path.join(os.path.expanduser("~"), ".claude", "skills"),
                  os.path.join(os.path.expanduser("~"), ".claude", "plugins")):
         for sm in glob.glob(os.path.join(base, "**", "SKILL.md"), recursive=True):
+            if _NOT_INSTALLED & set(os.path.relpath(sm, base).split(os.sep)):
+                continue
             n = norm(os.path.basename(os.path.dirname(sm)))
             if n:
                 cat.add(n)
@@ -492,11 +514,30 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     turns = []  # per-turn {saw_search, saw_skip, saw_marker, skip_text, sid, sub}
     dispatch_sessions = set()  # H3: team teammate / dispatched sessions (own sid), excluded when ON
 
-    def _new_turn(active):
+    def _new_turn(active, work=False):
         return {"saw_search": False, "saw_skip": False, "saw_marker": False, "saw_hook": False,
                 "marker_at_skip": False, "hook_at_skip": False, "search_at_skip": False,
-                "cont": {}, "loads": set(), "used_before": {},
-                "active": active, "skip_text": "", "sid": None}
+                "cont": {}, "loads": set(), "used_before": {}, "work": work,
+                "active": active, "skip_text": "", "sid": None, "skip_uid": None, "skip_own": False}
+
+    turn_at = {}   # skip-ruling record uuid -> (index in turns, read from the session's own file)
+
+    def _flush_turn(turn, is_sub):
+        if not (turn["active"] and turn["saw_skip"]):
+            return
+        t = {"saw_search": turn["search_at_skip"], "saw_skip": True, "saw_marker": turn["marker_at_skip"],
+             "saw_hook": turn["hook_at_skip"], "skip_text": turn["skip_text"], "sid": turn["sid"],
+             "sub": is_sub, "work": turn["work"]}
+        uid = turn["skip_uid"]
+        if uid and uid in turn_at:
+            # A resumed session's file copies the ruling; the copy in the session's own file wins.
+            i, had_own = turn_at[uid]
+            if turn["skip_own"] and not had_own:
+                turns[i], turn_at[uid] = t, (i, True)
+            return
+        if uid:
+            turn_at[uid] = (len(turns), turn["skip_own"])
+        turns.append(t)
 
     catalogue = build_catalogue()   # a later name in a continuation must be a known skill
     for fp in sorted(glob.glob(os.path.join(PROJECTS, "**", "*.jsonl"), recursive=True)):   # fixed order
@@ -550,24 +591,23 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                 if uid in file_uuids:
                     continue
                 file_uuids.add(uid)
-            opens = role_is_user_prompt(rec, rec.get("message")) or _hands_over_work(rec)
-            # A harness record in list form (a team relay, a program's prompt, an interrupt) starts
-            # a turn that is never scored: its rulings answer the harness, not a person, and must not
-            # merge into the turn before it.
-            msg_ = rec.get("message")
+            work = _hands_over_work(rec)
+            # A string record opens a scored turn (a notification's or a message's content is a
+            # task under the standing order), unless a program sent it. A harness record in list
+            # form (a team relay, a program's prompt, an interrupt) and a program's string prompt
+            # start a turn whose skip rulings are never scored: they answer the harness, not a
+            # person, and must not merge into the turn before it.
+            string_prompt = role_is_user_prompt(rec, rec.get("message"))
+            opens = work or (string_prompt and not _from_program(rec))
             unscored = (not opens and rec.get("type") == "user" and not rec.get("isMeta")
-                        and isinstance(msg_, dict) and isinstance(msg_.get("content"), list)
                         and _prompt_text(rec) is not None)
             if opens or unscored:   # a user prompt -> new turn
                 _close_continuations(cur)
-                if cur["active"] and cur["saw_skip"]:
-                    turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
-                                  "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
-                                  "sid": cur["sid"], "sub": is_sub})
-                cur = _new_turn(opens)
-                turn_no += _hands_over_work(rec)   # the stale gap counts work turns only
+                _flush_turn(cur, is_sub)
+                cur = _new_turn(opens, work)
+                turn_no += work   # the stale gap counts work turns only
                 cur["used_before"] = dict(last_used)   # "earlier use" means before this turn
-            if not opens and not has_marker:
+            if not (opens or string_prompt) and not has_marker:
                 continue
             # Count ONLY the enforcer's own authorization line: from its own hook output
             # (_enforcer_output), anchored on its message signatures (_is_authorized_skip_line) —
@@ -634,7 +674,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                     if role == "assistant":
                         used, retracted = _declared(txt)
                         if not (subagent_stop and is_sub):
-                            for c in _continued_names(txt, catalogue | set(last_used)):
+                            for c in _continued_names(txt, last_used, catalogue):
                                 if c not in cur["cont"]:
                                     last = [t for n, t in cur["used_before"].items() if _same_skill(c, n)]
                                     gap = (turn_no - max(last)) if last else None
@@ -655,6 +695,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                             n_skip += 1
                             n_skip_new += bool(m.group("new"))
                             if not cur["saw_skip"]:
+                                cur["skip_uid"], cur["skip_own"] = rec.get("uuid"), sid == own_sid
                                 # What the agent had been told when it ruled: a SKILL-CHECK: or an offer
                                 # that arrives later in the turn (a queued notification) cannot
                                 # authorize a skip already written.
@@ -669,15 +710,13 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                 cur["skip_text"] = txt[ls: le if le != -1 else len(txt)].strip()
                             cur["saw_skip"] = True
         _close_continuations(cur)
-        if cur["active"] and cur["saw_skip"]:  # flush the file's last turn
-            turns.append({"saw_search": cur["search_at_skip"], "saw_skip": True,
-                          "saw_marker": cur["marker_at_skip"], "saw_hook": cur["hook_at_skip"], "skip_text": cur["skip_text"],
-                          "sid": cur["sid"], "sub": is_sub})
+        _flush_turn(cur, is_sub)   # the file's last turn
         if file_dispatch and file_sid:
             dispatch_sessions.add(file_sid)
 
     false_skip, lawful_skip, authorized_skip = _skip_verdicts(turns)
     enforcer_verdicts = _skip_verdicts([t for t in turns if t.get("saw_hook")])
+    work_verdicts = _skip_verdicts([t for t in turns if t.get("work")])
 
     # Exclude builtin slashes (/clear, /compact, /plugin, ...) by catalogue membership so
     # they don't inflate "skill usage" — mirrors the skill-usage-tracker's known-skill filter.
@@ -695,7 +734,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         "continuations_organic": _continuation_counts([u for u in cont_units if u[0] not in meta_sessions]),
         "continuation_units": sorted(((u, u[0] in meta_sessions) for u in cont_units), key=lambda x: x[0][1]),
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
-        "enforcer_verdicts": enforcer_verdicts,
+        "enforcer_verdicts": enforcer_verdicts, "work_verdicts": work_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
         "meta_sessions": meta_sessions, "dispatch_sessions": dispatch_sessions,
         "turns": turns, "subagent_stop": subagent_stop,
@@ -887,6 +926,10 @@ def main():
                 print(f"    {str(sid_)[:8]} {when} {name} re-read={'yes' if reread else 'no'} "
                       f"work-turns-since-last-use={gap if gap is not None else 'never'}"
                       f"{' [self/meta]' if meta else ''}")
+    wfs, wls, waz = r["work_verdicts"]
+    if skip_turns:
+        print(f"  opened by a work prompt: {wfs}/{wfs + wls + waz} false (lawful {wls}; hook-authorized {waz}) — "
+              f"the other {skip_turns - wfs - wls - waz} answer a notification, a message or another harness record")
     efs, els, eaz = r["enforcer_verdicts"]
     if efs + els + eaz:
         print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "
@@ -909,7 +952,7 @@ def main():
         print(f"  organic Skill-tool: {organic_skill}   organic USING declarations: {organic_using}")
         print("  (self/meta = work ON the audited project: dogfood/verification, not organic usage)")
 
-    top = sorted(set(st) | set(us), key=lambda n: -(st.get(n, 0) + us.get(n, 0)))[:15]
+    top = sorted(set(st) | set(us), key=lambda n: (-(st.get(n, 0) + us.get(n, 0)), n))[:15]
     print("\ntop skills (Skill-tool + USING, combined):")
     for n in top:
         print(f"  {st.get(n,0)+us.get(n,0):>4}  (tool {st.get(n,0)}, using {us.get(n,0)})  {n}")

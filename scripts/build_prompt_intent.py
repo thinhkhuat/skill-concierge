@@ -36,6 +36,7 @@ Usage: python3 scripts/build_prompt_intent.py [--dump PATH] [--min N] [--selftes
 """
 import argparse
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -130,7 +131,7 @@ def mine():
     """(prompt, label) for clear-label turns across the transcript store. A turn opens on a
     genuine user prompt and closes at the next one; the label is the agent's action between.
     Subagent transcripts are skipped (their prompts are written by the parent agent), and files are
-    read in sorted order, so `balance()` picks the same rows on every machine."""
+    read in sorted order, so the rows come out in one order for one store."""
     rows = []
     for fp in sorted(glob.glob(str(PROJECTS / "**" / "*.jsonl"), recursive=True)):
         if os.sep + "subagents" + os.sep in fp:
@@ -179,10 +180,16 @@ def mine():
     return rows
 
 
+def _spread(prompts):
+    """Prompts ordered by a hash of their text: the same order for the same prompts on any machine,
+    and spread across projects, where the file order would take the first projects by name."""
+    return sorted(prompts, key=lambda p: (hashlib.sha1(p.encode("utf-8")).hexdigest(), p))
+
+
 def balance(rows):
-    """Equal actionable/conversational via deterministic head-downsample (no RNG -> reproducible)."""
-    act = [p for p, l in rows if l == "actionable"]
-    conv = [p for p, l in rows if l == "conversational"]
+    """Equal actionable/conversational, each class downsampled by `_spread` (no RNG -> reproducible)."""
+    act = _spread([p for p, l in rows if l == "actionable"])
+    conv = _spread([p for p, l in rows if l == "conversational"])
     k = min(len(act), len(conv))
     return [(p, "actionable") for p in act[:k]] + [(p, "conversational") for p in conv[:k]]
 
@@ -263,7 +270,9 @@ def _selftest():
     heads = ("Another Claude session sent a message", "[Cross-session idle notice]", "[SYSTEM NOTIFICATION",
              "[Scheduled Task", "<task-notification>", "<teammate-message", "<cross-session-message",
              "<command-name>", "<command-message>", "## New Messages", "## Team Governance",
-             "## Turn Context", 'Team: "')   # literal, so dropping a head from _NEW_STIMULUS fails here
+             "## Turn Context", 'Team: "', "Meanwhile, Heartbeat check", "Meanwhile, reply to your human partner",
+             "Meanwhile, System health check", "Meanwhile, Component upgrades available")
+    # literal, so dropping a head from _NEW_STIMULUS fails here
     kinds = [say(h + " x") for h in heads] + [
         say("2 background agents were stopped", origin={"kind": "task-notification"})]
     for stim in kinds:
@@ -299,11 +308,19 @@ def _selftest():
                 PROJECTS, glob.glob = saved, real_glob
         assert got[0] == got[1] == [("thanks, that is all for now", "conversational"),
                                     ("fix the parser bug please", "actionable")], got
-    assert _prompt_text(say("Meanwhile, Heartbeat check. [phase=primary] ack via node x",
-                            origin={"kind": "human"}, promptSource="typed")) is None
+    for head in ("Meanwhile, Heartbeat check", "Meanwhile, reply to your human partner",
+                 "Meanwhile, System health check", "Meanwhile, Component upgrades available"):
+        assert _prompt_text(say(head + ". [phase=primary] ack via node x",
+                                origin={"kind": "human"}, promptSource="typed")) is None, head
     b = balance([("a", "actionable"), ("b", "actionable"),
                  ("c", "actionable"), ("d", "conversational")])
     assert Counter(l for _, l in b) == {"actionable": 1, "conversational": 1}, b
+    # The sample does not follow file order: the kept rows are not the first k of each class.
+    rows = [(f"fix bug number {i} in the parser", "actionable") for i in range(40)] + \
+           [(f"thanks for item {i}", "conversational") for i in range(10)]
+    kept = [p for p, l in balance(rows) if l == "actionable"]
+    assert len(kept) == 10 and kept != [p for p, _ in rows[:10]], kept
+    assert balance(rows) == balance(list(reversed(rows)))
     print("build_prompt_intent --selftest ok")
     return 0
 

@@ -51,13 +51,14 @@ else
 fi
 
 # ── 2. Configure Settings (SessionStart hooks + skills array) via Python ──
-python3 - <<EOF
+python3 - "$ROOT" "$SETTINGS_FILE" <<'PY'
 import json
 import os
+import sys
 from pathlib import Path
 
-root = "$ROOT"
-settings_path = Path("$SETTINGS_FILE")
+root = sys.argv[1]
+settings_path = Path(sys.argv[2])
 settings = {}
 if settings_path.exists():
     try:
@@ -120,15 +121,16 @@ if skills_dir not in skills_list:
 
 settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 print("  [✓] Updated settings: SessionStart hooks + extra skills path")
-EOF
+PY
 
 # ── 3. Configure MCP (User Scope) via Python ──
-python3 - <<EOF
+python3 - "$ROOT" "$MCP_FILE" <<'PY'
 import json
+import sys
 from pathlib import Path
 
-root = "$ROOT"
-mcp_path = Path("$MCP_FILE")
+root = sys.argv[1]
+mcp_path = Path(sys.argv[2])
 mcp_data = {}
 if mcp_path.exists():
     try:
@@ -154,7 +156,7 @@ servers["skill-search"] = {
 
 mcp_path.write_text(json.dumps(mcp_data, indent=2) + "\n", encoding="utf-8")
 print("  [✓] Configured user-scope MCP: skill-search")
-EOF
+PY
 
 # ── 4. Project-scope fix if inside skill-concierge repo ──
 # cmd prioritizes project .mcp.json over user mcp.json. The repo .mcp.json uses
@@ -162,12 +164,13 @@ EOF
 REPO_PROJECT_SLUG="users-thinhkhuat-in-prod-my-workbench-skill-concierge"
 LOCAL_PROJECT_DIR="$CMD_DIR/projects/$REPO_PROJECT_SLUG"
 if [ -d "$LOCAL_PROJECT_DIR" ]; then
-  python3 - <<EOF
+  python3 - "$ROOT" "$LOCAL_PROJECT_DIR/mcp.json" <<'PY'
 import json
+import sys
 from pathlib import Path
 
-root = "$ROOT"
-local_mcp = Path("$LOCAL_PROJECT_DIR/mcp.json")
+root = sys.argv[1]
+local_mcp = Path(sys.argv[2])
 data = {}
 if local_mcp.exists():
     try:
@@ -191,22 +194,23 @@ servers["skill-search"] = {
     }
 }
 local_mcp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-print("  [✓] Configured local project-override MCP: $LOCAL_PROJECT_DIR/mcp.json")
-EOF
+print(f"  [✓] Configured local project-override MCP: {local_mcp}")
+PY
 fi
 
 chmod +x "$MOD_DST" 2>/dev/null || true
 
 # ── 5. Verify (ZCode parity: adapters/zcode/install.sh §6) ──────────────────
 echo "==> verify:"
-python3 - <<PYEOF
+python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" <<'PYEOF'
 import json
+import sys
 from pathlib import Path
-root = Path("$ROOT")
+root = Path(sys.argv[1])
 mod_src = root / "adapters/commandcode/skill-concierge.mod.ts"
-mod_dst = Path("$MOD_DST")
-settings_path = Path("$SETTINGS_FILE")
-mcp_path = Path("$MCP_FILE")
+mod_dst = Path(sys.argv[2])
+settings_path = Path(sys.argv[3])
+mcp_path = Path(sys.argv[4])
 bad = False
 # 5a. Mod present and byte-identical to repo HEAD (the enforcer/ledger
 #     scripts drift check in ZCode is manual; here we ensure the shipped

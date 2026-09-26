@@ -70,9 +70,11 @@ _ver_ge() {
     exit 0}'
 }
 
-# Version + installPath OMP's registry records for skill-concierge@skill-concierge.
+# Version + installPath + scope OMP's registry records for skill-concierge@skill-concierge.
 # The registry keys plugins by '<name>@<marketplace>' and stores a LIST (one
 # record per scope) — both list and bare-dict shapes tolerated (doctor parity).
+# A \x1f field separator, not a tab: a tab is IFS whitespace, so an empty version field
+# would shift the installPath into the version on the `read` below.
 _omp_record() {
   python3 - "$OMP_PLUGINS_JSON" <<'PY'
 import json, sys
@@ -81,16 +83,17 @@ try:
     e = rec["plugins"]["skill-concierge@skill-concierge"]
     recs = e if isinstance(e, list) else [e]
     r = recs[0]
-    print(r.get("version", ""), r.get("installPath", ""), sep="\t")
+    print(r.get("version", ""), r.get("installPath", ""), r.get("scope", "user"), r.get("projectPath", ""),
+          sep="\x1f")
 except Exception:
-    print("\t", end="")
+    print("\x1f\x1f\x1f", end="")
 PY
 }
 
-# _deployed_ver PATH — the version the cache CONTENT carries (its own manifest), falling back
-# to the registry's record only when the manifest is unreadable. The registry can record a
-# version whose content came from a stale remote (marketplace update before the push), so the
-# manifest, not the record, decides "already current".
+# _deployed_ver PATH — the version the cache CONTENT carries (its own manifest); callers fall back
+# to the registry's record only when the manifest is unreadable (a missing dir included). The
+# registry can record a version whose content came from a stale remote (marketplace update before
+# the push), so the manifest, not the record, decides "already current".
 _deployed_ver() {
   python3 -c "import json,sys;print(json.load(open(sys.argv[1]+'/.claude-plugin/plugin.json'))['version'])" "$1" 2>/dev/null
 }
@@ -113,10 +116,11 @@ _is_own_checkout() {
 }
 
 # A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
-# uncommitted version change would put HEAD's content in a dir named for the new version: refuse
-# before any CLI call or write. A checkout whose git dir is renamed to `git/` (the workbench's
-# no-dot toggle) is refused too: copying it as a plain tree would ship that database and every
-# untracked file.
+# uncommitted version change (staged or not) would put HEAD's content in a dir named for the new
+# version: refuse before any CLI call or write. A checkout git cannot read (git missing, a
+# safe.directory refusal, a damaged repo) and one whose git dir is renamed to `git/` (the
+# workbench's no-dot toggle) are refused too: copying either as a plain tree would ship its
+# untracked files.
 if _is_own_checkout; then
   HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
@@ -129,17 +133,63 @@ elif [ -f "$ROOT/git/HEAD" ]; then
   echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
   echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
   exit 1
+elif [ -e "$ROOT/.git" ]; then
+  echo "!! $ROOT is a git checkout, but git cannot read it (git missing, a safe.directory refusal, or a" >&2
+  echo "   damaged repo). Copying it as a plain tree would ship every untracked file. Fix git, then re-run." >&2
+  exit 1
 fi
+
+# _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
+# interrupted copy never leaves a half-filled DIR that a later run reads as current; a failed copy
+# removes its staging dir. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which
+# skill discovery skips, and only the newest such copy is kept.
+_export_to() {
+  local dest="$1" parent base stage old
+  parent="$(dirname "$dest")"; base="$(basename "$dest")"
+  mkdir -p "$parent"
+  stage="$(mktemp -d "$parent/.staging.XXXXXX")"
+  if _is_own_checkout; then
+    if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
+      rm -rf "$stage"; echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
+    echo "    exported HEAD → $dest"
+  else
+    # A tree with no git metadata at all: copy everything except scratch dirs.
+    if ! tar -C "$ROOT" -cf - \
+        --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
+        --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
+        --exclude='.zcode' --exclude='.unlazy' \
+        --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
+        --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
+        . | tar -xf - -C "$stage"; then
+      rm -rf "$stage"; echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
+    echo "    copied the working tree (not a git checkout) → $dest"
+  fi
+  chmod 755 "$stage"   # mktemp makes it 0700; the swapped-in tree must read like the CLI's
+  if [ -e "$dest" ]; then
+    for old in "$parent/.$base.replaced-"*; do [ -e "$old" ] && rm -rf "$old"; done
+    mv "$dest" "$parent/.$base.replaced-$(date +%Y%m%d-%H%M%S)-$$"
+  fi
+  mv "$stage" "$dest"
+}
 
 DEST=""
 if [ "$MARKETPLACE" = "1" ]; then
   # ── (a) Marketplace plugin: refresh, verify the outcome, sync as fallback. ──
-  IFS=$'\t' read -r INSTALLED INSTALLED_PATH <<<"$(_omp_record)"
+  IFS=$'\x1f' read -r INSTALLED INSTALLED_PATH SCOPE PROJECT_PATH <<<"$(_omp_record)"
+  SCOPE="${SCOPE:-user}"
   PINNED="$OMP_PLUGIN_CACHE/skill-concierge___skill-concierge___$VERSION"
-  DEPLOYED="$(_deployed_ver "$INSTALLED_PATH")"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
+  DEPLOYED="$(_deployed_ver "$INSTALLED_PATH" || true)"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
 
-  if [ "$INSTALLED" = "$VERSION" ] && [ "$DEPLOYED" = "$VERSION" ] && [ -d "$INSTALLED_PATH" ] \
-     && [ -f "$INSTALLED_PATH/adapters/omp/skill-concierge.ext.ts" ]; then
+  # Current means the version and the file the MCP server needs; a lost exec bit is repaired
+  # below without a CLI call.
+  _current() {
+    [ "$INSTALLED" = "$VERSION" ] && [ "$DEPLOYED" = "$VERSION" ] && [ -d "$INSTALLED_PATH" ] \
+      && [ -f "$INSTALLED_PATH/bin/skill-search-mcp" ]
+  }
+
+  if _current; then
     echo "  [✓] Already current: OMP deploy v$INSTALLED (content v$DEPLOYED) == SSOT v$VERSION"
     DEST="$INSTALLED_PATH"
   else
@@ -150,10 +200,13 @@ if [ "$MARKETPLACE" = "1" ]; then
     if omp plugin upgrade skill-concierge@skill-concierge --scope user; then :; else
       echo "    [!] 'omp plugin upgrade' failed — falling back to checkout sync" >&2
     fi
-    IFS=$'\t' read -r INSTALLED INSTALLED_PATH <<<"$(_omp_record)"
-    DEPLOYED="$(_deployed_ver "$INSTALLED_PATH")"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
+    IFS=$'\x1f' read -r INSTALLED INSTALLED_PATH SCOPE PROJECT_PATH <<<"$(_omp_record)"
+    SCOPE="${SCOPE:-user}"
+    DEPLOYED="$(_deployed_ver "$INSTALLED_PATH" || true)"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
 
-    if [ "$INSTALLED" != "$VERSION" ] || [ "$DEPLOYED" != "$VERSION" ]; then
+    # A current version with a missing dir or launcher is repaired from this checkout too: the
+    # CLI sees nothing to update there.
+    if ! _current; then
       # ── Manual sync fallback (ZCode §2-4 parity): export HEAD → cache dir. ──
       if [ -n "$DEPLOYED" ] && ! _ver_ge "$VERSION" "$DEPLOYED"; then
         echo "!! refusing to downgrade: deployed OMP copy v$DEPLOYED is NEWER than" >&2
@@ -163,47 +216,52 @@ if [ "$MARKETPLACE" = "1" ]; then
       fi
       echo "  [•] CLI did not reach SSOT -> syncing this checkout into the OMP cache"
       DEST="$PINNED"
-      mkdir -p "$DEST"
-      if _is_own_checkout; then
-        git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
-        echo "    exported HEAD → $DEST"
-      else
-        # Non-git checkout: copy everything except VCS/scratch dirs.
-        tar -C "$ROOT" -cf - \
-            --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
-            --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
-            --exclude='.zcode' --exclude='.unlazy' \
-            --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
-            --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-            . | tar -xf - -C "$DEST"
-        echo "    copied the working tree (not a git checkout) → $DEST"
-      fi
+      _export_to "$DEST"   # staged, then swapped in: no stale files from an older tree survive
       chmod +x "$DEST/bin/"* "$DEST/setup.sh" \
                "$DEST/adapters/omp/install.sh" "$DEST/adapters/zcode/install.sh" \
                "$DEST/adapters/commandcode/install.sh" 2>/dev/null || true
       echo "    bin/ + installer exec bits ensured"
 
-      # ── Registry repoint (backup first) — OMP schema: map of LISTS. ──
-      python3 - "$OMP_PLUGINS_JSON" "$DEST" "$VERSION" <<'PY'
-import json, shutil, sys, time
+      # ── Registry repoint: only the record this run read (its scope and project). The write
+      # goes to the file a symlink points at (a dotfiles setup), keeps its permissions, and is
+      # swapped in with os.replace, so no reader ever sees half a file. If the file changes while
+      # this runs (a live OMP session writing it), the repoint stops rather than overwrite that
+      # change. The backup sits beside the registry path OMP reads; the newest five are kept. ──
+      python3 - "$OMP_PLUGINS_JSON" "$DEST" "$VERSION" "$SCOPE" "$PROJECT_PATH" <<'PY'
+import json, os, shutil, sys, time
 from pathlib import Path
-reg_path, install_path, version = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-data = json.loads(reg_path.read_text(encoding="utf-8"))
-plugins = data.get("plugins", {})
-entry = plugins.get("skill-concierge@skill-concierge")
+reg_path = Path(os.path.realpath(sys.argv[1]))
+install_path, version, scope, project = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+raw = reg_path.read_bytes()
+data = json.loads(raw.decode("utf-8"))
+entry = data.get("plugins", {}).get("skill-concierge@skill-concierge")
 if not entry:
     print("!! registry lost the skill-concierge@skill-concierge entry mid-run", file=sys.stderr)
     sys.exit(1)
 records = entry if isinstance(entry, list) else [entry]
-backup = reg_path.with_suffix(".json.bak-sc-" + time.strftime("%Y%m%d-%H%M%S"))
-shutil.copy2(reg_path, backup)
+targets = [r for r in records
+           if r.get("scope", "user") == scope and (r.get("projectPath") or "") == project] or records[:1]
 now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-for rec in records:
+for rec in targets:
     rec["version"] = version
     rec["installPath"] = install_path
     rec["lastUpdated"] = now
-reg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-print(f"    registry → v{version} (backup: {backup.name})")
+tmp_path = reg_path.with_name(reg_path.name + f".tmp-{os.getpid()}")
+tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+shutil.copymode(reg_path, tmp_path)
+if reg_path.read_bytes() != raw:
+    tmp_path.unlink()
+    print("!! installed_plugins.json changed while this ran (a live session?) — not repointed; re-run",
+          file=sys.stderr)
+    sys.exit(1)
+reg_dir = Path(sys.argv[1]).parent
+backup = reg_dir / f"installed_plugins.json.bak-omp-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+backup.write_bytes(raw)
+for old in sorted(reg_dir.glob("installed_plugins.json.bak-omp-*"))[:-5]:
+    old.unlink()
+os.replace(tmp_path, reg_path)
+where = f"scope {scope}" + (f", project {project}" if project else "")
+print(f"    registry → v{version} for {where} (backup: {backup.name})")
 PY
     else
       DEST="$INSTALLED_PATH"
@@ -280,6 +338,11 @@ print("  [✓] Appended extension entry to", config_path)
 PYEOF
 fi
 
+# ── Exec bits (self-heal on every path: a CLI-installed copy can ship without them) ──
+if [ "$MARKETPLACE" = "1" ] && [ -n "$DEST" ]; then
+  chmod +x "$DEST/bin/"* 2>/dev/null || true
+fi
+
 # ── (c) Verify wiring (ZCode §6 parity) ──────────────────────────────────────
 echo "==> verify:"
 if [ "$MARKETPLACE" = "1" ] && [ -n "$DEST" ]; then
@@ -289,8 +352,8 @@ if [ "$MARKETPLACE" = "1" ] && [ -n "$DEST" ]; then
   test -x "$DEST/bin/skill-search-mcp" && echo "    launcher executable: yes" \
     || echo "    [!] launcher not executable at $DEST/bin/skill-search-mcp" >&2
   diff -q "$ROOT/hooks/scripts/enforcer.py" "$DEST/hooks/scripts/enforcer.py" >/dev/null 2>&1 \
-    && echo "    enforcer byte-identical to repo HEAD: yes" \
-    || echo "    [!] enforcer differs from repo HEAD (deployed copy is a foreign build)" >&2
+    && echo "    enforcer byte-identical to this checkout's working tree: yes" \
+    || echo "    [!] enforcer differs from this checkout's working tree (deployed copy is a foreign build)" >&2
 fi
 if [ "$MARKETPLACE" = "1" ]; then
   if omp plugin list 2>/dev/null | grep -q "skill-concierge"; then

@@ -72,14 +72,23 @@ prompt from a program entrypoint (`sdk-…`) is not work — including the few a
 SDK app, a recorded trade-off (ADR-0071) — and neither is a team runner's inbox relay or scaffolding
 (`## New Messages`, `## Team Governance`, `## Turn Context`, `Team: "…"`) or a bot scheduler's message
 (`Meanwhile, Heartbeat check` and three siblings). A "turn" for the verdicts is every string-content user
-record plus a list-form prompt that hands over work; a list-form harness record opens a turn that is
-never scored (since `0.52.8`). A record line the store
-wrote twice is read once. Files are read in sorted order; a resumed session usually rewrites the copied
+record plus a list-form prompt that hands over work: a notification's or a message's content is a task
+under the standing order (rule 4), so its turn is scored. A list-form harness record, and a program's
+prompt in either form (a `system` or program-SDK prompt whose text would be work from a person), open a
+turn whose skip rulings are never scored (since `0.52.8`; string-form programs since ADR-0073); a
+continuation in such a turn still counts. The report adds the verdicts on turns a work prompt opened, as
+its own line: the headline is mostly harness-message turns. A record line the store
+wrote twice is read once, and a skip ruling a resumed session copied into its file counts once (the
+session's own file wins; ADR-0073). Files are read in sorted order; a resumed session usually rewrites the copied
 records' session id, so that order decides which copy of a continuation counts (when a copy keeps the
 original id, the session's own file wins). A note that negates the continuation word itself ("(not
-continuing x)", "(instead of continuing x)") or names a new task is a fresh ruling; a justification
-elsewhere in the note ("same task, no new search — continuing") still reads; the bare
-`USING <name> (continuing)` reads in capitals. Name forms of one skill
+continuing x)", "(not actually continuing)", "(instead of continuing x)") or names a new task is a fresh
+ruling; a justification elsewhere in the note ("same task, no new search — continuing", "(no need for a
+new task)", "(won't stop continuing)") still reads; the bare `USING <name> (continuing)` reads in
+capitals. A later name after a comma or `+` reads only as one word ("then study"), a skill this session
+already used, or a hyphenated installed skill ("+ ak-git for the commit"): "then run the tests" is prose
+even where a skill is named `run`. The installed-skill catalogue skips test fixtures and marketplace
+copies (ADR-0073). Name forms of one skill
 match loosely (`plugin:name` and `name`, or one name ending in `-<the other>`), which can join two
 different skills whose names nest (`ssh-doctor`, `tk-servers-ssh-doctor`); a slash command counts as
 earlier use only from the user's own prompt, not from a tool result that quotes one. The listing shows

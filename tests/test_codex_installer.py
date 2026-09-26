@@ -20,6 +20,10 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from installer_env import installer_env
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "adapters" / "codex" / "install.sh"
 ENFORCER_SRC = ROOT / "hooks" / "scripts" / "enforcer.py"
@@ -81,11 +85,20 @@ def main():
         sys.exit(2)
 
     if sub == "list":
+        if state.get("fail_list"):
+            print("error: failed to parse config.toml", file=sys.stderr)
+            sys.exit(1)
+        if state.get("nonjson_list"):
+            print("warning: a newer codex is available")
+            sys.exit(0)
         installed = []
         if state.get("plugin_installed"):
-            installed.append({"pluginId": "skill-concierge@skill-concierge", "name": "skill-concierge",
-                               "marketplaceName": "skill-concierge", "version": state["remote_version"],
-                               "installed": True, "enabled": bool(state.get("enabled", True))})
+            rec = {"pluginId": "skill-concierge@skill-concierge", "name": "skill-concierge",
+                   "marketplaceName": "skill-concierge", "version": state["remote_version"],
+                   "installed": True, "enabled": bool(state.get("enabled", True))}
+            if state.get("omit_enabled"):
+                del rec["enabled"]
+            installed.append(rec)
         print(json.dumps({"installed": installed}))
         sys.exit(0)
 
@@ -163,13 +176,7 @@ def _make_home(tmp_path, state):
 
 
 def _env(home, fakebin):
-    return dict(
-        os.environ,
-        HOME=str(home),
-        PATH=str(fakebin) + os.pathsep + os.environ.get("PATH", ""),
-        FAKE_CODEX_ENFORCER_SRC=str(ENFORCER_SRC),
-        SKILL_QDRANT_URL="http://127.0.0.1:9",   # the verify step's doctor never reaches live Qdrant
-    )
+    return installer_env(home.parent, home, fakebin, FAKE_CODEX_ENFORCER_SRC=str(ENFORCER_SRC))
 
 
 def _run(env, *extra_args):
@@ -236,7 +243,7 @@ def test_fast_path_tolerates_lexically_smaller_and_non_version_siblings(tmp_path
     stray lower-digit-width dir, and must never mistake a non-version-named staging dir
     (Codex keeps its plugin-install-<random>/ one level up; the fixture puts one here to
     prove the dirname filter) for a version. The
-    fast path calls no CLI at all, so every sibling here survives untouched no matter what
+    fast path makes no mutating CLI call, so every sibling here survives untouched no matter what
     Codex's own `add` might otherwise do to them."""
     home, fakebin = _make_home(tmp_path, {
         "marketplace_registered": True,
@@ -604,12 +611,75 @@ def test_fast_path_reports_a_disabled_plugin_without_claiming_it_loads(tmp_path)
     assert "Restart Codex" not in result.stdout
 
 
-def test_fast_path_fails_when_codex_does_not_list_the_plugin(tmp_path):
+def test_a_complete_cache_codex_does_not_list_is_added(tmp_path):
+    """Files alone do not make the fast path: a cache Codex does not list takes the refresh path,
+    whose `add` registers it, instead of failing the verify on every run."""
     home, env = _installed_once(tmp_path)
     _set_state(home, plugin_installed=False)
     result = _run(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ["plugin", "add", "skill-concierge@skill-concierge"] in [l["argv"] for l in _log_lines(home)]
+
+
+@pytest.mark.parametrize("fault, words", [("fail_list", "failed to parse config.toml"),
+                                          ("nonjson_list", "other than the expected JSON")])
+def test_a_failed_or_unreadable_listing_is_reported_as_such(tmp_path, fault, words):
+    home, env = _installed_once(tmp_path)
+    _set_state(home, **{fault: True})
+    result = _run(env)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "does not show" in result.stderr
+    assert words in result.stderr and "Traceback" not in result.stderr, result.stderr
+    assert "not installed" not in result.stderr and "does not show" not in result.stderr
+    assert [l["argv"][:2] for l in _log_lines(home)] == [["plugin", "list"]], "no mutating call"
+
+
+def test_a_record_without_an_enabled_field_counts_as_enabled(tmp_path):
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": True,
+                                          "omit_enabled": True, "remote_version": SSOT_VERSION})
+    result = _run(_env(home, fakebin))
+    assert result.returncode == 0 and "installed but disabled" not in result.stderr, result.stdout + result.stderr
+
+
+def test_an_incomplete_copy_left_after_the_add_is_replaced_and_set_aside(tmp_path):
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": True,
+                                          "remote_version": SSOT_VERSION, "add_noop": True})
+    part = _cache_root(home) / SSOT_VERSION
+    (part / ".codex-plugin").mkdir(parents=True)
+    (part / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": SSOT_VERSION}))
+    (part / "skills").mkdir()
+    result = _run(_env(home, fakebin))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (part / ".codex" / "hooks.json").is_file() and oct(part.stat().st_mode & 0o777) == oct(0o755)
+    aside = [d.name for d in _cache_root(home).iterdir() if ".replaced-" in d.name]
+    assert len(aside) == 1 and aside[0].startswith(f".{SSOT_VERSION}.replaced-"), aside
+
+
+def test_a_failed_export_leaves_no_staging_dir(tmp_path):
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": "0.0.1"})
+    tar = fakebin / "tar"
+    tar.write_text("#!/bin/sh\necho 'tar: simulated failure' >&2\nexit 1\n")
+    tar.chmod(0o755)
+    result = _run(_env(home, fakebin))
+    assert result.returncode == 1 and "failed (see above)" in result.stderr, result.stdout + result.stderr
+    assert not [d for d in _cache_root(home).iterdir() if d.name.startswith(".staging.")]
+
+
+def test_heads_two_manifests_must_agree(tmp_path):
+    repo = tmp_path / "repo"
+    _write_plugin_fixture(repo, "7.0.0")
+    (repo / ".codex-plugin").mkdir(exist_ok=True)
+    (repo / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": "6.9.0"}))
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+                   cwd=repo, check=True)
+    home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                          "remote_version": "1.0.0"})
+    result = _run(_env(home, fakebin), "--root", str(repo))
+    assert result.returncode == 1 and "HEAD's .codex-plugin/plugin.json carries v6.9.0" in result.stderr, \
+        result.stdout + result.stderr
+    assert _log_lines(home) == []
 
 
 def test_an_add_that_installs_nothing_exits_nonzero(tmp_path):
@@ -647,6 +717,8 @@ def test_a_symlinked_root_still_exports_head(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".claude-plugin").mkdir(parents=True)
     (repo / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "7.0.0"}))
+    (repo / ".codex-plugin").mkdir()
+    (repo / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": "7.0.0"}))
     (repo / "bin").mkdir()
     (repo / "bin" / "skill-search-mcp").write_text("#!/bin/sh\n")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)

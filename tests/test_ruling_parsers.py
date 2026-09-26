@@ -434,7 +434,7 @@ def test_the_harness_fields_decide_before_the_text():
     assert [A._hands_over_work(r) for r in not_work] == [False] * len(not_work)
 
 
-def test_a_team_relay_in_list_form_opens_no_turn(tmp_path, monkeypatch):
+def test_a_team_relay_in_list_form_opens_an_unscored_turn(tmp_path, monkeypatch):
     r = _audit(tmp_path, monkeypatch, [
         _user("turn one"), _say("NO SKILL: nothing fits"),
         _listed({"type": "text", "text": "## New Messages – From lead [message] do x"}),
@@ -513,3 +513,118 @@ def test_a_typed_list_prompt_opens_a_scored_turn(tmp_path, monkeypatch):
         _listed({"type": "text", "text": "fix the parser please"}), _say("NO SKILL: nothing fits"),
     ])
     assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
+
+
+def test_a_later_part_reads_a_session_skill_or_a_hyphenated_catalogue_name(tmp_path, monkeypatch):
+    """Prose after a comma is not a skill even where a skill is named `run`: a later multi-word part
+    counts when its first word is a skill used this session, or a hyphenated installed skill."""
+    assert A._continued_names("USING: study, then run the tests (continuing)", (), {"run", "ak-git"}) == ["study"]
+    assert A._continued_names("USING: ak-cook, then update the docs (continuing)", (), {"update"}) == ["ak-cook"]
+    assert A._continued_names("USING: ak-cook + ak-git for the commit (continuing)", (), {"ak-git"}) == ["ak-cook", "ak-git"]
+    assert A._continued_names("USING: ak-cook + study the logs (continuing)", {"study": 1}, {"run"}) == ["ak-cook", "study"]
+    monkeypatch.setattr(A, "build_catalogue", lambda: {"run", "ak-git", "ak-cook"})
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _tool("Skill", skill="study"), _tool("Skill", skill="ak-cook"),
+        _user("turn two"), _say("USING: ak-cook + study the logs + ak-git for the commit, then run the tests (continuing)"),
+    ])
+    names = sorted(u[0][2] for u in r["continuation_units"])
+    assert names == ["ak-cook", "ak-git", "study"], names
+
+
+def test_the_catalogue_holds_installed_skills_only(tmp_path, monkeypatch):
+    for rel in ("plugins/cache/o/1.0/tests/fixtures/router/skills/run/SKILL.md",
+                "plugins/marketplaces/m/skills/deploy/SKILL.md", "plugins/cache/p/1.0/skills/real-one/SKILL.md",
+                "skills/study/SKILL.md"):
+        f = tmp_path / ".claude" / rel
+        f.parent.mkdir(parents=True)
+        f.write_text("---\nname: x\n---\n")
+    monkeypatch.setattr(A.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    assert A.build_catalogue() == {"real-one", "study"}
+
+
+def test_a_programs_string_prompt_opens_an_unscored_turn(tmp_path, monkeypatch):
+    """A system prompt or a program's SDK prompt stored as a string answers the harness: its ruling is
+    neither scored nor merged into the turn before. A notification's content stays a scored task."""
+    for rec in ({**_user("carry on with the plan"), "promptSource": "system"},
+                {**_user("review the parser change"), "promptSource": "sdk", "entrypoint": "sdk-cli"},
+                {**_user("summarize the conversation"), "promptSource": "sdk", "entrypoint": "sdk-ts"}):
+        r = _audit(tmp_path / str(id(rec)), monkeypatch, [
+            _user("turn one"), _say("USING: study"), rec, _say("NO SKILL: nothing fits"),
+        ])
+        assert r["n_skip"] == 1 and (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (0, 0, 0), rec
+    r = _audit(tmp_path / "note", monkeypatch, [
+        _user("turn one"), _say("USING: study"),
+        {**_user("2 background agents were stopped"), "origin": {"kind": "task-notification"}},
+        _say("NO SKILL: nothing fits"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
+    assert r["work_verdicts"] == (0, 0, 0)
+    # Other records in an SDK-launched session are not a program's prompt: a notification there stays scored.
+    r = _audit(tmp_path / "sdk-note", monkeypatch, [
+        _user("turn one"), _say("USING: study"),
+        {**_user("<task-notification>agent done</task-notification>"), "promptSource": "sdk", "entrypoint": "sdk-ts"},
+        _say("NO SKILL: nothing fits"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
+
+
+def test_the_work_opened_subset_is_counted_apart(tmp_path, monkeypatch):
+    r = _audit(tmp_path, monkeypatch, [
+        _user("fix the parser please"), _say("NO SKILL: nothing fits"),
+        _user("<task-notification>agent done</task-notification>"), _say("NO SKILL: nothing fits"),
+        _user("now update the readme"), _say("SEARCH: docs"), _tool("mcp__skill-search__search_skills"),
+        _say("NO SKILL: no hit fits"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (2, 1, 0)
+    assert r["work_verdicts"] == (1, 1, 0)
+
+
+def test_a_meta_record_in_list_form_does_not_open_a_turn(tmp_path, monkeypatch):
+    """A skill body the harness injects mid-turn belongs to the prompt's turn."""
+    r = _audit(tmp_path, monkeypatch, [
+        _user("fix the parser please"),
+        {**_listed({"type": "text", "text": "Base directory for this skill: /x"}), "isMeta": True},
+        _say("NO SKILL: nothing fits"),
+    ])
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
+
+
+def test_a_resumed_copy_of_a_skip_ruling_counts_once_and_the_own_file_wins(tmp_path, monkeypatch):
+    """A resumed session's file copies the ruling with its session id; the copy is read first (its
+    file sorts first) and differs (a search precedes it), yet the ruling counts once, as its own
+    file has it."""
+    own = [{**_user("fix the parser please"), "uuid": "u1"}, {**_say("NO SKILL: nothing fits"), "uuid": "r1"}]
+    copy = [{**_user("fix the parser please"), "uuid": "u1"}, _tool("mcp__skill-search__search_skills"),
+            {**_say("NO SKILL: nothing fits"), "uuid": "r1"}]
+    r = _audit_files(tmp_path, monkeypatch, {"p/a-resumed.jsonl": copy, "p/s1.jsonl": own})
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
+
+
+def test_the_negation_reader_edges():
+    for note in ("(isn't really a continuation of x)", "(not actually continuing)", "(not yet continuing x)",
+                 "(not strictly a continuation)", "(not really continuing ak-cook)"):
+        assert A._continued_names("USING: ak-cook " + note) == [], note
+    for note in ("(won't stop continuing)", "(continuing; no need for a new task)",
+                 "(continuing; this is not a brand new task)", "(new task? no, continuing)"):
+        assert A._continued_names("USING: ak-cook " + note) == ["ak-cook"], note
+
+
+def test_every_bot_scheduler_head_is_not_work():
+    for head in ("Meanwhile, Heartbeat check", "Meanwhile, reply to your human partner",
+                 "Meanwhile, System health check", "Meanwhile, Component upgrades available"):
+        assert not A._hands_over_work({**_user(head + ". [phase=primary] ack"),
+                                       "origin": {"kind": "human"}, "promptSource": "typed"}), head
+
+
+def test_ranking_ties_break_by_name(tmp_path, monkeypatch, capsys):
+    names = [f"skill-{c}" for c in "kqbxmdzafhtc"]
+    recs = [_user("turn one")] + [_tool("Skill", skill=n) for n in names]
+    d = tmp_path / "projects" / "p"
+    d.mkdir(parents=True)
+    (d / "s1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    monkeypatch.setattr(A, "PROJECTS", str(tmp_path / "projects"))
+    monkeypatch.setattr(sys, "argv", ["audit"])
+    A.main()
+    out = capsys.readouterr().out.split("top skills")[1]
+    ranked = [ln.split()[-1] for ln in out.splitlines() if "(tool " in ln]
+    assert ranked == sorted(names), ranked

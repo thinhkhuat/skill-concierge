@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from installer_env import installer_env
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "adapters" / "claude-code" / "install.sh"
@@ -161,12 +162,8 @@ def _fake_claude_dir(tmp_path):
 
 
 def _run(tmp_path, root, home, mode, *, source=None, extra_env=None):
-    env = dict(os.environ)
-    env["HOME"] = str(home)
-    env["PATH"] = str(_fake_claude_dir(tmp_path)) + os.pathsep + os.environ.get("PATH", "")
-    env["FAKE_CLAUDE_MODE"] = mode
-    env["SKILL_QDRANT_URL"] = "http://127.0.0.1:9"   # the verify step's doctor never reaches live Qdrant
-    env["FAKE_CLAUDE_LOG"] = str(tmp_path / "fake-claude.log")
+    env = installer_env(tmp_path, home, _fake_claude_dir(tmp_path), FAKE_CLAUDE_MODE=mode,
+                        FAKE_CLAUDE_LOG=str(tmp_path / "fake-claude.log"))
     if source is not None:
         env["FAKE_CLAUDE_SOURCE"] = str(source)
     if extra_env:
@@ -316,18 +313,11 @@ def test_verify_prints_doctors_claude_code_row(tmp_path):
 
 
 def test_real_claude_binary_is_never_invoked(tmp_path):
-    real_claude = shutil.which("claude")
-    if real_claude is None:
-        pytest.skip("no real claude binary on this machine's PATH to prove isolation against")
-    repo = _make_repo(tmp_path, "repo", "1.5.0")
-    home, _old_cache = _seed_home_with_cache(tmp_path, version="1.4.0")
-
-    r = _run(tmp_path, repo, home, mode="up_to_date_stale")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert _claude_log(tmp_path) != "", "the fake CLI must have been invoked"
-    # The fake's own log records only what the fake itself received — a real `claude`
-    # would never write to FAKE_CLAUDE_LOG at all, so any content here is proof enough
-    # that only the fake, first on PATH, was ever resolved.
+    """Under a test's PATH, `claude` resolves to the fake and no other harness CLI resolves."""
+    env = installer_env(tmp_path, tmp_path / "home", _fake_claude_dir(tmp_path))
+    r = subprocess.run(["bash", "-c", "command -v claude; command -v codex omp zcode || true"],
+                       env=env, capture_output=True, text=True)
+    assert r.stdout.split() == [str(tmp_path / "fakebin" / "claude")], r.stdout
 
 
 # ── Git worktree detection ────────────────────────────────────────────────────
@@ -413,18 +403,22 @@ def test_plain_root_inside_another_repo_copies_only_itself(tmp_path):
 
 
 def test_fallback_replaces_the_tree_and_keeps_the_old_one_aside(tmp_path):
-    """The export is staged and swapped in: no file from an older tree survives in the dir, and the
-    old tree is moved aside, not deleted."""
+    """The export is staged and swapped in: no file from an older tree survives in the dir, the
+    new tree reads like the CLI's (0755), and the old tree is moved aside under a hidden name that
+    skill discovery skips. Only the newest aside copy is kept."""
     repo = _make_repo(tmp_path, "repo", "2.0.0")
     home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
     dest = home / ".claude" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "2.0.0"
     dest.mkdir(parents=True)
     (dest / "stale.txt").write_text("from an interrupted run")
+    (dest.parent / ".2.0.0.replaced-20260101-000000-1").mkdir()
     r = _run(tmp_path, repo, home, mode="error")
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (dest / "stale.txt").exists()
-    aside = [d for d in dest.parent.iterdir() if d.name.startswith("2.0.0.replaced-")]
-    assert len(aside) == 1 and (aside[0] / "stale.txt").exists()
+    assert oct(dest.stat().st_mode & 0o777) == oct(0o755)
+    aside = [d for d in dest.parent.iterdir() if ".replaced-" in d.name]
+    assert len(aside) == 1 and aside[0].name.startswith(".2.0.0.replaced-") and (aside[0] / "stale.txt").exists()
+    assert not [d for d in dest.parent.iterdir() if d.name.startswith(".staging.")]
 
 
 def test_the_registry_symlink_and_its_mode_are_kept(tmp_path):
@@ -476,8 +470,67 @@ def test_a_newer_copy_after_the_cli_refresh_is_refused(tmp_path):
     assert r.returncode == 1 and "after the CLI refresh" in r.stderr, r.stdout + r.stderr
 
 
-def test_a_missing_launcher_fails_the_verify(tmp_path):
+def test_a_missing_launcher_at_the_current_version_is_repaired(tmp_path):
+    """The CLI sees nothing to update when the version is current, so the checkout repairs it."""
     repo = _make_repo(tmp_path, "repo", "2.0.0")
     home, cache = _seed_home_with_cache(tmp_path, version="2.0.0")
     r = _run(tmp_path, repo, home, mode="up_to_date_current")
-    assert r.returncode == 1 and "launcher missing" in r.stderr, r.stdout + r.stderr
+    assert r.returncode == 0 and "verify: OK" in r.stdout, r.stdout + r.stderr
+    assert os.access(cache / "bin" / "skill-search-mcp", os.X_OK)
+
+
+@pytest.mark.parametrize("install_path", ["missing", ""])
+def test_a_missing_install_dir_is_repaired_with_a_message(tmp_path, install_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    path = tmp_path / "gone" if install_path else ""
+    home = _seed_home(tmp_path, installed_version="1.9.0", install_path=path)
+    r = _run(tmp_path, repo, home, mode="error")
+    assert r.returncode == 0 and "verify: OK" in r.stdout, r.stdout + r.stderr
+    rec = _registry(home)["plugins"][PLUGIN_ID][0]
+    assert rec["version"] == "2.0.0" and Path(rec["installPath"]).is_dir()
+
+
+def test_a_lost_exec_bit_is_repaired_without_a_cli_call(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, cache = _seed_home_with_cache(tmp_path, version="2.0.0")
+    shutil.rmtree(cache)
+    shutil.copytree(repo, cache, ignore=shutil.ignore_patterns(".git"))
+    (cache / "bin" / "skill-search-mcp").chmod(0o644)
+    r = _run(tmp_path, repo, home, mode="up_to_date_current")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _claude_log(tmp_path) == ""
+    assert os.access(cache / "bin" / "skill-search-mcp", os.X_OK)
+
+
+def test_only_the_record_read_is_repointed_when_a_project_comes_first(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, cache = _seed_home_with_cache(tmp_path, version="1.9.0")
+    reg = home / ".claude" / "plugins" / "installed_plugins.json"
+    data = json.loads(reg.read_text())
+    user = data["plugins"][PLUGIN_ID][0]
+    a = {"scope": "project", "projectPath": "/proj/A", "installPath": str(cache), "version": "1.9.0"}
+    b = {"scope": "project", "projectPath": "/proj/B", "installPath": "/proj/B/cache", "version": "1.5.0"}
+    data["plugins"][PLUGIN_ID] = [a, dict(b), dict(user)]
+    reg.write_text(json.dumps(data))
+    r = _run(tmp_path, repo, home, mode="error")
+    assert r.returncode == 0, r.stdout + r.stderr
+    recs = _registry(home)["plugins"][PLUGIN_ID]
+    assert recs[0]["version"] == "2.0.0" and recs[1] == b and recs[2] == user
+
+
+def test_backups_sit_beside_the_registry_path_and_only_five_are_kept(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, _ = _seed_home_with_cache(tmp_path, version="1.9.0")
+    plugins = home / ".claude" / "plugins"
+    for i in range(6):
+        (plugins / f"installed_plugins.json.bak-claude-code-20260101-00000{i}-1").write_text("{}")
+    reg = plugins / "installed_plugins.json"
+    real = tmp_path / "dotfiles" / "installed_plugins.json"
+    real.parent.mkdir()
+    shutil.move(str(reg), real)
+    reg.symlink_to(real)
+    r = _run(tmp_path, repo, home, mode="error")
+    assert r.returncode == 0, r.stdout + r.stderr
+    kept = sorted(b.name for b in _backups(home))
+    assert len(kept) == 5 and not kept[-1].startswith("installed_plugins.json.bak-claude-code-2026010"), kept
+    assert not list(real.parent.glob("*.bak-*"))

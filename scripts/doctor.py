@@ -1670,14 +1670,17 @@ def check_codex():
         if not (launcher.is_file() and os.access(launcher, os.X_OK)):
             findings.append(f"Codex cache v{cached_ver} launcher bin/skill-search-mcp missing or not "
                             "executable — run adapters/codex/install.sh")
-        if not (CODEX_PLUGIN_CACHE / cached_ver / ".codex-plugin" / "mcp.json").is_file():
-            findings.append(f"Codex cache v{cached_ver} missing .codex-plugin/mcp.json — incomplete install")
+        # The installer's verify requires the same two descriptors Codex reads from the tree.
+        for rel in (".codex-plugin/mcp.json", ".codex/hooks.json"):
+            if not (CODEX_PLUGIN_CACHE / cached_ver / rel).is_file():
+                findings.append(f"Codex cache v{cached_ver} missing {rel} — incomplete install; "
+                                "run adapters/codex/install.sh")
     if findings:
         return {"id": "codex", "label": "Codex integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None, "version": cached_ver}
     return {"id": "codex", "label": "Codex integration", "status": OK,
-            "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills, launcher and MCP "
-                      "descriptor present",
+            "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills, launcher, MCP "
+                      "descriptor and hooks present",
             "fix": None, "version": cached_ver}
 
 def check_commandcode():
@@ -1883,10 +1886,11 @@ def check_claude_code():
     adapters/claude-code/install.sh (a `claude plugin update` CLI refresh, falling back
     to a local git-archive sync when the marketplace remote hasn't caught up to this
     checkout yet). Two signals:
-      1. deployed content — the installed path's OWN .claude-plugin/plugin.json version
-         (falling back to the registry's version when that is unreadable) vs the SSOT;
-         "content decides, not the record" — a hand-repointed registry entry could lie.
-      2. launcher exec bit — bin/skill-search-mcp under the installed path.
+      1. deployed content — the installed path's OWN .claude-plugin/plugin.json version vs
+         the SSOT; "content decides, not the record" — a hand-repointed registry entry could
+         lie. An unreadable manifest (or no installPath) is a finding, and the row's
+         `version` is then None: the registry's value is a claim, not what is deployed.
+      2. launcher — bin/skill-search-mcp under the installed path, present and executable.
     WARN-only — a plugin-free dev checkout is one 'not installed' row, never a failure.
     """
     if not CLAUDE_PLUGINS_DIR.exists():
@@ -1901,22 +1905,26 @@ def check_claude_code():
     if installed_ver is None:
         findings.append("skill-concierge has no Claude Code install record (installed_plugins.json)")
     else:
-        deployed_ver = installed_ver
         if install_path:
-            deployed_ver = _descriptor_version(
-                Path(install_path) / ".claude-plugin" / "plugin.json") or installed_ver
-        if ssot and deployed_ver != ssot:
+            deployed_ver = _descriptor_version(Path(install_path) / ".claude-plugin" / "plugin.json")
+        if deployed_ver is None:
+            where = install_path or "no installPath in the install record"
+            findings.append(f"the Claude Code cache manifest is unreadable ({where}); the record says "
+                            f"v{installed_ver} — re-run adapters/claude-code/install.sh")
+        elif ssot and deployed_ver != ssot:
             findings.append(f"Claude Code plugin v{deployed_ver} != SSOT v{ssot} — "
                             "re-run adapters/claude-code/install.sh")
         if install_path:
             launcher = Path(install_path) / "bin" / "skill-search-mcp"
+            shown = deployed_ver or installed_ver
             if not launcher.is_file():
-                findings.append(f"bin/skill-search-mcp missing from the Claude Code cache v{deployed_ver} — "
+                findings.append(f"bin/skill-search-mcp missing from the Claude Code cache v{shown} — "
                                 "the MCP server cannot start; re-run adapters/claude-code/install.sh")
             elif not os.access(launcher, os.X_OK):
-                findings.append(f"bin/skill-search-mcp in the Claude Code cache v{deployed_ver} "
+                findings.append(f"bin/skill-search-mcp in the Claude Code cache v{shown} "
                                 "lost its exec bit — re-run adapters/claude-code/install.sh")
-    # `version` is the deployed content's own version (what Claude Code will load), not the record's.
+    # `version` is the deployed content's own version (what Claude Code will load), not the record's;
+    # None when that content cannot be read.
     if findings:
         return {"id": "claude-code", "label": "Claude Code integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None, "version": deployed_ver}
@@ -2541,11 +2549,19 @@ def _selftest():
             (cached_dir / "skills" / "dummy").mkdir(parents=True)
             (cached_dir / "skills" / "dummy" / "SKILL.md").write_text("# placeholder")
             (cached_dir / ".codex-plugin" / "mcp.json").write_text("{}")
+            (cached_dir / ".codex").mkdir()
+            (cached_dir / ".codex" / "hooks.json").write_text("{}")
             (cached_dir / "bin").mkdir()
             (cached_dir / "bin" / "skill-search-mcp").write_text("#!/bin/sh\n")
             (cached_dir / "bin" / "skill-search-mcp").chmod(0o755)
             row = check_codex()
             assert row["status"] == OK, row
+            # Each descriptor the installer requires is a finding when missing.
+            for rel in (".codex-plugin/mcp.json", ".codex/hooks.json"):
+                (cached_dir / rel).rename(cached_dir / (rel + ".off"))
+                row = check_codex()
+                assert row["status"] == WARN and rel in row["detail"], (rel, row)
+                (cached_dir / (rel + ".off")).rename(cached_dir / rel)
             # Codex starts the launcher itself: without its exec bit the row is not OK.
             (cached_dir / "bin" / "skill-search-mcp").chmod(0o644)
             row = check_codex()
@@ -2640,8 +2656,38 @@ def _selftest():
                     {"scope": "user", "installPath": str(install_dir), "version": "0.0.1"}]}}))
             row = check_claude_code()
             assert row["status"] == WARN and "missing" in row["detail"] and row["version"] == cc_ssot, row
+            # Unreadable content: the record's version is a claim, so `version` is None and the row
+            # names the problem; with no installPath it does not claim a launcher either.
+            (install_dir / ".claude-plugin" / "plugin.json").unlink()
+            row = check_claude_code()
+            assert row["status"] == WARN and "unreadable" in row["detail"] and row["version"] is None, row
+            _g["CLAUDE_PLUGINS_FILE"].write_text(json.dumps({
+                "plugins": {"skill-concierge@skill-concierge": [{"scope": "user", "version": cc_ssot}]}}))
+            row = check_claude_code()
+            assert (row["status"] == WARN and "no installPath" in row["detail"] and row["version"] is None
+                    and "launcher" not in row["detail"]), row
     finally:
         _g.update(_saved_cc)
+
+    # --- ZCode harness check: fixture-driven, never touches the real ~/.zcode ---
+    _saved_zc = {k: _g[k] for k in ("ZCODE_DIR", "ZCODE_PLUGIN_CACHE")}
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            _g["ZCODE_DIR"] = base / ".zcode"
+            _g["ZCODE_PLUGIN_CACHE"] = base / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+            zc_ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+            (_g["ZCODE_PLUGIN_CACHE"] / zc_ssot / "bin").mkdir(parents=True)
+            launcher = _g["ZCODE_PLUGIN_CACHE"] / zc_ssot / "bin" / "skill-search-mcp"
+            launcher.write_text("#!/bin/sh\n")
+            launcher.chmod(0o755)
+            row = check_zcode()
+            assert row["status"] == OK, row
+            launcher.unlink()
+            row = check_zcode()
+            assert row["status"] == WARN and "missing" in row["detail"], row
+    finally:
+        _g.update(_saved_zc)
 
     # --- Command Code harness check (ADR-0038): fixture-driven, never touches the real ~/.commandcode ---
     # Two outcomes: absent CC -> WARN "not installed"; all surface present -> OK.

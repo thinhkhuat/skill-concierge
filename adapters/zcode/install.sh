@@ -53,10 +53,11 @@ _is_own_checkout() {
 }
 
 # A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
-# uncommitted version change would put HEAD's content in a dir named for the new version: refuse
-# before any CLI call or write. A checkout whose git dir is renamed to `git/` (the workbench's
-# no-dot toggle) is refused too: copying it as a plain tree would ship that database and every
-# untracked file.
+# uncommitted version change (staged or not) would put HEAD's content in a dir named for the new
+# version: refuse before any CLI call or write. A checkout git cannot read (git missing, a
+# safe.directory refusal, a damaged repo) and one whose git dir is renamed to `git/` (the
+# workbench's no-dot toggle) are refused too: copying either as a plain tree would ship its
+# untracked files.
 if _is_own_checkout; then
   HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
@@ -69,24 +70,49 @@ elif [ -f "$ROOT/git/HEAD" ]; then
   echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
   echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
   exit 1
+elif [ -e "$ROOT/.git" ]; then
+  echo "!! $ROOT is a git checkout, but git cannot read it (git missing, a safe.directory refusal, or a" >&2
+  echo "   damaged repo). Copying it as a plain tree would ship every untracked file. Fix git, then re-run." >&2
+  exit 1
 fi
+
+# _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
+# interrupted copy never leaves a half-filled DIR that a later run reads as current; a failed copy
+# removes its staging dir. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which
+# skill discovery skips, and only the newest such copy is kept.
+_export_to() {
+  local dest="$1" parent base stage old
+  parent="$(dirname "$dest")"; base="$(basename "$dest")"
+  mkdir -p "$parent"
+  stage="$(mktemp -d "$parent/.staging.XXXXXX")"
+  if _is_own_checkout; then
+    if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
+      rm -rf "$stage"; echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
+    echo "    exported HEAD → $dest"
+  else
+    # Non-git checkout: copy everything except VCS/scratch dirs.
+    if ! tar -C "$ROOT" -cf - \
+        --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
+        --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
+        --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
+        --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
+        . | tar -xf - -C "$stage"; then
+      rm -rf "$stage"; echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
+    echo "    copied the working tree (not a git checkout) → $dest"
+  fi
+  chmod 755 "$stage"   # mktemp makes it 0700; the swapped-in tree must read like the CLI's
+  if [ -e "$dest" ]; then
+    for old in "$parent/.$base.replaced-"*; do [ -e "$old" ] && rm -rf "$old"; done
+    mv "$dest" "$parent/.$base.replaced-$(date +%Y%m%d-%H%M%S)-$$"
+  fi
+  mv "$stage" "$dest"
+}
 
 # ── 2. Export the release tree into the versioned cache dir ──────────────────
 DEST="$CACHE_BASE/$VERSION"
-mkdir -p "$DEST"
-if _is_own_checkout; then
-  git -C "$ROOT" archive HEAD | tar -x -C "$DEST"
-  echo "    exported HEAD → $DEST"
-else
-  # Non-git checkout: copy everything except VCS/scratch dirs.
-  tar -C "$ROOT" -cf - \
-      --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
-      --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
-      --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
-      --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-      . | tar -xf - -C "$DEST"
-  echo "    copied the working tree (not a git checkout) → $DEST"
-fi
+_export_to "$DEST"   # staged, then swapped in: no stale files from an older tree survive
 
 # ── 3. Exec bits ─────────────────────────────────────────────────────────────
 chmod +x "$DEST/bin/"* "$DEST/setup.sh" \
@@ -94,12 +120,16 @@ chmod +x "$DEST/bin/"* "$DEST/setup.sh" \
          "$DEST/adapters/omp/install.sh" 2>/dev/null || true
 echo "    bin/ + installer exec bits ensured"
 
-# ── 4. Registry update (backup first) ────────────────────────────────────────
+# ── 4. Registry update: only the record this run read, resolved through a symlink, written
+# atomically, backed up only after a change-during-run check passes (same doctrine as the
+# claude-code/OMP repoint) ───────────────────────────────────────────────────
 python3 - "$REG_FILE" "$DEST" "$VERSION" <<'PY'
-import json, shutil, sys, time
+import json, os, shutil, sys, time
 from pathlib import Path
-reg_path, install_path, version = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-data = json.loads(reg_path.read_text(encoding="utf-8"))
+reg_path = Path(os.path.realpath(sys.argv[1]))
+install_path, version = sys.argv[2], sys.argv[3]
+raw = reg_path.read_bytes()
+data = json.loads(raw.decode("utf-8"))
 entry = None
 for p in data.get("plugins", []):
     if p.get("id") == "skill-concierge@skill-concierge":
@@ -109,12 +139,23 @@ if entry is None:
     print("!! no skill-concierge@skill-concierge entry in the registry — install once via "
           "Settings → Plugin Management → Discover (Get), then re-run this sync.", file=sys.stderr)
     sys.exit(1)
-backup = reg_path.with_suffix(".json.bak-sc-" + time.strftime("%Y%m%d-%H%M%S"))
-shutil.copy2(reg_path, backup)
 entry["version"] = version
 entry["installPath"] = install_path
 entry["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-reg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+tmp_path = reg_path.with_name(reg_path.name + f".tmp-{os.getpid()}")
+tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+shutil.copymode(reg_path, tmp_path)
+if reg_path.read_bytes() != raw:
+    tmp_path.unlink()
+    print("!! installed_plugins.json changed while this ran (a live session?) — not repointed; re-run",
+          file=sys.stderr)
+    sys.exit(1)
+reg_dir = Path(sys.argv[1]).parent
+backup = reg_dir / f"installed_plugins.json.bak-zcode-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+backup.write_bytes(raw)
+for old in sorted(reg_dir.glob("installed_plugins.json.bak-zcode-*"))[:-5]:
+    old.unlink()
+os.replace(tmp_path, reg_path)
 print(f"    registry → v{version} (backup: {backup.name})")
 PY
 
@@ -148,7 +189,7 @@ test "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"
   || { echo "    !! cache manifest version mismatch" >&2; exit 1; }
 test -x "$DEST/bin/skill-search-mcp" && echo "    launcher executable: yes"
 diff -q "$ROOT/hooks/scripts/enforcer.py" "$DEST/hooks/scripts/enforcer.py" >/dev/null \
-  && echo "    enforcer byte-identical to repo HEAD: yes"
+  && echo "    enforcer byte-identical to this checkout's working tree: yes"
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "ZCode integration" || true
 echo "==> Done. Restart ZCode to load v$VERSION (hooks + MCP server re-read at session start)."
 echo "    Then confirm: Settings → MCP shows the plugin server connected, and a session lists"

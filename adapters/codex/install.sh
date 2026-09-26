@@ -11,8 +11,10 @@
 #   1. Read the SSOT version from $ROOT/.claude-plugin/plugin.json.
 #   2. One-directional guard: refuse if the cached copy is NEWER than this
 #      checkout — no CLI call, no write.
-#   3. Fast path: cache already at SSOT with skills/ + plugin.json present ->
-#      no CLI calls, straight to verify.
+#   3. Fast path: cache already at SSOT with every file Codex reads present, and
+#      `codex plugin list --json` showing the plugin installed -> no mutating CLI
+#      call, straight to verify. A complete cache Codex does not list takes the
+#      refresh path, whose `add` registers it.
 #   4. Otherwise: `codex plugin marketplace upgrade` (best effort), then
 #      `codex plugin add` — NEVER `codex plugin remove`. `remove` deletes the
 #      plugin's whole cache tree AND its config.toml entry; a failed `add`
@@ -51,9 +53,10 @@
 #      already succeeded, so it starts from whatever `add` just left behind
 #      (the one version dir it installed) and only ever adds to that.
 #   8. Verify: cache manifest version, skills/, launcher exec bit,
-#      .codex-plugin/mcp.json + .codex/hooks.json, enforcer byte-identical to
-#      HEAD, `codex plugin list --json` installed state (refresh path only),
-#      doctor's Codex row.
+#      .codex-plugin/mcp.json + .codex/hooks.json, enforcer identical to this
+#      checkout's, `codex plugin list --json` installed state (every path; a
+#      failed or unreadable listing is reported as such, never as "not
+#      installed"), doctor's Codex row.
 #
 # _cached_version() sorts candidate version dirs by a dotted-integer key
 # (matching Codex's own semver-aware resolution, and scripts/doctor.py's
@@ -150,48 +153,71 @@ _is_own_checkout() {
 }
 
 # _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
-# interrupted copy never leaves a half-filled DIR that a later run reads as current. An existing DIR
-# is moved aside to DIR.replaced-<time> (not a version name, so nothing resolves it), never deleted.
+# interrupted copy never leaves a half-filled DIR that a later run reads as current; a failed copy
+# removes its staging dir. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which
+# neither the version scan nor skill discovery reads, and only the newest such copy is kept.
 _export_to() {
-  local dest="$1" stage
-  mkdir -p "$(dirname "$dest")"
-  stage="$(mktemp -d "$(dirname "$dest")/.staging.XXXXXX")"
+  local dest="$1" parent base stage old
+  parent="$(dirname "$dest")"; base="$(basename "$dest")"
+  mkdir -p "$parent"
+  stage="$(mktemp -d "$parent/.staging.XXXXXX")"
   if _is_own_checkout; then
-    git -C "$ROOT" archive HEAD | tar -x -C "$stage"
+    if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
+      rm -rf "$stage"; echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
     echo "    exported HEAD → $dest"
   else
-    # Non-git checkout: copy everything except VCS/scratch dirs.
-    tar -C "$ROOT" -cf - \
+    # A tree with no git metadata at all: copy everything except scratch dirs.
+    if ! tar -C "$ROOT" -cf - \
         --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
         --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
         --exclude='.zcode' --exclude='.unlazy' \
         --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
         --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-        . | tar -xf - -C "$stage"
+        . | tar -xf - -C "$stage"; then
+      rm -rf "$stage"; echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
     echo "    copied the working tree (not a git checkout) → $dest"
   fi
+  chmod 755 "$stage"   # mktemp makes it 0700; the swapped-in tree must read like the CLI's
   if [ -e "$dest" ]; then
-    mv "$dest" "$dest.replaced-$(date +%Y%m%d-%H%M%S)-$$"
+    for old in "$parent/.$base.replaced-"*; do [ -e "$old" ] && rm -rf "$old"; done
+    mv "$dest" "$parent/.$base.replaced-$(date +%Y%m%d-%H%M%S)-$$"
   fi
   mv "$stage" "$dest"
 }
 
-# A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
-# uncommitted version change would put HEAD's content in a dir named for the new version: refuse
-# before any CLI call or write. A checkout whose git dir is renamed to `git/` (the workbench's
-# no-dot toggle) is refused too: copying it as a plain tree would ship that database and every
-# untracked file.
+# A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install; Codex
+# names and scans the cache by .codex-plugin/plugin.json, so HEAD's copy of that manifest must agree
+# too. An uncommitted version change (staged or not) would put HEAD's content in a dir named for the
+# new version: refuse before any CLI call or write. A checkout git cannot read (git missing, a
+# safe.directory refusal, a damaged repo) and one whose git dir is renamed to `git/` (the
+# workbench's no-dot toggle) are refused too: copying either as a plain tree would ship its
+# untracked files.
+_head_version() {
+  git -C "$ROOT" show "HEAD:$1" 2>/dev/null \
+    | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true
+}
 if _is_own_checkout; then
-  HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
-    | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
+  HEAD_VERSION="$(_head_version .claude-plugin/plugin.json)"
+  HEAD_CODEX_VERSION="$(_head_version .codex-plugin/plugin.json)"
   if [ "$HEAD_VERSION" != "$VERSION" ]; then
     echo "!! .claude-plugin/plugin.json says v$VERSION but HEAD carries v${HEAD_VERSION:-none}; this installer" >&2
     echo "   installs HEAD. Commit the version change (or restore the file), then re-run." >&2
     exit 1
   fi
+  if [ "$HEAD_CODEX_VERSION" != "$VERSION" ]; then
+    echo "!! HEAD's .codex-plugin/plugin.json carries v${HEAD_CODEX_VERSION:-none}, not v$VERSION; Codex would" >&2
+    echo "   file this install under another version. Commit both manifests at one version, then re-run." >&2
+    exit 1
+  fi
 elif [ -f "$ROOT/git/HEAD" ]; then
   echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
   echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
+  exit 1
+elif [ -e "$ROOT/.git" ]; then
+  echo "!! $ROOT is a git checkout, but git cannot read it (git missing, a safe.directory refusal, or a" >&2
+  echo "   damaged repo). Copying it as a plain tree would ship every untracked file. Fix git, then re-run." >&2
   exit 1
 fi
 
@@ -206,39 +232,92 @@ if [ -n "$CACHED" ] && ! _ver_ge "$VERSION" "$CACHED"; then
   exit 1
 fi
 
+# _codex_json WHAT… — run `codex plugin WHAT… --json`, print its stdout; on a failed run print
+# "error:" and the CLI's own message instead, so a broken Codex is never read as an empty listing.
+_codex_json() {
+  local out errf rc=0
+  errf="$(mktemp)"
+  out="$(codex plugin "$@" --json 2>"$errf")" || rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "error:'codex plugin $* --json' exited $rc: $(head -c 400 "$errf" | tr '\n' ' ')"
+  else
+    printf '%s' "$out"
+  fi
+  rm -f "$errf"
+}
+
+# _plugin_state — Codex's own view of this plugin: enabled | disabled | not-installed, or
+# "error:<why>" when the listing failed or was not JSON. A record without an `enabled` field
+# counts as enabled, the same default everywhere in this script.
+_plugin_state() {
+  local out
+  out="$(_codex_json list)"
+  case "$out" in error:*) echo "$out"; return ;; esac
+  python3 - "$out" "$PLUGIN_SELECTOR" <<'PY'
+import json, sys
+try:
+    plg = json.loads(sys.argv[1])
+    rec = next((p for p in plg.get("installed", [])
+                if p.get("pluginId") == sys.argv[2] and p.get("installed")), None)
+except (ValueError, AttributeError, TypeError):
+    print("error:'codex plugin list --json' printed something other than the expected JSON")
+    sys.exit(0)
+print("not-installed" if not rec else ("enabled" if rec.get("enabled", True) else "disabled"))
+PY
+}
+
 REFRESHED=0
+STATE=""
+command -v codex >/dev/null 2>&1 && STATE="$(_plugin_state)"
 # Codex starts ./bin/skill-search-mcp directly and reads the MCP and hooks files from the cached
-# tree, so a copy without them is not current, whatever its manifest says.
+# tree, so a copy without them is not current, whatever its manifest says; nor is one Codex does
+# not list as installed.
 _complete() {
   [ -d "$1/skills" ] && [ -f "$1/.codex-plugin/plugin.json" ] && [ -f "$1/bin/skill-search-mcp" ] \
     && [ -f "$1/.codex-plugin/mcp.json" ] && [ -f "$1/.codex/hooks.json" ]
 }
-if [ "$CACHED" = "$VERSION" ] && _complete "$DEST"; then
-  # ── Fast path: already current, no CLI calls, no content writes (the
+if [ "$CACHED" = "$VERSION" ] && _complete "$DEST" && { [ "$STATE" = enabled ] || [ "$STATE" = disabled ]; }; then
+  # ── Fast path: already current; one read-only `codex plugin list`, no content writes (the
   # self-heal exec-bit chmod below still runs on every path) ─────────────────
   echo "  [✓] Already current: Codex cache v$CACHED == SSOT v$VERSION"
 else
   REFRESHED=1
-  echo "  [•] Codex cache v${CACHED:-none} != SSOT v$VERSION (or incomplete) -> checking Codex registration"
+  echo "  [•] Codex cache v${CACHED:-none} != SSOT v$VERSION (or incomplete, or not listed) -> checking Codex registration"
   if ! command -v codex >/dev/null 2>&1; then
     echo "!! the codex CLI is not on PATH — this installer refreshes through it. Install Codex first." >&2
     exit 1
   fi
+  case "$STATE" in
+    error:*) echo "!! ${STATE#error:}" >&2
+             echo "   Fix Codex (the message above is its own), then re-run; nothing was changed." >&2
+             exit 1 ;;
+  esac
 
-  MKT_JSON="$(codex plugin marketplace list --json 2>/dev/null || echo '{"marketplaces":[]}')"
-  PLG_JSON="$(codex plugin list --json 2>/dev/null || echo '{"installed":[]}')"
-
-  read -r MKT_REGISTERED PLUGIN_INSTALLED ENABLED_BEFORE <<<"$(python3 - "$MKT_JSON" "$PLG_JSON" "$MARKETPLACE_NAME" "$PLUGIN_SELECTOR" <<'PY'
+  MKT_JSON="$(_codex_json marketplace list)"
+  case "$MKT_JSON" in
+    error:*) echo "!! ${MKT_JSON#error:}" >&2
+             echo "   Fix Codex (the message above is its own), then re-run; nothing was changed." >&2
+             exit 1 ;;
+  esac
+  MKT_REGISTERED="$(python3 - "$MKT_JSON" "$MARKETPLACE_NAME" <<'PY'
 import json, sys
-mkt, plg, mkt_name, plugin_sel = json.loads(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3], sys.argv[4]
-registered = mkt_name in [m.get("name") for m in mkt.get("marketplaces", [])]
-rec = next((p for p in plg.get("installed", [])
-            if p.get("pluginId") == plugin_sel and p.get("installed")), None)
-print("1" if registered else "0",
-      "1" if rec else "0",
-      ("1" if rec.get("enabled") else "0") if rec else "na")
+try:
+    mkt = json.loads(sys.argv[1])
+    print("1" if sys.argv[2] in [m.get("name") for m in mkt.get("marketplaces", [])] else "0")
+except (ValueError, AttributeError, TypeError):
+    print("error")
 PY
 )"
+  if [ "$MKT_REGISTERED" = "error" ]; then
+    echo "!! 'codex plugin marketplace list --json' printed something other than the expected JSON;" >&2
+    echo "   nothing was changed." >&2
+    exit 1
+  fi
+  PLUGIN_INSTALLED=0; ENABLED_BEFORE=na
+  case "$STATE" in
+    enabled) PLUGIN_INSTALLED=1; ENABLED_BEFORE=1 ;;
+    disabled) PLUGIN_INSTALLED=1; ENABLED_BEFORE=0 ;;
+  esac
 
   # ── Disabled-plugin guard — before any mutating CLI call ────────────────
   # `codex plugin add` always re-enables a plugin, and Codex has no CLI command
@@ -277,15 +356,13 @@ PY
   ADD_OK=1
   codex plugin add "$PLUGIN_SELECTOR" || { ADD_OK=0; echo "!! 'codex plugin add $PLUGIN_SELECTOR' failed." >&2; }
 
-  PLG_JSON="$(codex plugin list --json 2>/dev/null || echo '{"installed":[]}')"
-  read -r INSTALLED_AFTER ENABLED_AFTER <<<"$(python3 - "$PLG_JSON" "$PLUGIN_SELECTOR" <<'PY'
-import json, sys
-plg, plugin_sel = json.loads(sys.argv[1]), sys.argv[2]
-rec = next((p for p in plg.get("installed", [])
-            if p.get("pluginId") == plugin_sel and p.get("installed")), None)
-print("1" if rec else "0", ("1" if rec.get("enabled") else "0") if rec else "na")
-PY
-)"
+  STATE="$(_plugin_state)"
+  INSTALLED_AFTER=0; ENABLED_AFTER=na
+  case "$STATE" in
+    enabled) INSTALLED_AFTER=1; ENABLED_AFTER=1 ;;
+    disabled) INSTALLED_AFTER=1; ENABLED_AFTER=0 ;;
+    error:*) echo "!! ${STATE#error:}" >&2 ;;
+  esac
 
   if [ "$ADD_OK" != "1" ] || [ "$INSTALLED_AFTER" != "1" ]; then
     echo "!! Codex does not report '$PLUGIN_SELECTOR' as installed after the refresh attempt." >&2
@@ -319,7 +396,7 @@ PY
   CACHED="$(_cached_version)"
   DEST="$CODEX_PLUGIN_CACHE/$CACHED"
 
-  if [ "$CACHED" != "$VERSION" ]; then
+  if [ "$CACHED" != "$VERSION" ] || ! _complete "$DEST"; then
     # ── Manual sync fallback — only reached with the plugin confirmed
     # installed above (see header step 7). The downgrade guard applies again:
     # the CLI refresh could in principle have installed something NEWER than
@@ -330,8 +407,8 @@ PY
       exit 1
     fi
 
-    echo "  [•] '$MARKETPLACE_NAME' marketplace still v${CACHED:-none} after the CLI refresh" \
-         "(the git remote lags this checkout) -> syncing this checkout into the Codex cache"
+    echo "  [•] '$MARKETPLACE_NAME' marketplace still v${CACHED:-none} (or an incomplete copy) after the CLI" \
+         "refresh (the git remote lags this checkout) -> syncing this checkout into the Codex cache"
     echo "  !! NOTE: this deploys the LOCAL checkout DIRECTLY — it may include commits not" >&2
     echo "     yet pushed to the '$MARKETPLACE_NAME' marketplace's git remote" \
          "(https://github.com/thinhkhuat/skill-concierge.git). Once pushed, a plain" >&2
@@ -344,12 +421,12 @@ PY
     echo "    bin/ + installer exec bits ensured"
 
     # Older version dirs under this cache path are left in place, deliberately
-    # — see header step 7. A replaced incomplete copy is kept as <version>.replaced-<time>.
+    # — see header step 7. A replaced incomplete copy is kept as .<version>.replaced-<time>.
 
     CACHED="$(_cached_version)"
     DEST="$CODEX_PLUGIN_CACHE/$CACHED"
-    # The export writes HEAD, whose version the up-front check made equal to $VERSION, so the new dir
-    # cannot carry another version's content. Reaching this means the export itself failed.
+    # The export writes HEAD, whose two manifests the up-front check made equal to $VERSION, so the new
+    # dir cannot carry another version's content. Reaching this means the export itself failed.
     if [ "$CACHED" != "$VERSION" ]; then
       echo "!! sync into the Codex cache did not take (cache now v${CACHED:-none}) — see output above." >&2
       exit 1
@@ -382,24 +459,20 @@ diff -q "$ROOT/hooks/scripts/enforcer.py" "$DEST/hooks/scripts/enforcer.py" >/de
   && echo "    enforcer identical to this checkout's: yes" \
   || echo "    [!] enforcer differs from this checkout's (deployed copy is another build)" >&2
 # Registry state on every path, not just files on disk: Codex loads only an installed, enabled plugin.
+# The fast path already asked Codex; the refresh path asks again after its own changes.
 LOADS=false
 if ! command -v codex >/dev/null 2>&1; then
   echo "    !! the codex CLI is not on PATH — cannot confirm Codex has the plugin installed" >&2
   VERIFY_OK=false
 else
-  PLG_JSON="$(codex plugin list --json 2>/dev/null || echo '{"installed":[]}')"
-  PLUGIN_STATE="$(python3 - "$PLG_JSON" "$PLUGIN_SELECTOR" <<'PY'
-import json, sys
-plg, plugin_sel = json.loads(sys.argv[1]), sys.argv[2]
-rec = next((p for p in plg.get("installed", [])
-            if p.get("pluginId") == plugin_sel and p.get("installed")), None)
-print("not-installed" if not rec else ("enabled" if rec.get("enabled", True) else "disabled"))
-PY
-)"
-  case "$PLUGIN_STATE" in
+  [ "$REFRESHED" = 1 ] && STATE="$(_plugin_state)"
+  case "$STATE" in
     enabled) echo "    codex plugin list: installed, enabled"; LOADS=true ;;
     disabled) echo "    [!] codex plugin list: installed but DISABLED — Codex will not load it until it is enabled" >&2 ;;
-    *) echo "    !! codex plugin list --json does not show '$PLUGIN_SELECTOR' installed" >&2; VERIFY_OK=false ;;
+    error:*) echo "    !! ${STATE#error:}" >&2; VERIFY_OK=false ;;
+    *) echo "    !! codex plugin list --json does not show '$PLUGIN_SELECTOR' installed; run" >&2
+       echo "       'codex plugin add $PLUGIN_SELECTOR', then re-run this installer" >&2
+       VERIFY_OK=false ;;
   esac
 fi
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Codex integration" || true

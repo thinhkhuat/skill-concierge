@@ -86,14 +86,15 @@ try:
     e = rec["plugins"]["skill-concierge@skill-concierge"]
     recs = e if isinstance(e, list) else [e]
     r = recs[0]
-    print(r.get("version", ""), r.get("installPath", ""), r.get("scope", "user"), sep="\x1f")
+    print(r.get("version", ""), r.get("installPath", ""), r.get("scope", "user"), r.get("projectPath", ""),
+          sep="\x1f")
 except Exception:
-    print("\x1f\x1f", end="")
+    print("\x1f\x1f\x1f", end="")
 PY
 }
 
-# _deployed_ver PATH — the version the cache CONTENT carries (its own manifest),
-# falling back to the registry's record only when the manifest is unreadable.
+# _deployed_ver PATH — the version the cache CONTENT carries (its own manifest); callers fall back
+# to the registry's record only when the manifest is unreadable (a missing dir included).
 # The registry can record a version whose content came from a stale marketplace
 # pull, so the manifest, not the record, decides "already current".
 _deployed_ver() {
@@ -113,37 +114,46 @@ _is_own_checkout() {
 }
 
 # _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
-# interrupted copy never leaves a half-filled DIR that a later run reads as current. An existing DIR
-# is moved aside to DIR.replaced-<time> (not a version name, so nothing resolves it), never deleted.
+# interrupted copy never leaves a half-filled DIR that a later run reads as current; a failed copy
+# removes its staging dir. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which
+# skill discovery skips, and only the newest such copy is kept.
 _export_to() {
-  local dest="$1" stage
-  mkdir -p "$(dirname "$dest")"
-  stage="$(mktemp -d "$(dirname "$dest")/.staging.XXXXXX")"
+  local dest="$1" parent base stage old
+  parent="$(dirname "$dest")"; base="$(basename "$dest")"
+  mkdir -p "$parent"
+  stage="$(mktemp -d "$parent/.staging.XXXXXX")"
   if _is_own_checkout; then
-    git -C "$ROOT" archive HEAD | tar -x -C "$stage"
+    if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
+      rm -rf "$stage"; echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
     echo "    exported HEAD → $dest"
   else
-    # Non-git checkout: copy everything except VCS/scratch dirs.
-    tar -C "$ROOT" -cf - \
+    # A tree with no git metadata at all: copy everything except scratch dirs.
+    if ! tar -C "$ROOT" -cf - \
         --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
         --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
         --exclude='.zcode' --exclude='.unlazy' \
         --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
         --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-        . | tar -xf - -C "$stage"
+        . | tar -xf - -C "$stage"; then
+      rm -rf "$stage"; echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
+    fi
     echo "    copied the working tree (not a git checkout) → $dest"
   fi
+  chmod 755 "$stage"   # mktemp makes it 0700; the swapped-in tree must read like the CLI's
   if [ -e "$dest" ]; then
-    mv "$dest" "$dest.replaced-$(date +%Y%m%d-%H%M%S)-$$"
+    for old in "$parent/.$base.replaced-"*; do [ -e "$old" ] && rm -rf "$old"; done
+    mv "$dest" "$parent/.$base.replaced-$(date +%Y%m%d-%H%M%S)-$$"
   fi
   mv "$stage" "$dest"
 }
 
 # A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
-# uncommitted version change would put HEAD's content in a dir named for the new version: refuse
-# before any CLI call or write. A checkout whose git dir is renamed to `git/` (the workbench's
-# no-dot toggle) is refused too: copying it as a plain tree would ship that database and every
-# untracked file.
+# uncommitted version change (staged or not) would put HEAD's content in a dir named for the new
+# version: refuse before any CLI call or write. A checkout git cannot read (git missing, a
+# safe.directory refusal, a damaged repo) and one whose git dir is renamed to `git/` (the
+# workbench's no-dot toggle) are refused too: copying either as a plain tree would ship its
+# untracked files.
 if _is_own_checkout; then
   HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
     | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
@@ -156,6 +166,10 @@ elif [ -f "$ROOT/git/HEAD" ]; then
   echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
   echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
   exit 1
+elif [ -e "$ROOT/.git" ]; then
+  echo "!! $ROOT is a git checkout, but git cannot read it (git missing, a safe.directory refusal, or a" >&2
+  echo "   damaged repo). Copying it as a plain tree would ship every untracked file. Fix git, then re-run." >&2
+  exit 1
 fi
 
 if [ ! -f "$CLAUDE_PLUGINS_JSON" ] || ! grep -q "\"$PLUGIN_ID\"" "$CLAUDE_PLUGINS_JSON"; then
@@ -167,13 +181,19 @@ if [ ! -f "$CLAUDE_PLUGINS_JSON" ] || ! grep -q "\"$PLUGIN_ID\"" "$CLAUDE_PLUGIN
   exit 1
 fi
 
-IFS=$'\x1f' read -r INSTALLED INSTALLED_PATH SCOPE <<<"$(_claude_record)"
+IFS=$'\x1f' read -r INSTALLED INSTALLED_PATH SCOPE PROJECT_PATH <<<"$(_claude_record)"
 SCOPE="${SCOPE:-user}"
-DEPLOYED="$(_deployed_ver "$INSTALLED_PATH")"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
+DEPLOYED="$(_deployed_ver "$INSTALLED_PATH" || true)"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
+
+# Current means the version and the files the MCP server needs; a lost exec bit is repaired below
+# without a CLI call.
+_current() {
+  [ "$INSTALLED" = "$VERSION" ] && [ "$DEPLOYED" = "$VERSION" ] && [ -d "$INSTALLED_PATH" ] \
+    && [ -f "$INSTALLED_PATH/bin/skill-search-mcp" ]
+}
 
 DEST=""
-if [ "$INSTALLED" = "$VERSION" ] && [ "$DEPLOYED" = "$VERSION" ] && [ -d "$INSTALLED_PATH" ] \
-   && [ -x "$INSTALLED_PATH/bin/skill-search-mcp" ]; then
+if _current; then
   echo "  [✓] Already current: Claude Code deploy v$INSTALLED (content v$DEPLOYED) == SSOT v$VERSION"
   DEST="$INSTALLED_PATH"
 else
@@ -194,11 +214,13 @@ else
     echo "    [!] 'claude' binary not on PATH — skipping CLI refresh, falling back to checkout sync" >&2
   fi
 
-  IFS=$'\x1f' read -r INSTALLED INSTALLED_PATH SCOPE <<<"$(_claude_record)"
+  IFS=$'\x1f' read -r INSTALLED INSTALLED_PATH SCOPE PROJECT_PATH <<<"$(_claude_record)"
   SCOPE="${SCOPE:-user}"
-  DEPLOYED="$(_deployed_ver "$INSTALLED_PATH")"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
+  DEPLOYED="$(_deployed_ver "$INSTALLED_PATH" || true)"; DEPLOYED="${DEPLOYED:-$INSTALLED}"
 
-  if [ "$INSTALLED" != "$VERSION" ] || [ "$DEPLOYED" != "$VERSION" ]; then
+  # A current version with a missing dir or launcher is repaired from this checkout too: the CLI
+  # sees nothing to update there.
+  if ! _current; then
     # ── Manual sync fallback (OMP/ZCode parity): export HEAD → cache dir. ──
     if [ -n "$DEPLOYED" ] && ! _ver_ge "$VERSION" "$DEPLOYED"; then
       echo "!! refusing to downgrade: after the CLI refresh, deployed Claude Code copy v$DEPLOYED" >&2
@@ -217,15 +239,17 @@ else
     HEAD_SHA=""
     if _is_own_checkout; then HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "")"; fi
 
-    # ── Registry repoint: only the record for the scope refreshed above. The write goes to the
-    # file a symlink points at (a dotfiles setup), keeps its permissions, and is swapped in with
-    # os.replace, so no reader ever sees half a file. If the file changes while this runs (a live
-    # Claude Code session writing it), the repoint stops rather than overwrite that change. ──
-    python3 - "$CLAUDE_PLUGINS_JSON" "$DEST" "$VERSION" "$HEAD_SHA" "$SCOPE" <<'PY'
+    # ── Registry repoint: only the record this run read (its scope and project). The write goes
+    # to the file a symlink points at (a dotfiles setup), keeps its permissions, and is swapped in
+    # with os.replace, so no reader ever sees half a file. If the file changed since it was read (a
+    # live Claude Code session writing it), the repoint stops rather than overwrite that change; a
+    # write in the instant between that last check and the swap is not caught. The backup sits
+    # beside the registry path Claude Code reads; the newest five are kept. ──
+    python3 - "$CLAUDE_PLUGINS_JSON" "$DEST" "$VERSION" "$HEAD_SHA" "$SCOPE" "$PROJECT_PATH" <<'PY'
 import json, os, shutil, sys, time
 from pathlib import Path
 reg_path = Path(os.path.realpath(sys.argv[1]))
-install_path, version, head_sha, scope = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+install_path, version, head_sha, scope, project = sys.argv[2:7]
 raw = reg_path.read_bytes()
 data = json.loads(raw.decode("utf-8"))
 entry = data.get("plugins", {}).get("skill-concierge@skill-concierge")
@@ -233,9 +257,8 @@ if not entry:
     print("!! registry lost the skill-concierge@skill-concierge entry mid-run", file=sys.stderr)
     sys.exit(1)
 records = entry if isinstance(entry, list) else [entry]
-targets = [r for r in records if r.get("scope", "user") == scope] or records[:1]
-backup = reg_path.with_name(f"{reg_path.name}.bak-claude-code-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
-shutil.copy2(reg_path, backup)
+targets = [r for r in records
+           if r.get("scope", "user") == scope and (r.get("projectPath") or "") == project] or records[:1]
 now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
 for rec in targets:
     rec["version"] = version
@@ -253,8 +276,14 @@ if reg_path.read_bytes() != raw:
     print("!! installed_plugins.json changed while this ran (a live session?) — not repointed; re-run",
           file=sys.stderr)
     sys.exit(1)
+reg_dir = Path(sys.argv[1]).parent
+backup = reg_dir / f"installed_plugins.json.bak-claude-code-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+backup.write_bytes(raw)
+for old in sorted(reg_dir.glob("installed_plugins.json.bak-claude-code-*"))[:-5]:
+    old.unlink()
 os.replace(tmp_path, reg_path)
-print(f"    registry → v{version} for scope {scope} (backup: {backup.name})")
+where = f"scope {scope}" + (f", project {project}" if project else "")
+print(f"    registry → v{version} for {where} (backup: {backup.name})")
 PY
   else
     DEST="$INSTALLED_PATH"
@@ -290,7 +319,7 @@ if [ -n "$DEST" ]; then
     echo "    [!] enforcer differs from this checkout's (deployed copy is another build)" >&2
   fi
 fi
-IFS=$'\x1f' read -r FINAL_INSTALLED _ _ <<<"$(_claude_record)"
+IFS=$'\x1f' read -r FINAL_INSTALLED _ _ _ <<<"$(_claude_record)"
 if [ "$FINAL_INSTALLED" = "$VERSION" ]; then
   echo "    installed_plugins.json: v$VERSION"
 else
