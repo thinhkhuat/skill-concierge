@@ -18,6 +18,9 @@
 #      the exec bit — cosmetic under the interpreter-form .mcp.json, repaired anyway)
 #   4. Point ~/.zcode/cli/plugins/installed_plugins.json at the new version (backup first)
 #
+# Refusals (exit 1, nothing written into the cache): no registry record for the plugin, an
+# unreadable registry, or a registered copy NEWER than this checkout (no downgrades).
+#
 # Old version dirs are left in place: discovery is registry-enumerated, so they are
 # neither indexed nor served. Restart ZCode afterwards to load the new version.
 set -euo pipefail
@@ -124,7 +127,7 @@ _export_to() {
 # ── 1b. Registry must already have a skill-concierge@skill-concierge entry, and the
 # copy it names must not be newer than this checkout — both checked BEFORE any write to
 # the cache, so a missing/broken registry or a stale checkout never leaves an export
-# sitting in the cache that this run then aborts out of (M3).
+# sitting in the cache that this run then aborts out of.
 if ! DEPLOYED="$(python3 - "$REG_FILE" <<'PY'
 import json, sys
 from pathlib import Path
@@ -141,7 +144,7 @@ for p in data.get("plugins", []):
             try:
                 ver = json.loads(pf.read_text(encoding="utf-8")).get("version") or ""
             except (OSError, ValueError):
-                ver = ""   # entry exists but its active copy's manifest is unreadable
+                ver = ""   # entry exists but the manifest of its active copy is unreadable
         print(ver)
         sys.exit(0)
 sys.exit(1)   # no matching entry in the registry
