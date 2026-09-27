@@ -17,6 +17,11 @@
             "type": "command",
             "command": "F=\"${CLAUDE_PROJECT_DIR}/scripts/graph_staleness_notice.py\"; [ -f \"$F\" ] || exit 0; exec python3 \"$F\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "F=\"${CLAUDE_PROJECT_DIR}/scripts/git_stash_guard.py\"; [ -f \"$F\" ] || exit 0; exec python3 \"$F\"",
+            "timeout": 10
           }
         ]
       }
