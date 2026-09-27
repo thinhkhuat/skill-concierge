@@ -13,6 +13,60 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.54.0 — local index owner replaces Qdrant and the Docker embed shim (ADR-0070; TASK-022)
+
+**Deployed on Claude Code 2026-09-27 06:45 +07:** commit `dfcbb6b` (rolled up from `a8261b7` +
+`c2c781a`) fast-forwarded onto `main` and pushed; dark window 06:34-06:45 (Docker Qdrant and the
+embed shim stopped, then the owner started on 6333/6363); smoke PASS (`/health` `code_version`
+0.54.0, only the owner listens, 64/80 saved smoke-name lists identical, the other 4 all exact
+score ties). Other harness caches (OMP, Codex, ZCode) start their own windows when their plugin
+cache reaches 0.54.0.
+
+**Starts per harness** when its plugin cache reaches `0.54.0` and `doctor.py`'s "Index owner" row
+is OK — every offer-level ledger rate (fallback, hit@k, embed/Qdrant latency, the `embed_down` /
+`qdrant_down` shares) resets here: the answerer behind `SKILL_QDRANT_URL` and 6363 changed from
+two Docker containers to one local process, so latency and outage bands from v0.53.x and earlier
+are not comparable.
+
+Two REQ-004 behavior changes, both epoch-scoped (never pooled across this line):
+- **Exact search replaces Qdrant's approximate order.** The parity replay
+  (`plans/reports/cutover-readiness-260926.md`) measured live Qdrant's default (HNSW-approximate)
+  order against the owner's exact-cosine order on the same 540 prompts (500 ledger human prompts +
+  40 EN/VN) used for TASK-016: the raw 40-row over-fetch differs on 292-295/540, but on the 8
+  skills actually offered (`TOP_K`), order differs on 66/540 prompts (12 %) and which skills
+  appear differs on 14/540 (2.6 %). So roughly 1 offer in 8 changes, toward the true nearest
+  neighbours — recall can only improve, and the replay never found an approximate score beating
+  an exact one.
+- **Ties break by score descending, then skill name ascending** (REQ-004), replacing Qdrant's own
+  arbitrary tie order.
+
+**`prompt_intent` was rebuilt at the switch, not migrated: 792 balanced points, was 2,044.** The
+migration copied `prompt_intent` bit-for-bit (2,044 points, 0 byte/payload differences) into the
+staging owner for the parity replay, but the go-live's `setup.sh` run rebuilds it from source
+(`build_prompt_intent.py`) instead of keeping that migrated copy — the actionability gate's
+grounding collection is a smaller, freshly-balanced set (792 vs 2,044), not the pre-migration one.
+The gate still fails open below its data-sufficiency floor, but any watch item reading gate hit
+rates must not compare against a baseline built on the 2,044-point collection.
+
+**Pre-existing quirk, newly load-bearing here (TASK-022): `embed_down` over-counts on Python
+3.9.** The enforcer's embed call (`_embed` → `urllib.request.urlopen(..., timeout=EMBED_TIMEOUT_S)`,
+`hooks/scripts/enforcer.py:1793`) is guarded by `except TimeoutError` first (`:2481`) and falls
+through to `except (OSError, ...)` (`:2488`), which logs the row `embed_down`. `socket.timeout`
+became an alias of `TimeoutError` only from Python 3.10 on; under Python 3.9 a plain read timeout
+still raises the pre-3.10 `socket.timeout` class, which the `TimeoutError` branch misses and the
+`OSError` branch catches instead — so a slow-but-alive owner is logged `embed_down` (unreachable)
+rather than `embed_timeout` (busy/loading). This is not new in 0.54.0, but the owner replacing two
+Docker containers with one process makes `embed_down` a more load-bearing signal now (W33):
+verify the hook's own interpreter before reading a spike as an outage.
+
+| # | Watch | Command | Trigger | Action |
+|---|-------|---------|---------|--------|
+| W29 | Owner up, not a revived container | `python3 scripts/doctor.py` → "Index owner" row | FAIL (answers as something other than the owner), or a Docker container listening on 6333/6363 | `doctor.py --fix` stops a revived container; `SKILL_OWNER_AUTOSTART=1` (default) lets the launcher/hook restart the owner itself |
+| W30 | Offer-level rates reset at the switch | `analyze.py --since "2026-09-27 06:45 +07"` (exclude subagent + self-session traffic) | any comparison against a v0.53.x-or-earlier window | epoch-scoped only — this is the reset line, never pool backward |
+| W31 | Exact-order offer shift measured, not assumed | replay live turns since the switch against the parity replay's offered-skill baseline (order differs 66/540, 12 %; which-skills differs 14/540, 2.6 %) | offer quality (hit@k, used-skill-in-offer) moves outside that baseline with no unrelated cause | re-run the parity comparison against the CURRENT catalogue (skills drift), never against the pre-switch snapshot |
+| W32 | `prompt_intent` gate on its rebuilt population | the actionability gate's fail-open share since the switch | fail-open share rises (the data-sufficiency floor trips more often on 792 points than it did on 2,044) | expected right after a rebuild — re-check after the collection re-accumulates; do not compare its hit rate to the pre-switch 2,044-point baseline |
+| W33 | `embed_down` interpreter check | on an `embed_down` spike, confirm which `python3` actually ran the hook (log its `sys.version` once, or check the hook's shebang resolution) | a Python 3.9 interpreter running the hook | point the hook at the venv interpreter, never a bare system `python3` — a 3.9 hook silently folds every read timeout into `embed_down` |
+
 ## v0.52.9 — installers fail closed (ADR-0072)
 
 **No new epoch for any watch item.** Installers and doctor rows only; the standing order, the enforcer,
