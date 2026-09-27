@@ -486,7 +486,7 @@ plugin-level customization layer and these engine patches.
   same way the malformed-value `try`/`except` does, falling back to 6333/6363 on either failure
   mode. Covered by `tests/test_index_owner.py::test_out_of_range_port_env_falls_back_instead_of_crashing_at_bind`.
   Not upstream: re-apply on re-vendor.
-- **Strict ASCII-digit port grammar (v0.54.2 round 3):** the two checks above still accepted
+- **Strict ASCII-digit port grammar (v0.54.2):** the two checks above still accepted
   every value Python's bare `int()` accepts — leading/trailing whitespace, a leading `+`/`-`
   sign, an underscore digit-group separator (`"7_363"`), and full-width Unicode decimal digits
   (`"７３６３"`) — while `scripts/doctor.py`, `hooks/scripts/enforcer.py`, and the bash callers

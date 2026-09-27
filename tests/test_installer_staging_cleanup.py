@@ -281,8 +281,8 @@ def test_omp_stale_prune_only_touches_our_own_prefix_not_a_foreign_tool(tmp_path
 
 
 # ── Sibling kill tests: the same signal-kill proof as claude-code (above), for the
-# three installers the rest of the suite only string-checks. Adapted from the reviewer's
-# scratch reproduction (fails 3/3 on the pre-fix installers, passes 3/3 on HEAD). ──────────
+# three installers the rest of the suite only string-checks. Each kill reproduction
+# fails on the pre-fix installers and passes on the fixed ones. ──────────
 
 def _kill_during_export(argv, env, cache_base, timeout=30):
     proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

@@ -12,24 +12,22 @@ WHY THIS EXISTS
     symptom-level control; this hook enforces it where the command runs.
 
 WHAT IT DOES — DENY BY DEFAULT
-    Any command that runs `git ... stash` in any recognized form is DENIED unless the
-    token immediately following `stash` is exactly `list` or `show`. Recognized forms:
-      - global git options before the subcommand: `-C <path>`, `-c k=v`, `--git-dir=`,
-        `--work-tree=`, `--namespace=`, `--no-pager`, and other dash flags
-      - an environment-variable prefix: `GIT_DIR=x git stash`
-      - wrappers: `env`, `command`, `sudo`, `time`, `nice`, `exec`, `eval`, `xargs`
-      - shell keywords that can precede a command word: `if`/`then`/`elif`/`else`/
-        `while`/`until`/`do`/`done`/`fi`/`case`/`esac`
-      - grouping: `( ... )`, `{ ... ; }`
-      - an absolute or relative git path (`/usr/bin/git`), a backslash-escaped
-        invocation (`\\git`), and the fused porcelain executable name `git-stash`
-      - a shell interpreter running a command string: `bash -c '...'`, `sh -c "..."`
-      - command substitution, wherever it sits in the surrounding command:
-        `$(git stash)`, `` `git stash` ``
-      - command separators: `&&`, `||`, `;`, `|`, `&`, newline
-    A command that never runs `git ... stash` at all — including one that merely
-    mentions the word ("git log --grep stash", "echo git stash", a quoted string) —
-    passes through with no decision.
+    Every word of every command is checked, not just the first: wherever a `git` word
+    (any path to it, `\\git`, or the fused `git-stash`) appears, the guard skips git's
+    own global options (`-C <path>`, `-c k=v`, `--git-dir=`, `--no-pager`, …) and, if the
+    subcommand is `stash`, DENIES unless the next word is exactly `list` or `show`.
+    Checking every position, instead of stripping a known list of prefixes, is what
+    makes wrappers and their options (`nice -n 10`, `time -p`, `sudo -u x`, `env A=1`),
+    shell keywords (`if`/`then`, `case … in x)`), grouping (`( … )`, `{ …; }`) and
+    environment prefixes (`GIT_DIR=x`) irrelevant: none of them can hide the git word.
+    Also checked, recursively: a shell running a command string (`bash -c '…'`,
+    `sh -c "…"`), `eval`'s arguments, and command substitution (`$(…)`, backticks)
+    wherever it sits. Separators (`&&`, `||`, `;`, `|`, `&`, newline) split commands.
+
+    A command that only mentions the word inside a quoted string (a commit message,
+    `git log --grep stash`, `echo 'git stash'`) passes. An UNQUOTED `git stash` anywhere
+    in a command is denied even when it is only an argument (`echo git stash`): the
+    guard fails safe rather than guess which words a program will execute.
 
     Deliberate obfuscation is OUT OF SCOPE: a string built by concatenation, base64, or
     a Python/Perl one-liner that shells out is not analyzed. This guard catches the
@@ -46,7 +44,6 @@ FAILS OPEN
 """
 import json
 import os
-import re
 import shlex
 import sys
 
@@ -58,13 +55,8 @@ REASON = ("git stash is blocked in this repo (owner rule: no git stash). A stash
           "stay allowed. Deliberate human override: GIT_STASH_GUARD=0.")
 
 _GIT_GLOBAL_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
-_WRAPPERS = {"command", "env", "sudo", "time", "nice", "exec", "eval", "xargs"}
-_KEYWORDS = {"if", "then", "elif", "else", "while", "until", "do", "done", "fi", "case", "esac"}
 _SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "ash"}
 _SEPARATORS = {"&&", "||", ";", "|", "&"}
-
-_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-
 
 def _extract_substitutions(command):
     """Return (outer, inners): OUTER has every top-level `$(...)` and backtick span
@@ -116,66 +108,43 @@ def _tokenize(text):
         return text.split()
 
 
-def _strip_leaders(toks):
-    """Drop leading env assignments, wrappers, shell keywords, and a group-open token;
-    a `git ... stash` command word can follow any of them."""
-    changed = True
-    while toks and changed:
-        changed = False
-        head = toks[0]
-        if _ASSIGN_RE.match(head) or head in _WRAPPERS or head in _KEYWORDS or head in ("(", "{"):
-            toks = toks[1:]
-            changed = True
-    return toks
-
-
-def _shell_dash_c_argument(toks):
-    """If TOKS runs a shell interpreter with `-c`, return its command-string argument
-    (the next token after `-c`), else None."""
-    if not toks or os.path.basename(toks[0]) not in _SHELLS:
-        return None
-    for idx in range(1, len(toks) - 1):
-        if toks[idx] == "-c":
-            return toks[idx + 1]
-    return None
+def _stash_first_arg_denied(toks, i):
+    """TOKS[i] is `stash` (or just past `git-stash`); deny unless the next word is a
+    read-only subcommand."""
+    first = toks[i] if i < len(toks) else ""
+    return first not in READ_ONLY
 
 
 def _group_is_denied(toks):
     """TOKS is one already-separated command (no `&&`/`;`/`|`/`&` inside it). Return
-    True if it runs a state-changing `git stash` in any recognized form."""
-    toks = _strip_leaders(toks)
-    if not toks:
-        return False
-
-    nested = _shell_dash_c_argument(toks)
-    if nested is not None:
-        return decide(nested) is not None
-
-    base = os.path.basename(toks[0])
-    if base == "git-stash":
-        rest = toks[1:]
-        first = rest[0] if rest else ""
-        return first not in READ_ONLY
-
-    if base != "git":
-        return False
-
-    i = 1
-    while i < len(toks) and toks[i].startswith("-"):        # git -C <path>, -c k=v, --git-dir=...
-        if toks[i] in _GIT_GLOBAL_WITH_VALUE and i + 1 < len(toks):
-            i += 2
-        else:
-            i += 1
-    if i >= len(toks) or toks[i] != "stash":
-        return False
-    first = toks[i + 1] if i + 1 < len(toks) else ""
-    return first not in READ_ONLY
+    True if ANY word in it starts a state-changing `git stash`, whatever precedes it."""
+    for idx, tok in enumerate(toks):
+        base = os.path.basename(tok)
+        if base in _SHELLS:
+            for j in range(idx + 1, len(toks) - 1):
+                if toks[j] == "-c":
+                    if decide(toks[j + 1]) is not None:
+                        return True
+                    break
+        elif base == "eval" and idx + 1 < len(toks):
+            if decide(" ".join(toks[idx + 1:])) is not None:
+                return True
+        elif base == "git-stash":
+            if _stash_first_arg_denied(toks, idx + 1):
+                return True
+        elif base == "git":
+            i = idx + 1
+            while i < len(toks) and toks[i].startswith("-"):   # git -C <path>, -c k=v, ...
+                i += 2 if toks[i] in _GIT_GLOBAL_WITH_VALUE and i + 1 < len(toks) else 1
+            if i < len(toks) and toks[i] == "stash" and _stash_first_arg_denied(toks, i + 1):
+                return True
+    return False
 
 
 def decide(command: str):
-    """'deny' reason string if COMMAND runs a state-changing git stash anywhere —
-    directly, through a wrapper, inside a subshell/brace/if block, in the background,
-    or via `$(...)`/backtick substitution — else None."""
+    """'deny' reason string if COMMAND runs a state-changing git stash anywhere in it
+    (any word position, a shell `-c` string, `eval`, or a `$(...)`/backtick
+    substitution), else None."""
     command = command or ""
     outer, inners = _extract_substitutions(command)
     for inner in inners:
@@ -224,10 +193,12 @@ def _selftest():
         "(cd sub && git stash)", "(git stash)", "{ git stash; }",
         "if true; then git stash; fi", "time git stash", "nice git stash", "exec git stash",
         "git stash&", "bash -c 'git stash'", "echo $(git stash)", "eval git stash",
-        "xargs git stash",
+        "xargs git stash", "echo git stash",
+        "case x in x) git stash;; esac", "nice -n 10 git stash", "time -p git stash",
+        "sudo -u me git stash", "env -i A=1 git stash", "eval 'git stash'",
     ]
     allow = [
-        "git stash list", "git stash show -p", "git status", "echo git stash", "git commit -m 'stash'",
+        "git stash list", "git stash show -p", "git status", "git commit -m 'stash'",
         "ls stash", "git show HEAD:x", "git -C x stash list", "echo 'git stash'",
         "git log --grep stash", "grep stash file",
     ]

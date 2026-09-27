@@ -15,12 +15,15 @@ All notable changes to **skill-concierge**. Format loosely follows
 ### Added
 - **git-stash guard:** a third `PreToolUse(Bash)` hook, `scripts/git_stash_guard.py`, denies any
   `git stash` in this checkout unless the word right after `stash` is exactly `list` or `show`.
-  - It finds the invocation wherever it sits in the command: after global options (`-C`, `-c`,
-    `--git-dir=`), environment prefixes, wrappers (`env`, `command`, `time`, `nice`, `exec`, `eval`,
-    `xargs`, `sudo`), an absolute path or `\git`, `git-stash`, subshells, `$(…)`, backticks, `{ …; }`,
-    `if`/`while` bodies, `sh -c`/`bash -c` strings, and after `&&`, `||`, `;`, `|`, `&` or a newline.
+  - Every word of the command is checked, not just the first, so nothing placed before `git` can
+    hide it: wrappers and their own options (`nice -n 10`, `time -p`, `sudo -u x`, `env A=1`), shell
+    keywords and `case` arms, subshells, `{ …; }`, environment prefixes, an absolute path or `\git`,
+    and `git-stash`. A `sh -c`/`bash -c` string, `eval`'s arguments and `$(…)`/backticks are checked
+    recursively; `&&`, `||`, `;`, `|`, `&` and newlines separate commands.
   - `git stash -m list` and `git stash -- list` are denied: their first word is not `list`.
-  - Commands that only mention the word (`git log --grep stash`, `grep stash file`) still pass.
+  - Quoted text passes (`git commit -m "…stash…"`, `git log --grep stash`, `echo 'git stash'`). An
+    unquoted `git stash` is denied even as another program's argument (`echo git stash`): the guard
+    fails safe rather than guess which words a program will run.
   - The deny message names `git show <ref>:<path>` / `git diff <ref>`, a WIP commit, or `git worktree
     add` as alternatives. Deliberate obfuscation (split strings, encoded commands) is out of scope.
   - Fails open on any internal error or unparseable stdin; override `GIT_STASH_GUARD=0`.
