@@ -499,47 +499,19 @@ def test_commandcode_malformed_mcp_json_stops_before_any_write(tmp_path):
 _PROJECT_SLUG = "users-thinhkhuat-in-prod-my-workbench-skill-concierge"
 
 
-def test_commandcode_malformed_project_scope_mcp_json_stops_before_any_write(tmp_path):
-    """The per-project mcp.json override must be checked in the same preflight as the user
-    mcp.json, so a malformed copy there also stops the run before anything is written."""
-    root = tmp_path / "repo"
-    (root / ".claude-plugin").mkdir(parents=True)
-    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
-    (root / "adapters" / "commandcode").mkdir(parents=True)
-    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
-                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
-    (root / "bin").mkdir()
-    launcher = root / "bin" / "skill-search-mcp"
-    launcher.touch()
-    launcher.chmod(0o755)
-    home = tmp_path / "home"
-    cmd = home / ".commandcode"
-    project_dir = cmd / "projects" / _PROJECT_SLUG
-    project_dir.mkdir(parents=True)
-    broken = '{"mcpServers": ['   # malformed on purpose
-    project_mcp = project_dir / "mcp.json"
-    project_mcp.write_text(broken)
-
-    env = installer_env(tmp_path, home)
-    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
-                        env=env, capture_output=True, text=True, timeout=120)
-    assert r.returncode != 0, r.stdout + r.stderr
-    assert "Nothing was changed" in r.stderr, r.stderr
-    assert project_mcp.read_text() == broken
-    assert not (cmd / "settings.json").exists(), "settings.json must not be written on a refusal"
-    assert not (cmd / "mcp.json").exists(), "the user-scope mcp.json must not be written on a refusal"
-    assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
-
-
 @pytest.mark.parametrize("target,content", [
     ("mcp.json", "[]"),
     ("mcp.json", '{"mcpServers": null}'),
     ("settings.json", "[]"),
+    (f"projects/{_PROJECT_SLUG}/mcp.json", "[]"),
+    (f"projects/{_PROJECT_SLUG}/mcp.json", '{"mcpServers": null}'),
 ])
 def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target, content):
     """Valid JSON of the wrong shape (a top-level array, or a null where an object is
     expected) must be refused by the preflight just like a parse failure — not accepted,
-    then crash a later step after earlier steps already wrote their part."""
+    then crash a later step after earlier steps already wrote their part. The per-project
+    mcp.json override was already checked for parseability before this shape check existed
+    (v0.54.1); these two cases are what is actually new about the preflight there."""
     root = tmp_path / "repo"
     (root / ".claude-plugin").mkdir(parents=True)
     (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
@@ -554,6 +526,7 @@ def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target,
     cmd = home / ".commandcode"
     cmd.mkdir(parents=True)
     target_path = cmd / target
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(content)
 
     env = installer_env(tmp_path, home)
@@ -562,6 +535,52 @@ def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target,
     assert r.returncode != 0, r.stdout + r.stderr
     assert "Nothing was changed" in r.stderr, r.stderr
     assert target_path.read_text() == content, "the wrong-shape file must be left byte-identical"
+    assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
+
+
+@pytest.mark.parametrize("settings_content", [
+    '{"hooks": {"SessionStart": null}}',
+    '{"hooks": {"SessionStart": [{"hooks": null}]}}',
+    '{"hooks": {"SessionStart": [{"hooks": ["x"]}]}}',
+])
+def test_commandcode_nested_wrong_shape_leaves_every_file_byte_identical(tmp_path, settings_content):
+    """A shape wrong enough to pass the top-level preflight (hooks IS an object) but wrong
+    at a nested level (SessionStart null, or an entry whose own hooks list holds something
+    that is not a dict) used to crash mid-run — after the mod and settings.json were already
+    written. The installer computes every JSON transform in memory before writing anything,
+    so a nested failure here must leave the mod absent and all three JSON files — including
+    the OTHER two it also rewrites — byte-identical to what was on disk before the run."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    cmd = home / ".commandcode"
+    cmd.mkdir(parents=True)
+    settings = cmd / "settings.json"
+    settings.write_text(settings_content)
+    mcp = cmd / "mcp.json"
+    mcp_good = json.dumps({"mcpServers": {"keep": "me"}})
+    mcp.write_text(mcp_good)
+    project_dir = cmd / "projects" / _PROJECT_SLUG
+    project_dir.mkdir(parents=True)
+    project_mcp = project_dir / "mcp.json"
+    project_mcp_good = json.dumps({"mcpServers": {"also-keep": "me"}})
+    project_mcp.write_text(project_mcp_good)
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert settings.read_text() == settings_content, "settings.json must be left byte-identical"
+    assert mcp.read_text() == mcp_good, "mcp.json must be left byte-identical"
+    assert project_mcp.read_text() == project_mcp_good, "the project mcp.json must be left byte-identical"
     assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
 
 
