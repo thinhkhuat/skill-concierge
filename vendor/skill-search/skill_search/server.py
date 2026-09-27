@@ -57,14 +57,16 @@ import requests
 # on the exact same set of skills/names — see skills_discovery.py.
 from skill_search import skills_discovery as sd
 from skill_search.skills_discovery import discover_skills
+from skill_search import ports
 
 
 # ---------------------------------------------------------------------------
 # Configuration (override via env vars so the same code runs on any machine)
 # ---------------------------------------------------------------------------
 # Vector store: the index owner (or a Qdrant server) at SKILL_QDRANT_URL. The
-# embedded on-disk mode is gone — it locked the store to one process.
-QDRANT_URL      = os.environ.get("SKILL_QDRANT_URL") or "http://localhost:6333"
+# embedded on-disk mode is gone — it locked the store to one process. ports.qdrant_url
+# is the one place in the repo that reads this var and applies the shared port grammar.
+QDRANT_URL      = ports.qdrant_url(default_port=6333)
 COLLECTION      = os.environ.get("SKILL_COLLECTION", "claude_skills")
 
 # Embedding backend. Default "fastembed" = local ONNX, NO service and no manual
@@ -548,7 +550,7 @@ def embed(text: str) -> list[float]:
 # machine holds one model copy instead of one per MCP server; otherwise the in-process
 # model, as before. Reindex keeps embedding in-process (tens of thousands of texts).
 EMBED_BASE = (f"http://{os.environ.get('EMBED_SHIM_HOST', '127.0.0.1')}:"
-              f"{os.environ.get('EMBED_SHIM_PORT', '6363')}")
+              f"{ports.embed_port(default=6363)}")
 _owner_ok = False            # set once the embed service has named this engine's model
 
 

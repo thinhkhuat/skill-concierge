@@ -446,8 +446,8 @@ anything or copying the mod, so a nested wrong shape can no longer crash mid-run
 already wrote their part; the ZCode installer header lists every pre-write refusal, checkout ones
 included; a malformed OR out-of-range port in `SKILL_QDRANT_URL`/`EMBED_SHIM_PORT`/the owner's own
 overrides falls back to the default port with one stderr line, and every port-deriving caller — the index
-owner (mirrored inline, since it stays import-free of the rest of the repo), `doctor.py`, the enforcer
-(both importing the one shared `scripts/port_grammar.py`), the launcher, and `setup.sh` — now applies the
+owner, the search server, `doctor.py`, the enforcer and every script (all importing the one module
+`vendor/skill-search/skill_search/ports.py`), the launcher, and `setup.sh` — now applies the
 identical STRICT ASCII-digit grammar (1-65535, no whitespace/sign/underscore/full-width-digit forms a bare
 `int()` would have accepted), each proven against its own real code in one shared test table so a
 regression in any single caller fails the suite; every installer's own JSON/registry write (Command Code,

@@ -131,34 +131,35 @@ NETWORK_READ_ERRORS = (*JSON_READ_ERRORS, http.client.HTTPException)
 
 
 def read_mcp_env():
-    """Embedder + store come from .mcp.json (single source of truth); env overrides win."""
-    env = {}
+    """Embedder + store come from .mcp.json (single source of truth); env overrides win.
+    Returns the merged mapping (mcp.json layer overlaid by the process env) — callers read
+    whichever key they need from it, including the port-deriving keys ports.py owns."""
+    conf = {}
     try:
-        env = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
+        conf = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["skill-search"]["env"]
     except JSON_READ_ERRORS:
-        env = {}
-    return (
-        os.environ.get("SKILL_QDRANT_URL", env.get("SKILL_QDRANT_URL", "http://localhost:6333")),
-        os.environ.get("SKILL_EMBED_BACKEND", env.get("SKILL_EMBED_BACKEND", "fastembed")),
-        os.environ.get("SKILL_EMBED_MODEL", env.get("SKILL_EMBED_MODEL", "")),
-    )
+        conf = {}
+    if not isinstance(conf, dict):
+        conf = {}
+    return {**conf, **os.environ}
 
 
-sys.path.insert(0, str(ROOT / "scripts"))
-import port_grammar  # noqa: E402  (needs ROOT on sys.path first)
+sys.path.insert(0, str(ROOT / "vendor" / "skill-search"))
+from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
 
-_RAW_QURL, BACKEND, MODEL = read_mcp_env()
-# The same strict grammar every port-deriving caller applies (scripts/port_grammar.py):
-# ASCII digits only, 1-65535. A malformed OR merely absent port in SKILL_QDRANT_URL must
-# land doctor on the SAME well-known default the index owner (index_owner.py) falls back
-# to — reassigning QURL itself, not just a side variable, means every direct network call
-# below that uses QURL gets the corrected address too. Left unfixed, a URL with no port at
-# all (e.g. a trailing "http://127.0.0.1:") does not raise, but `http.client`/`urllib` then
+_MCP_ENV = read_mcp_env()
+BACKEND = _MCP_ENV.get("SKILL_EMBED_BACKEND", "fastembed")
+MODEL = _MCP_ENV.get("SKILL_EMBED_MODEL", "")
+# The same strict grammar every port-deriving caller applies (skill_search.ports): ASCII
+# digits only, 1-65535. A malformed OR merely absent port in SKILL_QDRANT_URL must land
+# doctor on the SAME well-known default the index owner (index_owner.py) falls back to —
+# reassigning QURL itself, not just a side variable, means every direct network call below
+# that uses QURL gets the corrected address too. Left unfixed, a URL with no port at all
+# (e.g. a trailing "http://127.0.0.1:") does not raise, but `http.client`/`urllib` then
 # silently connect on port 80 (the browser default) instead of failing or using 6333.
-QURL = port_grammar.safe_url(_RAW_QURL, 6333)
-if QURL != _RAW_QURL:
-    print(f"skill-concierge doctor: SKILL_QDRANT_URL={_RAW_QURL!r} has no usable port; "
-          f"using {QURL!r}", file=sys.stderr)
+QURL, _qurl_notice = ports.resolved_qdrant_url(env=_MCP_ENV, default_port=6333)
+if _qurl_notice:
+    print(f"skill-concierge doctor: {_qurl_notice}", file=sys.stderr)
 SS_BIN = VENV / "bin" / "skill-search"
 PY_BIN = VENV / "bin" / "python"
 # The local index owner (skill_search.index_owner) replaces the Qdrant + embed-shim
@@ -173,7 +174,7 @@ ENAME = os.environ.get("SKILL_EMBED_CONTAINER", "skill-concierge-embed-shim")
 # The owner's two ports as configured (store URL + embed port), 6333/6363 by default: a
 # container publishing either one is in the owner's way; one on some other port is not.
 _store_port = urllib.parse.urlsplit(QURL).port
-_embed_port = port_grammar.parse_port(os.environ.get("EMBED_SHIM_PORT"), 6363)
+_embed_port = ports.embed_port(default=6363)
 EMBED_BASE = f"http://127.0.0.1:{_embed_port}"
 OWNER_PORTS = (str(_store_port), str(_embed_port))
 # The embed parity probe: one English and one Vietnamese prompt, owner vs in-process.

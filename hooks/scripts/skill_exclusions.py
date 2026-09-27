@@ -41,7 +41,16 @@ except Exception:  # sibling missing, or ledger's annotations break a 3.9 system
     GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
                  "skill-search/get_skill", "skill_search_get_skill")
 
-QDRANT_URL = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+# skill_search.ports is the one home for the SKILL_QDRANT_URL port grammar (owner, doctor,
+# the enforcer, this hook). A hook must never crash on an import it doesn't strictly need to
+# keep running: on failure this falls back to the fixed well-known default directly, never a
+# second copy of the grammar.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "vendor" / "skill-search"))
+    from skill_search import ports
+    QDRANT_URL = ports.qdrant_url(default_port=6333).rstrip("/")
+except Exception:
+    QDRANT_URL = "http://localhost:6333"
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 try:
     QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.25"))

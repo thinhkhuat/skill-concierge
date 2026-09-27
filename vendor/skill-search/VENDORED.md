@@ -492,12 +492,14 @@ plugin-level customization layer and these engine patches.
   (`"７３６３"`) — while `scripts/doctor.py`, `hooks/scripts/enforcer.py`, and the bash callers
   (`bin/skill-search-mcp`, `setup.sh`) all reject those forms. A single misconfigured env var
   could therefore make the owner bind one port while every other caller derived a different
-  one from the identical value. `_STRICT_PORT_RE = re.compile(r"^[0-9]{1,5}$")` and
-  `_strict_int(raw)` now gate BOTH `QUERY_PORT` and `EMBED_PORT` before the range check, matching
-  the ASCII-digits-only grammar every other caller applies. Every other Python caller imports
-  the single shared implementation at `scripts/port_grammar.py`; this file stays import-free of
-  the rest of the repo (it must remain portable on its own — see "What this provides" above), so
-  the grammar is MIRRORED here inline instead, at the cost of the duplication this note exists to
-  flag. Keep the two copies in lockstep by hand; there is no automated drift check. Covered by
-  `tests/test_index_owner.py::test_strict_grammar_rejects_whitespace_sign_underscore_and_full_width_digits`
-  and `tests/test_port_agreement.py`. Not upstream: re-apply on re-vendor.
+  one from the identical value. The grammar now lives in ONE module inside this package,
+  `skill_search/ports.py` (stdlib only): `index_owner.py` and `server.py` import it directly,
+  and every other caller in the repo puts `vendor/skill-search` on `sys.path` and imports the
+  same module, so there is no second copy to drift. The rule: ASCII digits only, the whole
+  string (`re.fullmatch`), 1-5 characters, 1-65535; a URL keeps IPv6 brackets when rebuilt,
+  and a URL with no usable port falls back to 443 for `https`, else the caller's default.
+  `tests/test_port_env_guard.py` fails if any other Python file reads one of the four port
+  settings from the environment, or any shell script expands one outside its `_safe_port`
+  derivation line. Covered by `tests/test_ports.py` and `tests/test_port_agreement.py` (one
+  shared case table driving every caller's real code, bash included). Not upstream: re-apply
+  on re-vendor.

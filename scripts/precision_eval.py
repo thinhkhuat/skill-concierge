@@ -29,8 +29,11 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "vendor" / "skill-search"))
+from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
+
 CORPUS = Path(os.environ.get("SKILL_SCENARIOS_DIR", ROOT / "eval" / "scenarios"))
-QDRANT = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+QDRANT = ports.qdrant_url(default_port=6333).rstrip("/")
 LIVE = os.environ.get("SKILL_COLLECTION", "claude_skills")
 SHADOW = os.environ.get("SKILL_SHADOW_COLLECTION", "claude_skills_shadow")
 FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.20"))

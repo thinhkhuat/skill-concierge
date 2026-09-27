@@ -31,11 +31,14 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "vendor" / "skill-search"))
+from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
+
 # Canonical utterance corpus lives in the OPERATOR home (0.37.0: single copy — the repo
 # is public, the corpus is personal; the pre-0.37.0 ROOT/eval default is retired).
 _TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
 OUT = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
-QDRANT = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+QDRANT = ports.qdrant_url(default_port=6333).rstrip("/")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 
 MAX_TRIGGERS = int(os.environ.get("TRIGGERS_MAX", "12"))   # m2: cap N so desc weight stays consistent

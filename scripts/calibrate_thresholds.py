@@ -43,6 +43,9 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "vendor" / "skill-search"))
+from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
+
 CORPUS_DIR = Path(os.environ.get("SKILL_SCENARIOS_DIR", ROOT / "eval" / "scenarios"))
 # Written to the DURABLE HOME so the artifact survives `/plugin update` (each release mints a
 # fresh cache dir; a copy under the plugin root dies with it — the ADR-0027 artifact class).
@@ -50,9 +53,8 @@ OUT = Path(os.environ.get(
     "SKILL_THRESHOLDS",
     Path.home() / ".claude" / "skill-concierge" / "thresholds.json"))
 
-EMBED_URL = (f"http://{os.environ.get('EMBED_SHIM_HOST','127.0.0.1')}"
-             f":{os.environ.get('EMBED_SHIM_PORT','6363')}/embed")
-QDRANT = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+EMBED_URL = f"http://{os.environ.get('EMBED_SHIM_HOST','127.0.0.1')}:{ports.embed_port(default=6363)}/embed"
+QDRANT = ports.qdrant_url(default_port=6333).rstrip("/")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 BETA2 = 4            # recall weighted 4x precision when picking tau (mirrors bm25)
 F1_OK = 0.60

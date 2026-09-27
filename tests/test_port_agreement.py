@@ -1,28 +1,21 @@
 """Every port-deriving caller — the vendored index owner, doctor.py, enforcer.py,
-bin/skill-search-mcp, and setup.sh — must apply the identical STRICT malformed/out-of-range
--> default rule (scripts/port_grammar.py: ASCII digits only, 1-65535) for SKILL_QDRANT_URL
-and EMBED_SHIM_PORT. Two prior gaps this file guards against:
-
-1. Before the first fix, the owner and doctor fell back to the well-known port on a bad
-   value while the enforcer, the launcher, and setup.sh kept trying the bad one — a single
-   misconfigured env var left half the callers unable to reach the half that actually came
-   up (test_every_caller_agrees_on_the_*_fallback, test_a_valid_configured_port_is_left_alone).
-2. Before the second fix, callers built on a bare `int(raw)` (doctor.py, enforcer.py) were
-   MORE lenient than bash's `_safe_port` and `urlsplit().port`: `int()` accepts leading and
-   trailing whitespace, a leading '+' sign, an underscore digit-group separator, and
-   full-width Unicode decimal digits, and treats "0" as valid — so those callers derived a
-   DIFFERENT port than the strict ones from the identical env var
-   (test_every_caller_rejects_lenient_forms_a_bare_int_would_accept).
+bin/skill-search-mcp and setup.sh — lands on the SAME port for every input in the shared case
+table (tests/port_cases.py). The Python callers all route through
+vendor/skill-search/skill_search/ports.py; the two bash scripts run before that package is
+importable and keep a native `_safe_port` implementing the same rule.
 
 Every helper below runs the CALLER'S OWN CODE — the real module for the Python callers, the
-function extracted verbatim alongside its real call-site line for the bash ones — never a
-reimplementation, so reverting a single caller's line fails the corresponding test."""
+real lines extracted verbatim for the bash ones (including the launcher's health-check curl
+line, the value actually USED, not just the one assigned) — never a reimplementation, so
+reverting a single caller's line fails a test here."""
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from port_cases import SCALAR_CASES, URL_CASES
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR_SRC = ROOT / "vendor" / "skill-search"
@@ -34,6 +27,16 @@ SETUP = ROOT / "setup.sh"
 _PORT_ENV_KEYS = ("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT",
                   "SKILL_QDRANT_URL", "EMBED_SHIM_PORT")
 
+sys.path.insert(0, str(VENDOR_SRC))
+from skill_search import ports  # noqa: E402
+
+
+def _bash(script, *args):
+    r = subprocess.run(["bash", "-c", script, "_", *args], capture_output=True, text=True,
+                       timeout=20)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
 
 def _extract_bash_func(path, name):
     lines = path.read_text().splitlines()
@@ -43,161 +46,110 @@ def _extract_bash_func(path, name):
 
 
 def _setup_embed_port(raw):
-    """Runs setup.sh's REAL embed-port call site (`EPORT="$(_safe_port ...)"`, line 35),
-    extracted verbatim alongside `_safe_port` itself — not a reimplementation. Guards the
-    M-1 gap: a caller reverted to read EMBED_SHIM_PORT directly, bypassing `_safe_port`
-    entirely, would slip past a test that only re-runs the function in isolation."""
-    func = _extract_bash_func(SETUP, "_safe_port")
-    lines = SETUP.read_text().splitlines()
-    line = next(l for l in lines if l.startswith("EPORT="))
-    assert 'EPORT="$(_safe_port "${EMBED_SHIM_PORT:-}" 6363)"' in line
-    script = f'{func}\nEMBED_SHIM_PORT="$1"\n{line}\necho "$EPORT"'
-    r = subprocess.run(["bash", "-c", script, "_", raw], capture_output=True, text=True, timeout=10)
-    assert r.returncode == 0, r.stderr
-    return r.stdout.strip()
+    """setup.sh's real `_safe_port` plus its real `EPORT=` line."""
+    line = next(l for l in SETUP.read_text().splitlines() if l.startswith("EPORT="))
+    assert "_safe_port" in line and "EMBED_SHIM_PORT" in line
+    return _bash(f'{_extract_bash_func(SETUP, "_safe_port")}\nEMBED_SHIM_PORT="$1"\n{line}\n'
+                 'echo "$EPORT"', raw)
 
 
-def _launcher_embed_port(raw):
-    """Runs bin/skill-search-mcp's REAL embed-port call site (`EMBED_PORT="$(_safe_port
-    ...)"`, line 137), extracted verbatim alongside `_safe_port` itself — the same M-1
-    guard as `_setup_embed_port`, for the other bash caller."""
-    func = _extract_bash_func(LAUNCHER, "_safe_port")
+def _launcher_health_url(raw):
+    """bin/skill-search-mcp's real `_safe_port`, its real `EMBED_PORT=` line, and the URL its
+    real health-check curl line actually requests (curl is stubbed to print its arguments).
+    A revert of EITHER line to a raw `${EMBED_SHIM_PORT...}` read changes this URL."""
     lines = LAUNCHER.read_text().splitlines()
-    line = next(l for l in lines if l.startswith("EMBED_PORT="))
-    assert 'EMBED_PORT="$(_safe_port "${EMBED_SHIM_PORT:-}" 6363)"' in line
-    script = f'{func}\nEMBED_SHIM_PORT="$1"\n{line}\necho "$EMBED_PORT"'
-    r = subprocess.run(["bash", "-c", script, "_", raw], capture_output=True, text=True, timeout=10)
-    assert r.returncode == 0, r.stderr
-    return r.stdout.strip()
+    assign = next(l for l in lines if l.startswith("EMBED_PORT="))
+    curl_line = next(l for l in lines if "curl -s -m 1" in l and "/health" in l)
+    call = curl_line[curl_line.index("curl"):curl_line.index(">/dev/null")].strip()
+    script = (f'{_extract_bash_func(LAUNCHER, "_safe_port")}\n'
+              'curl() { printf "%s\\n" "$@" | grep "^http"; }\n'
+              f'EMBED_SHIM_PORT="$1"\n{assign}\n{call}')
+    return _bash(script, raw)
 
 
-def _setup_store_port(qdrant_url):
-    """Runs setup.sh's REAL two-line store-port pipeline (the sed extraction, then
-    `_safe_port`), extracted verbatim, against `qdrant_url` — not a reimplementation of the
-    sed pattern, which a test written independently could easily get subtly wrong."""
-    func = _extract_bash_func(SETUP, "_safe_port")
+def _setup_store_port(qdrant_url, tmp_path):
+    """setup.sh's real store-port lines, run with $VENV/bin/python pointing at this
+    interpreter with the vendored engine importable — the same module the installed venv
+    carries after setup.sh's own reinstall step."""
     lines = SETUP.read_text().splitlines()
-    idx = next(i for i, l in enumerate(lines) if l.startswith("store_port=") and "sed" in l)
-    derive = "\n".join(lines[idx:idx + 2])
-    assert 'store_port="$(_safe_port "$store_port" 6333)"' in derive
-    script = f'{func}\nQURL="$1"\n{derive}\necho "$store_port"'
-    r = subprocess.run(["bash", "-c", script, "_", qdrant_url], capture_output=True, text=True, timeout=10)
+    start = next(i for i, l in enumerate(lines) if l.startswith('store_port="$('))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith(')"'))
+    block = "\n".join(lines[start:end + 1])
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True, exist_ok=True)
+    shim = venv_bin / "python"
+    shim.write_text(f'#!/bin/sh\nPYTHONPATH="{VENDOR_SRC}" exec "{sys.executable}" "$@"\n')
+    shim.chmod(0o755)
+    return _bash(f'VENV="{tmp_path / "venv"}"\nQURL="$1"\n{block}\necho "$store_port"',
+                 qdrant_url)
+
+
+def _run_module(path, name, env_overrides, expr):
+    env = {k: v for k, v in os.environ.items() if k not in _PORT_ENV_KEYS}
+    env.update(env_overrides)
+    env.setdefault("ENFORCER_JEV_GATE", "0")
+    script = ("import importlib.util\n"
+              f"spec = importlib.util.spec_from_file_location({name!r}, {str(path)!r})\n"
+              "mod = importlib.util.module_from_spec(spec)\n"
+              "spec.loader.exec_module(mod)\n"
+              f"print({expr})\n")
+    r = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
+                       text=True, timeout=30)
     assert r.returncode == 0, r.stderr
-    return r.stdout.strip()
+    return r.stdout.strip().splitlines()
 
 
 def _owner_ports(env_overrides):
-    env = dict(os.environ)
-    for k in _PORT_ENV_KEYS:
-        env.pop(k, None)
+    env = {k: v for k, v in os.environ.items() if k not in _PORT_ENV_KEYS}
     env.update(env_overrides)
     env["PYTHONPATH"] = str(VENDOR_SRC)
-    script = "from skill_search import index_owner as io_; print(io_.QUERY_PORT); print(io_.EMBED_PORT)"
-    r = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=20)
+    r = subprocess.run([sys.executable, "-c",
+                        "from skill_search import index_owner as o; "
+                        "print(o.QUERY_PORT); print(o.EMBED_PORT)"],
+                       env=env, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     query, embed = r.stdout.strip().splitlines()
     return int(query), int(embed)
 
 
-def _doctor_ports(env_overrides):
-    env = dict(os.environ)
-    for k in _PORT_ENV_KEYS:
-        env.pop(k, None)
-    env.update(env_overrides)
-    script = ("import importlib.util\n"
-              f"spec = importlib.util.spec_from_file_location('doctor_pa', {str(DOCTOR)!r})\n"
-              "mod = importlib.util.module_from_spec(spec)\n"
-              "spec.loader.exec_module(mod)\n"
-              "print(mod.OWNER_PORTS[0]); print(mod.OWNER_PORTS[1])\n")
-    r = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=20)
-    assert r.returncode == 0, r.stderr
-    store, embed = r.stdout.strip().splitlines()
-    return int(store), int(embed)
+def _doctor(env_overrides):
+    store, embed, qurl = _run_module(DOCTOR, "doctor_pa", env_overrides,
+                                     "mod.OWNER_PORTS[0], mod.OWNER_PORTS[1], mod.QURL, sep='\\n'")
+    return int(store), int(embed), qurl
 
 
-def _enforcer_ports(env_overrides):
-    env = dict(os.environ)
-    for k in _PORT_ENV_KEYS:
-        env.pop(k, None)
-    env.update(env_overrides)
-    env.setdefault("ENFORCER_JEV_GATE", "0")
-    script = ("import importlib.util\n"
-              f"spec = importlib.util.spec_from_file_location('enforcer_pa', {str(ENFORCER)!r})\n"
-              "mod = importlib.util.module_from_spec(spec)\n"
-              "spec.loader.exec_module(mod)\n"
-              "print(mod.EMBED_PORT); print(mod.QDRANT_URL)\n")
-    r = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, timeout=20)
-    assert r.returncode == 0, r.stderr
-    embed, qdrant_url = r.stdout.strip().splitlines()
-    return int(embed), qdrant_url
+def _enforcer(env_overrides):
+    embed, qurl = _run_module(ENFORCER, "enforcer_pa", env_overrides,
+                              "mod.EMBED_PORT, mod.QDRANT_URL, sep='\\n'")
+    return int(embed), qurl
 
 
-@pytest.mark.parametrize("raw", ["notaport", "70000", "-5", ""])
-def test_every_caller_agrees_on_the_embed_port_fallback(raw):
-    owner_query, owner_embed = _owner_ports({"EMBED_SHIM_PORT": raw})
-    doctor_store, doctor_embed = _doctor_ports({"EMBED_SHIM_PORT": raw})
-    enforcer_embed, _enforcer_qdrant = _enforcer_ports({"EMBED_SHIM_PORT": raw})
-    launcher_embed = _launcher_embed_port(raw)
-    setup_embed = _setup_embed_port(raw)
-
-    assert owner_embed == 6363
-    assert doctor_embed == 6363
-    assert enforcer_embed == 6363
-    assert launcher_embed == "6363"
-    assert setup_embed == "6363"
+@pytest.mark.parametrize("raw,valid", SCALAR_CASES)
+def test_every_caller_derives_the_same_embed_port(raw, valid):
+    expected = valid if valid is not None else 6363
+    assert _owner_ports({"EMBED_SHIM_PORT": raw})[1] == expected
+    assert _doctor({"EMBED_SHIM_PORT": raw})[1] == expected
+    assert _enforcer({"EMBED_SHIM_PORT": raw})[0] == expected
+    assert _setup_embed_port(raw) == str(expected)
+    assert _launcher_health_url(raw) == f"http://127.0.0.1:{expected}/health"
 
 
-@pytest.mark.parametrize("raw", ["http://127.0.0.1:notaport", "http://127.0.0.1:70000",
-                                 "http://127.0.0.1:-5"])
-def test_every_caller_agrees_on_the_store_port_fallback(raw):
-    owner_query, _owner_embed = _owner_ports({"SKILL_QDRANT_URL": raw})
-    doctor_store, _doctor_embed = _doctor_ports({"SKILL_QDRANT_URL": raw})
-    _enforcer_embed, enforcer_qdrant = _enforcer_ports({"SKILL_QDRANT_URL": raw})
-    setup_store = _setup_store_port(raw)
-
-    assert owner_query == 6333
-    assert doctor_store == 6333
-    assert enforcer_qdrant == "http://localhost:6333"
-    assert setup_store == "6333"
+@pytest.mark.parametrize("url,default_port,expected_url", URL_CASES)
+def test_every_caller_derives_the_same_store_address(url, default_port, expected_url, tmp_path):
+    expected_port = ports.url_port(expected_url, default_port)
+    env = {"SKILL_QDRANT_URL": url} if url else {}
+    assert _owner_ports(env)[0] == expected_port
+    doctor_store, _, doctor_url = _doctor(env)
+    assert doctor_store == expected_port
+    assert doctor_url.rstrip("/") == (expected_url if url else "http://localhost:6333")
+    assert _enforcer(env)[1] == (expected_url if url else "http://localhost:6333")
+    assert _setup_store_port(url, tmp_path) == str(expected_port)
 
 
-@pytest.mark.parametrize("raw", [" 7363", "7363 ", "+7363", "7_363", "７３６３", "0"])
-def test_every_caller_rejects_lenient_forms_a_bare_int_would_accept(raw):
-    """A bare Python `int(raw)` accepts leading/trailing whitespace, a leading sign, an
-    underscore digit-group separator, and full-width Unicode decimal digits — and treats
-    "0" as a valid non-negative integer. The strict port grammar (scripts/port_grammar.py,
-    mirrored inline in index_owner.py, and bash's own `case … [!0-9]*` pattern) rejects
-    every one of these; before this fix a caller built on plain `int()` would have derived
-    a DIFFERENT port than one built on `urlsplit().port` or the bash grammar from the exact
-    same env var."""
-    owner_query, owner_embed = _owner_ports({"EMBED_SHIM_PORT": raw})
-    doctor_store, doctor_embed = _doctor_ports({"EMBED_SHIM_PORT": raw})
-    enforcer_embed, _enforcer_qdrant = _enforcer_ports({"EMBED_SHIM_PORT": raw})
-    launcher_embed = _launcher_embed_port(raw)
-    setup_embed = _setup_embed_port(raw)
-
-    assert owner_embed == 6363, f"owner accepted {raw!r} as a port"
-    assert doctor_embed == 6363, f"doctor accepted {raw!r} as a port"
-    assert enforcer_embed == 6363, f"enforcer accepted {raw!r} as a port"
-    assert launcher_embed == "6363", f"launcher accepted {raw!r} as a port"
-    assert setup_embed == "6363", f"setup.sh accepted {raw!r} as a port"
-
-
-def test_a_valid_configured_port_is_left_alone_everywhere():
-    """The agreement rule must never override a VALID configuration — only a malformed or
-    out-of-range one falls back to the default."""
-    owner_query, owner_embed = _owner_ports({"SKILL_QDRANT_URL": "http://127.0.0.1:7333",
-                                             "EMBED_SHIM_PORT": "7363"})
-    doctor_store, doctor_embed = _doctor_ports({"SKILL_QDRANT_URL": "http://127.0.0.1:7333",
-                                                "EMBED_SHIM_PORT": "7363"})
-    enforcer_embed, enforcer_qdrant = _enforcer_ports({"SKILL_QDRANT_URL": "http://127.0.0.1:7333",
-                                                       "EMBED_SHIM_PORT": "7363"})
-    launcher_embed = _launcher_embed_port("7363")
-    setup_embed = _setup_embed_port("7363")
-    setup_store = _setup_store_port("http://127.0.0.1:7333")
-
-    assert owner_query == doctor_store == 7333
-    assert owner_embed == doctor_embed == enforcer_embed == 7363
-    assert enforcer_qdrant == "http://127.0.0.1:7333"
-    assert launcher_embed == setup_embed == "7363"
-    assert setup_store == "7333"
+def test_ipv6_store_url_does_not_crash_doctor_or_the_enforcer():
+    """A bracketed IPv6 loopback — the address the owner itself binds — must stay a parseable
+    URL everywhere; dropping the brackets used to crash doctor at import."""
+    for url in ("http://[::1]", "http://[::1]:", "http://[::1]:7333"):
+        _, _, doctor_url = _doctor({"SKILL_QDRANT_URL": url})
+        _, enforcer_url = _enforcer({"SKILL_QDRANT_URL": url})
+        assert doctor_url.startswith("http://[::1]:") and enforcer_url.startswith("http://[::1]:")

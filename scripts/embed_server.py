@@ -49,14 +49,18 @@ import json
 import os
 import queue
 import ssl
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 # Set the deployed embed env BEFORE importing the engine, so it reads mpnet-768
 # (NOT the engine's bge-small-en-v1.5 384-dim default). SKILL_QDRANT_URL only sets
 # the target for the engine's stdlib `_Store` REST client (vector-store Track B;
 # `qdrant-client` and its embedded on-disk mode are gone — ADR-0070). The shim
 # never queries the store itself, and `_Store` connects lazily, so none of this
-# couples shim startup to the store's reachability.
+# couples shim startup to the store's reachability. This is a WRITE of a fixed literal
+# default, never a read of the current value, so it never itself derives a port —
+# the engine's own server.py reads and validates it later through skill_search.ports.
 os.environ.setdefault("SKILL_EMBED_BACKEND", "fastembed")
 os.environ.setdefault(
     "SKILL_EMBED_MODEL",
@@ -64,10 +68,12 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SKILL_QDRANT_URL", "http://localhost:6333")
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "vendor" / "skill-search"))
+from skill_search import ports
 from skill_search.server import EMBED_MODEL, embed
 
 HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
-PORT = int(os.environ.get("EMBED_SHIM_PORT", "6363"))
+PORT = ports.embed_port(default=6363)
 
 _DIM = None
 

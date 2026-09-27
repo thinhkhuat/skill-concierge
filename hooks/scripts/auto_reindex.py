@@ -37,14 +37,23 @@ PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve()
 
 
 def _mcp_env():
-    """The query server's engine settings (scripts/engine_env.py); fail-silent to the process env."""
+    """The query server's engine settings (scripts/engine_env.py); fail-silent to the process
+    env. The store URL comes from skill_search.ports (the one place that reads
+    SKILL_QDRANT_URL and applies the shared port grammar); fail-silent to the fixed
+    well-known default if the vendored package can't be imported."""
     try:
         sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
         import engine_env
         merged = engine_env.engine_env(PLUGIN_ROOT)
     except Exception:
         merged = dict(os.environ)
-    return merged, merged.get("SKILL_QDRANT_URL", "http://localhost:6333")
+    try:
+        sys.path.insert(0, str(PLUGIN_ROOT / "vendor" / "skill-search"))
+        from skill_search import ports
+        url = ports.qdrant_url(env=merged, default_port=6333)
+    except Exception:
+        url = "http://localhost:6333"
+    return merged, url
 
 
 def _recent(path, within):

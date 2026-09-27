@@ -115,19 +115,28 @@ print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON" 2>/dev/null)"; th
   fi
 fi
 
-# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT: ASCII
-# digits only, no leading/trailing whitespace, no sign, no underscore separator.
-# Every port-deriving caller (index_owner.py, doctor.py, the enforcer hook, this launcher,
-# setup.sh) applies this identical grammar — the Python callers import/mirror
-# scripts/port_grammar.py, this and setup.sh implement it natively in bash — so a malformed
-# EMBED_SHIM_PORT lands every one of them on the same port instead of this launcher probing
-# an address the owner itself refused to bind to.
+# _safe_port RAW DEFAULT — echoes RAW (canonicalized to base 10, no leading zeros) if it is
+# 1-5 ASCII digits naming an integer in 1-65535, else DEFAULT. Digits only, no leading or
+# trailing whitespace, no sign, no underscore separator, and — the length check BEFORE the
+# range check — no more than 5 characters: without it, a value like "0065535" or
+# "000007363" passes bash's plain `-le 65535` comparison (which does not enforce a digit
+# count) while every Python caller (vendor/skill-search/skill_search/ports.py: index_owner.py,
+# doctor.py, the enforcer hook) already rejects it via a 5-char regex, so bash alone would
+# accept a port none of the others would derive. The explicit base-10 arithmetic
+# (`$((10#$1))`) matters for the SAME reason `int("07363")` is safe in Python but a bare
+# `$((07363))` is not in bash: a leading zero would otherwise make bash's arithmetic
+# expansion try to read the value as OCTAL (and "07363" contains 7/8/9, which aren't valid
+# octal digits, so bash would error instead of computing 7363).
 _safe_port() {
   case "$1" in
     ''|*[!0-9]*) echo "$2"; return ;;
   esac
-  if [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null; then
-    echo "$1"
+  if [ "${#1}" -gt 5 ]; then
+    echo "$2"; return
+  fi
+  port=$((10#$1))
+  if [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+    echo "$port"
   else
     echo "$2"
   fi

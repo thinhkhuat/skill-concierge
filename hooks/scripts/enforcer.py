@@ -45,57 +45,32 @@ import unicodedata
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
-
-# The one strict port grammar every port-deriving caller applies (scripts/port_grammar.py:
-# owner, doctor, this hook, the bash launcher, setup.sh) — ASCII digits only, 1-65535,
-# deliberately narrower than a bare int() (which also accepts " 7363", "+7363", "7_363" and
-# full-width digits). Mirrored inline, never imported, ONLY inside the vendored
-# index_owner.py, which must stay import-free of this repo's own code; every other caller,
-# this one included, imports it. Fails silent to a minimal same-grammar fallback if the file
-# is ever missing (packaging skew) — this hook must never crash on an import it doesn't
-# strictly need to keep running.
+# The one strict port grammar every port-deriving caller applies (vendor/skill-search/
+# skill_search/ports.py: owner, doctor, server.py, this hook, the bash launcher, setup.sh)
+# — ASCII digits only, 1-65535, deliberately narrower than a bare int() (which also accepts
+# " 7363", "+7363", "7_363" and full-width digits). This hook must never crash on an import
+# it doesn't strictly need to keep running: on any failure to import it, `ports` stays
+# `None` and the two endpoints below fall back to the fixed well-known defaults directly —
+# never a second copy of the grammar.
 try:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-    import port_grammar
-except Exception:  # pragma: no cover - defensive; see docstring above
-    import re as _re
-
-    class port_grammar:  # noqa: N801 - deliberately shaped like the module it stands in for
-        _RE = _re.compile(r"^[0-9]{1,5}$")
-
-        @staticmethod
-        def parse_port(raw, default):
-            if raw is None or not port_grammar._RE.match(raw):
-                return default
-            port = int(raw)
-            return port if 1 <= port <= 65535 else default
-
-        @staticmethod
-        def safe_url(url, default_port, default_host="localhost", default_scheme="http"):
-            try:
-                parsed = urlsplit(url)
-                port = parsed.port
-            except ValueError:
-                parsed = urlsplit("")
-                port = None
-            if port is not None and 1 <= port <= 65535:
-                return url
-            scheme = parsed.scheme or default_scheme
-            host = parsed.hostname or default_host
-            return f"{scheme}://{host}:{default_port}"
-
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "vendor" / "skill-search"))
+    from skill_search import ports
+except Exception:  # pragma: no cover - defensive; see comment above
+    ports = None
 
 # ── endpoints ────────────────────────────────────────────────────────────────
-EMBED_PORT = port_grammar.parse_port(os.environ.get("EMBED_SHIM_PORT"), 6363)
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
+if ports is not None:
+    EMBED_PORT = ports.embed_port(default=6363)
+    QDRANT_URL, _qdrant_notice = ports.resolved_qdrant_url(default_port=6333)
+    QDRANT_URL = QDRANT_URL.rstrip("/")
+    if _qdrant_notice:
+        print(f"skill-concierge enforcer: {_qdrant_notice}", file=sys.stderr)
+else:
+    EMBED_PORT = 6363
+    QDRANT_URL = "http://localhost:6333"
 EMBED_URL = f"http://{EMBED_HOST}:{EMBED_PORT}/embed"
-_RAW_QDRANT_URL = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333")
-QDRANT_URL = port_grammar.safe_url(_RAW_QDRANT_URL, 6333).rstrip("/")
-if QDRANT_URL != _RAW_QDRANT_URL.rstrip("/"):
-    print(f"skill-concierge enforcer: SKILL_QDRANT_URL={_RAW_QDRANT_URL!r} has no usable "
-          f"port; using {QDRANT_URL!r}", file=sys.stderr)
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 

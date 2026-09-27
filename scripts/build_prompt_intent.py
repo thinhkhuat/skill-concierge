@@ -45,10 +45,14 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-QDRANT_URL = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "vendor" / "skill-search"))
+from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
+
+QDRANT_URL = ports.qdrant_url(default_port=6333).rstrip("/")
 COLLECTION = os.environ.get("SKILL_PROMPT_INTENT_COLLECTION", "prompt_intent")
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
-EMBED_PORT = os.environ.get("EMBED_SHIM_PORT", "6363")
+EMBED_PORT = ports.embed_port(default=6363)
 EMBED_URL = f"http://{EMBED_HOST}:{EMBED_PORT}/embed"
 PROJECTS = Path(os.environ.get("CLAUDE_PROJECTS_DIR", Path.home() / ".claude" / "projects"))
 

@@ -38,6 +38,10 @@ from collections import Counter, defaultdict, deque
 from itertools import pairwise
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "vendor" / "skill-search"))
+from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
+
 # The `fallback` field is set on EVERY non-offer verdict leg (intent_skip -> "conversational",
 # negation -> "skill_refusal", harness_skip -> "harness_message"); only these three values
 # mean the shim/Qdrant leg actually degraded the turn to mandate-only. Counting the field
@@ -75,7 +79,7 @@ def known_skill_ids():
     enforcer offers from — so the manual real-skill-vs-builtin split can't drift
     from what the retriever knows (kills the old 585/508/512 library.json drift).
     Scrolls all point payload `name`s (stdlib only). Empty set if Qdrant is down."""
-    base = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+    base = ports.qdrant_url(default_port=6333).rstrip("/")
     coll = os.environ.get("SKILL_COLLECTION", "claude_skills")
     url = f"{base}/collections/{coll}/points/scroll"
     ids, offset = set(), None

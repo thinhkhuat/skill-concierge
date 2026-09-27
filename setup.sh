@@ -13,19 +13,28 @@
 #   ENFORCER_AUTHORIZED_SKIP=0 restore the enforcer's old silent getaway/intent_skip (ADR-0015)
 set -euo pipefail
 
-# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT: ASCII
-# digits only, no leading/trailing whitespace, no sign, no underscore separator.
-# Every port-deriving caller (index_owner.py, doctor.py, the enforcer hook, bin/skill-search-mcp,
-# this script) applies this identical grammar — the Python callers import/mirror
-# scripts/port_grammar.py, this and bin/skill-search-mcp implement it natively in bash — so a
-# malformed port lands every one of them on the same default instead of this script probing or
-# exporting an address the owner itself refused to bind to.
+# _safe_port RAW DEFAULT — echoes RAW (canonicalized to base 10, no leading zeros) if it is
+# 1-5 ASCII digits naming an integer in 1-65535, else DEFAULT. Digits only, no leading or
+# trailing whitespace, no sign, no underscore separator, and — the length check BEFORE the
+# range check — no more than 5 characters: without it, a value like "0065535" or
+# "000007363" passes bash's plain `-le 65535` comparison (which does not enforce a digit
+# count) while every Python caller (vendor/skill-search/skill_search/ports.py: index_owner.py,
+# doctor.py, the enforcer hook) already rejects it via a 5-char regex, so bash alone would
+# accept a port none of the others would derive. The explicit base-10 arithmetic
+# (`$((10#$1))`) matters for the SAME reason `int("07363")` is safe in Python but a bare
+# `$((07363))` is not in bash: a leading zero would otherwise make bash's arithmetic
+# expansion try to read the value as OCTAL (and "07363" contains 7/8/9, which aren't valid
+# octal digits, so bash would error instead of computing 7363).
 _safe_port() {
   case "$1" in
     ''|*[!0-9]*) echo "$2"; return ;;
   esac
-  if [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null; then
-    echo "$1"
+  if [ "${#1}" -gt 5 ]; then
+    echo "$2"; return
+  fi
+  port=$((10#$1))
+  if [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+    echo "$port"
   else
     echo "$2"
   fi
@@ -117,8 +126,16 @@ mkdir -p "$NEW_LOG"
 # Stop a running owner so the code just reinstalled takes effect (its stamp watch would exit
 # it within a minute anyway; this makes a same-version code change land now). Only a process
 # whose `GET /` answers the owner title is signalled — never a container or another service.
-store_port="$(printf '%s' "$QURL" | sed -E 's#^[a-z]+://[^:/]+:?([0-9]*).*#\1#')"
-store_port="$(_safe_port "$store_port" 6333)"
+# The store port derives from $QURL through the SAME strict grammar every other caller uses
+# (skill_search.ports, now installed into $VENV by the force-reinstall above) — not a bash/
+# sed URL-port extraction, which mishandled an IPv6 literal (its own colons are not the port
+# separator; a bare regex like that always fell back to the well-known default for a URL
+# such as "http://[::1]:7333" instead of reading its actual configured port 7333).
+store_port="$("$VENV/bin/python" -c '
+import sys
+from skill_search import ports
+print(ports.url_port(sys.argv[1], 6333))
+' "$QURL")"
 if curl -s -m 2 "http://127.0.0.1:$store_port/" 2>/dev/null | grep -qF "$OWNER_TITLE"; then
   for pid in $(lsof -nP -t -iTCP:"$store_port" -sTCP:LISTEN 2>/dev/null); do
     kill "$pid" 2>/dev/null || true
