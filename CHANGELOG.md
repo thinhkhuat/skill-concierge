@@ -12,6 +12,14 @@ All notable changes to **skill-concierge**. Format loosely follows
   archived outside the repo. Revert path: `git show 20b9768:Dockerfile > Dockerfile` and
   `git show 20b9768:.dockerignore > .dockerignore` restore both files byte-for-byte.
 
+### Added
+- **git-stash guard:** a third `PreToolUse(Bash)` hook, `scripts/git_stash_guard.py`, denies any
+  state-changing `git stash` in this checkout (push, save, bare `git stash`, pop, apply, drop,
+  clear, store, create, branch, any `-u`/`-a`/`-p`/`--keep-index` variant, a compound command
+  carrying one, or `git -C <path> stash`), naming `git show <ref>:<path>` / `git diff <ref>`, a WIP
+  commit, or `git worktree add` as the alternative. Read-only `git stash list` / `git stash show`
+  still pass. Fails open on any internal error or unparseable stdin; override `GIT_STASH_GUARD=0`.
+
 ### Fixed
 - **Command Code installer:** the preflight's shape check — added this release, on top of the parseability
   check the per-project `mcp.json` override already had since v0.54.1 — now also covers that project file,
@@ -29,17 +37,39 @@ All notable changes to **skill-concierge**. Format loosely follows
 - **Index owner:** a malformed OR out-of-range port in `SKILL_QDRANT_URL`, `SKILL_OWNER_QUERY_PORT`,
   `EMBED_SHIM_PORT`, or `SKILL_OWNER_EMBED_PORT` used to crash the owner at import (a non-numeric value) or
   at bind (an out-of-range one, e.g. `70000`), before it could even log anything. It now falls back to the
-  default port (6333 or 6363) and logs one line to stderr naming the bad value, in both cases. Every other
-  caller that derives a port from the same two env vars — `doctor.py`, `setup.sh`, `bin/skill-search-mcp`,
-  and the enforcer hook — now applies the identical rule, so a bad value lands every one of them on the
-  same default instead of some reaching the owner and others trying an address nothing listens on.
+  default port (6333 or 6363) and logs one line to stderr naming the bad value, in both cases.
+- **Port grammar, closed for real:** the fix above initially left every Python caller on a bare
+  `int(...)` parse, which is MORE lenient than `urlsplit().port` and bash's own `_safe_port` — `int()`
+  also accepts leading/trailing whitespace, a leading sign, an underscore digit-group separator, and
+  full-width Unicode decimal digits, so `doctor.py` and the enforcer hook could still derive a
+  DIFFERENT port than the owner and the bash callers from the identical env var. Every Python caller
+  now imports one shared strict grammar (`scripts/port_grammar.py`: ASCII digits only, 1-65535);
+  `vendor/skill-search/skill_search/index_owner.py` mirrors it inline instead of importing it, since
+  that file must stay import-free of the rest of the repo. `doctor.py` and the enforcer hook also now
+  rebuild their `SKILL_QDRANT_URL` constant itself (not just a side variable) when it names no usable
+  port at all (a trailing colon), closing a second gap: unrebuilt, that case does not raise, but
+  `urllib`/`http.client` then silently connect on port 80 instead of the well-known default. `setup.sh`
+  and `bin/skill-search-mcp` needed no change — their existing `_safe_port` already applied this exact
+  grammar. `tests/test_port_agreement.py` now runs one shared case table against every caller's REAL
+  code (including the bash call-site lines themselves, not a reimplementation of them), so reverting
+  any single caller's line fails the suite.
 - **Installer staging dirs:** the four installers that export a fresh copy through a staging dir beside
   their destination (Claude Code, Codex, OMP, ZCode) now remove that staging dir when the run is killed
   (`EXIT`/`INT`/`TERM`), not just on a normal finish or a checked failure, and prune any staging dir older
   than 60 minutes left over from an earlier killed run before starting a new export. The staging prefix is
   now skill-concierge-specific (`.skill-concierge-staging.*`) rather than a bare `.staging.*` — the OMP
   cache parent is shared by every OMP plugin, and a bare prefix could have pruned another plugin's own
-  staging dir.
+  staging dir. Claude Code, Codex, and ZCode additionally prune a LEGACY bare `.staging.*` left over from
+  a run killed under a version before that rename — their own cache parent is skill-concierge's alone, so
+  a bare-prefixed dir found there is provably ours too; OMP's shared parent still leaves any `.staging.*`
+  alone, since ownership there can't be proven.
+- **Installer writes, symlink- and permission-safe:** Command Code's installer wrote its atomic-swap
+  helper by hand, and it replaced a symlinked `settings.json` with a plain file (breaking a dotfiles-
+  managed setup) and widened a `0600` `mcp.json` to the process umask's default on every run. Every
+  installer's own JSON/registry write (Command Code, Claude Code, OMP, ZCode, Cline) now goes through
+  one shared routine, `adapters/lib/safe_write.py`: it resolves a symlink to its real target before
+  writing, preserves the target's existing file mode instead of the umask default, and swaps in via a
+  temp file plus `os.replace` for atomicity. DSH and Codex write no JSON directly and are unaffected.
 - **Doctor:** a Claude Code or OMP install registry file that exists but does not parse now reports "could
   not be read — install state unknown" instead of reading the same as "never installed". It is WARN in a
   normal run and FAILs under `--cutover`, the same rule already applied to an installed copy of unknown

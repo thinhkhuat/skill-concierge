@@ -446,12 +446,21 @@ anything or copying the mod, so a nested wrong shape can no longer crash mid-run
 already wrote their part; the ZCode installer header lists every pre-write refusal, checkout ones
 included; a malformed OR out-of-range port in `SKILL_QDRANT_URL`/`EMBED_SHIM_PORT`/the owner's own
 overrides falls back to the default port with one stderr line, and every port-deriving caller — the index
-owner, doctor, the enforcer, the launcher, and `setup.sh` — now applies the identical rule; the four
-staging-dir installers (Claude Code, Codex, OMP, ZCode) remove their staging dir on a kill, prune a stale
-one before a fresh export, and use a skill-concierge-specific prefix so the prune can never touch another
-tool's own staging dir in a shared cache parent; and a Claude Code or OMP registry file that exists but
-does not parse now reports "install state unknown" (WARN normally, FAIL under `--cutover`) instead of
-reading as never-installed.** See [CHANGELOG](CHANGELOG.md).
+owner (mirrored inline, since it stays import-free of the rest of the repo), `doctor.py`, the enforcer
+(both importing the one shared `scripts/port_grammar.py`), the launcher, and `setup.sh` — now applies the
+identical STRICT ASCII-digit grammar (1-65535, no whitespace/sign/underscore/full-width-digit forms a bare
+`int()` would have accepted), each proven against its own real code in one shared test table so a
+regression in any single caller fails the suite; every installer's own JSON/registry write (Command Code,
+Claude Code, OMP, ZCode, Cline) now goes through one shared, symlink- and permission-safe routine
+(`adapters/lib/safe_write.py`) instead of a hand-rolled copy that could replace a symlinked settings file
+or widen a `0600` secret; the four staging-dir installers (Claude Code, Codex, OMP, ZCode) remove their
+staging dir on a kill, prune a stale one before a fresh export, use a skill-concierge-specific prefix so
+the prune can never touch another tool's own staging dir in a shared cache parent, and (Claude Code,
+Codex, ZCode only — each owns its cache parent outright) also prune a legacy bare-prefixed staging dir
+left over from before that rename; a Claude Code or OMP registry file that exists but does not parse now
+reports "install state unknown" (WARN normally, FAIL under `--cutover`) instead of reading as
+never-installed; and a repo hook now denies any state-changing `git stash` in this checkout.** See
+[CHANGELOG](CHANGELOG.md).
 
 `0.54.1` — **published, ADR-0073 plus index-owner follow-ups: the audit scores what the standing order binds and the miner samples by prompt hash; installers repair a missing dir or launcher, refuse unreadable git and staged version changes, and the Command Code installer no longer runs its embedded Python's text as shell; `--cutover` skips harnesses without the plugin and fails an installed copy of unknown version; the owner's IPv6 probe carve-out applies to `::1` only; `setup.sh` starts the owner on its store port (`SKILL_QDRANT_URL` from the environment, else `.mcp.json`); the Command Code installer refuses an unparseable JSON file instead of resetting it and exits 1 on a failed verify; the ZCode installer refuses a downgrade and refuses when its registry has no matching entry; doctor's "Index owner" row shows the database path; the v0.54.0 epoch is opened in `docs/epoch-watch.md`.**
 
