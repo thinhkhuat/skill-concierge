@@ -331,7 +331,7 @@ def test_zcode_refuses_when_registry_has_no_matching_entry(tmp_path):
 
 
 def test_zcode_refuses_to_downgrade(tmp_path):
-    """M3: a newer copy is already active per the registry's own installPath manifest —
+    """A newer copy is already active per the registry's own installPath manifest —
     a stale checkout must never repoint ZCode backwards, and must never touch the cache."""
     repo = _make_repo(tmp_path, "repo", "2.0.0")
     deployed = tmp_path / "home" / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "3.0.0"
@@ -379,7 +379,7 @@ def test_apostrophe_and_double_quote_in_root_path(tmp_path):
 
 
 def test_commandcode_verify_failure_exits_nonzero(tmp_path):
-    """M2: a genuinely broken install (no MCP launcher on disk) must make verify's own
+    """A genuinely broken install (no MCP launcher on disk) must make verify's own
     `bad` flag exit the script non-zero — printing "verify: FAILED" while returning 0
     would let a caller (or a test) read the run as successful."""
     root = tmp_path / "repo"
@@ -423,6 +423,38 @@ def test_commandcode_refuses_a_malformed_settings_json_instead_of_resetting_it(t
                         env=env, capture_output=True, text=True, timeout=120)
     assert r.returncode != 0, r.stdout + r.stderr
     assert settings.read_text() == broken, "the malformed file must be left byte-identical"
+
+
+def test_commandcode_malformed_mcp_json_stops_before_any_write(tmp_path):
+    """A malformed mcp.json must stop the run before settings.json or the mod is touched,
+    so a refusal never leaves Command Code half-configured."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    cmd = home / ".commandcode"
+    cmd.mkdir(parents=True)
+    settings = cmd / "settings.json"
+    good = json.dumps({"hooks": {}, "keep": "me"})
+    settings.write_text(good)
+    broken = '{"mcpServers": {'   # malformed on purpose
+    (cmd / "mcp.json").write_text(broken)
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "Nothing was changed" in r.stderr, r.stderr
+    assert (cmd / "mcp.json").read_text() == broken
+    assert settings.read_text() == good, "settings.json must not be rewritten on a refusal"
+    assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
 
 
 # ── Sibling smoke tests (not owned here): must not choke on an apostrophe in the root path ──

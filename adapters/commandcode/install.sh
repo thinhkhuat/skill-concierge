@@ -34,6 +34,31 @@ CMD_DIR="$HOME/.commandcode"
 MODS_DIR="$CMD_DIR/mods"
 SETTINGS_FILE="$CMD_DIR/settings.json"
 MCP_FILE="$CMD_DIR/mcp.json"
+REPO_PROJECT_SLUG="users-thinhkhuat-in-prod-my-workbench-skill-concierge"
+LOCAL_PROJECT_DIR="$CMD_DIR/projects/$REPO_PROJECT_SLUG"
+
+# ── 0. Preflight: every JSON file this run rewrites must parse BEFORE anything is written,
+# so a malformed file stops the run with nothing half-configured.
+python3 - "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+bad = []
+for arg in sys.argv[1:]:
+    path = Path(arg)
+    if not path.exists():
+        continue
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        bad.append(f"{path}: {exc}")
+if bad:
+    for line in bad:
+        print(f"  [!] Cannot parse {line}", file=sys.stderr)
+    print("  [!] Nothing was changed. Fix or move the file(s) above, then re-run.", file=sys.stderr)
+    sys.exit(1)
+PY
 
 mkdir -p "$MODS_DIR"
 
@@ -165,8 +190,6 @@ PY
 # ── 4. Project-scope fix if inside skill-concierge repo ──
 # cmd prioritizes project .mcp.json over user mcp.json. The repo .mcp.json uses
 # ${CLAUDE_PLUGIN_ROOT} which cmd cannot expand. Writing local project override solves this.
-REPO_PROJECT_SLUG="users-thinhkhuat-in-prod-my-workbench-skill-concierge"
-LOCAL_PROJECT_DIR="$CMD_DIR/projects/$REPO_PROJECT_SLUG"
 if [ -d "$LOCAL_PROJECT_DIR" ]; then
   python3 - "$ROOT" "$LOCAL_PROJECT_DIR/mcp.json" <<'PY'
 import json
