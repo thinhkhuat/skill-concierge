@@ -93,17 +93,24 @@ elif [ -e "$ROOT/.git" ]; then
 fi
 
 # _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
-# interrupted copy never leaves a half-filled DIR that a later run reads as current; a failed copy
-# removes its staging dir. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which
-# skill discovery skips, and only the newest such copy is kept.
+# interrupted copy never leaves a half-filled DIR that a later run reads as current. The staging
+# dir is trapped (EXIT/INT/TERM) so a killed run removes it instead of leaking it forever
+# (bash defers running that trap until the current foreground step — the git archive/tar
+# pipeline — actually exits, so cleanup lands once that step ends, not the instant the signal
+# arrives), and any
+# staging dir older than 60 minutes left over from an earlier killed run is pruned before a fresh
+# one is made. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which skill
+# discovery skips, and only the newest such copy is kept.
 _export_to() {
   local dest="$1" parent base stage old
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
   mkdir -p "$parent"
+  find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
   stage="$(mktemp -d "$parent/.staging.XXXXXX")"
+  trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
   if _is_own_checkout; then
     if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
-      rm -rf "$stage"; echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
+      echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
     fi
     echo "    exported HEAD → $dest"
   else
@@ -114,7 +121,7 @@ _export_to() {
         --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
         --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
         . | tar -xf - -C "$stage"; then
-      rm -rf "$stage"; echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
+      echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
     fi
     echo "    copied the working tree (not a git checkout) → $dest"
   fi
@@ -124,6 +131,7 @@ _export_to() {
     mv "$dest" "$parent/.$base.replaced-$(date +%Y%m%d-%H%M%S)-$$"
   fi
   mv "$stage" "$dest"
+  trap - EXIT INT TERM
 }
 
 # ── 1b. Registry must already have a skill-concierge@skill-concierge entry, and the
