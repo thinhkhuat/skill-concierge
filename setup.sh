@@ -121,7 +121,7 @@ fi
 # SAME embed port this script has been using throughout ($EPORT, taken from EMBED_SHIM_PORT
 # or the 6363 default — .mcp.json carries no embed-port key) — QURL/EPORT are plain bash
 # vars, never exported by default, so without this the owner would fall back to its
-# hardcoded 6333/6363 defaults whenever .mcp.json configures a non-default store port (N10).
+# hardcoded 6333/6363 defaults whenever .mcp.json configures a non-default store port.
 env SKILL_QDRANT_URL="$QURL" EMBED_SHIM_PORT="$EPORT" "$VENV/bin/python" -c 'import subprocess,sys
 subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
                   start_new_session=True, stdin=subprocess.DEVNULL,

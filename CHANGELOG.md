@@ -17,7 +17,11 @@ All notable changes to **skill-concierge**. Format loosely follows
   checkout git cannot read, or a staged but uncommitted version change, is refused before any write;
   exports are staged and swapped in; the registry repoint changes only the record the run read. The
   Command Code installer passes its embedded Python through quoted heredocs, so it no longer prints
-  `unknown: command not found`.
+  `unknown: command not found`; it checks every JSON file it rewrites before writing anything and
+  refuses (exit 1, nothing changed) when one does not parse, instead of resetting it to `{}`; and it
+  exits 1 when its own verify fails. The ZCode installer refuses to downgrade a newer registered copy,
+  and checks its registry before exporting anything into the cache. Every shipped shell script is
+  tested to parse under macOS's stock `/bin/bash` 3.2.
 - **Doctor:** the Codex row requires `.codex/hooks.json`; a row whose deployed manifest cannot be read
   reports version None instead of the registry's claim.
 

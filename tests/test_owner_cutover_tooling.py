@@ -90,7 +90,7 @@ def test_cutover_fails_harness_rows_below_release(dr):
 
 
 def test_cutover_fails_installed_row_with_unknown_version(dr):
-    """A3: an installed harness whose version could not be determined (None/empty) must
+    """An installed harness whose version could not be determined (None/empty) must
     FAIL under --cutover — it cannot prove it is at or above the release."""
     rows = [
         {"id": "claude-code", "status": "warn", "version": None,
@@ -104,7 +104,7 @@ def test_cutover_fails_installed_row_with_unknown_version(dr):
 
 
 def test_cutover_leaves_not_installed_rows_from_the_real_checks_unchanged(dr, tmp_path, monkeypatch):
-    """A3: the real "not installed" rows from every cutover harness's own check function
+    """The real "not installed" rows from every cutover harness's own check function
     (empty machine, none of the four dirs exist) must survive --cutover untouched, even
     though Claude Code's own row sets version=None just like the "unknown version" case."""
     monkeypatch.setattr(dr, "CLAUDE_PLUGINS_DIR", tmp_path / "no-claude-plugins")
@@ -120,7 +120,7 @@ def test_cutover_leaves_not_installed_rows_from_the_real_checks_unchanged(dr, tm
 
 def test_cutover_leaves_harness_present_but_plugin_never_installed_rows_unchanged(
         dr, tmp_path, monkeypatch):
-    """N7 regression: a harness that IS installed on the machine (its own dir exists) but
+    """A harness that IS installed on the machine (its own dir exists) but
     never had skill-concierge installed into it — no cache dir, no install record — has no
     copy that could hold anything back, so --cutover must leave it at WARN, not FAIL. The
     prior fix over-reached: `detail` never contains the literal phrase "not installed" for
@@ -201,7 +201,7 @@ def test_claude_version_row(dr, tmp_path, monkeypatch):
 
 
 def test_zcode_version_prefers_registry_install_path_over_newest_dir(dr, tmp_path, monkeypatch):
-    """L10: ZCode's own install registry names the ACTIVE copy — read that copy's version
+    """ZCode's own install registry names the ACTIVE copy — read that copy's version
     instead of trusting whichever cache dir happens to sort newest by name."""
     zcode_dir = tmp_path / "zcode"
     cache = zcode_dir / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
@@ -239,7 +239,7 @@ def test_zcode_version_falls_back_to_newest_dir_without_a_registry_record(dr, tm
 
 
 def test_cutover_fails_codex_row_with_corrupt_manifest(dr, tmp_path, monkeypatch):
-    """M1: a Codex version dir IS present (installed), but its plugin.json is corrupt —
+    """A Codex version dir IS present (installed), but its plugin.json is corrupt —
     existence must drive plugin_installed, not the (failed) version parse, or --cutover
     silently skips a stale/broken copy instead of FAILing it."""
     cache = tmp_path / "codex" / "cache"
@@ -256,7 +256,7 @@ def test_cutover_fails_codex_row_with_corrupt_manifest(dr, tmp_path, monkeypatch
 
 
 def test_cutover_fails_codex_row_with_version_dir_but_no_manifest(dr, tmp_path, monkeypatch):
-    """M1: a Codex version dir with no plugin.json at all is still an install, not an
+    """A Codex version dir with no plugin.json at all is still an install, not an
     absence — --cutover must FAIL it."""
     cache = tmp_path / "codex" / "cache"
     (cache / "0.50.0" / ".codex-plugin").mkdir(parents=True)
@@ -269,7 +269,7 @@ def test_cutover_fails_codex_row_with_version_dir_but_no_manifest(dr, tmp_path, 
 
 
 def test_cutover_fails_claude_record_without_version_key(dr, tmp_path, monkeypatch):
-    """M1: a Claude Code install record present with no `version` field must not read as
+    """A Claude Code install record present with no `version` field must not read as
     plugin_installed=False — a real install with a broken/missing version claim must FAIL
     under --cutover, not be skipped as never-installed."""
     plugins = tmp_path / "plugins"
@@ -289,7 +289,7 @@ def test_cutover_fails_claude_record_without_version_key(dr, tmp_path, monkeypat
 
 
 def test_cutover_fails_omp_record_without_version_key(dr, tmp_path, monkeypatch):
-    """M1: same rule for OMP — a present record with no `version` field must FAIL, not be
+    """Same rule for OMP — a present record with no `version` field must FAIL, not be
     treated as never-installed."""
     omp = tmp_path / "omp"
     omp.mkdir()
@@ -308,7 +308,7 @@ def test_cutover_fails_omp_record_without_version_key(dr, tmp_path, monkeypatch)
 
 def test_cutover_fails_zcode_registry_pointing_at_a_corrupt_copy_despite_a_newer_dir(
         dr, tmp_path, monkeypatch):
-    """M1: ZCode's registry names a corrupt old copy as active while a newer, unrelated
+    """ZCode's registry names a corrupt old copy as active while a newer, unrelated
     version dir also sits in the cache. The newest-dir-by-name fallback must never mask
     the registry's own broken pointer — that previously reported OK/matches-SSOT."""
     zcode = tmp_path / ".zcode"
@@ -411,7 +411,7 @@ def test_fix_containers_stops_disables_then_starts_owner(dr, tmp_path, monkeypat
 
 
 def test_fix_containers_reports_failure_when_docker_update_fails(dr, tmp_path, monkeypatch):
-    """L5: a failed `docker update --restart=no` must be reported as a failure, never
+    """A failed `docker update --restart=no` must be reported as a failure, never
     papered over as "disabled" — the container could still restart on its own."""
     db = tmp_path / "index.sqlite"
     db.write_bytes(b"")
@@ -526,7 +526,7 @@ def test_cosine(dr):
 def en(tmp_path, monkeypatch):
     monkeypatch.setenv("SKILL_CONCIERGE_LOG", str(tmp_path / "logs"))
     # OWNER_AUTOSTART is a module-level constant read from this env var at import time.
-    # An ambient SKILL_OWNER_AUTOSTART=0 (e.g. the gate's own H1-safe test env) must not
+    # An ambient SKILL_OWNER_AUTOSTART=0 (e.g. the gate's own isolated test env) must not
     # silently flip these autostart-behavior tests' default-on assumption.
     monkeypatch.delenv("SKILL_OWNER_AUTOSTART", raising=False)
     mod = _load("enforcer_owner_t", ROOT / "hooks" / "scripts" / "enforcer.py")
@@ -589,7 +589,7 @@ class _FakeEmbedResp:
 
 
 def test_check_embed_parity_reports_a_clean_timeout_instead_of_hanging(dr, monkeypatch, tmp_path):
-    """L6: the in-process model-load subprocess must be bounded — a stuck load reports a
+    """The in-process model-load subprocess must be bounded — a stuck load reports a
     WARN row instead of hanging doctor forever."""
     monkeypatch.setattr(dr, "_owner_health", lambda: {"status": "ok", "model": "test-model"})
     monkeypatch.setattr(dr.urllib.request, "urlopen",
@@ -697,7 +697,7 @@ def test_launcher_starts_owner_when_health_fails(tmp_path, switch, started):
 
 
 def test_launcher_execs_engine_when_owner_log_cannot_be_opened(tmp_path):
-    """N2 regression: SKILL_CONCIERGE_LOG pointing at an unwritable location (here, a
+    """SKILL_CONCIERGE_LOG pointing at an unwritable location (here, a
     path with a plain FILE where a directory is expected) must not stop the MCP from
     starting — only the owner autostart fails, and the launcher still execs the engine
     (D3: this fix previously shipped with no test)."""
@@ -715,7 +715,7 @@ def test_launcher_execs_engine_when_owner_log_cannot_be_opened(tmp_path):
 
 
 def test_engine_version_read_handles_apostrophe_in_root(tmp_path):
-    """A1/A2: $ROOT (and $PLUGIN_JSON built from it) must never be spliced into a Python
+    """$ROOT (and $PLUGIN_JSON built from it) must never be spliced into a Python
     string literal — an apostrophe in the path used to break the embedded `open('...')`
     call. The launcher passes the path via argv instead, so it must survive unmodified."""
     root = tmp_path / "root's project"
@@ -734,7 +734,7 @@ def test_engine_version_read_handles_apostrophe_in_root(tmp_path):
 
 
 def test_engine_version_read_fails_open_and_reports_on_bad_json(tmp_path):
-    """A2: a readable-but-unparseable plugin.json must print one clear stderr line and
+    """A readable-but-unparseable plugin.json must print one clear stderr line and
     still let the launcher continue (fail-open, not silent)."""
     root = tmp_path / "root"
     (root / "bin").mkdir(parents=True)
@@ -765,7 +765,7 @@ def test_setup_has_no_docker_start_path_and_starts_owner():
     # M4: the engine resync takes the SAME mkdir lock bin/skill-search-mcp's background
     # resync uses, so the two can never race pip against the shared venv.
     assert ".engine-resync.lock" in code
-    # N10: the owner it starts must bind the SAME store/embed ports this script just
+    # The owner it starts must bind the SAME store/embed ports this script just
     # probed and stopped ($store_port, derived from $QURL) — QURL/EPORT are plain bash
     # vars, never exported by default, so the owner-start line must export them itself
     # or a configured non-default .mcp.json port would leave the owner on 6333/6363.

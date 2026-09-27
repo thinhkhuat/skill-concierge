@@ -165,7 +165,7 @@ PARITY_TEXTS = ("find the right skill to deploy a web app",
                 "tìm kỹ năng phù hợp để triển khai ứng dụng web")
 PARITY_MIN_COSINE = 0.9999
 # In-process model load for the parity probe (fastembed onnx, cold-start can be slow on a
-# fresh cache) — bounded so a stuck load can never hang doctor forever (L6).
+# fresh cache) — bounded so a stuck load can never hang doctor forever.
 EMBED_PARITY_LOAD_TIMEOUT_S = 60
 
 
@@ -1488,7 +1488,7 @@ def apply_cutover(results, release=None):
     """--cutover: every Claude/Codex/OMP/ZCode row turns FAIL when either its installed
     version is below the switch-over release (the SSOT version this tree ships), or the
     harness IS installed but the version could not be determined (a None/empty `version`
-    can't prove the copy is caught up, so it FAILs rather than silently passing — A3). An
+    can't prove the copy is caught up, so it FAILs rather than silently passing). An
     old or unknown copy has no owner start path, and its setup.sh would restart Docker on
     the owner's ports.
 
@@ -1500,7 +1500,7 @@ def apply_cutover(results, release=None):
     second state is read from each row's own `plugin_installed` flag (set by the check_*
     function at the exact point it determines there is no record/cache for skill-concierge
     at all), never sniffed from prose: a `version=None` row can also mean "installed but
-    the version could not be resolved" (a corrupt cache), which must still FAIL (N7)."""
+    the version could not be resolved" (a corrupt cache), which must still FAIL."""
     release = release or _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     if not release:
         return results
@@ -1541,7 +1541,7 @@ def _omp_installed_version():
 def _omp_record_exists():
     """True when OMP's install record has an entry for skill-concierge@skill-concierge,
     regardless of whether that entry carries a `version` field — existence, not the parsed
-    field, proves an install happened (M1)."""
+    field, proves an install happened."""
     try:
         rec = json.loads(OMP_PLUGINS_FILE.read_text(encoding="utf-8"))
         entry = rec["plugins"]["skill-concierge@skill-concierge"]
@@ -1660,7 +1660,7 @@ def _codex_cached_version():
 def _codex_cache_has_version_dir():
     """True when at least one version-named dir sits in the Codex plugin cache, regardless
     of whether its plugin.json is present or readable. Existence of the install, not a
-    successfully parsed version, is what `--cutover` must key its FAIL rule on (M1)."""
+    successfully parsed version, is what `--cutover` must key its FAIL rule on."""
     try:
         base = CODEX_PLUGIN_CACHE
         if not base.is_dir():
@@ -1828,7 +1828,7 @@ def _zcode_installed_path():
     (~/.zcode/cli/plugins/installed_plugins.json), or None when there is no record. Unlike
     Codex — proven live to always load the semver-newest cache dir regardless of any
     registry — ZCode's registry is the one signal that names which cache copy is actually
-    active, so it is preferred over the newest-by-name heuristic (L10)."""
+    active, so it is preferred over the newest-by-name heuristic."""
     try:
         data = json.loads(ZCODE_PLUGINS_FILE.read_text(encoding="utf-8"))
     except JSON_READ_ERRORS:
@@ -1842,7 +1842,7 @@ def _zcode_installed_path():
 def _zcode_record_exists():
     """True when ZCode's install registry has an entry for skill-concierge@skill-concierge,
     regardless of whether that entry carries a usable installPath — existence, not the
-    resolved version, proves an install happened (M1)."""
+    resolved version, proves an install happened."""
     try:
         data = json.loads(ZCODE_PLUGINS_FILE.read_text(encoding="utf-8"))
     except JSON_READ_ERRORS:
@@ -1867,12 +1867,12 @@ def check_zcode():
          cosmetic, but the row keeps the regression visible.
     WARN-only — no ZCode install is one 'zcode: not installed' row, never a failure.
 
-    Version resolution (L10): ZCode's own install registry names which cache copy is
+    Version resolution: ZCode's own install registry names which cache copy is
     active (`installPath`) — read that copy's OWN .claude-plugin/plugin.json first, since
     trusting "newest dir by name" could report a version ZCode isn't actually running (a
     manually-dropped or half-synced newer dir would outrank the active one). Fall back to
     the newest-cache-dir heuristic only when the registry has no usable record — the
-    pre-L10 behavior, kept as a safety net rather than reporting nothing.
+    the earlier newest-by-name behavior, kept as a safety net rather than reporting nothing.
     """
     if not ZCODE_DIR.exists():
         return {"id": "zcode", "label": "ZCode integration", "status": WARN,
@@ -1887,9 +1887,9 @@ def check_zcode():
         cached_ver = _descriptor_version(Path(install_path) / ".claude-plugin" / "plugin.json")
     if not record_present and cached_ver is None:
         # No registry entry at all — fall back to the newest-cache-dir heuristic (the
-        # pre-L10 safety net) rather than reporting nothing. Never used when a registry
+        # the earlier safety net) rather than reporting nothing. Never used when a registry
         # record IS present: a record with an unreadable manifest must stay version=None,
-        # not silently resolve to whichever dir happens to sort newest by name (M1).
+        # not silently resolve to whichever dir happens to sort newest by name.
         try:
             if ZCODE_PLUGIN_CACHE.is_dir():
                 versions = sorted((d for d in ZCODE_PLUGIN_CACHE.iterdir() if d.is_dir()),
@@ -1953,7 +1953,7 @@ def _claude_code_installed():
 def _claude_code_record_exists():
     """True when Claude Code's install record has an entry for skill-concierge@skill-concierge,
     regardless of whether that entry carries a `version` field — existence, not the parsed
-    field, proves an install happened (M1)."""
+    field, proves an install happened."""
     try:
         rec = json.loads(CLAUDE_PLUGINS_FILE.read_text(encoding="utf-8"))
         entry = rec["plugins"]["skill-concierge@skill-concierge"]
