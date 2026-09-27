@@ -200,6 +200,64 @@ def test_claude_version_row(dr, tmp_path, monkeypatch):
     assert dr.check_claude_code in dr.CHECKS
 
 
+def test_claude_code_corrupt_registry_file_reads_as_unreadable_not_never_installed(dr, tmp_path, monkeypatch):
+    """A registry FILE that exists but does not parse must not read the same as a
+    registry that was never written: install state is unknown, not "never installed",
+    so the row says so and --cutover fails it instead of skipping it."""
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_DIR", plugins)
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_FILE", plugins / "installed_plugins.json")
+    (plugins / "installed_plugins.json").write_text("{not valid json")
+
+    row = dr.check_claude_code()
+    assert row["version"] is None
+    assert row["plugin_installed"] is True
+    assert "could not be read" in row["detail"]
+    assert "has no Claude Code install record" not in row["detail"]
+    assert row["status"] == "warn"
+
+    out = dr.apply_cutover([dict(row)], release="0.50.0")[0]
+    assert out["status"] == "fail" and "unknown" in out["detail"]
+
+
+def test_omp_corrupt_registry_file_reads_as_unreadable_not_never_installed(dr, tmp_path, monkeypatch):
+    omp_dir = tmp_path / "omp"
+    omp_dir.mkdir()
+    monkeypatch.setattr(dr, "OMP_DIR", omp_dir)
+    monkeypatch.setattr(dr, "OMP_PLUGINS_FILE", omp_dir / "installed_plugins.json")
+    monkeypatch.setattr(dr, "OMP_MARKETPLACE", omp_dir / "no-marketplace")
+    monkeypatch.setattr(dr, "OMP_PLUGIN_CACHE", omp_dir / "no-cache")
+    (omp_dir / "installed_plugins.json").write_text("[]")   # parses, but the wrong top-level shape
+
+    row = dr.check_omp()
+    assert row["version"] is None
+    assert row["plugin_installed"] is True
+    assert "could not be read" in row["detail"]
+    assert "has no OMP install record" not in row["detail"]
+    assert row["status"] == "warn"
+
+    out = dr.apply_cutover([dict(row)], release="0.50.0")[0]
+    assert out["status"] == "fail" and "unknown" in out["detail"]
+
+
+def test_a_missing_registry_file_still_reads_as_never_installed(dr, tmp_path, monkeypatch):
+    """The counterpart to the two tests above: a registry file that was never written
+    (as opposed to one that exists and fails to parse) keeps today's behavior — WARN,
+    never-installed, and --cutover skips the row."""
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_DIR", plugins)
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_FILE", plugins / "installed_plugins.json")
+
+    row = dr.check_claude_code()
+    assert row["plugin_installed"] is False
+    assert "has no Claude Code install record" in row["detail"]
+
+    out = dr.apply_cutover([dict(row)], release="0.50.0")[0]
+    assert out["status"] == "warn"
+
+
 def test_zcode_version_prefers_registry_install_path_over_newest_dir(dr, tmp_path, monkeypatch):
     """ZCode's own install registry names the ACTIVE copy — read that copy's version
     instead of trusting whichever cache dir happens to sort newest by name."""

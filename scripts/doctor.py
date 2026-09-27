@@ -1527,37 +1527,57 @@ def apply_cutover(results, release=None):
     return results
 
 
-def _omp_installed_version():
-    """(version, enabled) of skill-concierge@skill-concierge in OMP's install record,
-    or (None, None) when OMP has no record for it. The record keys plugins by
-    '<name>@<marketplace>' and stores a LIST (one entry per install scope), so both
-    list and bare-dict shapes are tolerated."""
+def _registry_entry_state(path, plugin_key):
+    """Reads a plugin-cache registry JSON file at `path` for `plugin_key`'s install
+    entry and returns `(state, head)`:
+      - `("missing", None)`    — `path` does not exist: no install has ever touched
+                                  this registry. WARN as "never installed"; `--cutover`
+                                  skips the row, same as always.
+      - `("unreadable", None)` — `path` exists but does not parse, or its shape is not
+                                  one a real registry ever writes (not a dict, `plugins`
+                                  not a dict, entry not a dict/list-of-dicts): install
+                                  state cannot be determined from it. Never collapse
+                                  this into "missing" — `--cutover` must FAIL an unknown
+                                  install state rather than silently skip it.
+      - `("ok", head)`         — the file parses and the shape is sound; `head` is the
+                                  plugin's own registry entry (a dict), or `None` when
+                                  the registry is well-formed but has no entry for it.
+    """
+    if not path.exists():
+        return "missing", None
     try:
-        rec = json.loads(OMP_PLUGINS_FILE.read_text(encoding="utf-8"))
-        entry = rec["plugins"]["skill-concierge@skill-concierge"]
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        entry = rec["plugins"].get(plugin_key)
     except JSON_READ_ERRORS:
-        return None, None
+        return "unreadable", None
     if not entry:
-        return None, None
+        return "ok", None
     head = entry[0] if isinstance(entry, list) else entry
     if not isinstance(head, dict):
+        return "unreadable", None
+    return "ok", head
+
+
+def _omp_installed_version():
+    """(version, enabled) of skill-concierge@skill-concierge in OMP's install record,
+    or (None, None) when OMP has no record for it or the registry is unreadable. The
+    record keys plugins by '<name>@<marketplace>' and stores a LIST (one entry per
+    install scope), so both list and bare-dict shapes are tolerated."""
+    _state, head = _registry_entry_state(OMP_PLUGINS_FILE, "skill-concierge@skill-concierge")
+    if head is None:
         return None, None
     return head.get("version"), head.get("enabled")
 
 
-def _omp_record_exists():
-    """True when OMP's install record has an entry for skill-concierge@skill-concierge,
-    regardless of whether that entry carries a `version` field — existence, not the parsed
-    field, proves an install happened."""
-    try:
-        rec = json.loads(OMP_PLUGINS_FILE.read_text(encoding="utf-8"))
-        entry = rec["plugins"]["skill-concierge@skill-concierge"]
-    except JSON_READ_ERRORS:
-        return False
-    if not entry:
-        return False
-    head = entry[0] if isinstance(entry, list) else entry
-    return isinstance(head, dict)
+def _omp_record_state():
+    """"missing" | "unreadable" | "present" for OMP's install record — see
+    `_registry_entry_state`. Existence, not the parsed field, proves an install
+    happened; an unreadable registry proves nothing either way, so it is reported
+    and treated as installed-with-unknown-version rather than never-installed."""
+    state, head = _registry_entry_state(OMP_PLUGINS_FILE, "skill-concierge@skill-concierge")
+    if state == "unreadable":
+        return "unreadable"
+    return "present" if isinstance(head, dict) else "missing"
 
 
 def _omp_marketplace_version():
@@ -1599,10 +1619,16 @@ def check_omp():
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     ver, enabled = _omp_installed_version()
-    record_present = _omp_record_exists()
-    plugin_installed = record_present
-    if not record_present:
+    record_state = _omp_record_state()
+    # A missing registry proves no install ever happened (existing WARN-only, cutover-skips
+    # behavior). An unreadable one proves nothing either way, so it is NOT collapsed into
+    # "missing": install state is unknown, and --cutover must fail that, not skip it.
+    plugin_installed = record_state != "missing"
+    if record_state == "missing":
         findings.append("skill-concierge has no OMP install record (installed_plugins.json)")
+    elif record_state == "unreadable":
+        findings.append(f"OMP install record ({OMP_PLUGINS_FILE}) exists but could not be "
+                        "read as JSON — install state unknown")
     else:
         if ver is None:
             findings.append("OMP install record has no version field")
@@ -1942,34 +1968,24 @@ def check_zcode():
 
 def _claude_code_installed():
     """(version, installPath) of skill-concierge@skill-concierge in Claude Code's own
-    install record, or (None, None) when there is no record. Same map-of-lists shape as
-    OMP's (one entry per install scope); the head entry is the active scope."""
-    try:
-        rec = json.loads(CLAUDE_PLUGINS_FILE.read_text(encoding="utf-8"))
-        entry = rec["plugins"]["skill-concierge@skill-concierge"]
-    except JSON_READ_ERRORS:
-        return None, None
-    if not entry:
-        return None, None
-    head = entry[0] if isinstance(entry, list) else entry
-    if not isinstance(head, dict):
+    install record, or (None, None) when there is no record or the registry is
+    unreadable. Same map-of-lists shape as OMP's (one entry per install scope); the
+    head entry is the active scope."""
+    _state, head = _registry_entry_state(CLAUDE_PLUGINS_FILE, "skill-concierge@skill-concierge")
+    if head is None:
         return None, None
     return head.get("version"), head.get("installPath")
 
 
-def _claude_code_record_exists():
-    """True when Claude Code's install record has an entry for skill-concierge@skill-concierge,
-    regardless of whether that entry carries a `version` field — existence, not the parsed
-    field, proves an install happened."""
-    try:
-        rec = json.loads(CLAUDE_PLUGINS_FILE.read_text(encoding="utf-8"))
-        entry = rec["plugins"]["skill-concierge@skill-concierge"]
-    except JSON_READ_ERRORS:
-        return False
-    if not entry:
-        return False
-    head = entry[0] if isinstance(entry, list) else entry
-    return isinstance(head, dict)
+def _claude_code_record_state():
+    """"missing" | "unreadable" | "present" for Claude Code's install record — see
+    `_registry_entry_state`. Existence, not the parsed field, proves an install
+    happened; an unreadable registry proves nothing either way, so it is reported
+    and treated as installed-with-unknown-version rather than never-installed."""
+    state, head = _registry_entry_state(CLAUDE_PLUGINS_FILE, "skill-concierge@skill-concierge")
+    if state == "unreadable":
+        return "unreadable"
+    return "present" if isinstance(head, dict) else "missing"
 
 
 def check_claude_code():
@@ -1995,11 +2011,17 @@ def check_claude_code():
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     installed_ver, install_path = _claude_code_installed()
-    record_present = _claude_code_record_exists()
+    record_state = _claude_code_record_state()
     deployed_ver = None
-    plugin_installed = record_present
-    if not record_present:
+    # A missing registry proves no install ever happened (existing WARN-only, cutover-skips
+    # behavior). An unreadable one proves nothing either way, so it is NOT collapsed into
+    # "missing": install state is unknown, and --cutover must fail that, not skip it.
+    plugin_installed = record_state != "missing"
+    if record_state == "missing":
         findings.append("skill-concierge has no Claude Code install record (installed_plugins.json)")
+    elif record_state == "unreadable":
+        findings.append(f"Claude Code install record ({CLAUDE_PLUGINS_FILE}) exists but could "
+                        "not be read as JSON — install state unknown")
     else:
         if installed_ver is None:
             findings.append("Claude Code install record has no version field")
