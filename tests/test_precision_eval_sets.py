@@ -30,7 +30,8 @@ def cal():
     return _load("calibrate_jev_gate_t", ROOT / "scripts" / "calibrate_jev_gate.py")
 
 
-# ── sign test ────────────────────────────────────────────────────────────────────────────────
+# ── sign test: gain direction (the earlier, WRONG gating value — kept, reported
+# alongside the loss direction, never used alone to gate the bar again) ────────────────────
 def test_sign_test_p_matches_the_review_measured_examples(pe):
     # review-adversarial-v3.md M1: pooled +24/-8 -> p ~= 0.004; MCP-only +8/-5 -> p ~= 0.29.
     assert abs(pe.sign_test_p(8, 24) - 0.0035) < 1e-3
@@ -41,6 +42,22 @@ def test_sign_test_p_edge_cases(pe):
     assert pe.sign_test_p(0, 0) == 0.0
     assert pe.sign_test_p(0, 10) == pytest.approx((1 / 2) ** 10)   # only "0 losses" qualifies
     assert pe.sign_test_p(10, 0) == 1.0                             # every trial lost
+
+
+# ── sign test: loss direction (design SS4 E bar 2's pre-registered "no significant loss";
+# H1: losses > gains, p = P(L >= lost)) ─────────────────────────────────────────────────────
+def test_sign_test_loss_p_matches_the_gain_direction_by_symmetry(pe):
+    # the two directions of the SAME (8,24) split: 24 gains/8 losses is strong evidence of
+    # gain (small gain_p) and correspondingly the WEAKEST possible evidence of loss (loss_p
+    # near 1); the mirror split (8 gains/24 losses) is strong evidence of loss.
+    assert abs(pe.sign_test_loss_p(8, 24) - 0.9989) < 1e-3
+    assert abs(pe.sign_test_loss_p(24, 8) - 0.0035) < 1e-3
+
+
+def test_sign_test_loss_p_edge_cases(pe):
+    assert pe.sign_test_loss_p(0, 0) == 1.0           # zero changed cases: cannot show loss
+    assert pe.sign_test_loss_p(0, 10) == 1.0          # zero losses: cannot show loss either
+    assert pe.sign_test_loss_p(10, 0) == pytest.approx((1 / 2) ** 10)   # every trial lost
 
 
 def test_gains_losses(pe):
@@ -58,22 +75,42 @@ def test_lost_gained_cases_identifies_the_individual_pairs(pe):
     assert lost == [("q2", "b")] and gained == [("q3", "c")]
 
 
-# ── cd_bar ───────────────────────────────────────────────────────────────────────────────────
+# ── cd_bar: the pre-registered wording is "net >= 0 AND no significant loss" — FAIL only
+# on net < 0 or a significant LOSS sign test, never on an insignificant GAIN ─────────────────
 def test_cd_bar_passes_on_a_clean_win(pe):
-    # +4/-0: p = 1/2**4 = 0.0625 <= 0.10. A smaller n cannot clear 0.10 even at zero losses
-    # (the sign test is honestly starved on a tiny sample) — this is bar math, not a bug.
-    r = pe.cd_bar([False, False, False, False], [True, True, True, True])
+    r = pe.cd_bar([False, False, False, False], [True, True, True, True])   # +4/-0
     assert r["gained"] == 4 and r["lost"] == 0 and r["net"] == 4 and r["passed"]
+    assert r["loss_p"] == 1.0
 
 
-def test_cd_bar_fails_on_net_negative_even_with_a_low_p(pe):
-    r = pe.cd_bar([True, True, True, True], [False, False, False, True])   # +0/-3
-    assert r["net"] == -3 and not r["passed"]
+def test_cd_bar_fails_on_net_negative_even_when_the_sign_test_is_insignificant(pe):
+    """The exact case the "or net < 0" clause exists for: 0/-3 has loss_p = 0.125, which
+    alone would NOT clear the 0.10 significance bar — the sample is just too small — but a
+    real net loss must still fail regardless."""
+    r = pe.cd_bar([True, True, True], [False, False, False])   # +0/-3
+    assert r["net"] == -3 and r["loss_p"] > 0.10 and not r["passed"]
+
+
+def test_cd_bar_fails_on_a_significant_net_negative(pe):
+    r = pe.cd_bar([True] * 10, [False] * 10)   # +0/-10
+    assert r["net"] == -10 and r["loss_p"] <= 0.10 and not r["passed"]
+
+
+def test_cd_bar_passes_a_net_gain_even_when_the_gain_is_not_significant(pe):
+    """The exact bug this round fixes: +8/-5 (net +3, from review-adversarial-v3.md's
+    measured MCP-view C+D split) has gain_p = 0.29 > 0.10 — an insignificant GAIN by the
+    (wrong) earlier gating — but there is no significant LOSS either (loss_p = 0.867), and
+    the pre-registered bar never required evidence of gain, only the absence of loss."""
+    r = pe.cd_bar([False] * 8 + [True] * 5, [True] * 8 + [False] * 5)
+    assert r["gained"] == 8 and r["lost"] == 5 and r["net"] == 3
+    assert r["gain_p"] > 0.10        # would have FAILED under the earlier (wrong) gating
+    assert r["loss_p"] > 0.10 and r["passed"]
 
 
 def test_cd_bar_no_change_trivially_passes(pe):
     r = pe.cd_bar([True, False, True], [True, False, True])
     assert r["gained"] == 0 and r["lost"] == 0 and r["passed"]
+    assert r["loss_p"] == 1.0 and r["gain_p"] == 0.0
 
 
 # ── w_bar ────────────────────────────────────────────────────────────────────────────────────

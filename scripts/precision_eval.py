@@ -238,15 +238,30 @@ def run():
 
 # ── bar math: pure, no I/O, no network — the whole reason it is decomposed this way ────────
 def sign_test_p(lost: int, gained: int) -> float:
-    """One-sided binomial sign-test p-value: P(X <= lost) under Binomial(lost + gained, 0.5).
-    A SMALL p means it would be unlikely, if gains/losses were an unbiased coin flip, to see
-    this FEW losses — i.e. losses are rare relative to gains (design bar 2's "p <= 0.10
-    against loss"). n == 0 (nothing changed either way) is the strongest possible no-loss
-    signal, not an undefined one, so it returns 0.0 rather than raising or returning 1.0."""
+    """The GAIN-direction one-sided sign-test p-value: P(X <= lost) under
+    Binomial(lost + gained, 0.5). A SMALL value means it would be unlikely, if
+    gains/losses were an unbiased coin flip, to see this FEW losses — evidence FOR gain.
+    This is NOT what design SS4 E bar 2 pre-registers ("net >= 0 AND no significant
+    loss" — see `sign_test_loss_p`); an earlier implementation of this harness mistakenly
+    gated the bar on THIS value instead, requiring evidence of gain rather than merely the
+    absence of significant loss. Kept, and still reported alongside `sign_test_loss_p` in
+    the release evidence, for exactly that disclosure."""
     n = lost + gained
     if n == 0:
         return 0.0
     return sum(math.comb(n, i) for i in range(0, lost + 1)) / (2 ** n)
+
+
+def sign_test_loss_p(lost: int, gained: int) -> float:
+    """The pre-registered LOSS-direction one-sided sign-test p-value (design SS4 E bar 2,
+    H1: losses are more common than gains): P(X >= lost) under
+    Binomial(lost + gained, 0.5). A SMALL value is evidence of a real, significant loss.
+    Zero changed cases (n == 0) cannot show a loss by construction: 1.0, the strongest
+    possible no-loss signal, never an undefined one."""
+    n = lost + gained
+    if n == 0:
+        return 1.0
+    return sum(math.comb(n, i) for i in range(lost, n + 1)) / (2 ** n)
 
 
 def gains_losses(base_hits, cand_hits) -> tuple:
@@ -265,12 +280,18 @@ def lost_gained_cases(pairs, base_hits, cand_hits) -> tuple:
 
 
 def cd_bar(base_hits, cand_hits) -> dict:
-    """One (set, view) bar 2 verdict: net top-6 change >= 0 AND the sign test clears 0.10."""
+    """One (set, view) bar 2 verdict, matching the pre-registered wording exactly ("net >=
+    0 AND no significant loss"): FAILS only when net < 0, or the LOSS-direction sign test
+    (`sign_test_loss_p`) clears SIGN_TEST_P_BAR. Both the loss- and gain-direction p-values
+    are reported (`gain_p` is the earlier, wrong gating value — see `sign_test_p`'s
+    docstring), since the release evidence discloses both."""
     gained, lost = gains_losses(base_hits, cand_hits)
     net = gained - lost
-    p = sign_test_p(lost, gained)
-    return {"gained": gained, "lost": lost, "net": net, "p": round(p, 4),
-            "passed": net >= 0 and p <= SIGN_TEST_P_BAR}
+    gain_p = sign_test_p(lost, gained)
+    loss_p = sign_test_loss_p(lost, gained)
+    return {"gained": gained, "lost": lost, "net": net,
+            "gain_p": round(gain_p, 4), "loss_p": round(loss_p, 4),
+            "passed": net >= 0 and loss_p > SIGN_TEST_P_BAR}
 
 
 def w_bar(w_rows: list, topn: int = 3) -> dict:
@@ -418,7 +439,7 @@ def _markdown_block(base_url, cand_url, w_result, cd_results, vn_counts, n_resul
         for view in ("mcp", "enforcer"):
             r = cd_results[f"{label}_{view}"]
             lines.append(f"- **{label} [{view}]**: +{r['gained']}/-{r['lost']} "
-                         f"(net {r['net']:+d}, p={r['p']}) -> "
+                         f"(net {r['net']:+d}, loss_p={r['loss_p']}, gain_p={r['gain_p']}) -> "
                          f"**{'PASS' if r['passed'] else 'FAIL'}**")
     lines.append(f"  - Vietnamese slice (informational, not gated): C={vn_counts['C']}, "
                 f"D={vn_counts['D']}")
@@ -486,6 +507,10 @@ def run_findability(args) -> int:
               f"{r['base_rank']} -> {r['cand_rank']}")
 
     # ---- C / D ----
+    print("  (bar: net >= 0 AND no significant loss, i.e. loss_p > "
+          f"{SIGN_TEST_P_BAR} — an earlier implementation of this harness gated on "
+          "gain_p instead, which required evidence of GAIN rather than merely the "
+          "absence of significant loss; both are reported below)")
     c_sets, d_sets = _cd_pairs(cal, enf_base, args.corpus)
     cd_results = {}
     for label, pairs in (("C", c_sets["en"]), ("D", d_sets["en"])):
@@ -500,7 +525,8 @@ def run_findability(args) -> int:
         for view in ("mcp", "enforcer"):
             r = cd_results[f"{label}_{view}"]
             print(f"{label} [{view}]: n={len(pairs)} +{r['gained']}/-{r['lost']} "
-                  f"net {r['net']:+d} p={r['p']}  -> {'PASS' if r['passed'] else 'FAIL'}")
+                  f"net {r['net']:+d} loss_p={r['loss_p']} gain_p={r['gain_p']}  "
+                  f"-> {'PASS' if r['passed'] else 'FAIL'}")
             lost, _gained = cd_cases[view]
             if lost:
                 print(f"  {label} [{view}] LOST cases ({len(lost)}):")
@@ -607,9 +633,23 @@ def main():
         if rank_of(ranked, "z") != (None, None):
             bad.append("missing-name rank wrong")
         if abs(sign_test_p(8, 24) - 0.0035) > 1e-3:
-            bad.append("sign_test_p wrong (n=32,lost=8)")
+            bad.append("sign_test_p (gain direction) wrong (n=32,lost=8)")
         if sign_test_p(0, 0) != 0.0:
             bad.append("sign_test_p(0,0) must be 0.0, not undefined")
+        if abs(sign_test_loss_p(10, 0) - 0.000977) > 1e-3:
+            bad.append("sign_test_loss_p wrong (n=10,lost=10)")
+        if sign_test_loss_p(0, 0) != 1.0:
+            bad.append("sign_test_loss_p(0,0) must be 1.0, not undefined")
+        if not cd_bar([True] * 0, [True] * 0)["passed"]:
+            bad.append("cd_bar must pass on zero changed cases")
+        if not cd_bar([False] * 8 + [True] * 5, [True] * 8 + [False] * 5)["passed"]:
+            # +8/-5 (net +3): the earlier implementation gated on gain_p (0.29 > 0.10,
+            # so it FAILED a clean net gain with no significant loss — exactly the bug).
+            bad.append("cd_bar must pass a net gain with no significant loss")
+        if cd_bar([True] * 3, [False] * 3)["passed"]:
+            # 0/-3 (net -3): too small a sample for loss_p to clear 0.10 (0.125), but a
+            # net loss must still fail — this is what the "or net < 0" clause is for.
+            bad.append("cd_bar must fail a net loss even when the sign test is insignificant")
         if not w_bar([{"base_rank": 1, "cand_rank": 1}])["passed"]:
             bad.append("w_bar wrong on a no-op")
         if n_bar(0, 0, 0)["passed"] is not True:
