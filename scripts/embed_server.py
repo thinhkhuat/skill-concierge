@@ -5,7 +5,8 @@ skill-concierge — warm embed shim.
 RETIRED from the deployment path by ADR-0070: the local index owner
 (vendor/skill-search/skill_search/index_owner.py) now serves /embed, /health and
 /jev on the embed port. setup.sh and the MCP launcher no longer start this file;
-bin/embed-shim and the Dockerfile still can, for standalone use.
+bin/embed-shim still can, for standalone use. The Docker image build files were
+removed from the repo in v0.54.2; the archived images live outside the repo.
 
 A persistent HTTP service that holds the fastembed mpnet-768 model in memory so
 the per-turn enforcer hook can embed a query in ~tens of ms instead of paying the
