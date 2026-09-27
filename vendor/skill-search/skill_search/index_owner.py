@@ -899,10 +899,11 @@ def _probe(port: int) -> str | None:
         except ConnectionRefusedError:
             pass                                  # nobody listening on this host/family
         except OSError as e:
-            if e.errno not in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT,
-                               errno.ENETUNREACH, errno.EHOSTUNREACH):
-                seen = "other"                    # accepted then reset/closed
-            # else: this host has no such loopback (e.g. no ::1) — nobody there, as _bind assumes
+            if host == "::1" and e.errno in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT,
+                                              errno.ENETUNREACH, errno.EHOSTUNREACH):
+                pass                               # no IPv6 loopback — nobody there, as _bind assumes
+            else:
+                seen = "other"                    # accepted then reset/closed (127.0.0.1 stays strict)
         except http.client.HTTPException:
             seen = "other"                        # accepted then reset/closed/malformed
         finally:

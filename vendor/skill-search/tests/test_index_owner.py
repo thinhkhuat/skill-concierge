@@ -429,6 +429,32 @@ def test_health_reports_routes_for_setup_sh_parity(owner):
     assert body["routes"] == ["embed", "jev"]
 
 
+def test_health_reports_routes_while_loading():
+    """N5 regression: an old harness copy's setup.sh greps '/health' for '"jev"' to decide
+    whether the Docker embed shim is still needed. The 503 body served WHILE the owner is
+    still loading must carry the same routes key as the 200 body, or that grep sees an
+    incomplete answer during every model load (D3: this fix previously shipped with no
+    test — exercised at the handler level, not over a real load-timing race)."""
+    from skill_search import index_owner as io_
+
+    class _FakeOwner:
+        ready = False
+        code_version = "0.54.0"
+
+        def check_stamp(self):
+            pass
+
+    sent = {}
+
+    class _FakeHandler:
+        def _send(self, code, obj, ctype="application/json"):
+            sent["code"], sent["obj"] = code, obj
+
+    io_.Handler._embed_route(_FakeHandler(), _FakeOwner(), "GET", "/health", 0.0)
+    assert sent["code"] == 503
+    assert sent["obj"]["routes"] == ["embed", "jev"]
+
+
 def test_code_version_survives_a_stamp_downgrade(owner_factory, tmp_path):
     """L1: /health's code_version must report the RUNNING code even after an older
     harness copy downgrades the venv stamp on disk — only stamp_version should move."""
@@ -513,6 +539,25 @@ def test_probe_treats_a_missing_ipv6_loopback_as_nobody(monkeypatch, err):
 
     monkeypatch.setattr(http.client.HTTPConnection, "connect", connect)
     assert io_._probe(_free_port()) is None
+
+
+@pytest.mark.parametrize("err", ["EADDRNOTAVAIL", "EAFNOSUPPORT", "ENETUNREACH", "EHOSTUNREACH"])
+def test_probe_does_not_carve_out_the_same_errno_on_127_0_0_1(monkeypatch, err):
+    """The ::1 carve-out (missing IPv6 loopback) must not extend to 127.0.0.1: a real
+    IPv4 loopback failing with the same errno (e.g. ephemeral-port exhaustion racing a
+    foreign wildcard listener) has to stay 'other', never read as nobody there."""
+    import errno
+    import http.client
+    from skill_search import index_owner as io_
+    real_connect = http.client.HTTPConnection.connect
+
+    def connect(self):
+        if self.host == "127.0.0.1":
+            raise OSError(getattr(errno, err), err)
+        return real_connect(self)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", connect)
+    assert io_._probe(_free_port()) == "other"
 
 
 class _FlakyDB:
