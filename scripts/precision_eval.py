@@ -600,10 +600,10 @@ def main():
     ap.add_argument("--mode", choices=("495", "findability"), default="495",
                     help="495 = the original full-495-way recall/precision gate (default); "
                          "findability = the ADR-0074 base-vs-candidate harness")
-    ap.add_argument("--base-url", default=os.environ.get("SKILL_QDRANT_URL", "http://127.0.0.1:6333"),
+    ap.add_argument("--base-url", default=ports.qdrant_url(default_host="127.0.0.1"),
                     help="findability mode: the BASE owner's Qdrant-compatible query URL")
     ap.add_argument("--base-embed-port", type=int,
-                    default=int(os.environ.get("EMBED_SHIM_PORT", "6363")),
+                    default=ports.embed_port(),
                     help="findability mode: the BASE owner's embed port")
     ap.add_argument("--candidate-url", default=None,
                     help="findability mode: the CANDIDATE owner's query URL "

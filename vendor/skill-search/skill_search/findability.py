@@ -48,10 +48,9 @@ Output: SKILL_FINDABILITY_PATH, else ~/.claude/skill-concierge/findability.json:
 of the caller's own cwd or ambient `SKILL_CONCIERGE_HARNESS` — so the view it measures never
 depends on which project's session happened to trigger the reindex that launched it (the
 engine's `build_index` hook launches it with `cwd=~` already; `--sweep` re-asserts this
-itself so a manual invocation from anywhere behaves identically). Owner URLs are derived the
-SAME way `index_owner.py` derives its own bind ports (a malformed `SKILL_QDRANT_URL` falls
-back to port 6333; `EMBED_SHIM_PORT` to 6363) — not `server.py`'s simpler whole-URL default —
-because this module talks to the owner directly, the same way the owner talks to itself.
+itself so a manual invocation from anywhere behaves identically). Owner URLs use the
+owner's own bind ports, from the same `skill_search.ports` rule the owner applies, because
+this module talks to the owner directly, the same way the owner talks to itself.
 
 Approximation, disclosed (v4 adversarial review, "the ratchet does not pin the project
 directory"): running from a fixed `~` with no project scope neutralizes cross-harness/project
@@ -75,7 +74,6 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from pathlib import Path
-from urllib.parse import urlsplit
 
 # ── name-word probe: token selection (mirrors evidence/rare_token_probe.py, the proven
 # probe this design measured 179/236 with; scripts/precision_eval.py's `findability` mode
@@ -109,19 +107,12 @@ def _lock_path() -> Path:
     return p.with_name(p.name + ".lock")
 
 
-# ── owner URLs: the SAME malformed-value fallback index_owner.py uses for its own bind
-# ports (urlsplit(...).port or 6333; int(...) or 6363) — not server.py's plain "or default
-# whole URL", because this module is a PEER of the owner talking to it directly. ──────────
+# ── owner URLs: the owner's own bind ports, derived by the one shared rule
+# (skill_search.ports) — this module is a PEER of the owner talking to it directly. ────────
 def _owner_urls() -> tuple:
-    try:
-        qport = urlsplit(os.environ.get("SKILL_QDRANT_URL", "")).port or 6333
-    except ValueError:
-        qport = 6333
-    try:
-        eport = int(os.environ.get("EMBED_SHIM_PORT") or 6363)
-    except (TypeError, ValueError):
-        eport = 6363
-    return f"http://127.0.0.1:{qport}", f"http://127.0.0.1:{eport}"
+    from skill_search import ports
+    return (f"http://127.0.0.1:{ports.query_port()}",
+            f"http://127.0.0.1:{ports.embed_port()}")
 
 
 # ── thin stdlib HTTP client for the owner's Qdrant-compatible REST subset + /embed ──────────
