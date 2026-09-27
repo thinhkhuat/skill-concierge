@@ -2253,9 +2253,14 @@ def check_findability():
         return {"id": "findability", "label": "Findability", "status": WARN,
                 "detail": f"{path} has an unexpected shape — re-swept on the next reindex",
                 "fix": None}
-    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(data.get("swept_at", 0) or 0))
-    backlog = data.get("backlog", "?")
-    warnings = data.get("warnings") or []
+    swept_at, backlog, warnings = data.get("swept_at"), data.get("backlog"), data.get("warnings")
+    if (not isinstance(swept_at, (int, float)) or isinstance(swept_at, bool)
+            or not isinstance(backlog, int) or isinstance(backlog, bool)
+            or not isinstance(warnings, list)):
+        return {"id": "findability", "label": "Findability", "status": WARN,
+                "detail": f"{path} has an unexpected shape — re-swept on the next reindex",
+                "fix": None}
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(swept_at))
     if warnings:
         shown = "; ".join(str(w) for w in warnings[:5])
         more = f" (+{len(warnings) - 5} more)" if len(warnings) > 5 else ""
@@ -2409,8 +2414,20 @@ def run_all():
     # after repairing something, and a memo carried across that boundary would re-report the
     # very failure the fix just cleared — exiting 1 on a system doctor had already repaired.
     _reset_pass_caches()
-    results = [c for c in (fn() for fn in CHECKS) if c]
+    results = [c for c in (_run_check(fn) for fn in CHECKS) if c]
     return apply_cutover(results) if CUTOVER else results
+
+
+def _run_check(fn):
+    """One check that raises must not take the whole report down with it: the other rows
+    still print, and the broken one becomes a FAIL row naming the exception — the same exit
+    status an uncaught crash gave, without hiding every other check's answer."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 - any crash in a check is reported, never raised
+        name = getattr(fn, "__name__", "check").removeprefix("check_")
+        return {"id": name, "label": name.replace("_", " ").capitalize(), "status": FAIL,
+                "detail": f"the check itself crashed: {type(e).__name__}: {e}", "fix": None}
 
 
 def overall(results):

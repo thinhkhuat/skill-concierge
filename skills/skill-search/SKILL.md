@@ -22,11 +22,7 @@ Then:
    harness is not a hit. Otherwise: a skill your harness lists is invoked by name; one it does not
    list is loaded with `get_skill(name)` and followed inline.
 2. Invoke the genuinely relevant ones by name (e.g. /frontend-design).
-3. Ignore low-score results — do not load skills that aren't relevant. Installed rows
-   are always listed before external-catalog rows (marked `external`, not
-   Skill-tool-invocable — read via `get_skill(name)`) unless an external clearly
-   outscores the installed top; a lower position among externals does not by itself
-   mean lower relevance than an installed row above it.
+3. Ignore low-score results — do not load skills that aren't relevant.
 4. If a result looks promising but the description is thin, call `get_skill`
    on it before deciding.
 

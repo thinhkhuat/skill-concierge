@@ -97,3 +97,39 @@ def test_default_path_is_the_durable_home(dr, monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize("fields", [
+    {"warnings": {"x": 1}},            # a dict where a list belongs: slicing it used to raise
+    {"warnings": "one warning"},
+    {"swept_at": "yesterday"},         # time.localtime() raised on a string
+    {"swept_at": True},
+    {"backlog": "many"},
+    {"backlog": None},
+])
+def test_malformed_nested_field_warns_instead_of_crashing(dr, tmp_path, monkeypatch, fields):
+    doc = {"version": 1, "swept_at": 1758960000.0, "harness": "claude", "skills": {},
+           "warnings": [], "backlog": 1}
+    doc.update(fields)
+    path = tmp_path / "findability.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    monkeypatch.setenv("SKILL_FINDABILITY_PATH", str(path))
+    row = dr.check_findability()
+    assert row["status"] == dr.WARN
+    assert "unexpected shape" in row["detail"]
+
+
+def test_a_crashing_check_becomes_a_fail_row_and_the_rest_still_run(dr, monkeypatch):
+    def check_boom():
+        raise KeyError("nested")
+
+    def check_fine():
+        return {"id": "fine", "label": "Fine", "status": dr.OK, "detail": "ok", "fix": None}
+
+    monkeypatch.setattr(dr, "CHECKS", [check_boom, check_fine])
+    monkeypatch.setattr(dr, "CUTOVER", False)
+    rows = dr.run_all()
+    assert [r["id"] for r in rows] == ["boom", "fine"]
+    assert rows[0]["status"] == dr.FAIL
+    assert "KeyError" in rows[0]["detail"]
+    assert dr.overall(rows) == dr.FAIL
