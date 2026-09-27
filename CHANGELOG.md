@@ -30,13 +30,17 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ### Upgrade notes — this release needs a switch-over, not only a plugin update
 - The owner memory cost is accepted: about 2 GB steady, 3 GB at startup (D5).
-- Follow the switch-over order (D10, TASK-021 in
-  `plans/260925-2349-vector-store-hardening-and-migration/architecture-vector-store-3.md`): stop the Qdrant and
-  embed-shim containers, move the migrated SQLite store into place, update Claude Code, start the owner, then
-  update the OMP, Codex and ZCode copies and restart every session. An older engine can still search the
-  owner and incrementally reindex against it, but it cannot create a collection or a payload index there,
-  so every session moves to this release (D6). Skill search is
-  dark for a few minutes during the switch.
+- Follow the switch-over order (D10, TASK-021): stop the Qdrant and embed-shim containers, move the
+  migrated SQLite store into place, update Claude Code, start the owner, then update the OMP, Codex
+  and ZCode copies and restart every session. An older engine can still search the owner and
+  incrementally reindex against it, but it cannot create a collection or a payload index there, so
+  every session moves to this release (D6). Skill search is dark for a few minutes during the
+  switch. Two execution rules tighten that move: before moving the migrated file into place,
+  confirm the staging owner has fully exited and no `-wal`/`-shm` files remain next to it — an
+  unclean stop leaves committed rows in `-wal`, which a bare `mv` would drop; and "start the owner"
+  on the new release means running this release's `setup.sh`, never a bare
+  `python -m skill_search.index_owner` — the shared venv still holds the previous engine (no
+  `index_owner` module) until `setup.sh` resyncs it and writes the version stamp.
 - Do not run an older `setup.sh` or `doctor.py --fix` after the switch: they start the Qdrant container again.
 
 ## [0.52.9] — 2026-09-27
