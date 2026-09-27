@@ -19,7 +19,9 @@
 #   4. Point ~/.zcode/cli/plugins/installed_plugins.json at the new version (backup first)
 #
 # Refusals (exit 1, nothing written into the cache): no registry record for the plugin, an
-# unreadable registry, or a registered copy NEWER than this checkout (no downgrades).
+# unreadable registry, a registered copy NEWER than this checkout (no downgrades), a checkout
+# whose HEAD version disagrees with plugin.json (commit or restore it first), a git database
+# renamed to git/ (rename it back to .git first), or a git checkout git cannot read.
 #
 # Old version dirs are left in place: discovery is registry-enumerated, so they are
 # neither indexed nor served. Restart ZCode afterwards to load the new version.

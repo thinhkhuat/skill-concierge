@@ -37,8 +37,11 @@ MCP_FILE="$CMD_DIR/mcp.json"
 REPO_PROJECT_SLUG="users-thinhkhuat-in-prod-my-workbench-skill-concierge"
 LOCAL_PROJECT_DIR="$CMD_DIR/projects/$REPO_PROJECT_SLUG"
 
-# ── 0. Preflight: every JSON file this run rewrites must parse BEFORE anything is written,
-# so a malformed file stops the run with nothing half-configured.
+# ── 0. Preflight: every JSON file this run rewrites must parse AND have the
+# expected shape BEFORE anything is written, so a malformed file stops the run
+# with nothing half-configured. A file that parses but is the wrong shape
+# (e.g. a JSON array, or "mcpServers": null) would otherwise pass this check,
+# then crash a later step after earlier steps already wrote their part.
 python3 - "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" <<'PY'
 import json
 import sys
@@ -50,12 +53,22 @@ for arg in sys.argv[1:]:
     if not path.exists():
         continue
     try:
-        json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         bad.append(f"{path}: {exc}")
+        continue
+    if not isinstance(data, dict):
+        bad.append(f"{path}: top level must be a JSON object, found {type(data).__name__}")
+        continue
+    if "hooks" in data and not isinstance(data["hooks"], dict):
+        bad.append(f"{path}: \"hooks\" must be an object, found {type(data['hooks']).__name__}")
+    if "mcpServers" in data and not isinstance(data["mcpServers"], dict):
+        bad.append(f"{path}: \"mcpServers\" must be an object, found {type(data['mcpServers']).__name__}")
+    if "skills" in data and not isinstance(data["skills"], list):
+        bad.append(f"{path}: \"skills\" must be an array, found {type(data['skills']).__name__}")
 if bad:
     for line in bad:
-        print(f"  [!] Cannot parse {line}", file=sys.stderr)
+        print(f"  [!] Cannot use {line}", file=sys.stderr)
     print("  [!] Nothing was changed. Fix or move the file(s) above, then re-run.", file=sys.stderr)
     sys.exit(1)
 PY

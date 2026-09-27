@@ -346,6 +346,42 @@ def test_zcode_refuses_to_downgrade(tmp_path):
     assert (deployed / ".claude-plugin" / "plugin.json").read_text() == json.dumps({"version": "3.0.0"})
 
 
+def test_zcode_header_lists_every_refusal_that_exits_before_a_write():
+    """The installer's own header must list every refusal that exits 1 before any write —
+    the registry ones AND the checkout ones (HEAD/version mismatch, a git/ dir, unreadable
+    git) — so a reader doesn't have to read the code to know what stops a run."""
+    text = INSTALL_SH["zcode"].read_text()
+    header_lines = []
+    for line in text.splitlines()[1:]:
+        if not line.startswith("#"):
+            break
+        header_lines.append(line)
+    header = "\n".join(header_lines)
+    assert "# Refusals" in header
+    for must_mention in (
+        "no registry record",
+        "unreadable registry",
+        "downgrade",
+        "HEAD",
+        "git/",
+        "git cannot read",
+    ):
+        assert must_mention in header, f"header is missing a mention of: {must_mention!r}"
+
+
+def test_readme_054_1_line_mentions_the_zcode_missing_registry_entry_refusal():
+    """The 0.54.1 line documents that the ZCode installer refuses a downgrade, but that
+    release also shipped a refusal when the registry has no matching entry — the README
+    line must say so too."""
+    readme = (ROOT / "README.md").read_text()
+    start = readme.index("`0.54.1` —")
+    end = readme.index("`0.54.0` —") if "`0.54.0` —" in readme else start + 4000
+    line = readme[start:end]
+    assert "registry" in line and ("no matching entry" in line or "no entry" in line), (
+        "README's 0.54.1 line must mention the ZCode refusal when the registry entry is missing"
+    )
+
+
 # ── Item 7 (Command Code): a root path holding an apostrophe AND a double quote ─────────────
 
 def test_apostrophe_and_double_quote_in_root_path(tmp_path):
@@ -454,6 +490,78 @@ def test_commandcode_malformed_mcp_json_stops_before_any_write(tmp_path):
     assert "Nothing was changed" in r.stderr, r.stderr
     assert (cmd / "mcp.json").read_text() == broken
     assert settings.read_text() == good, "settings.json must not be rewritten on a refusal"
+    assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
+
+
+# The project-scope override path is keyed on a fixed slug for this one machine's checkout
+# location, independent of --root, so a fixture only needs to place the file at that fixed
+# path under the redirected $HOME to exercise it.
+_PROJECT_SLUG = "users-thinhkhuat-in-prod-my-workbench-skill-concierge"
+
+
+def test_commandcode_malformed_project_scope_mcp_json_stops_before_any_write(tmp_path):
+    """The per-project mcp.json override must be checked in the same preflight as the user
+    mcp.json, so a malformed copy there also stops the run before anything is written."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    cmd = home / ".commandcode"
+    project_dir = cmd / "projects" / _PROJECT_SLUG
+    project_dir.mkdir(parents=True)
+    broken = '{"mcpServers": ['   # malformed on purpose
+    project_mcp = project_dir / "mcp.json"
+    project_mcp.write_text(broken)
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "Nothing was changed" in r.stderr, r.stderr
+    assert project_mcp.read_text() == broken
+    assert not (cmd / "settings.json").exists(), "settings.json must not be written on a refusal"
+    assert not (cmd / "mcp.json").exists(), "the user-scope mcp.json must not be written on a refusal"
+    assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
+
+
+@pytest.mark.parametrize("target,content", [
+    ("mcp.json", "[]"),
+    ("mcp.json", '{"mcpServers": null}'),
+    ("settings.json", "[]"),
+])
+def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target, content):
+    """Valid JSON of the wrong shape (a top-level array, or a null where an object is
+    expected) must be refused by the preflight just like a parse failure — not accepted,
+    then crash a later step after earlier steps already wrote their part."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    cmd = home / ".commandcode"
+    cmd.mkdir(parents=True)
+    target_path = cmd / target
+    target_path.write_text(content)
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "Nothing was changed" in r.stderr, r.stderr
+    assert target_path.read_text() == content, "the wrong-shape file must be left byte-identical"
     assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
 
 
