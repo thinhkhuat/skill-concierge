@@ -1,0 +1,56 @@
+"""adapters/cline/install.sh must merge the skill-search MCP server into
+~/.cline/data/settings/cline_mcp_settings.json through adapters/lib/safe_write.py — a
+symlinked settings file (a dotfiles-managed layout) must stay a symlink pointing at the same
+real file, and a locked-down mode must not widen to the shell's umask. Same doctrine as every
+other installer's own config write (ADR-0072); this is the per-call-site coverage Cline was
+missing."""
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+from installer_env import installer_env
+
+ROOT = Path(__file__).resolve().parents[1]
+INSTALL_SH = ROOT / "adapters" / "cline" / "install.sh"
+
+
+def _node_front(tmp_path):
+    """installer_env's hermetic PATH deliberately omits `node`; Cline's own verify step shells
+    out to it to load the bridge module, so add just that one (test_sibling_installers.py
+    uses the same trick for its own Cline smoke test)."""
+    front = tmp_path / "node-front"
+    front.mkdir()
+    node = shutil.which("node")
+    if node:
+        (front / "node").symlink_to(node)
+    return front
+
+
+def test_mcp_settings_write_keeps_a_symlink_and_its_mode(tmp_path):
+    home = tmp_path / "home"
+    settings_dir = home / ".cline" / "data" / "settings"
+    settings_dir.mkdir(parents=True)
+    settings = settings_dir / "cline_mcp_settings.json"
+    settings.write_text(json.dumps({"mcpServers": {"other-server": {"command": "x"}}}))
+
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "cline_mcp_settings.json"
+    shutil.move(str(settings), real)
+    real.chmod(0o600)
+    settings.symlink_to(real)
+
+    env = installer_env(tmp_path, home, _node_front(tmp_path))
+    r = subprocess.run(["bash", str(INSTALL_SH)], env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    assert settings.is_symlink(), "cline_mcp_settings.json must stay a symlink"
+    assert os.path.realpath(settings) == str(real), \
+        "the symlink must still point at the same dotfiles-managed file"
+    data = json.loads(real.read_text())
+    assert data["mcpServers"]["skill-search"]["command"]
+    assert data["mcpServers"]["other-server"]["command"] == "x", \
+        "an unrelated existing MCP server entry must survive the merge"
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600), "the real file must not widen past 0600"

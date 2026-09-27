@@ -23,7 +23,9 @@ WHAT IT PROVIDES
     Both resolve `path` through `os.path.realpath` first, so a symlinked config is updated
     at the file it points to (the symlink itself is left untouched), and both copy the
     existing target's mode onto the replacement whenever the target exists — the mode is
-    kept exactly, never widened.
+    kept exactly, never widened. The tmp file itself is created at 0600 (never the shell's
+    umask), so there is no window where a soon-to-be-restrictive file is briefly readable by
+    anyone else; `write_registry`'s backup copy gets the SOURCE file's own mode the same way.
 """
 import json
 import os
@@ -36,15 +38,35 @@ def _tmp_beside(real_path):
     return real_path.with_name(real_path.name + f".tmp-{os.getpid()}")
 
 
+def _write_fresh(path, data: bytes):
+    """Creates `path` fresh at mode 0600 via O_EXCL and writes `data` — never a moment where
+    the new bytes sit at the shell's umask before a caller narrows the mode. A stale leftover
+    at this exact name (e.g. a prior run's tmp file, same pid reused) is removed and retried
+    once; any other failure removes the partial file before re-raising."""
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        path.unlink()
+        fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def write_text(path, text, encoding="utf-8"):
     """Atomically writes `text` to `path`. Resolves a symlink to its real target first (a
     plain, non-symlinked path resolves to itself); creates the target's parent dir if
-    missing; keeps the target's existing mode when it already exists. Returns the real
-    path that was written."""
+    missing; keeps the target's existing mode when it already exists (a brand-new file is
+    left at the 0600 it was created with — never widened by a default umask). Returns the
+    real path that was written."""
     real = Path(os.path.realpath(path))
     real.parent.mkdir(parents=True, exist_ok=True)
     tmp = _tmp_beside(real)
-    tmp.write_text(text, encoding=encoding)
+    _write_fresh(tmp, text.encode(encoding))
     if real.exists():
         shutil.copymode(real, tmp)
     os.replace(tmp, real)
@@ -67,14 +89,15 @@ def write_registry(path, mutate, backup_prefix, keep=5):
     data = json.loads(raw.decode("utf-8"))
     mutate(data)
     tmp = _tmp_beside(real)
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _write_fresh(tmp, (json.dumps(data, indent=2) + "\n").encode("utf-8"))
     shutil.copymode(real, tmp)
     if real.read_bytes() != raw:
         tmp.unlink()
         raise RuntimeError(f"{real} changed while this ran (a live session?) — not repointed; re-run")
     reg_dir = orig.parent
     backup = reg_dir / f"{orig.name}.bak-{backup_prefix}-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-    backup.write_bytes(raw)
+    _write_fresh(backup, raw)
+    shutil.copymode(real, backup)   # the backup keeps the SOURCE file's own mode, not the umask
     for old in sorted(reg_dir.glob(f"{orig.name}.bak-{backup_prefix}-*"))[:-keep]:
         old.unlink()
     os.replace(tmp, real)

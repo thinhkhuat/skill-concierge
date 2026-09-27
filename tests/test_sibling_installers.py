@@ -116,7 +116,7 @@ def _seed_zcode_home(tmp_path, *, installed_version, install_path):
     return home
 
 
-def _run_zcode(tmp_path, root, home):
+def _run_zcode(tmp_path, root, home, *extra_args):
     dest = root / "adapters" / "zcode"
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy(INSTALL_SH["zcode"], dest / "install.sh")
@@ -127,7 +127,7 @@ def _run_zcode(tmp_path, root, home):
     if not lib_dest.exists():
         shutil.copytree(ROOT / "adapters" / "lib", lib_dest)
     env = installer_env(tmp_path, home)
-    return subprocess.run(["bash", str(dest / "install.sh")],
+    return subprocess.run(["bash", str(dest / "install.sh"), *extra_args],
                            env=env, capture_output=True, text=True, timeout=120)
 
 
@@ -385,6 +385,106 @@ def test_readme_054_1_line_mentions_the_zcode_missing_registry_entry_refusal():
     assert "registry" in line and ("no matching entry" in line or "no entry" in line), (
         "README's 0.54.1 line must mention the ZCode refusal when the registry entry is missing"
     )
+
+
+# ── Symlink- and mode-safety at each safe_write call site (per-call-site coverage: a regression
+# to a plain os.replace at any ONE of these must fail here, not just at the sites already
+# covered elsewhere — Claude Code's registry write and the Command Code end-to-end write) ─────
+
+def test_omp_registry_write_keeps_a_symlink_and_its_mode(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home, _old_cache = _seed_omp_home_with_cache(tmp_path, version="1.9.0")
+    reg = home / ".omp" / "plugins" / "installed_plugins.json"
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "installed_plugins.json"
+    shutil.move(str(reg), real)
+    real.chmod(0o600)
+    reg.symlink_to(real)
+
+    r = _run_omp(tmp_path, repo, home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert reg.is_symlink(), "the OMP registry must stay a symlink"
+    assert os.path.realpath(reg) == str(real)
+    assert json.loads(real.read_text())["plugins"][PLUGIN_ID][0]["version"] == "2.0.0"
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600), "the real file must not widen past 0600"
+
+
+def test_zcode_registry_write_keeps_a_symlink_and_its_mode(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    deployed = (tmp_path / "home" / ".zcode" / "cli" / "plugins" / "cache" /
+                "skill-concierge" / "skill-concierge" / "1.9.0")
+    home = _seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=deployed)
+    reg = home / ".zcode" / "cli" / "plugins" / "installed_plugins.json"
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "installed_plugins.json"
+    shutil.move(str(reg), real)
+    real.chmod(0o600)
+    reg.symlink_to(real)
+
+    r = _run_zcode(tmp_path, repo, home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert reg.is_symlink(), "the ZCode registry must stay a symlink"
+    assert os.path.realpath(reg) == str(real)
+    data = json.loads(real.read_text())
+    rec = next(p for p in data["plugins"] if p.get("id") == PLUGIN_ID)
+    assert rec["version"] == "2.0.0"
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600), "the real file must not widen past 0600"
+
+
+def test_zcode_mcp_fallback_write_keeps_a_symlink_and_its_mode(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    deployed = (tmp_path / "home" / ".zcode" / "cli" / "plugins" / "cache" /
+                "skill-concierge" / "skill-concierge" / "1.9.0")
+    home = _seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=deployed)
+    (deployed / ".claude-plugin").mkdir(parents=True)
+    (deployed / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "1.9.0"}))
+    (repo / "adapters" / "zcode").mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "adapters" / "zcode" / "mcp.json", repo / "adapters" / "zcode" / "mcp.json")
+    config = home / ".zcode" / "cli" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"mcp": {"servers": {}}, "keep": "me"}))
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "config.json"
+    shutil.move(str(config), real)
+    real.chmod(0o600)
+    config.symlink_to(real)
+
+    r = _run_zcode(tmp_path, repo, home, "--mcp-fallback")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert config.is_symlink(), "ZCode's config.json must stay a symlink"
+    assert os.path.realpath(config) == str(real)
+    data = json.loads(real.read_text())
+    assert data["mcp"]["servers"]["skill-search"]["command"]
+    assert data["keep"] == "me", "an unrelated top-level key must survive the merge"
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600), "the real file must not widen past 0600"
+
+
+def test_omp_config_yml_dev_mode_write_keeps_a_symlink_and_its_mode(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    (repo / "adapters" / "omp").mkdir(parents=True)
+    (repo / "adapters" / "omp" / "skill-concierge.ext.ts").touch()
+    home = tmp_path / "home"
+    omp_agent = home / ".omp" / "agent"
+    omp_agent.mkdir(parents=True)
+    config = omp_agent / "config.yml"
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "config.yml"
+    real.write_text("extensions:\n  - /some/other/ext.ts\n")
+    real.chmod(0o600)
+    config.symlink_to(real)
+
+    r = _run_omp(tmp_path, repo, home)   # no installed_plugins.json -> dev-mode path
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert config.is_symlink(), "OMP's config.yml must stay a symlink"
+    assert os.path.realpath(config) == str(real)
+    text = real.read_text()
+    assert str(repo / "adapters" / "omp" / "skill-concierge.ext.ts") in text
+    assert "/some/other/ext.ts" in text, "an unrelated existing extension entry must survive"
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600), "the real file must not widen past 0600"
 
 
 # ── Item 7 (Command Code): a root path holding an apostrophe AND a double quote ─────────────

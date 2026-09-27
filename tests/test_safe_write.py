@@ -2,6 +2,7 @@
 write now goes through, so it is tested once here instead of once per call site."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,44 @@ def test_write_registry_refuses_when_the_file_changed_since_it_was_read(tmp_path
     assert json.loads(reg.read_text())["plugins"]["skill-concierge@skill-concierge"][0]["version"] == "9.9.9", \
         "the concurrent write must survive untouched"
     assert not list(tmp_path.glob("*.tmp-*")), "no leftover tmp file"
+
+
+def test_write_text_tmp_file_is_never_created_wider_than_0600(tmp_path, safe_write, monkeypatch):
+    """The tmp file must be created at 0600 directly (O_CREAT|O_EXCL|O_WRONLY, 0o600) — never
+    at the shell's default umask and narrowed afterward, which would leave a real window where
+    a soon-to-be-restrictive secret file is briefly world- or group-readable."""
+    seen_modes = []
+    real_open = os.open
+
+    def spy_open(path, flags, mode=0o777):
+        seen_modes.append((flags, mode))
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(safe_write.os, "open", spy_open)
+    target = tmp_path / "mcp.json"
+    safe_write.write_text(target, json.dumps({"env": {"TOKEN": "s3cr3t"}}))
+
+    assert seen_modes, "safe_write must create its tmp file via os.open, not Path.write_text"
+    flags, mode = seen_modes[0]
+    assert mode == 0o600, f"tmp file must be created at 0o600, was {oct(mode)}"
+    assert flags & os.O_EXCL, "tmp file creation must use O_EXCL"
+    assert flags & os.O_CREAT and flags & os.O_WRONLY
+
+
+def test_write_registry_backup_keeps_the_source_files_mode_not_the_umask(tmp_path, safe_write):
+    """The backup written beside a registry must carry the SAME mode as the registry it backs
+    up — not the shell's default umask (previously always 0644-ish regardless of a 0600 source),
+    which would silently widen a locked-down registry's backup copy."""
+    reg = tmp_path / "installed_plugins.json"
+    reg.write_text(json.dumps({"plugins": {"skill-concierge@skill-concierge": [{"version": "1.0.0"}]}}))
+    reg.chmod(0o640)
+
+    def bump(data):
+        data["plugins"]["skill-concierge@skill-concierge"][0]["version"] = "2.0.0"
+
+    _real, backup = safe_write.write_registry(reg, bump, "unittest")
+    assert oct(backup.stat().st_mode & 0o777) == oct(0o640), \
+        "the backup must keep the registry's OWN mode, not a fresh-file default"
 
 
 def test_write_registry_keeps_only_the_newest_backups(tmp_path, safe_write):
