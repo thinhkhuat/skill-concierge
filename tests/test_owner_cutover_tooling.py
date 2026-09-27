@@ -366,6 +366,17 @@ def test_owner_ports_follow_configured_ports(dr, monkeypatch):
     assert [n for n, _ in dr._parse_publishers(ps)] == ["staged"]
 
 
+def test_a_malformed_qdrant_url_port_does_not_crash_doctor_at_import(monkeypatch):
+    """OWNER_PORTS derives from the same SKILL_QDRANT_URL the index owner does, with the
+    same urlsplit(...).port call that raises on a non-numeric port — doctor must land on
+    the same 6333 fallback the owner falls back to, not crash before it can report anything."""
+    for k in _ENGINE_SUITE_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SKILL_QDRANT_URL", "http://127.0.0.1:notaport")
+    dr = _load("doctor_malformed_port_t", ROOT / "scripts" / "doctor.py")
+    assert dr.OWNER_PORTS[0] == "6333"
+
+
 def test_owner_log_row(dr, tmp_path, monkeypatch):
     log = tmp_path / "index-owner.log"
     monkeypatch.setattr(dr, "OWNER_LOG", log)

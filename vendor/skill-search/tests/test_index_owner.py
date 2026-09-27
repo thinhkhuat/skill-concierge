@@ -717,6 +717,34 @@ def test_default_ports_fall_back_to_6333_6363_with_nothing_configured(tmp_path):
     assert json.loads(r.stdout) == [6333, 6363]
 
 
+@pytest.mark.parametrize("bad_env", [
+    {"SKILL_QDRANT_URL": "http://127.0.0.1:notaport"},
+    {"SKILL_OWNER_QUERY_PORT": "notaport"},
+    {"EMBED_SHIM_PORT": "notaport"},
+    {"SKILL_OWNER_EMBED_PORT": "notaport"},
+])
+def test_malformed_port_env_falls_back_instead_of_crashing_at_import(tmp_path, bad_env):
+    """A malformed port in any of the four port-shaping env vars must not raise at
+    import — importing the module is the owner's whole startup path, so a raise there
+    crashes the owner before it can even log anything useful."""
+    env = dict(os.environ)
+    for k in ("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT", "SKILL_QDRANT_URL", "EMBED_SHIM_PORT"):
+        env.pop(k, None)
+    env.update(bad_env)
+    script = (
+        "import json\n"
+        "from skill_search import index_owner as io_\n"
+        "print(json.dumps([io_.QUERY_PORT, io_.EMBED_PORT]))\n")
+    script_path = tmp_path / "port_malformed_probe.py"
+    script_path.write_text(script, encoding="utf-8")
+    env["PYTHONPATH"] = str(SRC)
+    r = subprocess.run([sys.executable, str(script_path)], env=env,
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [6333, 6363]
+    assert "notaport" in r.stderr
+
+
 def test_log_lines_are_not_duplicated_when_stderr_shares_the_log_file(tmp_path):
     """L9: a launcher (doctor.start_owner, the enforcer, setup.sh) that redirects the
     owner's stderr into the SAME file as SKILL_OWNER_LOG must not see every line twice."""

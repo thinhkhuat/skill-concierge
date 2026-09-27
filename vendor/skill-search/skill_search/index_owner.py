@@ -83,10 +83,23 @@ DB_PATH = Path(os.environ.get("SKILL_INDEX_DB")
 # Port defaults mirror every caller (doctor.py, the launcher, the enforcer): a configured
 # SKILL_QDRANT_URL/EMBED_SHIM_PORT is honored before falling back to the Qdrant/embed-shim
 # well-known ports, so an owner started standalone lands on the same port its callers expect.
-QUERY_PORT = int(os.environ.get("SKILL_OWNER_QUERY_PORT")
-                 or urlsplit(os.environ.get("SKILL_QDRANT_URL", "")).port or 6333)
-EMBED_PORT = int(os.environ.get("SKILL_OWNER_EMBED_PORT")
-                 or os.environ.get("EMBED_SHIM_PORT") or 6363)
+# A malformed value (non-numeric, or a URL port that doesn't cast to int) must not crash the
+# owner here — this runs at import, before there is any log file or listener to report through
+# other than stderr, and the owner falling back to the well-known port is still reachable.
+try:
+    QUERY_PORT = int(os.environ.get("SKILL_OWNER_QUERY_PORT")
+                     or urlsplit(os.environ.get("SKILL_QDRANT_URL", "")).port or 6333)
+except (TypeError, ValueError) as _exc:
+    print(f"skill-concierge index owner: SKILL_OWNER_QUERY_PORT/SKILL_QDRANT_URL has a "
+          f"malformed port ({_exc}); falling back to 6333", file=sys.stderr)
+    QUERY_PORT = 6333
+try:
+    EMBED_PORT = int(os.environ.get("SKILL_OWNER_EMBED_PORT")
+                     or os.environ.get("EMBED_SHIM_PORT") or 6363)
+except (TypeError, ValueError) as _exc:
+    print(f"skill-concierge index owner: SKILL_OWNER_EMBED_PORT/EMBED_SHIM_PORT has a "
+          f"malformed port ({_exc}); falling back to 6363", file=sys.stderr)
+    EMBED_PORT = 6363
 LOG_PATH = Path(os.environ.get("SKILL_OWNER_LOG")
                 or Path(os.environ.get("SKILL_CONCIERGE_LOG",
                                         Path.home() / ".claude" / "skill-concierge" / "logs"))

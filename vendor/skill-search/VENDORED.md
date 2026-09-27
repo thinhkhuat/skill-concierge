@@ -470,3 +470,12 @@ plugin-level customization layer and these engine patches.
   with `SKILL_OWNER_LOG` (a full path) still winning when set. Removed the unused `parse_qs` import.
   Covered by `tests/test_index_owner.py`'s "track B review fixes" section. Not upstream: re-apply
   on re-vendor.
+- **Malformed-port fallback (v0.54.2):** the `QUERY_PORT`/`EMBED_PORT` derivation above
+  (`int(...)` over `SKILL_OWNER_QUERY_PORT`/`SKILL_QDRANT_URL`'s port/`SKILL_OWNER_EMBED_PORT`/
+  `EMBED_SHIM_PORT`) used to raise at import on a non-numeric value, crashing the owner before
+  it could log anything. Both derivations now catch the parse failure, print one line to stderr
+  naming the bad value, and fall back to 6333/6363 — the same fallback `scripts/doctor.py`'s
+  `OWNER_PORTS` now uses for the same `SKILL_QDRANT_URL` port, so a malformed value lands the
+  owner and doctor on the same port instead of doctor crashing first. Covered by
+  `tests/test_index_owner.py::test_malformed_port_env_falls_back_instead_of_crashing_at_import`.
+  Not upstream: re-apply on re-vendor.

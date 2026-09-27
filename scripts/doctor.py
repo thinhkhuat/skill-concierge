@@ -158,8 +158,15 @@ OWNER_LOG = LOGDIR / "index-owner.log"
 ENAME = os.environ.get("SKILL_EMBED_CONTAINER", "skill-concierge-embed-shim")
 # The owner's two ports as configured (store URL + embed port), 6333/6363 by default: a
 # container publishing either one is in the owner's way; one on some other port is not.
-OWNER_PORTS = (str(urllib.parse.urlsplit(QURL).port or 6333),
-               os.environ.get("EMBED_SHIM_PORT", "6363"))
+# A malformed SKILL_QDRANT_URL port must not crash doctor before it can report anything —
+# fall back to the same 6333 the index owner itself falls back to (index_owner.py).
+try:
+    _store_port = urllib.parse.urlsplit(QURL).port or 6333
+except ValueError as _exc:
+    print(f"skill-concierge doctor: SKILL_QDRANT_URL={QURL!r} has a malformed port "
+          f"({_exc}); falling back to 6333", file=sys.stderr)
+    _store_port = 6333
+OWNER_PORTS = (str(_store_port), os.environ.get("EMBED_SHIM_PORT", "6363"))
 # The embed parity probe: one English and one Vietnamese prompt, owner vs in-process.
 PARITY_TEXTS = ("find the right skill to deploy a web app",
                 "tìm kỹ năng phù hợp để triển khai ứng dụng web")
