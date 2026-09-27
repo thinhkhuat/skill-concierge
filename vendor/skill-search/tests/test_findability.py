@@ -331,7 +331,7 @@ def test_name_word_rank_beyond_depth_is_depth_plus_one(owner_factory):
     assert rank == 6           # not found within depth=5 -> depth + 1
 
 
-# ── complement_rank / search_skills_rank (ADR-0075 integration: search_skills() itself
+# ── complement_rank / search_skills_rank (complement-rule integration: search_skills() itself
 # arranges installed-before-external via TWO separate queries, which a single mixed-tier
 # groups query — name_word_rank's own shape — can never observe) ──────────────────────────
 def _allow_catalog(monkeypatch, alias):
@@ -377,8 +377,8 @@ def test_complement_rank_lets_a_strong_external_lead(owner_factory, monkeypatch)
 
 
 def test_search_skills_rank_falls_back_to_plain_shape_without_the_complement_machinery(owner_factory):
-    """A pre-ADR-0075 `srv` (no _search_complement_on at all) must use the plain single-query
-    shape — the exact case a BASE checkout that predates X hits."""
+    """An `srv` without the complement rule (no _search_complement_on at all) must use the plain single-query
+    shape — the exact case a BASE checkout that predates the rule hits."""
     o = owner_factory().wait_ready()
     seed(o, [pt(1, "winner", vec(0, 1)), pt(2, "target", vec(0.1, 0.9))])
 

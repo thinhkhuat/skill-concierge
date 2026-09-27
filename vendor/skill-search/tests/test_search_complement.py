@@ -1,4 +1,4 @@
-"""ADR-0075: search_skills can merge installed and external-catalog rows conditionally — an
+"""Installed/external complement rule: search_skills can merge installed and external-catalog rows conditionally — an
 installed row is placed ahead of an external row only when its score is within
 EXTERNAL_MARGIN (0.08, a fixed constant) of that external's; a clearly better external
 keeps its place. Ships OFF by default (v0.55.0), pending a combined judgment with the

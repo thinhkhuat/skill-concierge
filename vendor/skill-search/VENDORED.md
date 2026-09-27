@@ -504,7 +504,7 @@ plugin-level customization layer and these engine patches.
   shared case table driving every caller's real code, bash included). Not upstream: re-apply
   on re-vendor.
 
-- **Findability at the root (ADR-0074/ADR-0075, 2026-09-27):**
+- **Findability at the root (ADR-0074, 2026-09-27):**
   - **Exclusion-sentence trigger drop:** `server._split_phrases` drops an exclusion sentence rather
     than indexing it as a positive trigger point. `_TRIG_NEGATIVE_RE` reuses
     `skills_discovery._BODY_NEGATIVE_RE`'s exact pattern (never hand-copied) plus a "not for" arm
@@ -526,7 +526,7 @@ plugin-level customization layer and these engine patches.
     gate with that channel in v0.56.0, keeping the index byte-identical and opening no new epoch)
     — `SKILL_DECLARED_TRIGGERS=1` turns it on; `=0`/unset restores the byte-identical pre-fix text
     and phrases.
-  - **`search_skills` external-row complement (ADR-0075):** between installed and external-catalog
+  - **`search_skills` external-row complement (`SKILL_SEARCH_COMPLEMENT`, default OFF):** between installed and external-catalog
     rows, via two SEPARATE queries (`_installed_only_filter`/`_external_only_filter`, mirroring the
     enforcer's `_retrieve`/`_retrieve_external`) fused per tier by the existing `_fuse_ranked`, then
     merged pairwise by `_arrange_tiers` — a per-row rule, not a single installed-top threshold: an

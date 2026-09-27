@@ -33,7 +33,7 @@ def cal():
 # ── sign test: gain direction (the earlier, WRONG gating value — kept, reported
 # alongside the loss direction, never used alone to gate the bar again) ────────────────────
 def test_sign_test_p_matches_the_review_measured_examples(pe):
-    # review-adversarial-v3.md M1: pooled +24/-8 -> p ~= 0.004; MCP-only +8/-5 -> p ~= 0.29.
+    # Measured splits: pooled +24/-8 -> p ~= 0.004; MCP-only +8/-5 -> p ~= 0.29.
     assert abs(pe.sign_test_p(8, 24) - 0.0035) < 1e-3
     assert abs(pe.sign_test_p(5, 8) - 0.2905) < 1e-3
 
@@ -97,8 +97,8 @@ def test_cd_bar_fails_on_a_significant_net_negative(pe):
 
 
 def test_cd_bar_passes_a_net_gain_even_when_the_gain_is_not_significant(pe):
-    """The exact bug this round fixes: +8/-5 (net +3, from review-adversarial-v3.md's
-    measured MCP-view C+D split) has gain_p = 0.29 > 0.10 — an insignificant GAIN by the
+    """A net gain that is not significant: +8/-5 (net +3, the measured MCP-view C+D
+    split) has gain_p = 0.29 > 0.10 — an insignificant GAIN by the
     (wrong) earlier gating — but there is no significant LOSS either (loss_p = 0.867), and
     the pre-registered bar never required evidence of gain, only the absence of loss."""
     r = pe.cd_bar([False] * 8 + [True] * 5, [True] * 8 + [False] * 5)
@@ -121,7 +121,7 @@ def test_w_bar_fails_when_any_probe_leaves_the_top3(pe):
 
 
 def test_w_bar_passes_when_no_one_leaves_even_if_someone_loses_a_rank(pe):
-    """The v4 review's exact blocker case: F2 shifts 50/258 targets down one place inside
+    """Declared list phrases shift 50/258 targets down one place inside
     the top 3, without any of them leaving it — bar 1's fixed wording must pass this."""
     rows = [{"skill": "a", "base_rank": 1, "cand_rank": 2}]
     assert pe.w_bar(rows)["passed"]

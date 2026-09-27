@@ -20,7 +20,7 @@ Queries embedded via the ENGINE path (same space as the index). Run under the en
   --selftest   ranking/metric math self-check (no network)
 
 --mode findability (ADR-0074, design plans/260927-1450-findability-at-the-root SS4 E): the
-pre-registered evaluation harness for an index- or ranking-shaping change (F1/F2/X/K). Runs a
+pre-registered evaluation harness for an index- or ranking-shaping change. Runs a
 BASE owner (the live index) against a CANDIDATE owner (a staging build) over five sets:
   W  every claude-invocable installed skill's name-word probe (the SAME rule
      `skill_search.findability` uses for its own ratchet) -> MCP-view rank, base vs candidate.
@@ -31,7 +31,7 @@ BASE owner (the live index) against a CANDIDATE owner (a staging build) over fiv
      absent corpus reports "0/0, not independently verified", never a false PASS-by-omission)
      plus the incident's 7 hand-written controls (evidence/curated_measure.py's NEGATIVE list,
      copied verbatim, target tk-gdelt-doctor).
-  G  the 3 GDELT name queries (#1 bar) plus the paraphrase query (F3's, reported only).
+  G  the 3 GDELT name queries (#1 bar) plus the paraphrase query (reported only).
 Flags: --base-url/--base-embed-port, --candidate-url/--candidate-embed-port (default = base,
 so `--mode findability` alone runs a trivial base-vs-itself check), --collection, --corpus
 (the private real-turn corpus — read, never copied into this repo), --markdown (also emit a
@@ -73,7 +73,7 @@ GDELT_SKILL = "tk-gdelt-doctor"
 # default list minus its one non-name-bearing paraphrase, copied verbatim.
 GDELT_NAME_QUERIES = ["my gdelt tone query crashed with a unicode error",
                       "move the gdelt-ngrams archive to another server", "gdelt"]
-GDELT_PARAPHRASE_QUERY = "is my local news archive up to date and healthy"   # F3's; reported only
+GDELT_PARAPHRASE_QUERY = "is my local news archive up to date and healthy"   # reported only, never gated
 # The incident's 7 hand-written controls — plans/.../evidence/curated_measure.py's NEGATIVE
 # list, copied verbatim 2026-09-27. Target: GDELT_SKILL must NOT newly rank top-3 for these.
 GDELT_INCIDENT_CONTROLS = [
@@ -295,7 +295,7 @@ def cd_bar(base_hits, cand_hits) -> dict:
 
 
 def w_bar(w_rows: list, topn: int = 3) -> dict:
-    """Bar 1 (v4.1 wording, the fix for the v4 review's blocker): no W probe leaves the top
+    """Bar 1: no W probe leaves the top
     `topn`, and the count of probes in the top `topn` must not fall."""
     leavers = [r for r in w_rows if r["base_rank"] <= topn and r["cand_rank"] > topn]
     base_top = sum(1 for r in w_rows if r["base_rank"] <= topn)
@@ -343,9 +343,9 @@ def _enforcer_for(cal, qdrant_url: str, embed_port: int):
 
 def _server_for(engine_root: Path):
     """A fresh `skill_search.server` loaded from `engine_root`'s OWN vendor/skill-search, so a
-    BASE checkout that predates the ADR-0075 installed/external complement rule (X) genuinely
+    BASE checkout that predates the installed/external complement rule genuinely
     lacks `_search_complement_on`/`_arrange_tiers` — `search_skills_rank` detects that absence
-    and falls back to the pre-X plain shape, rather than this script guessing which side has
+    and falls back to the plain single-query shape, rather than this script guessing which side has
     the mechanism. No network state to bake in: `_scope_filter`/`_installed_only_filter`/
     `_external_only_filter`/`_arrange_tiers`/`_search_complement_on` take the query URL as an
     explicit argument (via `findability.py`'s `_query_groups`) or read a live env flag, never a
@@ -360,7 +360,7 @@ def _mcp_rank(fnd, embed_cache: dict, embed_base: str, query_base: str, collecti
              scope_filter, srv, text: str, target: str, depth: int) -> int:
     """The MCP-view rank of `target` for `text`, exactly as `search_skills()` on THIS `srv`
     instance would return it (`skill_search.findability.search_skills_rank` — the complement
-    arrangement when `srv` carries X and it is on, else the pre-X plain shape). Never re-
+    arrangement when `srv` carries the complement rule and it is on, else the plain shape). Never re-
     embedded twice for the same (embed_base, text) — a free win when --candidate-url defaults
     to --base-url."""
     key = (embed_base, text)
@@ -471,7 +471,7 @@ def run_findability(args) -> int:
     # `srv` (this script's OWN skill_search.server) governs the candidate side by construction
     # — this script IS the candidate's code. The base side gets its OWN instance only when
     # --base-engine-root names a different checkout (e.g. origin/main, which predates the
-    # ADR-0075 installed/external complement rule); absent that flag, base is assumed to run
+    # installed/external complement rule); absent that flag, base is assumed to run
     # the SAME code (the --mode findability self-check with no flags at all).
     srv_base = _server_for(args.base_engine_root) if args.base_engine_root else srv
     scope_filter = srv._scope_filter()
@@ -569,7 +569,7 @@ def run_findability(args) -> int:
                           N_RANK_DEPTH)
         print(f"G (name, #1 bar): base {g_base_ranks} -> candidate {g_ranks}  "
               f"-> {'PASS' if g_result['passed'] else 'FAIL'}")
-        print(f"G (paraphrase, F3's territory — reported only, never gated): "
+        print(f"G (paraphrase — reported only, never gated): "
               f"candidate rank {g_para_rank}")
     else:
         print(f"G: {GDELT_SKILL!r} is not installed here — not applicable "
@@ -614,7 +614,7 @@ def main():
     ap.add_argument("--base-engine-root", type=Path, default=None,
                     help="findability mode: repo root whose vendor/skill-search/server.py the "
                          "BASE owner is actually running, when it differs from this script's "
-                         "own code (e.g. origin/main, pre-ADR-0075) — lets the MCP-view rank "
+                         "own code (e.g. origin/main, before the complement rule) — lets the MCP-view rank "
                          "correctly detect that BASE has no installed/external complement rule "
                          "to apply. Default: assume BASE runs the same code as this script.")
     ap.add_argument("--collection", default=os.environ.get("SKILL_COLLECTION", "claude_skills"),

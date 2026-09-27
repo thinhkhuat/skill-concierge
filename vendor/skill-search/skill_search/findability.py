@@ -274,14 +274,14 @@ def _tier_rows(groups: list) -> list:
 
 def complement_rank(query_base: str, collection: str, srv, vector: list, name: str,
                     depth: int = NAME_RANK_DEPTH) -> tuple:
-    """(rank, winner) as `search_skills()` ACTUALLY ranks it once the ADR-0075 installed/
-    external complement rule (X) ships: two separate queries (`srv._installed_only_filter`/
+    """(rank, winner) as `search_skills()` ACTUALLY ranks it once the installed/
+    external complement rule (SKILL_SEARCH_COMPLEMENT) is on: two separate queries (`srv._installed_only_filter`/
     `srv._external_only_filter`), each ranked to `depth`, then arranged by `srv._arrange_tiers`
     — the SAME functions `search_skills()` itself calls, reused rather than re-derived, just
     at a depth deeper than its own hardcoded TOP_K so a rank beyond the visible offer is still
     measured. Callers must gate this on the loaded `srv` actually carrying that machinery AND
     having it turned on (`search_skills_rank` does this automatically); calling it against a
-    pre-X `srv` raises AttributeError on purpose — there is no reasonable arrangement to fall
+    `srv` without that rule raises AttributeError on purpose — there is no reasonable arrangement to fall
     back to from inside this function without silently hiding that the code it was asked to
     measure does not exist."""
     inst = _tier_rows(_query_groups(query_base, collection, vector, "name", depth,
@@ -299,10 +299,10 @@ def complement_rank(query_base: str, collection: str, srv, vector: list, name: s
 def search_skills_rank(query_base: str, collection: str, scope_filter: dict, srv, vector: list,
                        name: str, depth: int = NAME_RANK_DEPTH) -> tuple:
     """(rank, winner) matching whatever `search_skills()` ACTUALLY does for this `srv` instance:
-    the ADR-0075 complement arrangement (`complement_rank`) when `srv` carries it and it is
-    turned on, else the plain single-query shape every release before X used
-    (`name_word_rank`). Measuring a pre-X owner (or X switched off) through the plain shape and
-    a post-X owner through the complement shape is not an inconsistency to paper over — it is
+    the installed/external complement arrangement (`complement_rank`) when `srv` carries it and it is
+    turned on, else the plain single-query shape every release before the rule used
+    (`name_word_rank`). Measuring an owner without the rule (or with it switched off) through the plain shape and
+    an owner with it on through the complement shape is not an inconsistency to paper over — it is
     the one honest way to compare what `search_skills()` truly returns on each side, which is
     the whole point of a base-vs-candidate rank comparison."""
     if getattr(srv, "_search_complement_on", lambda: False)():

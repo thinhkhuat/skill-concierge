@@ -81,7 +81,7 @@ OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
-# ADR-0075: search_skills can merge installed and external-catalog rows conditionally, not by
+# Installed/external complement rule (SKILL_SEARCH_COMPLEMENT): search_skills can merge installed and external-catalog rows conditionally, not by
 # tier alone — an installed row is placed ahead of an external row only when its score is
 # within EXTERNAL_MARGIN of that external's; a clearly better external (by more than the
 # margin) keeps its place. consult_candidates is untouched (it deliberately sieves both
@@ -930,7 +930,7 @@ def _scope_filter():
 
 
 def _installed_only_filter() -> dict:
-    """ADR-0075: _scope_filter plus `must_not tier=external`, the SAME clause the
+    """Complement rule: _scope_filter plus `must_not tier=external`, the SAME clause the
     enforcer's `_retrieve` uses. A separate query filtered this way guarantees the true
     installed top always surfaces, instead of competing for the same TOP_K slots as
     every external row in one mixed-tier query (a handful of strong externals could
@@ -942,7 +942,7 @@ def _installed_only_filter() -> dict:
 
 
 def _external_only_filter() -> dict:
-    """ADR-0075: _scope_filter plus `must tier=external`, mirroring the enforcer's
+    """Complement rule: _scope_filter plus `must tier=external`, mirroring the enforcer's
     `_retrieve_external`. A separate query, so external rows can never physically
     displace an installed row out of the installed-only query's own result window."""
     f = _scope_filter()
@@ -951,7 +951,7 @@ def _external_only_filter() -> dict:
 
 
 def _arrange_tiers(installed_rows: list, external_rows: list, top_k: int) -> list:
-    """ADR-0075's conditional external rule: a per-row merge, not a single installed-top
+    """The conditional installed/external complement rule: a per-row merge, not a single installed-top
     threshold. An installed row is placed ahead of an external row only when
     `installed.score >= external.score - EXTERNAL_MARGIN`; otherwise the external keeps
     its place. Both tiers are expected to already be fused/ranked (score descending)
@@ -1230,7 +1230,7 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     phrasing across all of them (MAX-pool over the query union), so a skill a
     single phrasing would bury still surfaces.
 
-    ADR-0075: an installed row is placed ahead of an external row only when its score
+    Complement rule: an installed row is placed ahead of an external row only when its score
     is within EXTERNAL_MARGIN of that external's; a clearly better external (by more
     than the margin) keeps its place, still marked external."""
     # group_by name + group_size=1 keeps each skill's single BEST point (on the
@@ -1238,7 +1238,7 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     queries = [query] + [q for q in (extra_queries or []) if q and q.strip()]
     vectors = embed_queries(queries)
     if _search_complement_on():
-        # ADR-0075: a SEPARATE installed-only query alongside the external-only one
+        # Complement rule: a SEPARATE installed-only query alongside the external-only one
         # (never one mixed-tier query filtered post-hoc) — otherwise all TOP_K slots of
         # a single query could fill with externals before the installed top is even
         # seen. Each tier is fused on its own via _fuse_ranked, then arranged.
