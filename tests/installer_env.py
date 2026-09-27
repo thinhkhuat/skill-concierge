@@ -27,4 +27,5 @@ def installer_env(tmp_path, home, *front, **extra):
     """The environment an installer test runs under: throwaway HOME, hermetic PATH, no bytecode
     written into HOME by any Python, and a Qdrant URL that nothing answers."""
     return {**os.environ, "HOME": str(home), "PATH": hermetic_path(tmp_path, *front),
-            "PYTHONDONTWRITEBYTECODE": "1", "SKILL_QDRANT_URL": "http://127.0.0.1:9", **extra}
+            "PYTHONDONTWRITEBYTECODE": "1", "SKILL_QDRANT_URL": "http://127.0.0.1:9",
+            "EMBED_SHIM_PORT": "9", "SKILL_OWNER_AUTOSTART": "0", **extra}

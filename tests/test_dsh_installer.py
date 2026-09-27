@@ -43,7 +43,8 @@ def test_installer_writes_a_loadable_idempotent_patch_layer(start, tmp_path):
     (prof / "cordis.yml").write_text("[]\n")
     patch = prof / "cordis.patch.yml"
     patch.write_text(start)
-    env = dict(os.environ, SKILL_DSH_HOME=str(home), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"))
+    env = dict(os.environ, SKILL_DSH_HOME=str(home), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"),
+                EMBED_SHIM_PORT="9", SKILL_OWNER_AUTOSTART="0", SKILL_QDRANT_URL="http://127.0.0.1:9")
     run = lambda: subprocess.run(["bash", str(ROOT / "adapters" / "dsh" / "install.sh")], env=env,
                                  capture_output=True, text=True, timeout=120)
     first = run()
@@ -86,7 +87,8 @@ def _install(tmp_path, start):
     (prof / "cordis.yml").write_text("[]\n")
     patch = prof / "cordis.patch.yml"
     patch.write_text(start)
-    env = dict(os.environ, SKILL_DSH_HOME=str(home), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"))
+    env = dict(os.environ, SKILL_DSH_HOME=str(home), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"),
+                EMBED_SHIM_PORT="9", SKILL_OWNER_AUTOSTART="0", SKILL_QDRANT_URL="http://127.0.0.1:9")
     r = subprocess.run(["bash", str(ROOT / "adapters" / "dsh" / "install.sh")], env=env,
                        capture_output=True, text=True, timeout=120)
     return r, patch
