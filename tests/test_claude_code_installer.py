@@ -101,6 +101,12 @@ def _make_repo(tmp_path, name, version):
     # doctor.py imports sibling scripts (e.g. flywheel_llm) lazily inside its own check
     # functions, so the whole dir is copied rather than just doctor.py itself.
     shutil.copytree(DOCTOR_SRC.parent, repo / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+    # doctor.py derives its ports through the vendored engine's ports module at import time,
+    # as every real checkout carries it; the fixture carries the same module.
+    engine = repo / "vendor" / "skill-search" / "skill_search"
+    engine.mkdir(parents=True)
+    for name in ("__init__.py", "ports.py"):
+        shutil.copy2(ROOT / "vendor" / "skill-search" / "skill_search" / name, engine / name)
     setup = repo / "setup.sh"
     setup.write_text("#!/bin/sh\n")
     setup.chmod(0o755)

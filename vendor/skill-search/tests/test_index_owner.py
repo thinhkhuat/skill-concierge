@@ -799,7 +799,7 @@ def test_out_of_range_port_env_falls_back_instead_of_crashing_at_bind(tmp_path, 
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [6333, 6363]
     assert bad_value in r.stderr
-    assert "out of range" in r.stderr or "not a strictly ASCII-digit port" in r.stderr
+    assert "is not a valid port" in r.stderr
 
 
 def test_log_lines_are_not_duplicated_when_stderr_shares_the_log_file(tmp_path):
