@@ -1538,6 +1538,21 @@ def _omp_installed_version():
     return head.get("version"), head.get("enabled")
 
 
+def _omp_record_exists():
+    """True when OMP's install record has an entry for skill-concierge@skill-concierge,
+    regardless of whether that entry carries a `version` field — existence, not the parsed
+    field, proves an install happened (M1)."""
+    try:
+        rec = json.loads(OMP_PLUGINS_FILE.read_text(encoding="utf-8"))
+        entry = rec["plugins"]["skill-concierge@skill-concierge"]
+    except JSON_READ_ERRORS:
+        return False
+    if not entry:
+        return False
+    head = entry[0] if isinstance(entry, list) else entry
+    return isinstance(head, dict)
+
+
 def _omp_marketplace_version():
     """Version the OMP marketplace catalog clone advertises — what the next plugin
     update would fetch. None when the clone is missing/unreadable (updates blind)."""
@@ -1577,13 +1592,16 @@ def check_omp():
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     ver, enabled = _omp_installed_version()
-    plugin_installed = ver is not None
-    if ver is None:
+    record_present = _omp_record_exists()
+    plugin_installed = record_present
+    if not record_present:
         findings.append("skill-concierge has no OMP install record (installed_plugins.json)")
     else:
+        if ver is None:
+            findings.append("OMP install record has no version field")
         if enabled is False:
             findings.append(f"OMP plugin v{ver} installed but DISABLED")
-        if ssot and ver != ssot:
+        if ver and ssot and ver != ssot:
             findings.append(f"OMP cache v{ver} != SSOT v{ssot} — run /plugin marketplace update")
     mkt = _omp_marketplace_version()
     if mkt is None:
@@ -1639,6 +1657,19 @@ def _codex_cached_version():
         return None
 
 
+def _codex_cache_has_version_dir():
+    """True when at least one version-named dir sits in the Codex plugin cache, regardless
+    of whether its plugin.json is present or readable. Existence of the install, not a
+    successfully parsed version, is what `--cutover` must key its FAIL rule on (M1)."""
+    try:
+        base = CODEX_PLUGIN_CACHE
+        if not base.is_dir():
+            return False
+        return any(d.is_dir() and _VERSION_DIRNAME.match(d.name) for d in base.iterdir())
+    except (OSError, PermissionError):
+        return False
+
+
 def check_codex():
     """Codex harness install state — version parity and surface presence (ADR-0033).
 
@@ -1661,9 +1692,13 @@ def check_codex():
     findings = []
     ssot = _descriptor_version(ROOT / ".codex-plugin" / "plugin.json")
     cached_ver = _codex_cached_version()
-    plugin_installed = cached_ver is not None
+    plugin_installed = _codex_cache_has_version_dir()
     if cached_ver is None:
-        findings.append("no Codex plugin cache found (never installed via marketplace)")
+        if plugin_installed:
+            findings.append("Codex plugin cache has a version dir but its plugin.json is "
+                            "missing or unreadable — run adapters/codex/install.sh")
+        else:
+            findings.append("no Codex plugin cache found (never installed via marketplace)")
     else:
         if ssot and cached_ver != ssot:
             findings.append(f"Codex cache v{cached_ver} != SSOT v{ssot} — "
@@ -1804,6 +1839,18 @@ def _zcode_installed_path():
     return None
 
 
+def _zcode_record_exists():
+    """True when ZCode's install registry has an entry for skill-concierge@skill-concierge,
+    regardless of whether that entry carries a usable installPath — existence, not the
+    resolved version, proves an install happened (M1)."""
+    try:
+        data = json.loads(ZCODE_PLUGINS_FILE.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
+        return False
+    return any(isinstance(p, dict) and p.get("id") == "skill-concierge@skill-concierge"
+               for p in data.get("plugins", []))
+
+
 def check_zcode():
     """ZCode harness install state — cache presence, version parity, exec bits (ADR-0042).
 
@@ -1833,11 +1880,16 @@ def check_zcode():
                 "fix": None}
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
-    cached_ver = None
+    record_present = _zcode_record_exists()
     install_path = _zcode_installed_path()
+    cached_ver = None
     if install_path:
         cached_ver = _descriptor_version(Path(install_path) / ".claude-plugin" / "plugin.json")
-    if cached_ver is None:
+    if not record_present and cached_ver is None:
+        # No registry entry at all — fall back to the newest-cache-dir heuristic (the
+        # pre-L10 safety net) rather than reporting nothing. Never used when a registry
+        # record IS present: a record with an unreadable manifest must stay version=None,
+        # not silently resolve to whichever dir happens to sort newest by name (M1).
         try:
             if ZCODE_PLUGIN_CACHE.is_dir():
                 versions = sorted((d for d in ZCODE_PLUGIN_CACHE.iterdir() if d.is_dir()),
@@ -1846,24 +1898,32 @@ def check_zcode():
                     cached_ver = versions[0].name
         except (OSError, ValueError):
             pass
-    plugin_installed = cached_ver is not None
-    if cached_ver is None:
+    plugin_installed = record_present or cached_ver is not None
+    if not plugin_installed:
         findings.append("no ZCode plugin cache found (never installed via the skill-concierge marketplace)")
     else:
-        if ssot and cached_ver != ssot:
+        if record_present and cached_ver is None:
+            findings.append(
+                f"the ZCode registry points at {install_path or 'an install record with no installPath'} "
+                "whose plugin manifest is unreadable or missing — re-run adapters/zcode/install.sh")
+        elif cached_ver and ssot and cached_ver != ssot:
             findings.append(f"ZCode cache v{cached_ver} != SSOT v{ssot} — update via "
                             "Settings → Plugin Management (skill-concierge marketplace)")
         # Anchor the launcher check on the registry's OWN installPath when we have one — the
         # copy ZCode actually runs — rather than reconstructing a path from cached_ver, which
         # could point at a differently-named dir if the two ever disagree.
-        active_dir = Path(install_path) if install_path else ZCODE_PLUGIN_CACHE / cached_ver
-        launcher = active_dir / "bin" / "skill-search-mcp"
-        if not launcher.is_file():
-            findings.append(f"bin/skill-search-mcp missing from the ZCode cache v{cached_ver} — "
-                            "the MCP server cannot start; re-run adapters/zcode/install.sh")
-        elif not os.access(launcher, os.X_OK):
-            findings.append(f"bin/skill-search-mcp in the ZCode cache v{cached_ver} lost its exec bit "
-                            "(cosmetic under the interpreter-form .mcp.json; repair: chmod +x)")
+        active_dir = Path(install_path) if install_path else (
+            ZCODE_PLUGIN_CACHE / cached_ver if cached_ver else None)
+        if active_dir is not None:
+            launcher = active_dir / "bin" / "skill-search-mcp"
+            if not launcher.is_file():
+                findings.append(
+                    f"bin/skill-search-mcp missing from the ZCode cache v{cached_ver or '?'} — "
+                    "the MCP server cannot start; re-run adapters/zcode/install.sh")
+            elif not os.access(launcher, os.X_OK):
+                findings.append(
+                    f"bin/skill-search-mcp in the ZCode cache v{cached_ver or '?'} lost its exec bit "
+                    "(cosmetic under the interpreter-form .mcp.json; repair: chmod +x)")
     if findings:
         return {"id": "zcode", "label": "ZCode integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None, "version": cached_ver,
@@ -1890,6 +1950,21 @@ def _claude_code_installed():
     return head.get("version"), head.get("installPath")
 
 
+def _claude_code_record_exists():
+    """True when Claude Code's install record has an entry for skill-concierge@skill-concierge,
+    regardless of whether that entry carries a `version` field — existence, not the parsed
+    field, proves an install happened (M1)."""
+    try:
+        rec = json.loads(CLAUDE_PLUGINS_FILE.read_text(encoding="utf-8"))
+        entry = rec["plugins"]["skill-concierge@skill-concierge"]
+    except JSON_READ_ERRORS:
+        return False
+    if not entry:
+        return False
+    head = entry[0] if isinstance(entry, list) else entry
+    return isinstance(head, dict)
+
+
 def check_claude_code():
     """Claude Code harness install state — install record vs deployed content vs SSOT.
 
@@ -1913,23 +1988,27 @@ def check_claude_code():
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     installed_ver, install_path = _claude_code_installed()
+    record_present = _claude_code_record_exists()
     deployed_ver = None
-    plugin_installed = installed_ver is not None
-    if installed_ver is None:
+    plugin_installed = record_present
+    if not record_present:
         findings.append("skill-concierge has no Claude Code install record (installed_plugins.json)")
     else:
+        if installed_ver is None:
+            findings.append("Claude Code install record has no version field")
         if install_path:
             deployed_ver = _descriptor_version(Path(install_path) / ".claude-plugin" / "plugin.json")
         if deployed_ver is None:
             where = install_path or "no installPath in the install record"
+            shown = f"v{installed_ver}" if installed_ver else "no version"
             findings.append(f"the Claude Code cache manifest is unreadable ({where}); the record says "
-                            f"v{installed_ver} — re-run adapters/claude-code/install.sh")
+                            f"{shown} — re-run adapters/claude-code/install.sh")
         elif ssot and deployed_ver != ssot:
             findings.append(f"Claude Code plugin v{deployed_ver} != SSOT v{ssot} — "
                             "re-run adapters/claude-code/install.sh")
         if install_path:
             launcher = Path(install_path) / "bin" / "skill-search-mcp"
-            shown = deployed_ver or installed_ver
+            shown = deployed_ver or installed_ver or "?"
             if not launcher.is_file():
                 findings.append(f"bin/skill-search-mcp missing from the Claude Code cache v{shown} — "
                                 "the MCP server cannot start; re-run adapters/claude-code/install.sh")

@@ -238,6 +238,102 @@ def test_zcode_version_falls_back_to_newest_dir_without_a_registry_record(dr, tm
     assert row["version"] == "0.40.0"        # numeric sort, not lexical ("0.9.0" > "0.40.0")
 
 
+def test_cutover_fails_codex_row_with_corrupt_manifest(dr, tmp_path, monkeypatch):
+    """M1: a Codex version dir IS present (installed), but its plugin.json is corrupt —
+    existence must drive plugin_installed, not the (failed) version parse, or --cutover
+    silently skips a stale/broken copy instead of FAILing it."""
+    cache = tmp_path / "codex" / "cache"
+    v = cache / "0.50.0" / ".codex-plugin"
+    v.mkdir(parents=True)
+    (v / "plugin.json").write_text("{corrupt")
+    monkeypatch.setattr(dr, "CODEX_DIR", tmp_path / "codex")
+    monkeypatch.setattr(dr, "CODEX_PLUGIN_CACHE", cache)
+    row = dr.check_codex()
+    assert row["version"] is None and row["plugin_installed"] is True
+    assert "not installed" not in row["detail"] and "never installed" not in row["detail"]
+    out = dr.apply_cutover([dict(row)], release="0.54.1")[0]
+    assert out["status"] == "fail"
+
+
+def test_cutover_fails_codex_row_with_version_dir_but_no_manifest(dr, tmp_path, monkeypatch):
+    """M1: a Codex version dir with no plugin.json at all is still an install, not an
+    absence — --cutover must FAIL it."""
+    cache = tmp_path / "codex" / "cache"
+    (cache / "0.50.0" / ".codex-plugin").mkdir(parents=True)
+    monkeypatch.setattr(dr, "CODEX_DIR", tmp_path / "codex")
+    monkeypatch.setattr(dr, "CODEX_PLUGIN_CACHE", cache)
+    row = dr.check_codex()
+    assert row["version"] is None and row["plugin_installed"] is True
+    out = dr.apply_cutover([dict(row)], release="0.54.1")[0]
+    assert out["status"] == "fail"
+
+
+def test_cutover_fails_claude_record_without_version_key(dr, tmp_path, monkeypatch):
+    """M1: a Claude Code install record present with no `version` field must not read as
+    plugin_installed=False — a real install with a broken/missing version claim must FAIL
+    under --cutover, not be skipped as never-installed."""
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_DIR", plugins)
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_FILE", plugins / "installed_plugins.json")
+    old = tmp_path / "cache" / "0.50.0"
+    (old / ".claude-plugin").mkdir(parents=True)
+    (old / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "0.50.0"}))
+    (plugins / "installed_plugins.json").write_text(json.dumps({"plugins": {
+        "skill-concierge@skill-concierge": [{"scope": "user", "installPath": str(old)}]}}))
+    row = dr.check_claude_code()
+    assert row["plugin_installed"] is True
+    assert "has no Claude Code install record" not in row["detail"]
+    out = dr.apply_cutover([dict(row)], release="0.54.1")[0]
+    assert out["status"] == "fail"
+
+
+def test_cutover_fails_omp_record_without_version_key(dr, tmp_path, monkeypatch):
+    """M1: same rule for OMP — a present record with no `version` field must FAIL, not be
+    treated as never-installed."""
+    omp = tmp_path / "omp"
+    omp.mkdir()
+    monkeypatch.setattr(dr, "OMP_DIR", omp)
+    monkeypatch.setattr(dr, "OMP_PLUGINS_FILE", omp / "installed_plugins.json")
+    monkeypatch.setattr(dr, "OMP_MARKETPLACE", omp / "no-marketplace")
+    monkeypatch.setattr(dr, "OMP_PLUGIN_CACHE", omp / "no-cache")
+    (omp / "installed_plugins.json").write_text(json.dumps({"plugins": {
+        "skill-concierge@skill-concierge": [{"scope": "user", "installPath": "/x"}]}}))
+    row = dr.check_omp()
+    assert row["plugin_installed"] is True
+    assert "has no OMP install record" not in row["detail"]
+    out = dr.apply_cutover([dict(row)], release="0.54.1")[0]
+    assert out["status"] == "fail"
+
+
+def test_cutover_fails_zcode_registry_pointing_at_a_corrupt_copy_despite_a_newer_dir(
+        dr, tmp_path, monkeypatch):
+    """M1: ZCode's registry names a corrupt old copy as active while a newer, unrelated
+    version dir also sits in the cache. The newest-dir-by-name fallback must never mask
+    the registry's own broken pointer — that previously reported OK/matches-SSOT."""
+    zcode = tmp_path / ".zcode"
+    cache = zcode / "cache"
+    old = cache / "0.50.0"
+    (old / ".claude-plugin").mkdir(parents=True)
+    (old / ".claude-plugin" / "plugin.json").write_text("{corrupt")
+    (old / "bin").mkdir()
+    (old / "bin" / "skill-search-mcp").write_text("x")
+    (old / "bin" / "skill-search-mcp").chmod(0o755)
+    new = cache / "0.54.1"
+    (new / ".claude-plugin").mkdir(parents=True)
+    (new / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "0.54.1"}))
+    monkeypatch.setattr(dr, "ZCODE_DIR", zcode)
+    monkeypatch.setattr(dr, "ZCODE_PLUGIN_CACHE", cache)
+    monkeypatch.setattr(dr, "ZCODE_PLUGINS_FILE", zcode / "installed_plugins.json")
+    (zcode / "installed_plugins.json").write_text(json.dumps({"plugins": [
+        {"id": "skill-concierge@skill-concierge", "installPath": str(old)}]}))
+    row = dr.check_zcode()
+    assert row["version"] is None and row["plugin_installed"] is True
+    assert row["status"] == "warn" and "unreadable" in row["detail"]
+    out = dr.apply_cutover([dict(row)], release="0.54.1")[0]
+    assert out["status"] == "fail"
+
+
 # ---------- owner port / container rows ----------
 
 def test_parse_publishers(dr):
@@ -429,6 +525,10 @@ def test_cosine(dr):
 @pytest.fixture()
 def en(tmp_path, monkeypatch):
     monkeypatch.setenv("SKILL_CONCIERGE_LOG", str(tmp_path / "logs"))
+    # OWNER_AUTOSTART is a module-level constant read from this env var at import time.
+    # An ambient SKILL_OWNER_AUTOSTART=0 (e.g. the gate's own H1-safe test env) must not
+    # silently flip these autostart-behavior tests' default-on assumption.
+    monkeypatch.delenv("SKILL_OWNER_AUTOSTART", raising=False)
     mod = _load("enforcer_owner_t", ROOT / "hooks" / "scripts" / "enforcer.py")
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
@@ -672,5 +772,4 @@ def test_setup_has_no_docker_start_path_and_starts_owner():
     owner_start = code[code.index('subprocess.Popen(') - 200:code.index('subprocess.Popen(')]
     assert 'SKILL_QDRANT_URL="$QURL"' in owner_start
     assert 'EMBED_SHIM_PORT="$EPORT"' in owner_start
-    assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0
     assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0
