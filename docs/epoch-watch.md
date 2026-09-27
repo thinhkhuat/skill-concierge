@@ -13,6 +13,34 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.54.2 — cleanup release; the v0.54.0 watch items carry on (no new watch items)
+
+**Epoch start moves to each harness's v0.54.2 go-live.**
+- v0.54.2 changes `vendor/skill-search/skill_search/index_owner.py`: a malformed port value now falls
+  back to the default instead of crashing the owner at import.
+- v0.54.1 changed the same file (`1ddeeca`: the missing-loopback errno carve-out narrowed to `::1`).
+- Both changes affect only how the owner starts. Neither changes what any offer contains.
+- The epoch rule keys on the commit, so W30–W33 below keep the v0.54.0 items and window from the
+  latest go-live.
+- `prompt_intent` after the v0.54.1 `setup.sh` rebuild: 792 points, the same count as at the switch
+  (live `/collections/prompt_intent`, 2026-09-27 11:45 +07). Its sample may differ, so W32 compares
+  shares, never individual hits.
+
+**First W30-W33 reading, 2026-09-27 11:45 +07: insufficient data.**
+- **W30.** `analyze.py --since "2026-09-27T09:25"` (the v0.54.1 go-live) shows 25 events, all from
+  the session doing the release work. After excluding self-session traffic, n = 0. The wider 06:45
+  window has 56 events: 54 from that same session and 2 from one other session. No rate is quotable.
+- **W31.** Not measurable at n = 0.
+- **W32.** `prompt_intent` holds 792 points. The fail-open share needs real turns, so it is not
+  measurable yet.
+- **W33.** No `embed_down` or `qdrant_down` offers since the switch, across all sessions. The hook's
+  `python3` resolves to pyenv 3.12.11 here, not the 3.9 system interpreter, so the Python 3.9
+  over-count cannot fire on this machine.
+- **Next reading.** After about a day of traffic from other sessions, windowed from the v0.54.2
+  go-live. Exclude self-session and subagent rows.
+
+---
+
 ## v0.54.0 — local index owner replaces Qdrant and the Docker embed shim (ADR-0070; TASK-022)
 
 **Deployed on Claude Code 2026-09-27 06:45 +07:** commit `dfcbb6b` (rolled up from `a8261b7` +
