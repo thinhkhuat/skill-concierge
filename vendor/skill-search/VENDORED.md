@@ -545,3 +545,29 @@ plugin-level customization layer and these engine patches.
     above through the real embedder) instead of the whole machine, dropping its runtime from ~150s
     to under 1s and removing a live-machine race that could flip its incremental assertion.
   Not upstream: re-apply on re-vendor.
+
+- **`findability.py` — new module (ADR-0074, v0.55.0, design plans/260927-1450-findability-at-the-root):**
+  a whole new file, `skill_search/findability.py`, not a patch to any upstream file — it never
+  needs re-applying on re-vendor, but it DOES depend on `hooks/scripts/enforcer.py` living
+  beside this vendored tree (dynamically loaded, exactly as `scripts/calibrate_jev_gate.py`'s
+  `load_enforcer` already does), so a re-vendor that changes this package's on-disk layout
+  relative to `hooks/` would need `_load_enforcer`'s `parents[3]` root computation re-checked.
+  `python -m skill_search.findability --sweep` measures whether each installed, non-catalog,
+  claude-invocable skill can be found by its OWN words — a name-word probe (primary) in the
+  `search_skills` SHAPE and a leave-one-out own-phrase score (secondary) in the enforcer's
+  installed-only shape — and ratchets the result into `~/.claude/skill-concierge/findability.json`
+  (`SKILL_FINDABILITY_PATH` overrides), throttled to one sweep per 10 minutes via a lock file,
+  pinned to a fixed `~` cwd and the `claude` harness regardless of the caller's own environment.
+  Owner URLs are derived the SAME malformed-value-tolerant way `index_owner.py` derives its OWN
+  bind ports (`urlsplit(SKILL_QDRANT_URL).port or 6333`; `int(EMBED_SHIM_PORT) or 6363`), not
+  `server.py`'s simpler whole-URL default, since this module talks to the owner directly. The
+  engine's own `_scope_filter()` (server.py) and skill enumeration (`skills_discovery.py`) are
+  reused, never re-derived by hand. `scripts/doctor.py`'s Findability row and
+  `scripts/precision_eval.py`'s `--mode findability` (the pre-registered W/C/D/N/G evaluation
+  harness) both reuse this module's `probe_token`/`document_frequency`/`name_word_rank`/
+  `_installed_skills` directly rather than duplicating the name-word rule. `SKILL_FINDABILITY=0`
+  (read by the engine's `build_index` hook, not by this module) disables the detached sweep
+  launch entirely; doctor's row is always read-only regardless. Covered by
+  `tests/test_findability.py` (ratchet math pure; the leave-one-out exclusion and the name-word
+  rank query proven against a real ephemeral owner from `owner_factory`) and, at the repo root,
+  `tests/test_findability_doctor.py` + `tests/test_precision_eval_sets.py`. Not upstream.
