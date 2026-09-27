@@ -131,7 +131,7 @@ def test_guard_allows_a_safe_write_call():
 def test_guard_would_have_caught_the_shipped_dsh_regression():
     """Regression pin, read straight from git history rather than a copy that could drift:
     the DSH installer as it actually shipped at 7e6cecf swapped cordis.patch.yml in with a
-    bare `mv "$NEW" "$PATCH"` — the exact bug M-B reported. This stays true even after the
+    bare `mv "$NEW" "$PATCH"` — the symlink-breaking, mode-widening swap. This stays true even after the
     working tree is edited again."""
     text = subprocess.run(["git", "show", "7e6cecf:adapters/dsh/install.sh"], cwd=ROOT,
                           capture_output=True, text=True, check=True).stdout
