@@ -42,6 +42,8 @@ import time
 import uuid
 import logging
 import hashlib
+import statistics
+import subprocess
 from pathlib import Path
 
 # Library-style logger: no handler/basicConfig here (that's the host app's call).
@@ -79,6 +81,22 @@ OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
+# ADR-0075: search_skills applies the ADR-0048 complement rule between installed and
+# external-catalog rows — an external row ranks above the installed top only if it beats
+# that row's score by ENFORCER_ANNEX_BEAT (the SAME env name the enforcer's own annex
+# uses), otherwise it renders after every installed row, still marked external.
+# consult_candidates is untouched (it deliberately sieves both tiers wide). Query-time,
+# never index-shaping — read LIVE per call (_search_complement_on, like _row_origin_on/
+# _blocked), since this server is long-lived and a query-time flag must apply without a
+# restart. Default ON; SKILL_SEARCH_COMPLEMENT=0 restores today's single mixed-tier
+# query and pure-score order byte-identically.
+ANNEX_BEAT      = float(os.environ.get("ENFORCER_ANNEX_BEAT", "0.04"))
+
+
+def _search_complement_on() -> bool:
+    return os.environ.get("SKILL_SEARCH_COMPLEMENT", "1") != "0"
+
+
 # Multi-vector trigger layer: index each skill's intent phrases as separate points and
 # MAX-pool them at query time (group_by name). Default ON; set SKILL_MULTIVECTOR=0 + reindex
 # to revert to one bare vector per skill. (Validated: 2.2x rank-1/separation, flat false-fire.)
@@ -95,6 +113,17 @@ SKILL_BODY_TRIGGERS = os.environ.get("SKILL_BODY_TRIGGERS", "1") != "0"
 # quality phrases win the capped slots), ahead of description/body phrases.
 # Default OFF = byte-identical to today; set SKILL_LLM_TRIGGERS=1 + reindex to enable.
 SKILL_LLM_TRIGGERS = os.environ.get("SKILL_LLM_TRIGGERS", "0") != "0"
+# ADR-0074: drop exclusion sentences from _split_phrases' output, and promote a
+# genuinely LIST-shaped when_to_use (skills_discovery.parse_skill's
+# when_to_use_items) into its own declared trigger phrases. One flag covers both
+# mechanical description-phrase fixes. Default ON; SKILL_DECLARED_TRIGGERS=0 + reindex
+# restores the byte-identical pre-fix phrase list (exclusion sentences kept as positive
+# triggers, when_to_use list items glued into one diluted phrase).
+SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "1") != "0"
+# ADR-0074 findability sweep hook (build_index, see _launch_findability_sweep): fires a
+# detached `python -m skill_search.findability --sweep` whenever a reindex actually
+# changed the index. SKILL_FINDABILITY=0 disables it.
+SKILL_FINDABILITY = os.environ.get("SKILL_FINDABILITY", "1") != "0"
 # 0.37.0: durable-home default (operator-owned corpus; the vendored-tree eval/ path was
 # never populated in deployed copies and fell back to "no utterances" without env).
 _LLM_TRIG_PATH = os.path.expandvars(os.environ.get(
@@ -631,10 +660,22 @@ _LABEL_RE = re.compile(r"^\s*(triggers?|examples?|use when|also use|use this ski
 _WS_RE = re.compile(r"\s+")
 _TRIG_MAX = int(os.environ.get("TRIGGERS_MAX", "12"))
 _TRIG_MIN_WORDS, _TRIG_MIN_CHARS = 3, 12
+# ADR-0074: an exclusion sentence must never become a POSITIVE trigger point.
+# Reuses skills_discovery._BODY_NEGATIVE_RE's exact pattern (never hand-copied, so the
+# two can't drift) plus a "not for" arm the body-side rule never needed: a body
+# decision-section's negative line is always verb-first ("do not use"), while a
+# description's exclusion is often the noun-phrase form ("Not for casual browsing").
+_TRIG_NEGATIVE_RE = re.compile(
+    sd._BODY_NEGATIVE_RE.pattern + r"|^[ \t]{0,3}not\s+for\b", re.IGNORECASE)
 
 
 def _split_phrases(description: str) -> list:
-    """Description -> deduped intent-bearing phrases (order-preserving), capped at _TRIG_MAX."""
+    """Description -> deduped intent-bearing phrases (order-preserving), capped at _TRIG_MAX.
+
+    ADR-0074: under SKILL_DECLARED_TRIGGERS, a phrase matching
+    _TRIG_NEGATIVE_RE (an exclusion sentence) is dropped rather than indexed as a
+    positive trigger point. The flag OFF keeps the pre-fix behavior byte-identical
+    (exclusion sentences included, as measured on 27-65 skills depending on pattern)."""
     if not description:
         return []
     out, seen = [], set()
@@ -642,6 +683,8 @@ def _split_phrases(description: str) -> list:
         p = _LABEL_RE.sub("", p or "")
         p = _WS_RE.sub(" ", p).strip().strip("\"'`()[]")
         if len(p) < _TRIG_MIN_CHARS or len(p.split()) < _TRIG_MIN_WORDS:
+            continue
+        if SKILL_DECLARED_TRIGGERS and _TRIG_NEGATIVE_RE.match(p):
             continue
         k = p.lower()
         if k in seen:
@@ -717,6 +760,47 @@ def _curated_phrases(name: str) -> list:
     return list(_CURATED_TRIG_CACHE.get(name, []))
 
 
+# ADR-0074: a genuinely LIST-shaped when_to_use qualifies for its own declared
+# trigger phrases only when it looks like a set of short trigger conditions, not a body
+# outline in disguise — at least this many items, whose typical (median) length is at
+# most this many words. DECLARED_TRIG_MAX is the layer's own budget (see _trigger_phrases).
+DECLARED_TRIG_MAX = 8
+_DECLARED_MIN_ITEMS = 3
+_DECLARED_MEDIAN_MAX_WORDS = 5
+_DECLARED_MIN_WORDS = 2
+
+
+def _declared_trigger_phrases(s: dict) -> list:
+    """ADR-0074: promote a genuinely LIST-shaped when_to_use into its own
+    trigger phrases. `s["when_to_use_items"]` is set ONLY when skills_discovery.parse_skill
+    parsed a real YAML block sequence (never prose, never a comma inside a sentence) —
+    this function applies the count/length qualifying rule on top of that structural
+    test: at least _DECLARED_MIN_ITEMS items, median length at most
+    _DECLARED_MEDIAN_MAX_WORDS words (a short bullet list of long sentences is a body
+    outline, not trigger phrases). Each qualifying item is whitespace-normalized, kept
+    only at _DECLARED_MIN_WORDS words or more, order preserved, case-insensitively
+    deduped, and capped at DECLARED_TRIG_MAX. [] when SKILL_DECLARED_TRIGGERS is off,
+    the field is absent/empty, or the shape doesn't qualify."""
+    if not SKILL_DECLARED_TRIGGERS:
+        return []
+    items = s.get("when_to_use_items") or []
+    if len(items) < _DECLARED_MIN_ITEMS:
+        return []
+    if statistics.median([len(it.split()) for it in items]) > _DECLARED_MEDIAN_MAX_WORDS:
+        return []
+    out, seen = [], set()
+    for it in items:
+        p = _WS_RE.sub(" ", it).strip()
+        if len(p.split()) < _DECLARED_MIN_WORDS:
+            continue
+        k = p.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(p)
+    return out[:DECLARED_TRIG_MAX]
+
+
 def _trigger_phrases(s: dict) -> list:
     """Trigger-point phrases for one skill, deduped (case-insensitive) and capped
     COMBINED at _TRIG_MAX. Sources in QUALITY order: operator-curated phrases FIRST
@@ -726,7 +810,12 @@ def _trigger_phrases(s: dict) -> list:
     the capped slots; the cap keeps per-skill growth bounded (raise TRIGGERS_MAX to
     add slots rather than evict). TOTAL point count still rises because most skills
     left description slots empty. Flags default OFF/prior — byte-identical to before
-    when unset."""
+    when unset.
+
+    ADR-0074: declared list-form when_to_use phrases (_declared_trigger_phrases)
+    get their OWN budget, DECLARED_TRIG_MAX, added AFTER the base layer above is already
+    capped at _TRIG_MAX — so they can only ADD new trigger points, never evict a
+    curated/LLM/description/body slot that already claimed a place."""
     phrases, seen = [], set()
 
     def _add(src):
@@ -742,7 +831,10 @@ def _trigger_phrases(s: dict) -> list:
     _add(_split_phrases(s["description"]))
     if SKILL_BODY_TRIGGERS:
         _add(_split_phrases("\n".join(s.get("body_triggers") or [])))
-    return phrases[:_TRIG_MAX]
+    phrases = phrases[:_TRIG_MAX]
+    seen = {p.lower() for p in phrases}   # re-sync after the base layer's own cap
+    _add(_declared_trigger_phrases(s))
+    return phrases
 
 
 def _skill_text(s: dict) -> str:
@@ -817,6 +909,42 @@ def _scope_filter():
         *[{"key": "scope", "match": {"value": s}} for s in sorted(vis)],
         {"is_null": {"key": "scope"}},
     ]}
+
+
+def _installed_only_filter() -> dict:
+    """ADR-0075: _scope_filter plus `must_not tier=external`, the SAME clause the
+    enforcer's `_retrieve` uses. A separate query filtered this way guarantees the true
+    installed top always surfaces, instead of competing for the same TOP_K slots as
+    every external row in one mixed-tier query (a handful of strong externals could
+    otherwise fill all of search_skills' TOP_K slots and drop the one relevant
+    installed row entirely)."""
+    f = _scope_filter()
+    f["must_not"] = [{"key": "tier", "match": {"value": "external"}}]
+    return f
+
+
+def _external_only_filter() -> dict:
+    """ADR-0075: _scope_filter plus `must tier=external`, mirroring the enforcer's
+    `_retrieve_external`. A separate query, so external rows can never physically
+    displace an installed row out of the installed-only query's own result window."""
+    f = _scope_filter()
+    f["must"] = [{"key": "tier", "match": {"value": "external"}}]
+    return f
+
+
+def _arrange_tiers(installed_rows: list, external_rows: list, top_k: int) -> list:
+    """ADR-0075: the ADR-0048 complement rule applied to search_skills' single result
+    list — installed rows come first. An external row ranks ABOVE the installed top
+    only if it beats that row's score by ANNEX_BEAT; every other external row renders
+    after every installed row, still marked external. Each tier is expected to already
+    be fused/ranked before this function runs — it only arranges the two tiers, never
+    re-fuses within one."""
+    if not installed_rows:
+        return external_rows[:top_k]
+    top_installed = installed_rows[0]["score"]
+    above = [r for r in external_rows if r["score"] > top_installed + ANNEX_BEAT]
+    below = [r for r in external_rows if r["score"] <= top_installed + ANNEX_BEAT]
+    return (above + installed_rows + below)[:top_k]
 
 
 # ---------------------------------------------------------------------------
@@ -895,8 +1023,32 @@ def build_index(force: bool = False) -> dict:
     n_skills = len({d[2]["name"] for d in desired.values()})
     _write_next_skills_sidecar(skills)   # ADR-0029: unconditional, per-scope merge
     _write_manifest(n_skills)
-    return {"indexed": n_skills, "points": len(desired), "embedded": len(changed),
-            "deleted": len(removed), "skipped": len(desired) - len(changed)}
+    result = {"indexed": n_skills, "points": len(desired), "embedded": len(changed),
+              "deleted": len(removed), "skipped": len(desired) - len(changed)}
+    _launch_findability_sweep(result["embedded"], result["deleted"])
+    return result
+
+
+def _launch_findability_sweep(embedded: int, deleted: int) -> None:
+    """ADR-0074 findability ratchet (design.md D): fire the sweep ONLY when this build
+    actually changed the indexed set — an unchanged index has nothing new to probe.
+    Detached (start_new_session=True) so it outlives the caller's own process, stdio
+    silenced (the sweep script owns its own logging), and run from a FIXED cwd (the
+    operator's home, never the caller's project dir) so the harness view it probes
+    never depends on which project triggered this particular reindex. Every reindex
+    path converges here through build_index. SKILL_FINDABILITY=0 disables it; any
+    failure to launch is swallowed — a telemetry sweep must never fail a reindex."""
+    if embedded <= 0 and deleted <= 0:
+        return
+    if not SKILL_FINDABILITY:
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "skill_search.findability", "--sweep"],
+            cwd=str(Path.home()), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
 
 
 def _indexed_names() -> set[str]:
@@ -1048,18 +1200,37 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     pass 2-3 varied phrasings of the same need in `extra_queries` — the server
     embeds every phrasing and scores each skill by its single best-matching
     phrasing across all of them (MAX-pool over the query union), so a skill a
-    single phrasing would bury still surfaces."""
+    single phrasing would bury still surfaces.
+
+    ADR-0075: installed rows always come first. An external row ranks above the
+    installed top only if it clearly beats it (score margin ENFORCER_ANNEX_BEAT);
+    otherwise it still renders, marked external, after every installed row."""
     # group_by name + group_size=1 keeps each skill's single BEST point (on the
     # multi-vector index, its best-matching phrase point — the recall lever).
     queries = [query] + [q for q in (extra_queries or []) if q and q.strip()]
-    # query_filter: never surface another session's project skills — this process
-    # cannot invoke them, so offering them is a dead recommendation.
-    scope_filter = _scope_filter()
-    group_lists = [
-        _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=TOP_K, filter=scope_filter)
-        for qv in embed_queries(queries)
-    ]
-    rows = [r for r in _fuse_ranked(group_lists, TOP_K) if not _blocked(r.get("name", ""))]
+    vectors = embed_queries(queries)
+    if _search_complement_on():
+        # ADR-0075: a SEPARATE installed-only query alongside the external-only one
+        # (never one mixed-tier query filtered post-hoc) — otherwise all TOP_K slots of
+        # a single query could fill with externals before the installed top is even
+        # seen. Each tier is fused on its own via _fuse_ranked, then arranged.
+        installed_lists = [_qdrant.query_groups(COLLECTION, qv, group_by="name",
+                                                limit=TOP_K, filter=_installed_only_filter())
+                           for qv in vectors]
+        external_lists = [_qdrant.query_groups(COLLECTION, qv, group_by="name",
+                                               limit=TOP_K, filter=_external_only_filter())
+                          for qv in vectors]
+        installed_rows = _fuse_ranked(installed_lists, TOP_K)
+        external_rows = _fuse_ranked(external_lists, TOP_K)
+        rows = _arrange_tiers(installed_rows, external_rows, TOP_K)
+    else:
+        scope_filter = _scope_filter()
+        group_lists = [
+            _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=TOP_K, filter=scope_filter)
+            for qv in vectors
+        ]
+        rows = _fuse_ranked(group_lists, TOP_K)
+    rows = [r for r in rows if not _blocked(r.get("name", ""))]
     out = {"query": query, "results": rows}
     if rows and _row_origin_on():
         out["note"] = ROW_NOTE

@@ -503,3 +503,45 @@ plugin-level customization layer and these engine patches.
   derivation line. Covered by `tests/test_ports.py` and `tests/test_port_agreement.py` (one
   shared case table driving every caller's real code, bash included). Not upstream: re-apply
   on re-vendor.
+
+- **Findability at the root (ADR-0074/ADR-0075, 2026-09-27):**
+  - **Exclusion-sentence trigger drop:** `server._split_phrases` drops an exclusion sentence rather
+    than indexing it as a positive trigger point. `_TRIG_NEGATIVE_RE` reuses
+    `skills_discovery._BODY_NEGATIVE_RE`'s exact pattern (never hand-copied) plus a "not for" arm
+    the body-side rule never needed. Under `SKILL_DECLARED_TRIGGERS` (default ON); `=0` restores
+    the byte-identical pre-fix phrase list.
+  - **Declared list-form when_to_use triggers:** `skills_discovery.parse_skill` full-parses
+    `when_to_use` (`_parse_when_to_use`) — a genuine YAML block sequence yields `when_to_use_items`
+    (never a prose scalar containing commas) and joins with "; " for the description append
+    instead of the old naive flow-scalar space-join. `server._declared_trigger_phrases` promotes a
+    qualifying list (≥3 items, median ≤5 words) into its own trigger phrases (min 2 words, order
+    preserved, deduped, capped at `DECLARED_TRIG_MAX = 8`), layered in `_trigger_phrases` AFTER the
+    base layer's own `_TRIG_MAX` cap so they can only ADD slots, never evict a
+    curated/LLM/description/body one. Same `SKILL_DECLARED_TRIGGERS` flag; `=0` restores the
+    byte-identical pre-fix text and phrases (both `skills_discovery.py` and `server.py` read the
+    flag independently — this module stays dependency-free by contract).
+  - **`search_skills` external-row complement (ADR-0075):** applies the ADR-0048 complement rule
+    between installed and external-catalog rows via two SEPARATE queries
+    (`_installed_only_filter`/`_external_only_filter`, mirroring the enforcer's
+    `_retrieve`/`_retrieve_external`) fused per tier by the existing `_fuse_ranked`, then arranged
+    by `_arrange_tiers`: installed rows come first; an external row ranks above the installed top
+    only if it beats that row's score by `ENFORCER_ANNEX_BEAT` (0.04), otherwise it renders after
+    every installed row, still marked external. `consult_candidates` is untouched. Query-time only
+    (`_search_complement_on`, read live like `_row_origin_on`/`_blocked` — this server is
+    long-lived); `SKILL_SEARCH_COMPLEMENT=0` restores today's single mixed-tier query and
+    pure-score order byte-identically.
+  - **Findability sweep hook:** `build_index` launches a detached
+    `python -m skill_search.findability --sweep` (`_launch_findability_sweep`) whenever a build
+    actually changed the index (`embedded + deleted > 0`), from a fixed cwd (`Path.home()`), stdio
+    silenced, fail-silent. `SKILL_FINDABILITY=0` disables it (default OFF in every test via
+    `tests/conftest.py`, since the sibling `skill_search.findability` module is owned separately).
+  - **Test hermeticity fix (unrelated to the items above, discovered while proving them):**
+    `tests/conftest.py`'s autouse `_isolate_harness_roots` fixture pinned every non-Claude harness
+    root but never Claude's own (`SKILL_DIRS`/`PLUGIN_GLOB`/`PERSONAL_ROOT`), so any unmocked
+    `discover_skills()`/`build_index()` call — the one true end-to-end test included — silently
+    walked the operator's REAL `~/.claude` catalog (measured: 1,830+ real `SKILL.md` paths on the
+    dev machine). Now pinned to `tmp_path`-scoped defaults like every other harness; the e2e test
+    itself now builds over a small fixture tree (also exercising the two trigger-phrase fixes
+    above through the real embedder) instead of the whole machine, dropping its runtime from ~150s
+    to under 1s and removing a live-machine race that could flip its incremental assertion.
+  Not upstream: re-apply on re-vendor.

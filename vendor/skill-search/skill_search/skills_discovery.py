@@ -527,6 +527,43 @@ def _unwrap_scalar(raw: str) -> str:
     return text.strip()
 
 
+# ADR-0074: declared trigger phrases from a genuinely LIST-shaped when_to_use.
+# Kept OUT of server.py's SKILL_DECLARED_TRIGGERS import — this module is dependency-free
+# by contract, so it reads its own copy of the flag directly (the same pattern
+# SKILL_TRIGGER_PURITY already uses above). Default ON; =0 + reindex restores the
+# byte-identical pre-fix text everywhere this flag is read (here AND in server.py).
+SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "1") != "0"
+
+# A YAML block-sequence item line: optional indent (already stripped by the caller),
+# "-", required whitespace, the item text.
+_YAML_SEQ_ITEM_RE = re.compile(r"^-\s+(.*)$")
+
+
+def _parse_when_to_use(raw: str) -> tuple:
+    """Full-parse a frontmatter `when_to_use:` value (ADR-0074).
+
+    Returns (plain_text, items). `plain_text` is what the description append uses:
+    identical to `_unwrap_scalar(raw)` for ordinary prose, or the list's items joined
+    with "; " when `raw` is a genuine YAML block sequence — every non-blank physical
+    line is its own "- item". `items` is that list of per-item strings, or [] for
+    prose. server.py's `_declared_trigger_phrases` is the only consumer of a non-empty
+    `items`, and it applies its own count/length gate on top of this structural test.
+
+    Deliberately does NOT treat a single-line comma-separated scalar as a list: a
+    description-style sentence with a couple of commas ("Use when doing X, Y, or Z")
+    must stay prose, never masquerade as a declared list — a real YAML block sequence
+    is an unambiguous authoring signal a plain scalar's commas are not.
+    """
+    if not raw:
+        return "", []
+    non_blank = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+    if non_blank and all(_YAML_SEQ_ITEM_RE.match(ln) for ln in non_blank):
+        items = [_unwrap_scalar(_YAML_SEQ_ITEM_RE.match(ln).group(1)) for ln in non_blank]
+        items = [it for it in items if it]
+        return "; ".join(items), items
+    return _unwrap_scalar(raw), []
+
+
 def parse_skill(path: Path) -> dict | None:
     """Return {name, description, body, path} or None if no valid frontmatter."""
     try:
@@ -577,6 +614,17 @@ def parse_skill(path: Path) -> dict | None:
                        re.MULTILINE | re.DOTALL)
     description = _unwrap_scalar(desc_m.group(1)) if desc_m else ""
     when_to_use = _unwrap_scalar(when_m.group(1)) if when_m else ""
+    when_to_use_items: list = []
+    # ADR-0074: full YAML parsing of `when_to_use` (multi-line block sequences
+    # too), kept as its own field for server.py's declared-trigger derivation, while
+    # STILL appended to `description` below exactly as before — a genuinely list-shaped
+    # value joins its items with "; " for that append instead of the old naive
+    # flow-scalar space-join, which glued dash-prefixed lines into one diluted phrase.
+    # Under SKILL_DECLARED_TRIGGERS: OFF keeps `when_to_use` as the plain
+    # `_unwrap_scalar` result, so both the appended description text and every trigger
+    # phrase derived from it stay byte-identical to the pre-fix behavior.
+    if SKILL_DECLARED_TRIGGERS and when_m:
+        when_to_use, when_to_use_items = _parse_when_to_use(when_m.group(1))
     if when_to_use:
         description += "  " + when_to_use
 
@@ -585,6 +633,11 @@ def parse_skill(path: Path) -> dict | None:
         "name": name,
         "description": description,
         "body": stripped_body[:4000],   # cap body so embeddings stay cheap
+        # ADR-0074: when_to_use kept as its own field (the same plain text merged into
+        # `description` above), plus the structural list-items extraction — [] unless
+        # `when_to_use` genuinely parsed as a YAML block sequence.
+        "when_to_use": when_to_use,
+        "when_to_use_items": when_to_use_items,
         # Extracted from the FULL body (not the 4000-char-capped copy above) so a
         # decision section late in a long SKILL.md still refreshes its trigger
         # points even when the capped base text is unaffected. Feeds the
