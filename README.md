@@ -440,14 +440,18 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 
 `0.54.2` — **published, a cleanup release: the Docker embed-shim build files are removed (the images are
 archived outside the repo; ADR-0070 already retired the image from the deployment path); the Command Code
-installer's preflight now checks JSON shape, not just parseability, and also covers the per-project
-`mcp.json`; the ZCode installer header lists every pre-write refusal, checkout ones included; a malformed
-port in `SKILL_QDRANT_URL`/`EMBED_SHIM_PORT`/the owner's own overrides falls back to the default port with
-one stderr line instead of crashing the index owner or doctor at import; the four staging-dir installers
-(Claude Code, Codex, OMP, ZCode) remove their staging dir on a kill and prune a stale one before a fresh
-export; and a Claude Code or OMP registry file that exists but does not parse now reports "install state
-unknown" (WARN normally, FAIL under `--cutover`) instead of reading as never-installed.** See
-[CHANGELOG](CHANGELOG.md).
+installer's preflight gains a shape check that now also covers the per-project `mcp.json` (parseability
+there shipped in v0.54.1), and the installer computes every JSON transform in memory before writing
+anything or copying the mod, so a nested wrong shape can no longer crash mid-run after earlier steps
+already wrote their part; the ZCode installer header lists every pre-write refusal, checkout ones
+included; a malformed OR out-of-range port in `SKILL_QDRANT_URL`/`EMBED_SHIM_PORT`/the owner's own
+overrides falls back to the default port with one stderr line, and every port-deriving caller — the index
+owner, doctor, the enforcer, the launcher, and `setup.sh` — now applies the identical rule; the four
+staging-dir installers (Claude Code, Codex, OMP, ZCode) remove their staging dir on a kill, prune a stale
+one before a fresh export, and use a skill-concierge-specific prefix so the prune can never touch another
+tool's own staging dir in a shared cache parent; and a Claude Code or OMP registry file that exists but
+does not parse now reports "install state unknown" (WARN normally, FAIL under `--cutover`) instead of
+reading as never-installed.** See [CHANGELOG](CHANGELOG.md).
 
 `0.54.1` — **published, ADR-0073 plus index-owner follow-ups: the audit scores what the standing order binds and the miner samples by prompt hash; installers repair a missing dir or launcher, refuse unreadable git and staged version changes, and the Command Code installer no longer runs its embedded Python's text as shell; `--cutover` skips harnesses without the plugin and fails an installed copy of unknown version; the owner's IPv6 probe carve-out applies to `::1` only; `setup.sh` starts the owner on its store port (`SKILL_QDRANT_URL` from the environment, else `.mcp.json`); the Command Code installer refuses an unparseable JSON file instead of resetting it and exits 1 on a failed verify; the ZCode installer refuses a downgrade and refuses when its registry has no matching entry; doctor's "Index owner" row shows the database path; the v0.54.0 epoch is opened in `docs/epoch-watch.md`.**
 

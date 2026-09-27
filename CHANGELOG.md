@@ -13,23 +13,33 @@ All notable changes to **skill-concierge**. Format loosely follows
   `git show 20b9768:.dockerignore > .dockerignore` restore both files byte-for-byte.
 
 ### Fixed
-- **Command Code installer:** the preflight that checks every JSON file before writing anything now also
-  checks its shape, not just that it parses — a top-level JSON array, or a `"mcpServers": null`, used to
-  pass the parse check and then crash mid-run after the mod and settings.json were already written. The
-  preflight now also covers the per-project `mcp.json` override, which it previously missed.
+- **Command Code installer:** the preflight's shape check — added this release, on top of the parseability
+  check the per-project `mcp.json` override already had since v0.54.1 — now also covers that project file,
+  refusing a top-level JSON array or `"mcpServers": null` there the same as in the user-scope files. More
+  substantially, the installer now computes every JSON transform (settings.json, both mcp.json files) fully
+  in memory before writing anything or copying the mod; only once every transform succeeds does it write
+  each file atomically and copy the mod. A shape wrong enough to pass the top-level preflight but wrong at
+  a nested level (`"hooks.SessionStart": null`, or a hook entry whose own `hooks` list holds something that
+  is not an object) used to crash mid-run after the mod and settings.json were already written — it no
+  longer can, in any of the three files.
 - **ZCode installer:** the header now lists every refusal that stops the run before any write, including
   the checkout refusals (a HEAD/version mismatch, a `git/` dir, or git being unreadable) alongside the
   registry ones. The README's release notes for the ZCode downgrade refusal now also mention the refusal
   when the registry has no matching entry, which shipped in the same release but went undocumented.
-- **Index owner:** a malformed port in `SKILL_QDRANT_URL`, `SKILL_OWNER_QUERY_PORT`, `EMBED_SHIM_PORT`, or
-  `SKILL_OWNER_EMBED_PORT` used to crash the owner at import, before it could even log anything. It now
-  falls back to the default port (6333 or 6363) and logs one line to stderr naming the bad value. `doctor.py`
-  had the identical crash for a malformed `SKILL_QDRANT_URL` port (its own port-agreement check with the
-  owner) and now falls back to the same default instead of crashing.
+- **Index owner:** a malformed OR out-of-range port in `SKILL_QDRANT_URL`, `SKILL_OWNER_QUERY_PORT`,
+  `EMBED_SHIM_PORT`, or `SKILL_OWNER_EMBED_PORT` used to crash the owner at import (a non-numeric value) or
+  at bind (an out-of-range one, e.g. `70000`), before it could even log anything. It now falls back to the
+  default port (6333 or 6363) and logs one line to stderr naming the bad value, in both cases. Every other
+  caller that derives a port from the same two env vars — `doctor.py`, `setup.sh`, `bin/skill-search-mcp`,
+  and the enforcer hook — now applies the identical rule, so a bad value lands every one of them on the
+  same default instead of some reaching the owner and others trying an address nothing listens on.
 - **Installer staging dirs:** the four installers that export a fresh copy through a staging dir beside
   their destination (Claude Code, Codex, OMP, ZCode) now remove that staging dir when the run is killed
   (`EXIT`/`INT`/`TERM`), not just on a normal finish or a checked failure, and prune any staging dir older
-  than 60 minutes left over from an earlier killed run before starting a new export.
+  than 60 minutes left over from an earlier killed run before starting a new export. The staging prefix is
+  now skill-concierge-specific (`.skill-concierge-staging.*`) rather than a bare `.staging.*` — the OMP
+  cache parent is shared by every OMP plugin, and a bare prefix could have pruned another plugin's own
+  staging dir.
 - **Doctor:** a Claude Code or OMP install registry file that exists but does not parse now reports "could
   not be read — install state unknown" instead of reading the same as "never installed". It is WARN in a
   normal run and FAILs under `--cutover`, the same rule already applied to an installed copy of unknown
