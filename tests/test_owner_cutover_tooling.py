@@ -118,6 +118,44 @@ def test_cutover_leaves_not_installed_rows_from_the_real_checks_unchanged(dr, tm
         assert out[r["id"]]["status"] == r["status"] == "warn"
 
 
+def test_cutover_leaves_harness_present_but_plugin_never_installed_rows_unchanged(
+        dr, tmp_path, monkeypatch):
+    """N7 regression: a harness that IS installed on the machine (its own dir exists) but
+    never had skill-concierge installed into it — no cache dir, no install record — has no
+    copy that could hold anything back, so --cutover must leave it at WARN, not FAIL. The
+    prior fix over-reached: `detail` never contains the literal phrase "not installed" for
+    this state (it says "no ... plugin cache found (never installed via marketplace)" or
+    "has no ... install record"), so the old substring skip missed it and the row fell
+    through to "installed version unknown" -> FAIL."""
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_DIR", tmp_path / "claude-plugins")
+    (tmp_path / "claude-plugins").mkdir()
+    monkeypatch.setattr(dr, "CLAUDE_PLUGINS_FILE", tmp_path / "claude-plugins" / "installed_plugins.json")
+
+    monkeypatch.setattr(dr, "OMP_DIR", tmp_path / "omp")
+    (tmp_path / "omp").mkdir()
+    monkeypatch.setattr(dr, "OMP_PLUGINS_FILE", tmp_path / "omp" / "installed_plugins.json")
+    monkeypatch.setattr(dr, "OMP_MARKETPLACE", tmp_path / "omp" / "no-marketplace")
+    monkeypatch.setattr(dr, "OMP_PLUGIN_CACHE", tmp_path / "omp" / "no-cache")
+
+    monkeypatch.setattr(dr, "CODEX_DIR", tmp_path / "codex")
+    (tmp_path / "codex").mkdir()
+    monkeypatch.setattr(dr, "CODEX_PLUGIN_CACHE", tmp_path / "codex" / "no-cache")
+
+    monkeypatch.setattr(dr, "ZCODE_DIR", tmp_path / "zcode")
+    (tmp_path / "zcode").mkdir()
+    monkeypatch.setattr(dr, "ZCODE_PLUGINS_FILE", tmp_path / "zcode" / "installed_plugins.json")
+    monkeypatch.setattr(dr, "ZCODE_PLUGIN_CACHE", tmp_path / "zcode" / "no-cache")
+
+    rows = [dr.check_claude_code(), dr.check_omp(), dr.check_codex(), dr.check_zcode()]
+    for r in rows:
+        assert r["plugin_installed"] is False, r
+        assert r["version"] is None, r
+        assert "not installed" not in r["detail"], r   # the harness itself IS present
+    out = {r["id"]: r for r in dr.apply_cutover(list(rows), release="0.50.0")}
+    for r in rows:
+        assert out[r["id"]]["status"] == "warn", out[r["id"]]
+
+
 def test_cutover_leaves_at_release_row_unchanged(dr):
     rows = [{"id": "codex", "status": "ok", "detail": "d", "version": "0.50.0"}]
     out = dr.apply_cutover(list(rows), release="0.50.0")
@@ -373,6 +411,7 @@ def test_owner_row_healthy(dr, tmp_path, monkeypatch):
         row = dr.check_owner()
         assert row["status"] == "ok", row
         assert "3 points" in row["detail"] and "integrity ok" in row["detail"]
+        assert str(db) in row["detail"]   # the resolved database path, ordered by Thinh
         (venv / ".engine-plugin-version").write_text("0.51.0")
         assert dr.check_owner()["status"] == "warn"      # code_version skew
     finally:
@@ -522,9 +561,25 @@ exit 0
 @pytest.mark.parametrize("switch,started", [("1", True), ("0", False)])
 def test_launcher_starts_owner_when_health_fails(tmp_path, switch, started):
     venv, marker, pgid_file = _fake_venv(tmp_path)
+    query_port, embed_port = _free_port(), _free_port()
+    home = tmp_path / "home"
+    home.mkdir()
+    # D2: the nested Popen the launcher runs (`python -m skill_search.index_owner`)
+    # inherits this process's cwd all the way down — `-m` puts cwd ahead of the
+    # PYTHONPATH stub on sys.path, so a caller running pytest with cwd inside
+    # vendor/skill-search would let the REAL package shadow the stub and start a
+    # real owner against the real database and port 6333. Pin cwd to tmp_path
+    # (which holds no top-level skill_search package) so the stub wins no matter
+    # where pytest itself was invoked from. HOME/SKILL_INDEX_DB/SKILL_OWNER_NO_MODEL
+    # and the explicit ports are a second guard: if the stub is ever bypassed
+    # regardless, a real owner still lands on a temp DB and free ports, never live.
     env = dict(os.environ, SKILL_CONCIERGE_VENV=str(venv), SKILL_OWNER_AUTOSTART=switch,
-               EMBED_SHIM_PORT=str(_free_port()), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"))
-    r = subprocess.run(["bash", str(ROOT / "bin" / "skill-search-mcp")], env=env,
+               EMBED_SHIM_PORT=str(embed_port), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"),
+               HOME=str(home), SKILL_INDEX_DB=str(tmp_path / "index.sqlite"),
+               SKILL_OWNER_NO_MODEL="1",
+               SKILL_OWNER_QUERY_PORT=str(query_port), SKILL_OWNER_EMBED_PORT=str(embed_port),
+               SKILL_QDRANT_URL=f"http://127.0.0.1:{query_port}")
+    r = subprocess.run(["bash", str(ROOT / "bin" / "skill-search-mcp")], env=env, cwd=tmp_path,
                        capture_output=True, text=True, timeout=30, check=False)
     assert r.returncode == 0, r.stderr
     deadline = time.time() + 5
@@ -539,6 +594,24 @@ def test_launcher_starts_owner_when_health_fails(tmp_path, switch, started):
         # back in that shared group.
         child_pgid = int(pgid_file.read_text().strip())
         assert child_pgid != os.getpgrp()
+
+
+def test_launcher_execs_engine_when_owner_log_cannot_be_opened(tmp_path):
+    """N2 regression: SKILL_CONCIERGE_LOG pointing at an unwritable location (here, a
+    path with a plain FILE where a directory is expected) must not stop the MCP from
+    starting — only the owner autostart fails, and the launcher still execs the engine
+    (D3: this fix previously shipped with no test)."""
+    venv, marker, pgid_file = _fake_venv(tmp_path)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    env = dict(os.environ, SKILL_CONCIERGE_VENV=str(venv), SKILL_OWNER_AUTOSTART="1",
+               EMBED_SHIM_PORT=str(_free_port()), SKILL_CONCIERGE_LOG=str(blocker / "logs"))
+    r = subprocess.run(["bash", str(ROOT / "bin" / "skill-search-mcp")], env=env, cwd=tmp_path,
+                       capture_output=True, text=True, timeout=30, check=False)
+    assert r.returncode == 0, r.stderr  # fail-open: the launcher still execs the engine
+    assert "owner autostart failed" in r.stderr
+    assert not marker.exists()   # the owner never actually started
+    assert not pgid_file.exists()
 
 
 def test_engine_version_read_handles_apostrophe_in_root(tmp_path):
@@ -592,5 +665,12 @@ def test_setup_has_no_docker_start_path_and_starts_owner():
     # M4: the engine resync takes the SAME mkdir lock bin/skill-search-mcp's background
     # resync uses, so the two can never race pip against the shared venv.
     assert ".engine-resync.lock" in code
+    # N10: the owner it starts must bind the SAME store/embed ports this script just
+    # probed and stopped ($store_port, derived from $QURL) — QURL/EPORT are plain bash
+    # vars, never exported by default, so the owner-start line must export them itself
+    # or a configured non-default .mcp.json port would leave the owner on 6333/6363.
+    owner_start = code[code.index('subprocess.Popen(') - 200:code.index('subprocess.Popen(')]
+    assert 'SKILL_QDRANT_URL="$QURL"' in owner_start
+    assert 'EMBED_SHIM_PORT="$EPORT"' in owner_start
     assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0
     assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0

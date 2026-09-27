@@ -794,7 +794,8 @@ def check_owner():
     if stamp and code != stamp:
         status = WARN
         notes.append(f"owner runs code_version {code} but the venv stamp is {stamp} "
-                     "(it exits and restarts on the next stamp check)")
+                     "(a downgraded stamp is ignored — the owner keeps serving code_version "
+                     "unchanged; it only exits and restarts when the stamp is rewritten upward)")
     info = _get_json(f"{QURL.rstrip('/')}/collections/{COLLECTION}")
     rest_points = ((info or {}).get("result") or {}).get("points_count")
     if not rest_points:
@@ -811,7 +812,7 @@ def check_owner():
         notes.append(f"SQLite holds {counts.get(COLLECTION)} points, REST reports {rest_points} "
                      "(a write landed between the two reads, or the owner serves another file)")
     detail = (f"{QURL} + {EMBED_BASE}; code_version {code}; {rest_points} points; "
-              f"{INDEX_DB.name} integrity ok")
+              f"db {INDEX_DB} integrity ok")
     return _owner_row(status, "; ".join([detail] + notes))
 
 
@@ -1492,15 +1493,20 @@ def apply_cutover(results, release=None):
     the owner's ports.
 
     A harness that is simply not installed is left alone — there is no copy to hold back.
-    check_claude_code/check_codex/check_omp/check_zcode all key their "not installed" row
-    on that exact phrase in `detail` (their `version` field is inconsistent across harnesses
-    — some omit the key, Claude Code sets it to None — so the phrase is the one reliable
-    signal shared by all four)."""
+    That covers two distinct states, both skipped the same way: the harness itself is
+    absent (check_claude_code/check_codex/check_omp/check_zcode key that row on the
+    literal "not installed" phrase in `detail`), or the harness IS present but
+    skill-concierge was never installed into it — no cache dir, no install record. The
+    second state is read from each row's own `plugin_installed` flag (set by the check_*
+    function at the exact point it determines there is no record/cache for skill-concierge
+    at all), never sniffed from prose: a `version=None` row can also mean "installed but
+    the version could not be resolved" (a corrupt cache), which must still FAIL (N7)."""
     release = release or _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     if not release:
         return results
     for r in results:
-        if r.get("id") not in CUTOVER_HARNESSES or "not installed" in r.get("detail", ""):
+        if (r.get("id") not in CUTOVER_HARNESSES or "not installed" in r.get("detail", "")
+                or r.get("plugin_installed") is False):
             continue
         ver = r.get("version")
         if not ver:
@@ -1571,6 +1577,7 @@ def check_omp():
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     ver, enabled = _omp_installed_version()
+    plugin_installed = ver is not None
     if ver is None:
         findings.append("skill-concierge has no OMP install record (installed_plugins.json)")
     else:
@@ -1592,10 +1599,11 @@ def check_omp():
                             "adapters/omp/skill-concierge.ext.ts; update the plugin")
     if findings:
         return {"id": "omp", "label": "OMP integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None, "version": ver}
+                "detail": "; ".join(findings), "fix": None, "version": ver,
+                "plugin_installed": plugin_installed}
     return {"id": "omp", "label": "OMP integration", "status": OK,
             "detail": f"OMP plugin v{ver} matches SSOT v{ssot}; marketplace + extension surface in sync",
-            "fix": None, "version": ver}
+            "fix": None, "version": ver, "plugin_installed": plugin_installed}
 
 _VERSION_DIRNAME = re.compile(r"^\d+(\.\d+)*$")
 
@@ -1653,6 +1661,7 @@ def check_codex():
     findings = []
     ssot = _descriptor_version(ROOT / ".codex-plugin" / "plugin.json")
     cached_ver = _codex_cached_version()
+    plugin_installed = cached_ver is not None
     if cached_ver is None:
         findings.append("no Codex plugin cache found (never installed via marketplace)")
     else:
@@ -1677,11 +1686,12 @@ def check_codex():
                                 "run adapters/codex/install.sh")
     if findings:
         return {"id": "codex", "label": "Codex integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None, "version": cached_ver}
+                "detail": "; ".join(findings), "fix": None, "version": cached_ver,
+                "plugin_installed": plugin_installed}
     return {"id": "codex", "label": "Codex integration", "status": OK,
             "detail": f"Codex cache v{cached_ver} matches SSOT v{ssot}; skills, launcher, MCP "
                       "descriptor and hooks present",
-            "fix": None, "version": cached_ver}
+            "fix": None, "version": cached_ver, "plugin_installed": plugin_installed}
 
 def check_commandcode():
     """Command Code harness install state — mod + settings + MCP surface (ADR-0038).
@@ -1836,6 +1846,7 @@ def check_zcode():
                     cached_ver = versions[0].name
         except (OSError, ValueError):
             pass
+    plugin_installed = cached_ver is not None
     if cached_ver is None:
         findings.append("no ZCode plugin cache found (never installed via the skill-concierge marketplace)")
     else:
@@ -1855,10 +1866,11 @@ def check_zcode():
                             "(cosmetic under the interpreter-form .mcp.json; repair: chmod +x)")
     if findings:
         return {"id": "zcode", "label": "ZCode integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None, "version": cached_ver}
+                "detail": "; ".join(findings), "fix": None, "version": cached_ver,
+                "plugin_installed": plugin_installed}
     return {"id": "zcode", "label": "ZCode integration", "status": OK,
             "detail": f"ZCode cache v{cached_ver} matches SSOT v{ssot}; launcher executable",
-            "fix": None, "version": cached_ver}
+            "fix": None, "version": cached_ver, "plugin_installed": plugin_installed}
 
 
 def _claude_code_installed():
@@ -1902,6 +1914,7 @@ def check_claude_code():
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
     installed_ver, install_path = _claude_code_installed()
     deployed_ver = None
+    plugin_installed = installed_ver is not None
     if installed_ver is None:
         findings.append("skill-concierge has no Claude Code install record (installed_plugins.json)")
     else:
@@ -1927,10 +1940,11 @@ def check_claude_code():
     # None when that content cannot be read.
     if findings:
         return {"id": "claude-code", "label": "Claude Code integration", "status": WARN,
-                "detail": "; ".join(findings), "fix": None, "version": deployed_ver}
+                "detail": "; ".join(findings), "fix": None, "version": deployed_ver,
+                "plugin_installed": plugin_installed}
     return {"id": "claude-code", "label": "Claude Code integration", "status": OK,
             "detail": f"Claude Code plugin v{deployed_ver} matches SSOT v{ssot}; launcher executable",
-            "fix": None, "version": deployed_ver}
+            "fix": None, "version": deployed_ver, "plugin_installed": plugin_installed}
 
 
 _DSH_OWN_IDS = ("skill-concierge", "unlazy-stop", "skill-concierge-enforcer")

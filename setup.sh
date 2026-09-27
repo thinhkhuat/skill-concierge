@@ -116,8 +116,11 @@ fi
 # process group — a plain `nohup ... &` still leaves the child in the caller's pgid, so a
 # kill of that group takes the owner down with it. A duplicate start is harmless — the
 # second owner loses the file lock and exits. Path is passed via argv, never interpolated
-# into the code string.
-"$VENV/bin/python" -c 'import subprocess,sys
+# into the code string. QURL/EPORT are exported so the owner binds the SAME store/embed
+# ports this script just probed and stopped ($store_port above) — QURL/EPORT are plain
+# bash vars, never exported by default, so without this the owner would fall back to its
+# hardcoded 6333/6363 defaults whenever .mcp.json configures a non-default port (N10).
+env SKILL_QDRANT_URL="$QURL" EMBED_SHIM_PORT="$EPORT" "$VENV/bin/python" -c 'import subprocess,sys
 subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
                   start_new_session=True, stdin=subprocess.DEVNULL,
                   stdout=open(sys.argv[1], "ab"), stderr=subprocess.STDOUT)' \
