@@ -81,16 +81,20 @@ OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
-# ADR-0075: search_skills applies the ADR-0048 complement rule between installed and
-# external-catalog rows — an external row ranks above the installed top only if it beats
-# that row's score by ENFORCER_ANNEX_BEAT (the SAME env name the enforcer's own annex
-# uses), otherwise it renders after every installed row, still marked external.
-# consult_candidates is untouched (it deliberately sieves both tiers wide). Query-time,
-# never index-shaping — read LIVE per call (_search_complement_on, like _row_origin_on/
-# _blocked), since this server is long-lived and a query-time flag must apply without a
-# restart. Default ON; SKILL_SEARCH_COMPLEMENT=0 restores today's single mixed-tier
-# query and pure-score order byte-identically.
-ANNEX_BEAT      = float(os.environ.get("ENFORCER_ANNEX_BEAT", "0.04"))
+# ADR-0075: search_skills merges installed and external-catalog rows conditionally, not by
+# tier alone — an installed row is placed ahead of an external row only when its score is
+# within EXTERNAL_MARGIN of that external's; a clearly better external (by more than the
+# margin) keeps its place. consult_candidates is untouched (it deliberately sieves both
+# tiers wide). Query-time, never index-shaping — read LIVE per call
+# (_search_complement_on, like _row_origin_on/_blocked), since this server is long-lived
+# and a query-time flag must apply without a restart. Default ON; SKILL_SEARCH_COMPLEMENT=0
+# restores today's single mixed-tier query and pure-score order byte-identically.
+#
+# EXTERNAL_MARGIN is fixed at 0.08 (the same value the enforcer's own foreign-scope annex
+# uses, ENFORCER_ANNEX_MARGIN — ADR-0036/0047) and pre-registered as a plain constant, not
+# an environment knob: it was measured and fixed BEFORE the release evidence ran, precisely
+# so it can never be swept to make a bar pass after the fact.
+EXTERNAL_MARGIN = 0.08
 
 
 def _search_complement_on() -> bool:
@@ -933,18 +937,28 @@ def _external_only_filter() -> dict:
 
 
 def _arrange_tiers(installed_rows: list, external_rows: list, top_k: int) -> list:
-    """ADR-0075: the ADR-0048 complement rule applied to search_skills' single result
-    list — installed rows come first. An external row ranks ABOVE the installed top
-    only if it beats that row's score by ANNEX_BEAT; every other external row renders
-    after every installed row, still marked external. Each tier is expected to already
-    be fused/ranked before this function runs — it only arranges the two tiers, never
-    re-fuses within one."""
-    if not installed_rows:
-        return external_rows[:top_k]
-    top_installed = installed_rows[0]["score"]
-    above = [r for r in external_rows if r["score"] > top_installed + ANNEX_BEAT]
-    below = [r for r in external_rows if r["score"] <= top_installed + ANNEX_BEAT]
-    return (above + installed_rows + below)[:top_k]
+    """ADR-0075's conditional external rule: a per-row merge, not a single installed-top
+    threshold. An installed row is placed ahead of an external row only when
+    `installed.score >= external.score - EXTERNAL_MARGIN`; otherwise the external keeps
+    its place. Both tiers are expected to already be fused/ranked (score descending)
+    before this function runs — it only arranges the two tiers, never re-fuses within one.
+
+    Comparing only the current HEAD of each tier at every step is equivalent to checking
+    every pair, given that ordering: if the best remaining installed row clears the margin
+    against the best remaining external row (the hardest one to clear, since every other
+    remaining external scores no higher), it clears the margin against every lower-scoring
+    external row too; if it does not, no lower-scoring installed row can either, so the
+    external row is emitted and the comparison retries against the next (lower-scoring,
+    easier to clear) external row."""
+    out, i, e = [], 0, 0
+    while i < len(installed_rows) and e < len(external_rows) and len(out) < top_k:
+        if installed_rows[i]["score"] >= external_rows[e]["score"] - EXTERNAL_MARGIN:
+            out.append(installed_rows[i]); i += 1
+        else:
+            out.append(external_rows[e]); e += 1
+    out += installed_rows[i:]
+    out += external_rows[e:]
+    return out[:top_k]
 
 
 # ---------------------------------------------------------------------------
@@ -1202,9 +1216,9 @@ def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     phrasing across all of them (MAX-pool over the query union), so a skill a
     single phrasing would bury still surfaces.
 
-    ADR-0075: installed rows always come first. An external row ranks above the
-    installed top only if it clearly beats it (score margin ENFORCER_ANNEX_BEAT);
-    otherwise it still renders, marked external, after every installed row."""
+    ADR-0075: an installed row is placed ahead of an external row only when its score
+    is within EXTERNAL_MARGIN of that external's; a clearly better external (by more
+    than the margin) keeps its place, still marked external."""
     # group_by name + group_size=1 keeps each skill's single BEST point (on the
     # multi-vector index, its best-matching phrase point — the recall lever).
     queries = [query] + [q for q in (extra_queries or []) if q and q.strip()]

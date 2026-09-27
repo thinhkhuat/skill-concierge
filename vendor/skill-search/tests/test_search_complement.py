@@ -1,8 +1,9 @@
-"""ADR-0075: search_skills applies the ADR-0048 complement rule between installed
-and external-catalog rows — installed rows come first; an external row ranks above the
-installed top only if it beats that row's score by ENFORCER_ANNEX_BEAT. Pure-logic tests
-run offline: query_groups is faked to return different rows for the installed-only vs
-external-only filter, exactly as the two separate queries in search_skills would see.
+"""ADR-0075: search_skills merges installed and external-catalog rows conditionally — an
+installed row is placed ahead of an external row only when its score is within
+EXTERNAL_MARGIN (0.08, a fixed constant) of that external's; a clearly better external
+keeps its place. Pure-logic tests run offline: query_groups is faked to return different
+rows for the installed-only vs external-only filter, exactly as the two separate queries
+in search_skills would see.
 """
 import json
 
@@ -33,11 +34,10 @@ def _rig(monkeypatch, installed_groups, external_groups):
     monkeypatch.setattr(_server._qdrant, "query_groups", fake_query_groups)
 
 
-def test_installed_row_comes_first_over_six_strong_externals(monkeypatch):
-    """6 strong externals + 1 weaker installed: none of the externals clears the
-    installed top by the ANNEX_BEAT margin, so the installed row still comes first.
-    A single mixed top-6 query could otherwise drop it entirely; the separate
-    installed-only query fixes that."""
+def test_installed_row_comes_first_over_six_externals_all_within_the_margin(monkeypatch):
+    """6 externals, all within 0.08 of the installed row's score: none can displace it,
+    so the installed row still comes first. A single mixed top-6 query could otherwise
+    drop it entirely; the separate installed-only query fixes that."""
     installed = [_grp("home-skill", 0.50, scope="personal")]
     external = [_grp(f"ext{i}", 0.50 + 0.005 * i, scope="catalog:x") for i in range(1, 7)]
     _rig(monkeypatch, installed, external)
@@ -47,22 +47,44 @@ def test_installed_row_comes_first_over_six_strong_externals(monkeypatch):
     assert any(r.get("external") for r in out["results"])
 
 
-def test_external_beating_by_more_than_beat_stays_above(monkeypatch):
+def test_a_competitive_installed_row_within_the_margin_goes_first(monkeypatch):
     installed = [_grp("home-skill", 0.50, scope="personal")]
-    external = [_grp("dominant-ext", 0.60, scope="catalog:x")]   # beats by 0.10 > 0.04
+    external = [_grp("near-ext", 0.55, scope="catalog:x")]   # beats by 0.05 <= 0.08 margin
+    _rig(monkeypatch, installed, external)
+    out = json.loads(_server.search_skills("q"))
+    names = [r["name"] for r in out["results"]]
+    assert names == ["home-skill", "near-ext"]
+
+
+def test_installed_wins_at_the_exact_margin_boundary(monkeypatch):
+    installed = [_grp("home-skill", 0.50, scope="personal")]
+    external = [_grp("boundary-ext", 0.58, scope="catalog:x")]   # beats by exactly 0.08
+    _rig(monkeypatch, installed, external)
+    out = json.loads(_server.search_skills("q"))
+    names = [r["name"] for r in out["results"]]
+    assert names == ["home-skill", "boundary-ext"]   # ties at the boundary go to installed
+
+
+def test_a_clearly_better_external_beating_by_more_than_the_margin_stays_ahead(monkeypatch):
+    installed = [_grp("home-skill", 0.50, scope="personal")]
+    external = [_grp("dominant-ext", 0.60, scope="catalog:x")]   # beats by 0.10 > 0.08
     _rig(monkeypatch, installed, external)
     out = json.loads(_server.search_skills("q"))
     names = [r["name"] for r in out["results"]]
     assert names == ["dominant-ext", "home-skill"]
 
 
-def test_external_just_under_beat_margin_stays_below(monkeypatch):
-    installed = [_grp("home-skill", 0.50, scope="personal")]
-    external = [_grp("near-ext", 0.539, scope="catalog:x")]   # 0.039 < 0.04 beat margin
+def test_a_weaker_installed_row_can_still_render_below_a_dominant_external(monkeypatch):
+    """The per-row merge, not a single installed-top threshold: a SECOND, weaker installed
+    row that a stronger external also clears the margin against still renders — after
+    the external, not dropped."""
+    installed = [_grp("strong-home", 0.50, scope="personal"),
+                 _grp("weak-home", 0.30, scope="personal")]
+    external = [_grp("dominant-ext", 0.60, scope="catalog:x")]   # beats BOTH by > 0.08
     _rig(monkeypatch, installed, external)
     out = json.loads(_server.search_skills("q"))
     names = [r["name"] for r in out["results"]]
-    assert names == ["home-skill", "near-ext"]
+    assert names == ["dominant-ext", "strong-home", "weak-home"]
 
 
 def test_arrange_tiers_with_no_installed_rows_falls_back_to_external_order():

@@ -344,29 +344,30 @@ def _allow_catalog(monkeypatch, alias):
     monkeypatch.setattr(sd, "catalog_roots", lambda: {alias: f"/tmp/{alias}"})
 
 
-def test_complement_rank_keeps_installed_first_when_no_external_beats_the_margin(owner_factory, monkeypatch):
+def test_complement_rank_keeps_installed_first_when_no_external_clears_the_margin(owner_factory, monkeypatch):
     from skill_search import server as srv
     monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
     _allow_catalog(monkeypatch, "x")
     o = owner_factory().wait_ready()
     seed(o, [
         pt(1, "target", vec(0.8, 0.2), scope="personal"),
-        pt(2, "ext-close", vec(0.83, 0.17), scope="catalog:x", tier="external"),  # < 0.04: stays below
+        # cosine ~0.999 vs target's exact self-match 1.0: well within the 0.08 margin
+        pt(2, "ext-close", vec(0.83, 0.17), scope="catalog:x", tier="external"),
         pt(3, "ext-far", vec(0.1, 0.9), scope="catalog:x", tier="external"),
     ])
     rank, winner = fnd.complement_rank(o.url, "t", srv, vec(0.8, 0.2), "target", depth=10)
-    assert rank == 1 and winner == "target"    # installed always leads unless beaten by ANNEX_BEAT
+    assert rank == 1 and winner == "target"    # installed leads unless an external clears the margin
 
 
 def test_complement_rank_lets_a_strong_external_lead(owner_factory, monkeypatch):
     from skill_search import server as srv
     monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
-    monkeypatch.setenv("ENFORCER_ANNEX_BEAT", "0.04")
     _allow_catalog(monkeypatch, "x")
     o = owner_factory().wait_ready()
     seed(o, [
         pt(1, "target", vec(0.5, 0.5), scope="personal"),
-        pt(2, "dominant-ext", vec(0.99, 0.01), scope="catalog:x", tier="external"),  # beats the margin
+        # cosine ~0.999 vs target's ~0.743 for this query: a ~0.26 gap, far past the 0.08 margin
+        pt(2, "dominant-ext", vec(0.99, 0.01), scope="catalog:x", tier="external"),
     ])
     # query near "dominant-ext": it must render ABOVE the installed target, still findable
     rank, winner = fnd.complement_rank(o.url, "t", srv, vec(0.95, 0.05), "target", depth=10)
