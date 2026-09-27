@@ -19,11 +19,12 @@ say "insufficient data" when the window is too small. Never pool across epochs
 - v0.54.2 changes `vendor/skill-search/skill_search/index_owner.py`: a malformed port value now falls
   back to the default instead of crashing the owner at import.
 - v0.54.1 changed the same file (`1ddeeca`: the missing-loopback errno carve-out narrowed to `::1`).
-- `0526f6c` (the same v0.54.2 round) also changed `hooks/scripts/enforcer.py` — the enforcer's
-  own port derivation (`EMBED_PORT`/`QDRANT_URL`), never the offer-ranking or gate logic the W30-W33
-  items below actually watch. The epoch rule keys on the commit, so the enforcer's own epoch start
-  moves to this commit's go-live too, alongside the owner's.
-- All three changes affect only how a process starts or which port it derives. None changes what
+- `0526f6c`, `d20764d` and `0bdca97` (the same release) also changed `hooks/scripts/enforcer.py`,
+  `index_owner.py` and `vendor/skill-search/skill_search/server.py` — each only in how it derives its
+  ports and store URL (now through one module, `skill_search/ports.py`), never the offer-ranking,
+  retrieval or gate logic the W30-W33 items below watch. The epoch rule keys on the commit, so every
+  one of these files' epoch starts moves to the v0.54.2 go-live.
+- All of these changes affect only how a process starts or which port it derives. None changes what
   any offer contains.
 - The epoch rule keys on the commit, so W30–W33 below keep the v0.54.0 items and window from the
   latest go-live.

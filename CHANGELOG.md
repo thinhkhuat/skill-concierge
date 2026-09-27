@@ -14,11 +14,16 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ### Added
 - **git-stash guard:** a third `PreToolUse(Bash)` hook, `scripts/git_stash_guard.py`, denies any
-  state-changing `git stash` in this checkout (push, save, bare `git stash`, pop, apply, drop,
-  clear, store, create, branch, any `-u`/`-a`/`-p`/`--keep-index` variant, a compound command
-  carrying one, or `git -C <path> stash`), naming `git show <ref>:<path>` / `git diff <ref>`, a WIP
-  commit, or `git worktree add` as the alternative. Read-only `git stash list` / `git stash show`
-  still pass. Fails open on any internal error or unparseable stdin; override `GIT_STASH_GUARD=0`.
+  `git stash` in this checkout unless the word right after `stash` is exactly `list` or `show`.
+  - It finds the invocation wherever it sits in the command: after global options (`-C`, `-c`,
+    `--git-dir=`), environment prefixes, wrappers (`env`, `command`, `time`, `nice`, `exec`, `eval`,
+    `xargs`, `sudo`), an absolute path or `\git`, `git-stash`, subshells, `$(…)`, backticks, `{ …; }`,
+    `if`/`while` bodies, `sh -c`/`bash -c` strings, and after `&&`, `||`, `;`, `|`, `&` or a newline.
+  - `git stash -m list` and `git stash -- list` are denied: their first word is not `list`.
+  - Commands that only mention the word (`git log --grep stash`, `grep stash file`) still pass.
+  - The deny message names `git show <ref>:<path>` / `git diff <ref>`, a WIP commit, or `git worktree
+    add` as alternatives. Deliberate obfuscation (split strings, encoded commands) is out of scope.
+  - Fails open on any internal error or unparseable stdin; override `GIT_STASH_GUARD=0`.
 
 ### Fixed
 - **Command Code installer:** the preflight's shape check — added this release, on top of the parseability
@@ -38,21 +43,26 @@ All notable changes to **skill-concierge**. Format loosely follows
   `EMBED_SHIM_PORT`, or `SKILL_OWNER_EMBED_PORT` used to crash the owner at import (a non-numeric value) or
   at bind (an out-of-range one, e.g. `70000`), before it could even log anything. It now falls back to the
   default port (6333 or 6363) and logs one line to stderr naming the bad value, in both cases.
-- **Port grammar, closed for real:** the fix above initially left every Python caller on a bare
-  `int(...)` parse, which is MORE lenient than `urlsplit().port` and bash's own `_safe_port` — `int()`
-  also accepts leading/trailing whitespace, a leading sign, an underscore digit-group separator, and
-  full-width Unicode decimal digits, so `doctor.py` and the enforcer hook could still derive a
-  DIFFERENT port than the owner and the bash callers from the identical env var. Every Python caller
-  now imports one shared strict grammar (`scripts/port_grammar.py`: ASCII digits only, 1-65535);
-  `vendor/skill-search/skill_search/index_owner.py` mirrors it inline instead of importing it, since
-  that file must stay import-free of the rest of the repo. `doctor.py` and the enforcer hook also now
-  rebuild their `SKILL_QDRANT_URL` constant itself (not just a side variable) when it names no usable
-  port at all (a trailing colon), closing a second gap: unrebuilt, that case does not raise, but
-  `urllib`/`http.client` then silently connect on port 80 instead of the well-known default. `setup.sh`
-  and `bin/skill-search-mcp` needed no change — their existing `_safe_port` already applied this exact
-  grammar. `tests/test_port_agreement.py` now runs one shared case table against every caller's REAL
-  code (including the bash call-site lines themselves, not a reimplementation of them), so reverting
-  any single caller's line fails the suite.
+- **One port rule for every reader:** the rule for turning `SKILL_QDRANT_URL`, `EMBED_SHIM_PORT` and
+  the owner's own port overrides into a port now lives in one module,
+  `vendor/skill-search/skill_search/ports.py`.
+  - The index owner and the search server import it from their own package; `doctor.py`, the
+    enforcer and every script import the same module. There is no second copy to drift.
+  - The rule: ASCII digits only, the whole value (a trailing newline no longer slips through), 1-5
+    characters, 1-65535. `bin/skill-search-mcp` and `setup.sh` run before the package is importable,
+    so they keep a native `_safe_port` that now checks the length and converts in base 10, rejecting
+    exactly what Python rejects (`"0065535"`, `"000007363"`, `"7363\n"`).
+  - A URL rebuilt around a bad or missing port keeps IPv6 brackets. `http://[::1]` used to become
+    `http://::1:6333`, which crashed `doctor.py` at import and left the enforcer with an unusable
+    store address.
+  - A URL with no usable port falls back to 443 for `https`, else to the well-known default, in both
+    the derived port and the rebuilt URL.
+  - `setup.sh` reads the store port through the same module instead of a `sed` pattern that ignored
+    the port of an IPv6 address.
+  - `tests/test_port_env_guard.py` fails if any Python file reads one of these settings outside
+    `ports.py`, or any shell script expands one outside its `_safe_port` line.
+    `tests/test_port_agreement.py` drives every caller's real code, both bash scripts included (the
+    launcher's health-check request too), from one shared case table.
 - **Installer staging dirs:** the four installers that export a fresh copy through a staging dir beside
   their destination (Claude Code, Codex, OMP, ZCode) now remove that staging dir when the run is killed
   (`EXIT`/`INT`/`TERM`), not just on a normal finish or a checked failure, and prune any staging dir older
@@ -69,7 +79,12 @@ All notable changes to **skill-concierge**. Format loosely follows
   installer's own JSON/registry write (Command Code, Claude Code, OMP, ZCode, Cline) now goes through
   one shared routine, `adapters/lib/safe_write.py`: it resolves a symlink to its real target before
   writing, preserves the target's existing file mode instead of the umask default, and swaps in via a
-  temp file plus `os.replace` for atomicity. DSH and Codex write no JSON directly and are unaffected.
+  temp file plus `os.replace` for atomicity. DSH's `cordis.patch.yml` swap now goes through the same
+  routine (it was a bare `mv`, with the same symlink and mode damage). The temp file and every registry
+  backup are created at `0600` before the target's mode is copied on, so a private file is never briefly
+  world-readable, and a backup keeps its source file's mode. `tests/test_installer_write_discipline.py`
+  fails if an installer replaces a config file any other way, and each installer's config write has
+  its own symlink-and-mode test. Codex writes no config file directly and is unaffected.
 - **Doctor:** a Claude Code or OMP install registry file that exists but does not parse now reports "could
   not be read — install state unknown" instead of reading the same as "never installed". It is WARN in a
   normal run and FAILs under `--cutover`, the same rule already applied to an installed copy of unknown
