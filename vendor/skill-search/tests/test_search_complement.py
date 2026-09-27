@@ -1,9 +1,10 @@
-"""ADR-0075: search_skills merges installed and external-catalog rows conditionally — an
+"""ADR-0075: search_skills can merge installed and external-catalog rows conditionally — an
 installed row is placed ahead of an external row only when its score is within
 EXTERNAL_MARGIN (0.08, a fixed constant) of that external's; a clearly better external
-keeps its place. Pure-logic tests run offline: query_groups is faked to return different
-rows for the installed-only vs external-only filter, exactly as the two separate queries
-in search_skills would see.
+keeps its place. Ships OFF by default (v0.55.0), pending a combined judgment with the
+keyword-trigger channel — SKILL_SEARCH_COMPLEMENT=1 turns it on. Pure-logic tests run
+offline: query_groups is faked to return different rows for the installed-only vs
+external-only filter, exactly as the two separate queries in search_skills would see.
 """
 import json
 
@@ -21,7 +22,10 @@ def _grp(name, score, scope=None):
 def _rig(monkeypatch, installed_groups, external_groups):
     """Route the installed-only query (must_not tier=external) to `installed_groups` and
     the external-only query (must tier=external) to `external_groups` — mirroring the
-    two separate calls search_skills issues under the complement rule."""
+    two separate calls search_skills issues under the complement rule. The rule ships
+    OFF by default (v0.55.0, pending a combined judgment with the keyword-trigger
+    channel) so every test exercising it turns it on explicitly."""
+    monkeypatch.setenv("SKILL_SEARCH_COMPLEMENT", "1")
     monkeypatch.setattr(_server, "embed_batch", lambda qs: [[0.0] for _ in qs])
     monkeypatch.setattr(_server, "_staleness_warning", lambda: None)
 

@@ -81,14 +81,20 @@ OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
-# ADR-0075: search_skills merges installed and external-catalog rows conditionally, not by
+# ADR-0075: search_skills can merge installed and external-catalog rows conditionally, not by
 # tier alone — an installed row is placed ahead of an external row only when its score is
 # within EXTERNAL_MARGIN of that external's; a clearly better external (by more than the
 # margin) keeps its place. consult_candidates is untouched (it deliberately sieves both
 # tiers wide). Query-time, never index-shaping — read LIVE per call
 # (_search_complement_on, like _row_origin_on/_blocked), since this server is long-lived
-# and a query-time flag must apply without a restart. Default ON; SKILL_SEARCH_COMPLEMENT=0
-# restores today's single mixed-tier query and pure-score order byte-identically.
+# and a query-time flag must apply without a restart.
+#
+# Default OFF (release-evidence finding, v0.55.0): the release-shape evidence run showed the
+# rule, even at this margin, is the dominant cause (98.5% of measured cases) of the one
+# precision bar this feature set did not clear. It ships off pending a combined judgment
+# with the keyword-trigger channel, not as an experimental or half-finished feature — the
+# code, its tests, and the 0.08 margin are unchanged and stay ready for that judgment.
+# SKILL_SEARCH_COMPLEMENT=1 turns it back on for local evaluation without a code change.
 #
 # EXTERNAL_MARGIN is fixed at 0.08 (the same value the enforcer's own foreign-scope annex
 # uses, ENFORCER_ANNEX_MARGIN — ADR-0036/0047) and pre-registered as a plain constant, not
@@ -98,7 +104,7 @@ EXTERNAL_MARGIN = 0.08
 
 
 def _search_complement_on() -> bool:
-    return os.environ.get("SKILL_SEARCH_COMPLEMENT", "1") != "0"
+    return os.environ.get("SKILL_SEARCH_COMPLEMENT", "0") != "0"
 
 
 # Multi-vector trigger layer: index each skill's intent phrases as separate points and

@@ -346,7 +346,9 @@ def _allow_catalog(monkeypatch, alias):
 
 def test_complement_rank_keeps_installed_first_when_no_external_clears_the_margin(owner_factory, monkeypatch):
     from skill_search import server as srv
-    monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
+    # complement_rank itself does not read the flag (only search_skills_rank/search_skills
+    # do); turned on explicitly here since the default shipped OFF in v0.55.0.
+    monkeypatch.setenv("SKILL_SEARCH_COMPLEMENT", "1")
     _allow_catalog(monkeypatch, "x")
     o = owner_factory().wait_ready()
     seed(o, [
@@ -361,7 +363,7 @@ def test_complement_rank_keeps_installed_first_when_no_external_clears_the_margi
 
 def test_complement_rank_lets_a_strong_external_lead(owner_factory, monkeypatch):
     from skill_search import server as srv
-    monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
+    monkeypatch.setenv("SKILL_SEARCH_COMPLEMENT", "1")
     _allow_catalog(monkeypatch, "x")
     o = owner_factory().wait_ready()
     seed(o, [
@@ -390,7 +392,8 @@ def test_search_skills_rank_falls_back_to_plain_shape_without_the_complement_mac
 
 def test_search_skills_rank_uses_the_complement_shape_when_srv_has_it_and_it_is_on(owner_factory, monkeypatch):
     from skill_search import server as srv
-    monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
+    # "it is on" is the test's premise — set explicitly since v0.55.0 ships the flag OFF.
+    monkeypatch.setenv("SKILL_SEARCH_COMPLEMENT", "1")
     _allow_catalog(monkeypatch, "x")
     o = owner_factory().wait_ready()
     seed(o, [

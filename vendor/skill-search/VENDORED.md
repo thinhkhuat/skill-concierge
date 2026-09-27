@@ -520,16 +520,22 @@ plugin-level customization layer and these engine patches.
     curated/LLM/description/body one. Same `SKILL_DECLARED_TRIGGERS` flag; `=0` restores the
     byte-identical pre-fix text and phrases (both `skills_discovery.py` and `server.py` read the
     flag independently — this module stays dependency-free by contract).
-  - **`search_skills` external-row complement (ADR-0075):** applies the ADR-0048 complement rule
-    between installed and external-catalog rows via two SEPARATE queries
-    (`_installed_only_filter`/`_external_only_filter`, mirroring the enforcer's
-    `_retrieve`/`_retrieve_external`) fused per tier by the existing `_fuse_ranked`, then arranged
-    by `_arrange_tiers`: installed rows come first; an external row ranks above the installed top
-    only if it beats that row's score by `ENFORCER_ANNEX_BEAT` (0.04), otherwise it renders after
-    every installed row, still marked external. `consult_candidates` is untouched. Query-time only
+  - **`search_skills` external-row complement (ADR-0075):** between installed and external-catalog
+    rows, via two SEPARATE queries (`_installed_only_filter`/`_external_only_filter`, mirroring the
+    enforcer's `_retrieve`/`_retrieve_external`) fused per tier by the existing `_fuse_ranked`, then
+    merged pairwise by `_arrange_tiers` — a per-row rule, not a single installed-top threshold: an
+    installed row is placed ahead of an external row only when its score is within
+    `EXTERNAL_MARGIN` (0.08, a fixed constant, not env-configurable, pre-registered before the
+    release evidence ran) of that external's; a clearly better external (by more than the margin)
+    keeps its place, still marked external. `consult_candidates` is untouched. Query-time only
     (`_search_complement_on`, read live like `_row_origin_on`/`_blocked` — this server is
-    long-lived); `SKILL_SEARCH_COMPLEMENT=0` restores today's single mixed-tier query and
-    pure-score order byte-identically.
+    long-lived). **Ships OFF by default** (v0.55.0 release evidence found the rule the dominant
+    cause of the one precision bar the release did not clear; it stays pending a combined judgment
+    with the keyword-trigger channel) — `SKILL_SEARCH_COMPLEMENT=1` turns it on;
+    `SKILL_SEARCH_COMPLEMENT=0`/unset restores today's single mixed-tier query and pure-score order
+    byte-identically. `findability.complement_rank`/`search_skills_rank` read the same
+    `srv._search_complement_on()`, so the sweep and evaluation harness see exactly what
+    `search_skills` serves.
   - **Findability sweep hook:** `build_index` launches a detached
     `python -m skill_search.findability --sweep` (`_launch_findability_sweep`) whenever a build
     actually changed the index (`embedded + deleted > 0`), from a fixed cwd (`Path.home()`), stdio
