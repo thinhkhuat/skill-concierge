@@ -33,7 +33,9 @@ def run_hook(prompt: str, sid: str, ledger_lines: list, sidecar: dict) -> str:
                    ENFORCER_CHAIN_HINT="1",
                    ENFORCER_JEV_GATE="0",   # ADR-0060: keep the e2e offline and deterministic
                    # a refused embed call would otherwise start a real index owner
-                   SKILL_OWNER_AUTOSTART="0")
+                   SKILL_OWNER_AUTOSTART="0",
+                   # never the live owner's embed or store port
+                   EMBED_SHIM_PORT="9", SKILL_QDRANT_URL="http://127.0.0.1:9")
         p = subprocess.run(
             [sys.executable, str(ENFORCER)],
             input=json.dumps({"prompt": prompt, "session_id": sid}).encode(),
