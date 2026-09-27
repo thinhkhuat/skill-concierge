@@ -170,13 +170,89 @@ def test_when_to_use_multiline_yaml_list_is_parsed(tmp_path):
 
 
 def test_when_to_use_prose_is_unchanged_regardless_of_commas(tmp_path):
-    """A prose sentence with commas must NOT be mistaken for a YAML list — only a
-    real block sequence (one '- item' per line) counts as list-shaped."""
+    """A prose sentence with commas must NOT be mistaken for a list: a real block
+    sequence (one '- item' per line) or a guarded single-line comma list both count
+    as list-shaped, but an ordinary sentence whose items read like sentence
+    fragments ("Use ...", "or Z ...") fails the comma-list guard and stays prose."""
     fm = ('description: "Does alpha."\n'
           'when_to_use: "Use when doing X, Y, or Z across a project"\n')
     s = _parse_fm(tmp_path, fm)
     assert s["when_to_use_items"] == []
     assert s["when_to_use"] == "Use when doing X, Y, or Z across a project"
+
+
+# --- when_to_use: guarded single-line comma list (measured over installed skills with
+# plans/260927-1450-findability-at-the-root/evidence/when_to_use_forms.py: 0 YAML
+# sequences, 4 clean comma lists, 112 prose) — every example below is a real installed
+# skill's own field, copied verbatim ------------------------------------------------
+
+def test_when_to_use_comma_list_vn_editor_qualifies(tmp_path):
+    fm = ('description: "d"\n'
+          'when_to_use: "biên tập tiếng Việt, sửa giúp, viết lại, dịch ra tiếng Việt, '
+          'gỡ AI, gỡ giọng AI, phát hiện giọng AI, detect ai writing, phân tích đối '
+          'chiếu, làm tự nhiên, rà soát tài liệu, đọc lại giúp, kiểm tra văn bản, '
+          'kiểm định phát hiện, validate findings, polish vietnamese, edit vietnamese, '
+          'translate to vietnamese. Viết MỚI thì sang vn-author."\n')
+    s = _parse_fm(tmp_path, fm)
+    assert len(s["when_to_use_items"]) == 18
+    assert s["when_to_use_items"][0] == "biên tập tiếng Việt"
+
+
+def test_when_to_use_comma_list_tk_gdelt_doctor_qualifies(tmp_path):
+    fm = ('description: "d"\n'
+          'when_to_use: "gdelt archive, gdelt-ngrams, ngrams-timeline, gkg-tone, gdelt '
+          'mcp not working, tone query crashed, ngrams timeline empty, gdelt fetcher '
+          'health, is the gdelt archive up to date, gdelt disk space, gdelt retention, '
+          'move the gdelt archive, gdelt warehouse, gdelt http mcp, gdelt cold tier nas, '
+          'record a gdelt finding"\n')
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"][:3] == ["gdelt archive", "gdelt-ngrams", "ngrams-timeline"]
+    assert len(s["when_to_use_items"]) == 16
+
+
+def test_when_to_use_comma_list_tk_servers_ssh_doctor_qualifies(tmp_path):
+    fm = ('description: "d"\n'
+          'when_to_use: "ssh to my server, connect to the nas/mini/vps/rtx, run a gpu '
+          'job on the rtx box, run linux on the windows pc, wsl over ssh, homelab '
+          'server, ssh permission denied, host key verification failed, add a new '
+          'server to ssh, onboard windows ssh, server ip changed, check all servers, '
+          'record an ssh finding"\n')
+    s = _parse_fm(tmp_path, fm)
+    assert len(s["when_to_use_items"]) == 13
+    assert s["when_to_use_items"][0] == "ssh to my server"
+
+
+def test_when_to_use_comma_list_agentkit_the_tk_way_qualifies(tmp_path):
+    fm = ('description: "d"\n'
+          'when_to_use: "update agentkit, update the engineer pack/kit, ak update '
+          'failed, ak self-update, ak audit drift, kit files modified, merge my edits '
+          'onto the new kit, roll back agentkit, record an agentkit finding"\n')
+    s = _parse_fm(tmp_path, fm)
+    assert len(s["when_to_use_items"]) == 9
+    assert s["when_to_use_items"][0] == "update agentkit"
+
+
+def test_when_to_use_comma_list_too_few_items_stays_prose(tmp_path):
+    fm = 'description: "d"\nwhen_to_use: "gdelt archive health, gdelt disk space"\n'
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"] == []
+
+
+def test_when_to_use_comma_list_an_item_over_eight_words_stays_prose(tmp_path):
+    fm = ('description: "d"\n'
+          'when_to_use: "short one, short two, this one single item runs on for '
+          'quite a lot more than eight words total"\n')
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"] == []
+
+
+def test_when_to_use_comma_list_flag_off_restores_old_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", False)
+    fm = ('description: "d"\n'
+          'when_to_use: "gdelt archive, gdelt disk space, gdelt retention"\n')
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"] == []
+    assert s["when_to_use"] == "gdelt archive, gdelt disk space, gdelt retention"
 
 
 def test_when_to_use_declared_triggers_flag_off_restores_old_text(tmp_path, monkeypatch):

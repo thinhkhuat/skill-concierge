@@ -22,6 +22,7 @@ import glob
 import fnmatch
 import hashlib
 import logging
+import statistics
 import textwrap
 from pathlib import Path
 
@@ -538,21 +539,51 @@ SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "1") != "0"
 # "-", required whitespace, the item text.
 _YAML_SEQ_ITEM_RE = re.compile(r"^-\s+(.*)$")
 
+# A guarded single-line comma list qualifies as a declared item list too (measured over
+# installed skills with plans/260927-1450-findability-at-the-root/evidence/when_to_use_forms.py:
+# 0 YAML lists, 4 clean comma lists, 112 prose). Every guard below must hold, or the value
+# stays plain prose: an ordinary sentence with a couple of commas ("Use when doing X, Y, or
+# Z") must never masquerade as a declared list. `_WHEN_COMMA_STARTS` catches an item that
+# reads like a sentence fragment rather than a discrete item.
+_WHEN_COMMA_STARTS = ("or ", "and ", "but ", "use ", "invoke", "when ", "for ", "to ", "not ",
+                     "e.g", "i.e", "etc")
+_WHEN_COMMA_MAX_ITEM_WORDS = 8
+_WHEN_COMMA_MEDIAN_WORDS = 5
+_WHEN_COMMA_MIN_ITEMS = 3
+
+
+def _guarded_comma_items(raw: str) -> list | None:
+    """The single-line comma-list arm of `_parse_when_to_use`: qualifies only when ALL hold
+    — >=3 items; median item length <=5 words; no item over 8 words; no item opens like a
+    sentence fragment (`_WHEN_COMMA_STARTS`). The newline check runs on the RAW value (before
+    any line-folding `_unwrap_scalar` would do), so a value that was authored across several
+    physical lines — even one a later fold would flatten to one line — is never treated as a
+    single-line list here; only a genuinely one-line scalar qualifies."""
+    if "\n" in raw.strip():
+        return None
+    line = _unwrap_scalar(raw)
+    items = [i.strip().rstrip(".") for i in line.split(",") if i.strip()]
+    if len(items) < _WHEN_COMMA_MIN_ITEMS:
+        return None
+    if statistics.median(len(i.split()) for i in items) > _WHEN_COMMA_MEDIAN_WORDS:
+        return None
+    if any(len(i.split()) > _WHEN_COMMA_MAX_ITEM_WORDS for i in items):
+        return None
+    if any(i.lower().startswith(_WHEN_COMMA_STARTS) for i in items):
+        return None
+    return items
+
 
 def _parse_when_to_use(raw: str) -> tuple:
     """Full-parse a frontmatter `when_to_use:` value (ADR-0074).
 
     Returns (plain_text, items). `plain_text` is what the description append uses:
     identical to `_unwrap_scalar(raw)` for ordinary prose, or the list's items joined
-    with "; " when `raw` is a genuine YAML block sequence — every non-blank physical
-    line is its own "- item". `items` is that list of per-item strings, or [] for
-    prose. server.py's `_declared_trigger_phrases` is the only consumer of a non-empty
-    `items`, and it applies its own count/length gate on top of this structural test.
-
-    Deliberately does NOT treat a single-line comma-separated scalar as a list: a
-    description-style sentence with a couple of commas ("Use when doing X, Y, or Z")
-    must stay prose, never masquerade as a declared list — a real YAML block sequence
-    is an unambiguous authoring signal a plain scalar's commas are not.
+    with "; " when `raw` is a genuine YAML block sequence (every non-blank physical line
+    is its own "- item") or a guarded single-line comma list (`_guarded_comma_items`).
+    `items` is that list of per-item strings, or [] for prose. server.py's
+    `_declared_trigger_phrases` is the only consumer of a non-empty `items`, and it
+    applies its own count/length gate on top of this structural test.
     """
     if not raw:
         return "", []
@@ -561,6 +592,9 @@ def _parse_when_to_use(raw: str) -> tuple:
         items = [_unwrap_scalar(_YAML_SEQ_ITEM_RE.match(ln).group(1)) for ln in non_blank]
         items = [it for it in items if it]
         return "; ".join(items), items
+    comma_items = _guarded_comma_items(raw)
+    if comma_items:
+        return "; ".join(comma_items), comma_items
     return _unwrap_scalar(raw), []
 
 
