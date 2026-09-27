@@ -100,6 +100,15 @@ def test_a_long_command_is_decided_well_inside_the_hook_timeout(guard):
     assert time.monotonic() - start < 1.0
 
 
+def test_a_long_flag_like_word_after_a_shell_is_decided_fast(guard):
+    """The `-c` cluster test must stay linear in a word's length: a backtracking pattern
+    took 11.8 s on one 64,000-character option-like word, past the hook timeout."""
+    command = "bash -" + "l" * 100_000 + "x; git stash"
+    start = time.monotonic()
+    assert guard.decide(command) == guard.REASON
+    assert time.monotonic() - start < 1.0
+
+
 def test_chained_evals_are_decided_fast(guard):
     """Each `eval` used to re-check the rest of the command, doubling the work per `eval`,
     so about twenty of them outlasted the hook timeout and let the call through."""

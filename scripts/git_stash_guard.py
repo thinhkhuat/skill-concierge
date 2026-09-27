@@ -74,7 +74,15 @@ _SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "yash", "posh", "f
            "csh", "tcsh", "pwsh"}
 _SEPARATORS = {"&&", "||", ";", "|", "&"}
 _VAR_WORD_RE = re.compile(r"^\$(\{[^}]*\}|[A-Za-z_0-9]+)$")    # $SHELL, ${SHELL:-bash}
-_C_FLAG_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")             # -c, -lc, -ic, -xc
+_FLAG_CLUSTER_RE = re.compile(r"-[A-Za-z]+")
+
+
+def _is_c_flag(tok):
+    """`-c`, `-lc`, `-ic`, `-xc`: a short-flag cluster holding `c`. Linear in the word's
+    length; a pattern with a letter run on each side of the `c` backtracks quadratically
+    on a long word, which could hold the hook past its timeout."""
+    return "c" in tok and _FLAG_CLUSTER_RE.fullmatch(tok) is not None
+
 
 def _extract_substitutions(command):
     """Return (outer, inners): OUTER has every top-level `$(...)` and backtick span
@@ -147,8 +155,8 @@ def _group_is_denied(toks, budget):
             # these, and checking each would cost time quadratic in the command's length.
             shell_checked = True
             rest = toks[idx + 1:]
-            if any(_C_FLAG_RE.match(t) for t in rest) and any(
-                    (not t.startswith("-") or (j and _C_FLAG_RE.match(rest[j - 1])))
+            if any(_is_c_flag(t) for t in rest) and any(
+                    (not t.startswith("-") or (j and _is_c_flag(rest[j - 1])))
                     and _decide(t, budget) is not None for j, t in enumerate(rest)):
                 return True
         elif base == "eval" and not eval_checked and idx + 1 < len(toks):
