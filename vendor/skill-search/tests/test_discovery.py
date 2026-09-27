@@ -149,9 +149,11 @@ def test_when_to_use_is_its_own_field_and_still_appended(tmp_path):
     assert s["when_to_use_items"] == []                 # prose, not a list
 
 
-def test_when_to_use_multiline_yaml_list_is_parsed(tmp_path):
+def test_when_to_use_multiline_yaml_list_is_parsed(tmp_path, monkeypatch):
     """A genuine YAML block sequence — the multi-line form authors actually write for
-    a list of short trigger conditions."""
+    a list of short trigger conditions. SKILL_DECLARED_TRIGGERS ships OFF by default
+    (v0.55.0); turned on here since this test exercises the parsing rule itself."""
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "Does alpha."\n'
           "when_to_use:\n"
           "  - Setting up a new alpha pipeline\n"
@@ -169,11 +171,13 @@ def test_when_to_use_multiline_yaml_list_is_parsed(tmp_path):
     assert "category" not in s["description"]
 
 
-def test_when_to_use_prose_is_unchanged_regardless_of_commas(tmp_path):
+def test_when_to_use_prose_is_unchanged_regardless_of_commas(tmp_path, monkeypatch):
     """A prose sentence with commas must NOT be mistaken for a list: a real block
     sequence (one '- item' per line) or a guarded single-line comma list both count
     as list-shaped, but an ordinary sentence whose items read like sentence
-    fragments ("Use ...", "or Z ...") fails the comma-list guard and stays prose."""
+    fragments ("Use ...", "or Z ...") fails the comma-list guard and stays prose.
+    Flag turned on: this proves the GUARD rejects it, not just the flag being off."""
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "Does alpha."\n'
           'when_to_use: "Use when doing X, Y, or Z across a project"\n')
     s = _parse_fm(tmp_path, fm)
@@ -186,7 +190,8 @@ def test_when_to_use_prose_is_unchanged_regardless_of_commas(tmp_path):
 # sequences, 4 clean comma lists, 112 prose) — every example below is a real installed
 # skill's own field, copied verbatim ------------------------------------------------
 
-def test_when_to_use_comma_list_vn_editor_qualifies(tmp_path):
+def test_when_to_use_comma_list_vn_editor_qualifies(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "d"\n'
           'when_to_use: "biên tập tiếng Việt, sửa giúp, viết lại, dịch ra tiếng Việt, '
           'gỡ AI, gỡ giọng AI, phát hiện giọng AI, detect ai writing, phân tích đối '
@@ -198,7 +203,8 @@ def test_when_to_use_comma_list_vn_editor_qualifies(tmp_path):
     assert s["when_to_use_items"][0] == "biên tập tiếng Việt"
 
 
-def test_when_to_use_comma_list_tk_gdelt_doctor_qualifies(tmp_path):
+def test_when_to_use_comma_list_tk_gdelt_doctor_qualifies(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "d"\n'
           'when_to_use: "gdelt archive, gdelt-ngrams, ngrams-timeline, gkg-tone, gdelt '
           'mcp not working, tone query crashed, ngrams timeline empty, gdelt fetcher '
@@ -210,7 +216,8 @@ def test_when_to_use_comma_list_tk_gdelt_doctor_qualifies(tmp_path):
     assert len(s["when_to_use_items"]) == 16
 
 
-def test_when_to_use_comma_list_tk_servers_ssh_doctor_qualifies(tmp_path):
+def test_when_to_use_comma_list_tk_servers_ssh_doctor_qualifies(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "d"\n'
           'when_to_use: "ssh to my server, connect to the nas/mini/vps/rtx, run a gpu '
           'job on the rtx box, run linux on the windows pc, wsl over ssh, homelab '
@@ -222,7 +229,8 @@ def test_when_to_use_comma_list_tk_servers_ssh_doctor_qualifies(tmp_path):
     assert s["when_to_use_items"][0] == "ssh to my server"
 
 
-def test_when_to_use_comma_list_agentkit_the_tk_way_qualifies(tmp_path):
+def test_when_to_use_comma_list_agentkit_the_tk_way_qualifies(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "d"\n'
           'when_to_use: "update agentkit, update the engineer pack/kit, ak update '
           'failed, ak self-update, ak audit drift, kit files modified, merge my edits '
@@ -232,13 +240,15 @@ def test_when_to_use_comma_list_agentkit_the_tk_way_qualifies(tmp_path):
     assert s["when_to_use_items"][0] == "update agentkit"
 
 
-def test_when_to_use_comma_list_too_few_items_stays_prose(tmp_path):
+def test_when_to_use_comma_list_too_few_items_stays_prose(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = 'description: "d"\nwhen_to_use: "gdelt archive health, gdelt disk space"\n'
     s = _parse_fm(tmp_path, fm)
     assert s["when_to_use_items"] == []
 
 
-def test_when_to_use_comma_list_an_item_over_eight_words_stays_prose(tmp_path):
+def test_when_to_use_comma_list_an_item_over_eight_words_stays_prose(tmp_path, monkeypatch):
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", True)
     fm = ('description: "d"\n'
           'when_to_use: "short one, short two, this one single item runs on for '
           'quite a lot more than eight words total"\n')
@@ -246,8 +256,10 @@ def test_when_to_use_comma_list_an_item_over_eight_words_stays_prose(tmp_path):
     assert s["when_to_use_items"] == []
 
 
-def test_when_to_use_comma_list_flag_off_restores_old_text(tmp_path, monkeypatch):
-    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", False)
+def test_when_to_use_comma_list_flag_off_restores_old_text(tmp_path):
+    """No monkeypatch: SKILL_DECLARED_TRIGGERS ships OFF by default (v0.55.0), so this
+    covers the actual default, not merely an explicit override."""
+    assert sd.SKILL_DECLARED_TRIGGERS is False
     fm = ('description: "d"\n'
           'when_to_use: "gdelt archive, gdelt disk space, gdelt retention"\n')
     s = _parse_fm(tmp_path, fm)
@@ -255,12 +267,13 @@ def test_when_to_use_comma_list_flag_off_restores_old_text(tmp_path, monkeypatch
     assert s["when_to_use"] == "gdelt archive, gdelt disk space, gdelt retention"
 
 
-def test_when_to_use_declared_triggers_flag_off_restores_old_text(tmp_path, monkeypatch):
-    """SKILL_DECLARED_TRIGGERS=0 must reproduce the byte-identical PRE-FIX description
+def test_when_to_use_declared_triggers_flag_off_restores_old_text(tmp_path):
+    """SKILL_DECLARED_TRIGGERS OFF (the default, v0.55.0 — no monkeypatch here, so this
+    covers the actual default) must reproduce the byte-identical PRE-FIX description
     text for a list-shaped when_to_use (the old naive flow-scalar join), not just an
     empty when_to_use_items — this is what makes the trigger-phrase reversion truly
     byte-identical rather than merely 'items absent'."""
-    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", False)
+    assert sd.SKILL_DECLARED_TRIGGERS is False
     fm = ('description: "Does alpha."\n'
           "when_to_use:\n"
           "  - Setting up a new alpha pipeline\n"

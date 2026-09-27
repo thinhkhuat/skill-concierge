@@ -508,18 +508,24 @@ plugin-level customization layer and these engine patches.
   - **Exclusion-sentence trigger drop:** `server._split_phrases` drops an exclusion sentence rather
     than indexing it as a positive trigger point. `_TRIG_NEGATIVE_RE` reuses
     `skills_discovery._BODY_NEGATIVE_RE`'s exact pattern (never hand-copied) plus a "not for" arm
-    the body-side rule never needed. Under `SKILL_DECLARED_TRIGGERS` (default ON); `=0` restores
-    the byte-identical pre-fix phrase list.
+    the body-side rule never needed. Under `SKILL_DECLARED_TRIGGERS`.
   - **Declared list-form when_to_use triggers:** `skills_discovery.parse_skill` full-parses
-    `when_to_use` (`_parse_when_to_use`) — a genuine YAML block sequence yields `when_to_use_items`
-    (never a prose scalar containing commas) and joins with "; " for the description append
-    instead of the old naive flow-scalar space-join. `server._declared_trigger_phrases` promotes a
-    qualifying list (≥3 items, median ≤5 words) into its own trigger phrases (min 2 words, order
-    preserved, deduped, capped at `DECLARED_TRIG_MAX = 8`), layered in `_trigger_phrases` AFTER the
-    base layer's own `_TRIG_MAX` cap so they can only ADD slots, never evict a
-    curated/LLM/description/body one. Same `SKILL_DECLARED_TRIGGERS` flag; `=0` restores the
-    byte-identical pre-fix text and phrases (both `skills_discovery.py` and `server.py` read the
-    flag independently — this module stays dependency-free by contract).
+    `when_to_use` (`_parse_when_to_use`) — a genuine YAML block sequence, or a guarded single-line
+    comma list (≥3 items, median ≤5 words, no item over 8 words, no item opening like a sentence
+    fragment), yields `when_to_use_items` (never an ordinary prose scalar containing commas) and
+    joins with "; " for the description append instead of the old naive flow-scalar space-join.
+    `server._declared_trigger_phrases` promotes a qualifying list into its own trigger phrases
+    (min 2 words, order preserved, deduped, capped at `DECLARED_TRIG_MAX = 8`), layered in
+    `_trigger_phrases` AFTER the base layer's own `_TRIG_MAX` cap so they can only ADD slots, never
+    evict a curated/LLM/description/body one.
+  - Both mechanisms above share **one flag, `SKILL_DECLARED_TRIGGERS`**, read independently by
+    `skills_discovery.py` and `server.py` (this module stays dependency-free by contract). **Ships
+    OFF by default** (v0.55.0 release evidence found the gain too small — name-word top-3 35->36 —
+    to clear the precision bar on its own, since the dominant cause of name-word misses is
+    dense-only retrieval, which the keyword-trigger channel addresses; it stays pending a combined
+    gate with that channel in v0.56.0, keeping the index byte-identical and opening no new epoch)
+    — `SKILL_DECLARED_TRIGGERS=1` turns it on; `=0`/unset restores the byte-identical pre-fix text
+    and phrases.
   - **`search_skills` external-row complement (ADR-0075):** between installed and external-catalog
     rows, via two SEPARATE queries (`_installed_only_filter`/`_external_only_filter`, mirroring the
     enforcer's `_retrieve`/`_retrieve_external`) fused per tier by the existing `_fuse_ranked`, then

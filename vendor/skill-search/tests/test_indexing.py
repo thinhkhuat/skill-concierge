@@ -99,16 +99,22 @@ def test_split_phrases_drops_do_not_use_exclusion_sentence(monkeypatch):
     assert any("plan roadmaps across teams" in p.lower() for p in out)
 
 
-def test_split_phrases_flag_off_keeps_exclusion_sentence_byte_identical(monkeypatch):
-    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", False)
+def test_split_phrases_flag_off_keeps_exclusion_sentence_byte_identical():
+    """No monkeypatch: SKILL_DECLARED_TRIGGERS ships OFF by default (v0.55.0), so this
+    covers the actual default, not merely an explicit override."""
+    assert server.SKILL_DECLARED_TRIGGERS is False
     desc = "Plan roadmaps and phases. Not for casual browsing or quick edits."
     out = server._split_phrases(desc)
     assert any("not for casual browsing" in p.lower() for p in out)
 
 
 # --- ADR-0074: declared list-form when_to_use trigger phrases -----------
+# The flag ships OFF by default (v0.55.0); every test below that means to exercise
+# the qualifying-list rule itself (as opposed to the flag-off short-circuit) turns
+# it on explicitly.
 
-def test_declared_trigger_phrases_from_qualifying_list():
+def test_declared_trigger_phrases_from_qualifying_list(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     s = {"name": "x", "description": "does alpha", "when_to_use_items": [
         "setting up a new alpha pipeline", "debugging a failing alpha run",
         "auditing alpha coverage"]}
@@ -117,7 +123,8 @@ def test_declared_trigger_phrases_from_qualifying_list():
                    "auditing alpha coverage"]
 
 
-def test_declared_trigger_phrases_min_two_words_honored():
+def test_declared_trigger_phrases_min_two_words_honored(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     s = {"name": "x", "description": "d", "when_to_use_items": [
         "alpha", "setting up alpha", "debugging alpha", "auditing alpha"]}
     out = server._declared_trigger_phrases(s)
@@ -125,20 +132,23 @@ def test_declared_trigger_phrases_min_two_words_honored():
     assert out == ["setting up alpha", "debugging alpha", "auditing alpha"]
 
 
-def test_declared_trigger_phrases_capped_at_declared_trig_max():
+def test_declared_trigger_phrases_capped_at_declared_trig_max(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     items = [f"do alpha task {i}" for i in range(20)]
     s = {"name": "x", "description": "d", "when_to_use_items": items}
     out = server._declared_trigger_phrases(s)
     assert len(out) == server.DECLARED_TRIG_MAX == 8
 
 
-def test_declared_trigger_phrases_below_min_items_yields_none():
+def test_declared_trigger_phrases_below_min_items_yields_none(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     s = {"name": "x", "description": "d",
          "when_to_use_items": ["setting up alpha", "debugging alpha"]}   # only 2
     assert server._declared_trigger_phrases(s) == []
 
 
-def test_declared_trigger_phrases_median_too_long_yields_none():
+def test_declared_trigger_phrases_median_too_long_yields_none(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     # Median item length > 5 words: this is a body outline, not trigger phrases.
     s = {"name": "x", "description": "d", "when_to_use_items": [
         "the user needs to configure the whole pipeline end to end",
@@ -147,8 +157,9 @@ def test_declared_trigger_phrases_median_too_long_yields_none():
     assert server._declared_trigger_phrases(s) == []
 
 
-def test_declared_trigger_phrases_flag_off_yields_none(monkeypatch):
-    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", False)
+def test_declared_trigger_phrases_flag_off_yields_none():
+    """No monkeypatch: covers the actual default (OFF, v0.55.0)."""
+    assert server.SKILL_DECLARED_TRIGGERS is False
     s = {"name": "x", "description": "d", "when_to_use_items": [
         "setting up alpha", "debugging alpha", "auditing alpha"]}
     assert server._declared_trigger_phrases(s) == []
@@ -157,6 +168,7 @@ def test_declared_trigger_phrases_flag_off_yields_none(monkeypatch):
 def test_declared_phrases_never_evict_curated_or_description_slots(monkeypatch):
     """Declared phrases get their OWN budget, layered AFTER the base cap — they can
     only ADD slots, never displace a curated/description/body phrase already there."""
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     monkeypatch.setattr(server, "SKILL_BODY_TRIGGERS", False)
     monkeypatch.setattr(server, "SKILL_LLM_TRIGGERS", False)
     monkeypatch.setattr(server, "_curated_phrases", lambda name: ["a top curated phrase here"])
@@ -173,7 +185,8 @@ def test_declared_phrases_never_evict_curated_or_description_slots(monkeypatch):
     assert len(with_declared) == server._TRIG_MAX + 3
 
 
-def test_declared_phrases_deduped_and_order_preserved():
+def test_declared_phrases_deduped_and_order_preserved(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
     s = {"name": "x", "description": "d", "when_to_use_items": [
         "setting up alpha now", "Setting Up Alpha Now", "debugging alpha issues"]}
     out = server._declared_trigger_phrases(s)

@@ -531,9 +531,14 @@ def _unwrap_scalar(raw: str) -> str:
 # ADR-0074: declared trigger phrases from a genuinely LIST-shaped when_to_use.
 # Kept OUT of server.py's SKILL_DECLARED_TRIGGERS import — this module is dependency-free
 # by contract, so it reads its own copy of the flag directly (the same pattern
-# SKILL_TRIGGER_PURITY already uses above). Default ON; =0 + reindex restores the
-# byte-identical pre-fix text everywhere this flag is read (here AND in server.py).
-SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "1") != "0"
+# SKILL_TRIGGER_PURITY already uses above).
+#
+# Default OFF (v0.55.0): ships off pending a combined gate with the keyword-trigger
+# channel in v0.56.0 (release-evidence finding — see server.py's copy of this flag for
+# the reasoning); code and constants unchanged. SKILL_DECLARED_TRIGGERS=1 + reindex turns
+# it on and restores the fixed text everywhere this flag is read (here AND in server.py);
+# =0/unset (the default) keeps the byte-identical pre-fix text.
+SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "0") != "0"
 
 # A YAML block-sequence item line: optional indent (already stripped by the caller),
 # "-", required whitespace, the item text.

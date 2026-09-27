@@ -126,10 +126,18 @@ SKILL_LLM_TRIGGERS = os.environ.get("SKILL_LLM_TRIGGERS", "0") != "0"
 # ADR-0074: drop exclusion sentences from _split_phrases' output, and promote a
 # genuinely LIST-shaped when_to_use (skills_discovery.parse_skill's
 # when_to_use_items) into its own declared trigger phrases. One flag covers both
-# mechanical description-phrase fixes. Default ON; SKILL_DECLARED_TRIGGERS=0 + reindex
-# restores the byte-identical pre-fix phrase list (exclusion sentences kept as positive
-# triggers, when_to_use list items glued into one diluted phrase).
-SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "1") != "0"
+# mechanical description-phrase fixes.
+#
+# Default OFF (release-evidence finding, v0.55.0): the release-shape evidence found the
+# gain from these two fixes too small (name-word top-3 35->36) to clear the precision bar
+# on its own — the dominant cause of name-word misses is dense-only retrieval, which the
+# keyword-trigger channel addresses. It ships off, keeping the index byte-identical and
+# opening no new epoch, pending a combined gate with that channel in v0.56.0. Code, tests,
+# and every constant here are unchanged; SKILL_DECLARED_TRIGGERS=1 + reindex turns it back
+# on for local evaluation. When off, restores the byte-identical pre-fix phrase list
+# (exclusion sentences kept as positive triggers, when_to_use list items glued into one
+# diluted phrase).
+SKILL_DECLARED_TRIGGERS = os.environ.get("SKILL_DECLARED_TRIGGERS", "0") != "0"
 # ADR-0074 findability sweep hook (build_index, see _launch_findability_sweep): fires a
 # detached `python -m skill_search.findability --sweep` whenever a reindex actually
 # changed the index. SKILL_FINDABILITY=0 disables it.
