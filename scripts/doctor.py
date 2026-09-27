@@ -2231,11 +2231,47 @@ def check_keepoff():
             "fix": "keepoff"}
 
 
+def check_findability():
+    """ADR-0074 findability ratchet (v0.55.0). Doctor only READS the JSON the detached,
+    throttled `python -m skill_search.findability --sweep` writes after an index-changing
+    reindex — this check never sweeps, never talks to the owner, and never spends an
+    embed/LLM call. An absent file is the healthy "nothing has changed the index yet, or
+    the plugin was just installed" state, not a defect."""
+    path = Path(os.environ.get(
+        "SKILL_FINDABILITY_PATH", Path.home() / ".claude" / "skill-concierge" / "findability.json"))
+    if not path.exists():
+        return {"id": "findability", "label": "Findability", "status": OK,
+                "detail": "not yet swept (runs after the next index-changing reindex)",
+                "fix": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except JSON_READ_ERRORS:
+        return {"id": "findability", "label": "Findability", "status": WARN,
+                "detail": f"{path} unreadable/malformed — re-swept on the next "
+                          "index-changing reindex", "fix": None}
+    if not isinstance(data, dict):
+        return {"id": "findability", "label": "Findability", "status": WARN,
+                "detail": f"{path} has an unexpected shape — re-swept on the next reindex",
+                "fix": None}
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(data.get("swept_at", 0) or 0))
+    backlog = data.get("backlog", "?")
+    warnings = data.get("warnings") or []
+    if warnings:
+        shown = "; ".join(str(w) for w in warnings[:5])
+        more = f" (+{len(warnings) - 5} more)" if len(warnings) > 5 else ""
+        return {"id": "findability", "label": "Findability", "status": WARN,
+                "detail": f"{len(warnings)} warning(s): {shown}{more} — backlog {backlog}, "
+                          f"swept {when}", "fix": None}
+    return {"id": "findability", "label": "Findability", "status": OK,
+            "detail": f"backlog {backlog} skill(s) not top-3 for their own name word, "
+                      f"swept {when}", "fix": None}
+
+
 CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine,
           check_mcp_wiring, check_owner, check_owner_ports, check_owner_log, check_embed_parity,
           check_engine_health, check_multivector, check_prompt_intent,
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
-          check_blocklist, check_keepoff,
+          check_blocklist, check_keepoff, check_findability,
           check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
           check_claude_code, check_dsh, check_cline,
           check_ledger, check_dup_mcp, check_mcp_enabled]
