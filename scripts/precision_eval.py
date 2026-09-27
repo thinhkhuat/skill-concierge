@@ -312,16 +312,33 @@ def _enforcer_for(cal, qdrant_url: str, embed_port: int):
     return cal.load_enforcer()
 
 
+def _server_for(engine_root: Path):
+    """A fresh `skill_search.server` loaded from `engine_root`'s OWN vendor/skill-search, so a
+    BASE checkout that predates the ADR-0075 installed/external complement rule (X) genuinely
+    lacks `_search_complement_on`/`_arrange_tiers` — `search_skills_rank` detects that absence
+    and falls back to the pre-X plain shape, rather than this script guessing which side has
+    the mechanism. No network state to bake in: `_scope_filter`/`_installed_only_filter`/
+    `_external_only_filter`/`_arrange_tiers`/`_search_complement_on` take the query URL as an
+    explicit argument (via `findability.py`'s `_query_groups`) or read a live env flag, never a
+    module-level owner URL. `skills_discovery` still resolves through the normal import system
+    (whichever copy is first on sys.path), which is immaterial here: none of the functions this
+    is used for reads skill CONTENT, only harness-root CONFIG."""
+    return _load_module(f"precision_eval_server_{engine_root}",
+                        engine_root / "vendor" / "skill-search" / "skill_search" / "server.py")
+
+
 def _mcp_rank(fnd, embed_cache: dict, embed_base: str, query_base: str, collection: str,
-             scope_filter, text: str, target: str, depth: int) -> int:
-    """The MCP-view rank of `target` for `text`, via `skill_search.findability`'s own
-    name-word probe machinery (never re-embedded twice for the same (embed_base, text) —
-    a free win when --candidate-url defaults to --base-url)."""
+             scope_filter, srv, text: str, target: str, depth: int) -> int:
+    """The MCP-view rank of `target` for `text`, exactly as `search_skills()` on THIS `srv`
+    instance would return it (`skill_search.findability.search_skills_rank` — the complement
+    arrangement when `srv` carries X and it is on, else the pre-X plain shape). Never re-
+    embedded twice for the same (embed_base, text) — a free win when --candidate-url defaults
+    to --base-url."""
     key = (embed_base, text)
     if key not in embed_cache:
         embed_cache[key] = fnd._owner_embed(embed_base, text)
-    rank, _winner = fnd.name_word_rank(query_base, collection, scope_filter,
-                                       embed_cache[key], target, depth)
+    rank, _winner = fnd.search_skills_rank(query_base, collection, scope_filter, srv,
+                                           embed_cache[key], target, depth)
     return rank
 
 
@@ -422,12 +439,18 @@ def run_findability(args) -> int:
 
     enf_base = _enforcer_for(cal, base_url, base_port)
     enf_cand = _enforcer_for(cal, cand_url, cand_port)
+    # `srv` (this script's OWN skill_search.server) governs the candidate side by construction
+    # — this script IS the candidate's code. The base side gets its OWN instance only when
+    # --base-engine-root names a different checkout (e.g. origin/main, which predates the
+    # ADR-0075 installed/external complement rule); absent that flag, base is assumed to run
+    # the SAME code (the --mode findability self-check with no flags at all).
+    srv_base = _server_for(args.base_engine_root) if args.base_engine_root else srv
     scope_filter = srv._scope_filter()
     embed_cache = {}
 
-    def rank(embed_base, query_base, text, target, depth):
+    def rank(embed_base, query_base, srv_side, text, target, depth):
         return _mcp_rank(fnd, embed_cache, embed_base, query_base, args.collection,
-                         scope_filter, text, target, depth)
+                         scope_filter, srv_side, text, target, depth)
 
     print(f"\nfindability eval (ADR-0074)  base={base_url} embed=:{base_port}  "
           f"candidate={cand_url} embed=:{cand_port}  collection={args.collection}")
@@ -443,8 +466,8 @@ def run_findability(args) -> int:
         tok = fnd.probe_token(s["name"], df)
         if tok is None:
             continue
-        br = rank(base_embed, base_url, tok, s["name"], fnd.NAME_RANK_DEPTH)
-        cr = rank(cand_embed, cand_url, tok, s["name"], fnd.NAME_RANK_DEPTH)
+        br = rank(base_embed, base_url, srv_base, tok, s["name"], fnd.NAME_RANK_DEPTH)
+        cr = rank(cand_embed, cand_url, srv, tok, s["name"], fnd.NAME_RANK_DEPTH)
         w_rows.append({"skill": s["name"], "token": tok, "base_rank": br, "cand_rank": cr})
     w_result = w_bar(w_rows)
     print(f"W: {len(w_rows)} probes  base top-3 {w_result['base_top3']}  "
@@ -458,8 +481,8 @@ def run_findability(args) -> int:
     c_sets, d_sets = _cd_pairs(cal, enf_base, args.corpus)
     cd_results = {}
     for label, pairs in (("C", c_sets["en"]), ("D", d_sets["en"])):
-        base_mcp = [rank(base_embed, base_url, q, t, N_RANK_DEPTH) <= 6 for q, t in pairs]
-        cand_mcp = [rank(cand_embed, cand_url, q, t, N_RANK_DEPTH) <= 6 for q, t in pairs]
+        base_mcp = [rank(base_embed, base_url, srv_base, q, t, N_RANK_DEPTH) <= 6 for q, t in pairs]
+        cand_mcp = [rank(cand_embed, cand_url, srv, q, t, N_RANK_DEPTH) <= 6 for q, t in pairs]
         base_enf = [_enforcer_hit6(enf_base, q, t) for q, t in pairs]
         cand_enf = [_enforcer_hit6(enf_cand, q, t) for q, t in pairs]
         cd_results[f"{label}_mcp"] = cd_bar(base_mcp, cand_mcp)
@@ -476,8 +499,8 @@ def run_findability(args) -> int:
     n_pairs = _n_pairs(installed_names)
     violations = []
     for skill, text in n_pairs:
-        br = rank(base_embed, base_url, text, skill, N_RANK_DEPTH)
-        cr = rank(cand_embed, cand_url, text, skill, N_RANK_DEPTH)
+        br = rank(base_embed, base_url, srv_base, text, skill, N_RANK_DEPTH)
+        cr = rank(cand_embed, cand_url, srv, text, skill, N_RANK_DEPTH)
         if br > 3 and cr <= 3:
             violations.append({"skill": skill, "query": text, "base_rank": br, "cand_rank": cr})
     recall_gains = (sum(1 for r in w_rows if r["base_rank"] > 3 and r["cand_rank"] <= 3)
@@ -494,13 +517,14 @@ def run_findability(args) -> int:
 
     # ---- G ----
     g_applicable = GDELT_SKILL in installed_names
-    g_ranks = ([rank(cand_embed, cand_url, q, GDELT_SKILL, N_RANK_DEPTH)
+    g_ranks = ([rank(cand_embed, cand_url, srv, q, GDELT_SKILL, N_RANK_DEPTH)
                for q in GDELT_NAME_QUERIES] if g_applicable else [])
     g_result = g_bar(g_ranks) if g_applicable else {"ranks": [], "passed": True}
     if g_applicable:
-        g_base_ranks = [rank(base_embed, base_url, q, GDELT_SKILL, N_RANK_DEPTH)
+        g_base_ranks = [rank(base_embed, base_url, srv_base, q, GDELT_SKILL, N_RANK_DEPTH)
                         for q in GDELT_NAME_QUERIES]
-        g_para_rank = rank(cand_embed, cand_url, GDELT_PARAPHRASE_QUERY, GDELT_SKILL, N_RANK_DEPTH)
+        g_para_rank = rank(cand_embed, cand_url, srv, GDELT_PARAPHRASE_QUERY, GDELT_SKILL,
+                          N_RANK_DEPTH)
         print(f"G (name, #1 bar): base {g_base_ranks} -> candidate {g_ranks}  "
               f"-> {'PASS' if g_result['passed'] else 'FAIL'}")
         print(f"G (paraphrase, F3's territory — reported only, never gated): "
@@ -545,6 +569,12 @@ def main():
     ap.add_argument("--candidate-embed-port", type=int, default=None,
                     help="findability mode: the CANDIDATE owner's embed port "
                          "(default: same as --base-embed-port)")
+    ap.add_argument("--base-engine-root", type=Path, default=None,
+                    help="findability mode: repo root whose vendor/skill-search/server.py the "
+                         "BASE owner is actually running, when it differs from this script's "
+                         "own code (e.g. origin/main, pre-ADR-0075) — lets the MCP-view rank "
+                         "correctly detect that BASE has no installed/external complement rule "
+                         "to apply. Default: assume BASE runs the same code as this script.")
     ap.add_argument("--collection", default=os.environ.get("SKILL_COLLECTION", "claude_skills"),
                     help="findability mode: the collection name on BOTH owners")
     ap.add_argument("--corpus", type=Path, default=REAL_TURN_CORPUS,

@@ -262,6 +262,54 @@ def name_word_rank(query_base: str, collection: str, scope_filter: dict, vector:
     return depth + 1, winner
 
 
+def _tier_rows(groups: list) -> list:
+    """[{"name","score"}] from a groups response — the row shape `srv._arrange_tiers` expects."""
+    rows = []
+    for g in groups:
+        hits = g.get("hits") or []
+        if hits:
+            rows.append({"name": g.get("id"), "score": float(hits[0].get("score", 0.0))})
+    return rows
+
+
+def complement_rank(query_base: str, collection: str, srv, vector: list, name: str,
+                    depth: int = NAME_RANK_DEPTH) -> tuple:
+    """(rank, winner) as `search_skills()` ACTUALLY ranks it once the ADR-0075 installed/
+    external complement rule (X) ships: two separate queries (`srv._installed_only_filter`/
+    `srv._external_only_filter`), each ranked to `depth`, then arranged by `srv._arrange_tiers`
+    — the SAME functions `search_skills()` itself calls, reused rather than re-derived, just
+    at a depth deeper than its own hardcoded TOP_K so a rank beyond the visible offer is still
+    measured. Callers must gate this on the loaded `srv` actually carrying that machinery AND
+    having it turned on (`search_skills_rank` does this automatically); calling it against a
+    pre-X `srv` raises AttributeError on purpose — there is no reasonable arrangement to fall
+    back to from inside this function without silently hiding that the code it was asked to
+    measure does not exist."""
+    inst = _tier_rows(_query_groups(query_base, collection, vector, "name", depth,
+                                    group_size=1, filt=srv._installed_only_filter()))
+    ext = _tier_rows(_query_groups(query_base, collection, vector, "name", depth,
+                                   group_size=1, filt=srv._external_only_filter()))
+    arranged = srv._arrange_tiers(inst, ext, depth)
+    winner = arranged[0]["name"] if arranged else None
+    for i, row in enumerate(arranged, 1):
+        if row["name"] == name:
+            return i, winner
+    return depth + 1, winner
+
+
+def search_skills_rank(query_base: str, collection: str, scope_filter: dict, srv, vector: list,
+                       name: str, depth: int = NAME_RANK_DEPTH) -> tuple:
+    """(rank, winner) matching whatever `search_skills()` ACTUALLY does for this `srv` instance:
+    the ADR-0075 complement arrangement (`complement_rank`) when `srv` carries it and it is
+    turned on, else the plain single-query shape every release before X used
+    (`name_word_rank`). Measuring a pre-X owner (or X switched off) through the plain shape and
+    a post-X owner through the complement shape is not an inconsistency to paper over — it is
+    the one honest way to compare what `search_skills()` truly returns on each side, which is
+    the whole point of a base-vs-candidate rank comparison."""
+    if getattr(srv, "_search_complement_on", lambda: False)():
+        return complement_rank(query_base, collection, srv, vector, name, depth)
+    return name_word_rank(query_base, collection, scope_filter, vector, name, depth)
+
+
 def own_phrase_score(query_base: str, collection: str, name: str, points: list) -> float | None:
     """Fraction of `name`'s own trigger points (leave-one-out, installed-only) for which its
     group still lands in the top TOPN_OWNPHRASE. None when the skill has no trigger points."""
@@ -386,7 +434,8 @@ def _run_sweep(enf, sd, srv, query_base: str, embed_base: str, collection: str) 
         tok = probe_token(name, df)
         if tok is not None:
             vector = _owner_embed(embed_base, tok)
-            rank, winner = name_word_rank(query_base, collection, scope_filter, vector, name)
+            rank, winner = search_skills_rank(query_base, collection, scope_filter, srv,
+                                              vector, name)
             entry["name_word"] = {"token": tok, "rank": rank, "winner": winner}
         points = _scroll_trigger_points(query_base, collection, name)
         score = own_phrase_score(query_base, collection, name, points)

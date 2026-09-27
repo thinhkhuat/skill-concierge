@@ -331,5 +331,86 @@ def test_name_word_rank_beyond_depth_is_depth_plus_one(owner_factory):
     assert rank == 6           # not found within depth=5 -> depth + 1
 
 
+# ── complement_rank / search_skills_rank (ADR-0075 integration: search_skills() itself
+# arranges installed-before-external via TWO separate queries, which a single mixed-tier
+# groups query — name_word_rank's own shape — can never observe) ──────────────────────────
+def _allow_catalog(monkeypatch, alias):
+    """`_scope_filter`'s "should" list only admits a catalog scope this session's config
+    actually names (conftest pins `SKILL_CONCIERGE_CATALOG_ROOTS` to a nonexistent path, so
+    every catalog scope is invisible by default) — the same seam the engine suite's own 6
+    catalog tests monkeypatch, applied here so a seeded external-tier point is not silently
+    filtered out before it ever reaches the complement arrangement."""
+    from skill_search import skills_discovery as sd
+    monkeypatch.setattr(sd, "catalog_roots", lambda: {alias: f"/tmp/{alias}"})
+
+
+def test_complement_rank_keeps_installed_first_when_no_external_beats_the_margin(owner_factory, monkeypatch):
+    from skill_search import server as srv
+    monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
+    _allow_catalog(monkeypatch, "x")
+    o = owner_factory().wait_ready()
+    seed(o, [
+        pt(1, "target", vec(0.8, 0.2), scope="personal"),
+        pt(2, "ext-close", vec(0.83, 0.17), scope="catalog:x", tier="external"),  # < 0.04: stays below
+        pt(3, "ext-far", vec(0.1, 0.9), scope="catalog:x", tier="external"),
+    ])
+    rank, winner = fnd.complement_rank(o.url, "t", srv, vec(0.8, 0.2), "target", depth=10)
+    assert rank == 1 and winner == "target"    # installed always leads unless beaten by ANNEX_BEAT
+
+
+def test_complement_rank_lets_a_strong_external_lead(owner_factory, monkeypatch):
+    from skill_search import server as srv
+    monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
+    monkeypatch.setenv("ENFORCER_ANNEX_BEAT", "0.04")
+    _allow_catalog(monkeypatch, "x")
+    o = owner_factory().wait_ready()
+    seed(o, [
+        pt(1, "target", vec(0.5, 0.5), scope="personal"),
+        pt(2, "dominant-ext", vec(0.99, 0.01), scope="catalog:x", tier="external"),  # beats the margin
+    ])
+    # query near "dominant-ext": it must render ABOVE the installed target, still findable
+    rank, winner = fnd.complement_rank(o.url, "t", srv, vec(0.95, 0.05), "target", depth=10)
+    assert winner == "dominant-ext" and rank == 2
+
+
+def test_search_skills_rank_falls_back_to_plain_shape_without_the_complement_machinery(owner_factory):
+    """A pre-ADR-0075 `srv` (no _search_complement_on at all) must use the plain single-query
+    shape — the exact case a BASE checkout that predates X hits."""
+    o = owner_factory().wait_ready()
+    seed(o, [pt(1, "winner", vec(0, 1)), pt(2, "target", vec(0.1, 0.9))])
+
+    class NoComplementServer:
+        pass
+
+    rank, winner = fnd.search_skills_rank(o.url, "t", None, NoComplementServer(), vec(0, 1),
+                                          "target", depth=10)
+    assert rank == 2 and winner == "winner"
+
+
+def test_search_skills_rank_uses_the_complement_shape_when_srv_has_it_and_it_is_on(owner_factory, monkeypatch):
+    from skill_search import server as srv
+    monkeypatch.delenv("SKILL_SEARCH_COMPLEMENT", raising=False)
+    _allow_catalog(monkeypatch, "x")
+    o = owner_factory().wait_ready()
+    seed(o, [
+        pt(1, "target", vec(0.5, 0.5), scope="personal"),
+        pt(2, "dominant-ext", vec(0.99, 0.01), scope="catalog:x", tier="external"),
+    ])
+    rank, winner = fnd.search_skills_rank(o.url, "t", None, srv, vec(0.95, 0.05),
+                                          "target", depth=10)
+    assert winner == "dominant-ext"    # only the complement shape can surface this
+
+
+def test_search_skills_rank_respects_the_flag_being_off(owner_factory, monkeypatch):
+    """SKILL_SEARCH_COMPLEMENT=0 must fall back to the plain shape even though `srv` carries
+    the machinery — search_skills_rank reads the LIVE flag, never just attribute presence."""
+    from skill_search import server as srv
+    monkeypatch.setenv("SKILL_SEARCH_COMPLEMENT", "0")
+    o = owner_factory().wait_ready()
+    seed(o, [pt(1, "winner", vec(0, 1)), pt(2, "target", vec(0.1, 0.9))])
+    rank, winner = fnd.search_skills_rank(o.url, "t", None, srv, vec(0, 1), "target", depth=10)
+    assert rank == 2 and winner == "winner"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
