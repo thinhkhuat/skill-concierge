@@ -1,16 +1,19 @@
 """adapters/{claude-code,codex,omp,zcode}/install.sh share one `_export_to` helper that
-stages an export beside its destination (`mktemp -d "$parent/.staging.XXXXXX"`) before
+stages an export beside its destination (`mktemp -d "$parent/.skill-concierge-staging.XXXXXX"`) before
 swapping it in. A run killed between the `mktemp` and the final `mv` used to leave that
 staging dir behind forever — nothing removed it. `_export_to` must now remove its own
-staging dir on a normal exit, on EXIT/INT/TERM, and prune any stale `.staging.*` dir left
+staging dir on a normal exit, on EXIT/INT/TERM, and prune any stale `.skill-concierge-staging.*` dir left
 over from an earlier killed run before it stages a new one."""
 import json
+import os
 import shutil
 import signal
 import subprocess
 import time
 from pathlib import Path
 
+import test_codex_installer as cx
+import test_sibling_installers as sib
 from installer_env import installer_env
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,7 +171,7 @@ def test_an_export_that_fails_partway_leaves_no_staging_dir_behind(tmp_path):
     r = subprocess.run(["bash", str(INSTALL_SH["claude-code"]), "--root", str(repo)],
                        env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode != 0, r.stdout + r.stderr
-    assert not list(cache_base.glob(".staging.*")), \
+    assert not list(cache_base.glob(".skill-concierge-staging.*")), \
         "a failed export must not leave its (even partially populated) staging dir behind"
     assert not (cache_base / "2.0.0").exists(), "a failed export must never land at the destination"
 
@@ -176,16 +179,15 @@ def test_an_export_that_fails_partway_leaves_no_staging_dir_behind(tmp_path):
 def test_a_stale_staging_dir_is_pruned_while_a_fresh_one_is_left_alone(tmp_path):
     """Only a staging dir older than 60 minutes is abandoned-run debris; anything newer
     could belong to a run genuinely still in flight and must not be touched."""
-    import os
     repo = _make_repo(tmp_path, "2.0.0")
     home, cache_base = _seed_claude_home(tmp_path, installed_version="1.9.0")
     cache_base.mkdir(parents=True, exist_ok=True)
-    stale = cache_base / ".staging.stale01"
+    stale = cache_base / ".skill-concierge-staging.stale01"
     stale.mkdir()
     (stale / "leftover.txt").write_text("from a killed run")
     old_time = time.time() - 3700   # > 60 minutes old
     os.utime(stale, (old_time, old_time))
-    fresh = cache_base / ".staging.fresh01"
+    fresh = cache_base / ".skill-concierge-staging.fresh01"
     fresh.mkdir()
     (fresh / "still-going.txt").write_text("a run that could still be in flight")
 
@@ -212,7 +214,7 @@ def test_a_signal_killed_export_leaves_no_staging_dir_behind(tmp_path):
         stage = None
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            hits = list(cache_base.glob(".staging.*"))
+            hits = list(cache_base.glob(".skill-concierge-staging.*"))
             if hits:
                 stage = hits[0]
                 break
@@ -230,7 +232,7 @@ def test_a_signal_killed_export_leaves_no_staging_dir_behind(tmp_path):
             proc.wait(timeout=15)
 
     assert proc.returncode != 0
-    assert not list(cache_base.glob(".staging.*")), "a killed export must not leave its staging dir behind"
+    assert not list(cache_base.glob(".skill-concierge-staging.*")), "a killed export must not leave its staging dir behind"
     assert not (cache_base / "2.0.0").exists(), "an interrupted export must never land at the destination"
 
 
@@ -242,6 +244,102 @@ def test_a_successful_export_leaves_no_staging_dir_behind(tmp_path):
     r = subprocess.run(["bash", str(INSTALL_SH["claude-code"]), "--root", str(repo)],
                        env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert not list(cache_base.glob(".staging.*")), \
+    assert not list(cache_base.glob(".skill-concierge-staging.*")), \
         "a successful export must swap its staging dir into place, not leave it behind"
     assert (cache_base / "2.0.0" / "bin" / "skill-search-mcp").exists()
+
+
+def test_omp_stale_prune_only_touches_our_own_prefix_not_a_foreign_tool(tmp_path):
+    """The OMP cache parent (~/.omp/plugins/cache/plugins) is shared by every OMP
+    plugin, not just this one — a bare `.staging.*` prune glob there could delete
+    another tool's own staging dir. The prefix is skill-concierge-specific so the
+    prune can never match anything else, while our own stale dir is still pruned."""
+    repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+    home, cache_dir = sib._seed_omp_home_with_cache(tmp_path, version="1.9.0")
+    cache_base = cache_dir.parent   # shared by every OMP plugin's own cache dir
+
+    foreign = cache_base / ".staging.some-other-omp-plugin"
+    foreign.mkdir()
+    (foreign / "not-ours.txt").write_text("belongs to a different OMP plugin's own staging dir")
+    old_time = time.time() - 3700   # > 60 minutes old
+    os.utime(foreign, (old_time, old_time))
+
+    ours_stale = cache_base / ".skill-concierge-staging.stale01"
+    ours_stale.mkdir()
+    os.utime(ours_stale, (old_time, old_time))
+
+    r = sib._run_omp(tmp_path, repo, home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert foreign.exists(), "a foreign tool's own staging dir must never be pruned"
+    assert not ours_stale.exists(), "our own stale staging dir must still be pruned"
+
+
+# ── Sibling kill tests: the same signal-kill proof as claude-code (above), for the
+# three installers the rest of the suite only string-checks. Adapted from the reviewer's
+# scratch reproduction (fails 3/3 on the pre-fix installers, passes 3/3 on HEAD). ──────────
+
+def _kill_during_export(argv, env, cache_base, timeout=30):
+    proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stage = None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            hits = list(cache_base.glob(".skill-concierge-staging.*")) if cache_base.exists() else []
+            if hits:
+                stage = hits[0]
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(0.02)
+        assert stage is not None and stage.is_dir(), "the export never reached the staging step"
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=timeout)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=timeout)
+    return proc.returncode
+
+
+def test_a_signal_killed_zcode_export_leaves_no_staging_dir_behind(tmp_path):
+    repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+    home = sib._seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=tmp_path / "irrelevant")
+    dest_dir = repo / "adapters" / "zcode"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(INSTALL_SH["zcode"], dest_dir / "install.sh")
+    env = installer_env(tmp_path, home, _slow_git_dir(tmp_path))
+    cache = home / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+
+    rc = _kill_during_export(["bash", str(dest_dir / "install.sh")], env, cache)
+    assert rc != 0
+    assert not list(cache.glob(".skill-concierge-staging.*"))
+    assert not (cache / "2.0.0").exists()
+
+
+def test_a_signal_killed_omp_export_leaves_no_staging_dir_behind(tmp_path):
+    repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+    home, _ = sib._seed_omp_home_with_cache(tmp_path, version="1.9.0")
+    env = installer_env(tmp_path, home, _slow_git_dir(tmp_path))
+    cache = home / ".omp" / "plugins" / "cache" / "plugins"
+
+    rc = _kill_during_export(["bash", str(INSTALL_SH["omp"]), "--root", str(repo)], env, cache)
+    assert rc != 0
+    assert not list(cache.glob(".skill-concierge-staging.*"))
+    reg = json.loads((home / ".omp" / "plugins" / "installed_plugins.json").read_text())
+    assert reg["plugins"]["skill-concierge@skill-concierge"][0]["version"] == "1.9.0", \
+        "a killed export must never repoint the registry"
+
+
+def test_a_signal_killed_codex_export_leaves_no_staging_dir_behind(tmp_path):
+    # A marketplace remote below SSOT forces the git-archive fallback (the export this
+    # test kills); the fake `codex add` still runs first and needs a real enforcer.py.
+    home, fakebin = cx._make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                             "remote_version": "0.45.0"})
+    env = installer_env(tmp_path, home, _slow_git_dir(tmp_path), fakebin,
+                        FAKE_CODEX_ENFORCER_SRC=str(cx.ENFORCER_SRC))
+    cache = cx._cache_root(home)
+
+    rc = _kill_during_export(["bash", str(cx.INSTALLER)], env, cache)
+    assert rc != 0
+    assert not list(cache.glob(".skill-concierge-staging.*"))
+    assert not (cache / cx.SSOT_VERSION).exists()

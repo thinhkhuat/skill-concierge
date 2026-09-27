@@ -105,8 +105,8 @@ _export_to() {
   local dest="$1" parent base stage old
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
   mkdir -p "$parent"
-  find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-  stage="$(mktemp -d "$parent/.staging.XXXXXX")"
+  find "$parent" -maxdepth 1 -name '.skill-concierge-staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  stage="$(mktemp -d "$parent/.skill-concierge-staging.XXXXXX")"
   trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
   if _is_own_checkout; then
     if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then

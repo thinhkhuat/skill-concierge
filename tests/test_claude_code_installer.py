@@ -418,7 +418,7 @@ def test_fallback_replaces_the_tree_and_keeps_the_old_one_aside(tmp_path):
     assert oct(dest.stat().st_mode & 0o777) == oct(0o755)
     aside = [d for d in dest.parent.iterdir() if ".replaced-" in d.name]
     assert len(aside) == 1 and aside[0].name.startswith(".2.0.0.replaced-") and (aside[0] / "stale.txt").exists()
-    assert not [d for d in dest.parent.iterdir() if d.name.startswith(".staging.")]
+    assert not [d for d in dest.parent.iterdir() if d.name.startswith(".skill-concierge-staging.")]
 
 
 def test_the_registry_symlink_and_its_mode_are_kept(tmp_path):

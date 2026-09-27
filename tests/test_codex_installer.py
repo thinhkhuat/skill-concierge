@@ -662,7 +662,7 @@ def test_a_failed_export_leaves_no_staging_dir(tmp_path):
     tar.chmod(0o755)
     result = _run(_env(home, fakebin))
     assert result.returncode == 1 and "failed (see above)" in result.stderr, result.stdout + result.stderr
-    assert not [d for d in _cache_root(home).iterdir() if d.name.startswith(".staging.")]
+    assert not [d for d in _cache_root(home).iterdir() if d.name.startswith(".skill-concierge-staging.")]
 
 
 def test_heads_two_manifests_must_agree(tmp_path):
