@@ -1,7 +1,7 @@
 """scripts/git_stash_guard.py — the PreToolUse(Bash) gate that denies, by default, any
 `git stash` invocation that can change state (owner rule: no git stash; added directly in
-response to two accidental uses during v0.54.2 release work, then hardened after a round-3
-adversarial review found several forms that tokenize as `git ... stash` but slipped past the
+response to two accidental uses during v0.54.2 release work, then hardened to deny every
+form that tokenizes as a `git ... stash` invocation, since several such forms slipped past the
 first draft). Covers the draft's own `_selftest()` case list directly (import, not subprocess,
 for speed), one real end-to-end invocation through stdin — the exact shape Claude Code actually
 feeds a PreToolUse hook — and a real-git proof in a throwaway `/tmp` repo that the six
@@ -30,10 +30,9 @@ DENY_COMMANDS = [
     "/usr/bin/git stash", "\\git stash", "git-stash push -m x",
 ]
 
-# Round-3-review bypasses (code-reviewer-260927-2025-v0542-round3-delta.md, finding M-A):
-# each of these was confirmed, in a real scratch repo, to create a stash while the prior
-# draft allowed it. `test_confirmed_bypass_creates_a_real_stash_without_the_guard` proves
-# the first six (the reviewer's own headline list) really do stash; all are denied here.
+# Forms the first draft allowed although each creates a real stash (confirmed in a scratch
+# repo). `test_confirmed_bypass_creates_a_real_stash_without_the_guard` proves the six in
+# REQUIRED_BYPASS_COMMANDS really do stash; all are denied here.
 BYPASS_DENY_COMMANDS = [
     "git stash -m list", "git stash -m show", "git stash -- list",
     "(cd sub && git stash)", "(git stash)", "{ git stash; }",
@@ -42,7 +41,7 @@ BYPASS_DENY_COMMANDS = [
     "xargs git stash",
 ]
 
-# The six the reviewer named explicitly as MUST-deny proof points.
+# Six forms proven, in a scratch repo, to create a stash: each MUST be denied.
 REQUIRED_BYPASS_COMMANDS = [
     "git stash -m list", "git stash -- list", "(cd sub && git stash)",
     "if true; then git stash; fi", "time git stash", "git stash&",
@@ -156,7 +155,7 @@ def _stash_count(repo):
 @pytest.mark.parametrize("command", REQUIRED_BYPASS_COMMANDS)
 def test_confirmed_bypass_creates_a_real_stash_without_the_guard(command):
     """Proof, not a guard test: in a throwaway `/tmp` repo this test creates and deletes
-    (never a real repo or worktree), each of the reviewer's six confirmed bypasses is run
+    (never a real repo or worktree), each of the six confirmed bypass forms is run
     WITHOUT the guard in the way and really does create exactly one stash entry — the
     evidence `decide()` above is now denying, not a claim about the guard's own behavior."""
     repo = _make_scratch_repo()
