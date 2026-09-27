@@ -3,6 +3,23 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.55.2] — 2026-09-28
+
+### Fixed
+- **git-stash guard: one long option-like word could hold it past the hook timeout.** The 0.55.1 test
+  for a `-c` flag cluster used a pattern with a letter run on each side of the `c`, which backtracks
+  quadratically on a long word that holds no `c`: one 64,000-character word after a shell name took
+  11.8 s, past the 10 s hook timeout, and a timed-out hook lets the command run. The test is now a
+  plain linear check (0.04 s for the same word). A timed test covers a 100,000-character word.
+- **The 0.55.1 timing claim was overstated.** The work cap bounds the work the guard charges for, but
+  Python's own word splitter (`shlex`) is still quadratic in the length of a single word, as it was in
+  0.55.0: one word close to the cap takes about 6.5 s, still inside the 10 s timeout. Commands built
+  from ordinary words stay near one second at worst.
+
+### Docs
+- AGENTS.md (Guardrails, the `git stash` bullet) documents the `-c` and `eval` checks, the too-complex
+  denial, and that a heredoc body mentioning the command is denied (write that text to a file first).
+
 ## [0.55.1] — 2026-09-27
 
 ### Fixed
