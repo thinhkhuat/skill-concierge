@@ -80,6 +80,106 @@ def test_trigger_phrases_combined_cap_respects_trig_max(monkeypatch):
     assert len(server._trigger_phrases(s)) <= server._TRIG_MAX
 
 
+# --- ADR-0074: exclusion sentences never become positive triggers -------
+
+def test_split_phrases_drops_not_for_exclusion_sentence(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
+    desc = "Plan roadmaps and phases. Not for casual browsing or quick edits."
+    out = server._split_phrases(desc)
+    assert "Plan roadmaps and phases" in out
+    assert not any("not for" in p.lower() for p in out)
+    assert not any("casual browsing" in p.lower() for p in out)
+
+
+def test_split_phrases_drops_do_not_use_exclusion_sentence(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", True)
+    desc = "Do NOT use for casual chit chat. Plan roadmaps across teams properly now."
+    out = server._split_phrases(desc)
+    assert not any("chit chat" in p.lower() for p in out)
+    assert any("plan roadmaps across teams" in p.lower() for p in out)
+
+
+def test_split_phrases_flag_off_keeps_exclusion_sentence_byte_identical(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", False)
+    desc = "Plan roadmaps and phases. Not for casual browsing or quick edits."
+    out = server._split_phrases(desc)
+    assert any("not for casual browsing" in p.lower() for p in out)
+
+
+# --- ADR-0074: declared list-form when_to_use trigger phrases -----------
+
+def test_declared_trigger_phrases_from_qualifying_list():
+    s = {"name": "x", "description": "does alpha", "when_to_use_items": [
+        "setting up a new alpha pipeline", "debugging a failing alpha run",
+        "auditing alpha coverage"]}
+    out = server._declared_trigger_phrases(s)
+    assert out == ["setting up a new alpha pipeline", "debugging a failing alpha run",
+                   "auditing alpha coverage"]
+
+
+def test_declared_trigger_phrases_min_two_words_honored():
+    s = {"name": "x", "description": "d", "when_to_use_items": [
+        "alpha", "setting up alpha", "debugging alpha", "auditing alpha"]}
+    out = server._declared_trigger_phrases(s)
+    # the single-word item is dropped; every 2+-word item survives, in order
+    assert out == ["setting up alpha", "debugging alpha", "auditing alpha"]
+
+
+def test_declared_trigger_phrases_capped_at_declared_trig_max():
+    items = [f"do alpha task {i}" for i in range(20)]
+    s = {"name": "x", "description": "d", "when_to_use_items": items}
+    out = server._declared_trigger_phrases(s)
+    assert len(out) == server.DECLARED_TRIG_MAX == 8
+
+
+def test_declared_trigger_phrases_below_min_items_yields_none():
+    s = {"name": "x", "description": "d",
+         "when_to_use_items": ["setting up alpha", "debugging alpha"]}   # only 2
+    assert server._declared_trigger_phrases(s) == []
+
+
+def test_declared_trigger_phrases_median_too_long_yields_none():
+    # Median item length > 5 words: this is a body outline, not trigger phrases.
+    s = {"name": "x", "description": "d", "when_to_use_items": [
+        "the user needs to configure the whole pipeline end to end",
+        "the operator wants a full audit of every alpha stage",
+        "a teammate is debugging a subtle alpha regression today"]}
+    assert server._declared_trigger_phrases(s) == []
+
+
+def test_declared_trigger_phrases_flag_off_yields_none(monkeypatch):
+    monkeypatch.setattr(server, "SKILL_DECLARED_TRIGGERS", False)
+    s = {"name": "x", "description": "d", "when_to_use_items": [
+        "setting up alpha", "debugging alpha", "auditing alpha"]}
+    assert server._declared_trigger_phrases(s) == []
+
+
+def test_declared_phrases_never_evict_curated_or_description_slots(monkeypatch):
+    """Declared phrases get their OWN budget, layered AFTER the base cap — they can
+    only ADD slots, never displace a curated/description/body phrase already there."""
+    monkeypatch.setattr(server, "SKILL_BODY_TRIGGERS", False)
+    monkeypatch.setattr(server, "SKILL_LLM_TRIGGERS", False)
+    monkeypatch.setattr(server, "_curated_phrases", lambda name: ["a top curated phrase here"])
+    desc = ". ".join(f"description phrase number {i}" for i in range(20))   # overflows _TRIG_MAX
+    s = {"name": "x", "description": desc, "when_to_use_items": [
+        "setting up alpha now", "debugging alpha issues", "auditing alpha logs"]}
+    base = server._trigger_phrases({"name": "x", "description": desc,
+                                    "when_to_use_items": []})
+    with_declared = server._trigger_phrases(s)
+    # every base-layer slot survives untouched
+    assert with_declared[:len(base)] == base
+    # the declared phrases are ADDED, on top of the base cap
+    assert "setting up alpha now" in with_declared
+    assert len(with_declared) == server._TRIG_MAX + 3
+
+
+def test_declared_phrases_deduped_and_order_preserved():
+    s = {"name": "x", "description": "d", "when_to_use_items": [
+        "setting up alpha now", "Setting Up Alpha Now", "debugging alpha issues"]}
+    out = server._declared_trigger_phrases(s)
+    assert out == ["setting up alpha now", "debugging alpha issues"]
+
+
 def test_body_section_re_and_server_label_re_stay_aligned():
     # `skills_discovery._BODY_SECTION_RE` and `server._LABEL_RE` are hand-mirrored
     # (skills_discovery.py:60-69). Every label server._LABEL_RE recognizes must also
@@ -366,25 +466,54 @@ def test_scope_change_forces_reembed():
 # --- end-to-end (loads the embedder; opt-in) -----------------------------
 
 @pytest.mark.integration
-def test_end_to_end_build_search_incremental():
-    """`embedded` counts POINTS, `indexed` counts SKILLS — they are equal only in the
+def _write_skill(root, name, desc, body="Body text.", when_items=None):
+    """Minimal SKILL.md writer local to this file (test_discovery.py's `make_skill`
+    only supports single-line when_to_use; this e2e test needs a real YAML list)."""
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    fm = f"---\nname: {name}\ndescription: {desc}\n"
+    if when_items:
+        fm += "when_to_use:\n" + "".join(f"  - {item}\n" for item in when_items)
+    fm += "---\n" + body
+    (d / "SKILL.md").write_text(fm)
+    return d / "SKILL.md"
+
+
+def test_end_to_end_build_search_incremental(tmp_path, monkeypatch):
+    """Hermetic: builds over a small FIXTURE skill tree, never the operator's real
+    ~/.claude catalog (see test_discover_skill_paths_never_leaves_tmp_root_by_default) —
+    the prior version walked the real machine (thousands of skills, ~150s) and its
+    `embedded == 0` incremental check flaked whenever a real skill changed mid-run.
+    The fixture also exercises the exclusion-sentence drop (a "Not for" sentence) and
+    the declared list-form when_to_use trigger phrases through the REAL embedder end
+    to end.
+
+    `embedded` counts POINTS, `indexed` counts SKILLS — they are equal only in the
     upstream one-vector-per-skill shape. This deployment layers MAX-pool trigger points
-    on top of each base vector (ADR-0012/0016/0026), so embedded legitimately runs many
-    times higher: measured 6,092 points for 416 skills. The original `==` therefore failed
-    on every real run here while passing with the layers off, which made a green suite
-    depend on env rather than on correctness. Assert the invariant that holds either way."""
+    on top of each base vector (ADR-0012/0016/0026), so embedded legitimately runs
+    higher. Assert the invariant that holds either way."""
+    personal = tmp_path / "personal"
+    _write_skill(personal, "debug-helper",
+                desc="Debug a failing test by tracing the stack. Not for writing new tests.",
+                when_items=["Debugging a failing test", "Tracing a stack overflow",
+                            "Isolating a flaky test"])
+    _write_skill(personal, "plain-alpha", desc="Does plain alpha things for the user.")
+    monkeypatch.setattr(sd, "SKILL_DIRS", [personal])
+    monkeypatch.setattr(sd, "PLUGIN_GLOB", str(tmp_path / "no-plugins" / "**" / "SKILL.md"))
+
     stats = server.build_index(force=True)
-    assert stats["indexed"] > 0
+    assert stats["indexed"] == 2
     assert stats["embedded"] >= stats["indexed"]
 
     hits = json.loads(server.search_skills("debug a failing test"))["results"]
     assert len(hits) > 0
     assert all("name" in h and "score" in h for h in hits)
+    assert any(h["name"] == "debug-helper" for h in hits)
 
     again = server.build_index()                         # nothing changed
     # `embedded == 0` IS the incremental guarantee. `skipped` counts points, not skills,
-    # so it cannot equal `indexed` under the trigger layer (measured 6,096 vs 417) — and
-    # pinning it to the earlier count would also break on any skill added mid-test.
+    # so it cannot equal `indexed` under the trigger layer — and pinning it to the
+    # earlier count would also break on any skill added mid-test.
     assert again["embedded"] == 0
     assert again["skipped"] >= stats["indexed"]
 

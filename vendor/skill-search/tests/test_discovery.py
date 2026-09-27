@@ -133,6 +133,72 @@ def test_parse_skill_description_unwraps_yaml_scalars(tmp_path):
     assert got == 'Use the "fast" path.'
 
 
+# --- when_to_use: own field + full YAML parsing (ADR-0074) --------
+
+def _parse_fm(tmp_path, fm_body):
+    d = tmp_path / f"sk{abs(hash(fm_body))}"
+    d.mkdir()
+    (d / "SKILL.md").write_text(f"---\n{fm_body}---\nbody")
+    return sd.parse_skill(d / "SKILL.md")
+
+
+def test_when_to_use_is_its_own_field_and_still_appended(tmp_path):
+    s = _parse_fm(tmp_path, 'description: "Alpha."\nwhen_to_use: "When alpha."\n')
+    assert s["when_to_use"] == "When alpha."
+    assert s["description"] == "Alpha.  When alpha."
+    assert s["when_to_use_items"] == []                 # prose, not a list
+
+
+def test_when_to_use_multiline_yaml_list_is_parsed(tmp_path):
+    """A genuine YAML block sequence — the multi-line form authors actually write for
+    a list of short trigger conditions."""
+    fm = ('description: "Does alpha."\n'
+          "when_to_use:\n"
+          "  - Setting up a new alpha pipeline\n"
+          "  - Debugging a failing alpha run\n"
+          "  - Auditing alpha coverage\n"
+          "category: utilities\n")
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"] == [
+        "Setting up a new alpha pipeline",
+        "Debugging a failing alpha run",
+        "Auditing alpha coverage",
+    ]
+    # still appended to description, joined cleanly (not the old dash-mangled join)
+    assert "Setting up a new alpha pipeline" in s["description"]
+    assert "category" not in s["description"]
+
+
+def test_when_to_use_prose_is_unchanged_regardless_of_commas(tmp_path):
+    """A prose sentence with commas must NOT be mistaken for a YAML list — only a
+    real block sequence (one '- item' per line) counts as list-shaped."""
+    fm = ('description: "Does alpha."\n'
+          'when_to_use: "Use when doing X, Y, or Z across a project"\n')
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"] == []
+    assert s["when_to_use"] == "Use when doing X, Y, or Z across a project"
+
+
+def test_when_to_use_declared_triggers_flag_off_restores_old_text(tmp_path, monkeypatch):
+    """SKILL_DECLARED_TRIGGERS=0 must reproduce the byte-identical PRE-FIX description
+    text for a list-shaped when_to_use (the old naive flow-scalar join), not just an
+    empty when_to_use_items — this is what makes the trigger-phrase reversion truly
+    byte-identical rather than merely 'items absent'."""
+    monkeypatch.setattr(sd, "SKILL_DECLARED_TRIGGERS", False)
+    fm = ('description: "Does alpha."\n'
+          "when_to_use:\n"
+          "  - Setting up a new alpha pipeline\n"
+          "  - Debugging a failing alpha run\n"
+          "  - Auditing alpha coverage\n")
+    s = _parse_fm(tmp_path, fm)
+    assert s["when_to_use_items"] == []
+    # the old join: every physical line space-joined, dashes and all
+    assert s["when_to_use"] == (
+        "- Setting up a new alpha pipeline - Debugging a failing alpha run "
+        "- Auditing alpha coverage")
+    assert s["description"] == "Does alpha.  " + s["when_to_use"]
+
+
 def test_parse_skill_no_frontmatter_returns_none(tmp_path):
     p = tmp_path / "f" / "SKILL.md"
     p.parent.mkdir()
@@ -262,6 +328,17 @@ def test_namespaced_name_marketplaces_not_namespaced():
 
 
 # --- discover_skills (dedup + scoping) -----------------------------------
+
+def test_discover_skill_paths_never_leaves_tmp_root_by_default():
+    """Hermeticity guard for the autouse _isolate_harness_roots fixture (conftest.py):
+    with no per-test skills created and no explicit SKILL_DIRS/PLUGIN_GLOB override,
+    discover_skill_paths() must be empty — never the operator's REAL ~/.claude catalog.
+    Regression: SKILL_DIRS/PLUGIN_GLOB were the two Claude-side seams the fixture forgot
+    to pin (every non-Claude harness root WAS pinned already), so a test that never
+    overrides them — the end-to-end integration test included — silently walked the
+    real machine's skill catalog (measured: thousands of hits on the dev machine)."""
+    assert sd.discover_skill_paths() == []
+
 
 def test_discover_dedup_precedence_personal_wins(tmp_path, monkeypatch):
     personal, project = tmp_path / "personal", tmp_path / "project"

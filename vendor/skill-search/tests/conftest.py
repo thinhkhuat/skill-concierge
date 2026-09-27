@@ -111,6 +111,12 @@ os.environ.setdefault("SKILL_CONCIERGE_CATALOG_ROOTS", os.path.join(_TMP, "no-ca
 # nonexistent temp path: otherwise the operator's live ~/.claude/skill-concierge/ corpus
 # leaks into every trigger-phrase test.
 os.environ.setdefault("SKILL_TRIGGERS", os.path.join(_TMP, "no-triggers.json"))
+# ADR-0074 findability sweep hook (build_index -> _launch_findability_sweep): tests must
+# never launch it — a real reindex here (e.g. the force=True integration test) would spawn
+# a detached `skill_search.findability` subprocess with no such module installed, against
+# the operator's real ~/.claude/skill-concierge/findability.json. A test that wants to
+# exercise the hook's own logic monkeypatches SKILL_FINDABILITY/subprocess.Popen itself.
+os.environ.setdefault("SKILL_FINDABILITY", "0")
 
 # Imported ONLY AFTER the env pinning above: skills_discovery reads several
 # seams (SKILL_CONCIERGE_CATALOG_ROOTS included) at MODULE IMPORT time, so an
@@ -140,7 +146,7 @@ def owner_factory(tmp_path):
 def _drop_test_collections():
     yield
     from skill_search import server
-    for c in (server.COLLECTION, "curated_reload_test"):
+    for c in (server.COLLECTION, "curated_reload_test", "sweep_hook_test"):
         try:
             server._qdrant.delete_collection(c)
         except Exception:
@@ -149,6 +155,23 @@ def _drop_test_collections():
 
 @pytest.fixture(autouse=True)
 def _isolate_harness_roots(tmp_path, monkeypatch):
+    # Claude's OWN roots. Regression: every non-Claude harness below was pinned, but
+    # SKILL_DIRS ([PERSONAL_ROOT, PROJECT_ROOT], built at import time) and PLUGIN_GLOB
+    # were not — a test that patches neither (an unmocked discover_skills()/build_index()
+    # call) silently walks the operator's REAL ~/.claude/skills and
+    # ~/.claude/plugins/cache/** (measured: thousands of hits on the dev machine), which
+    # made `test_end_to_end_build_search_incremental` both slow (~150s) and flaky (its
+    # `embedded == 0` incremental check depends on NOTHING on the real machine changing
+    # between its two build_index() calls). PERSONAL_ROOT is pinned too so a skill a test
+    # DOES create under it classifies as scope "personal" (_scope_for), not the
+    # project-scope fallback. Every test that cares already overrides SKILL_DIRS/
+    # PLUGIN_GLOB explicitly (the same pattern the harness roots below use), so this
+    # default only closes the gap for a test that doesn't.
+    monkeypatch.setattr(skills_discovery, "PERSONAL_ROOT", tmp_path / "claude-personal")
+    monkeypatch.setattr(skills_discovery, "SKILL_DIRS",
+                        [tmp_path / "claude-personal", tmp_path / "claude-project"])
+    monkeypatch.setattr(skills_discovery, "PLUGIN_GLOB",
+                        str(tmp_path / "claude-plugin-cache" / "none" / "**" / "SKILL.md"))
     # ADR-0033/0038 multi-harness: discovery also walks ~/.codex/** and ~/.omp/**.
     # Tests that patch SKILL_DIRS/PLUGIN_GLOB but not the Codex/OMP globals would
     # otherwise pull the machine's REAL ~/.codex/plugins/cache/** and
