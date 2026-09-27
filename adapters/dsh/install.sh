@@ -235,7 +235,20 @@ PYEOF
       echo "  [✓] cordis.patch.yml already current (v$VERSION)"
     else
       [ -f "$PATCH" ] && cp -p "$PATCH" "$PATCH.bak-skillconcierge-$(date +%Y%m%d-%H%M%S)"
-      mv "$NEW" "$PATCH"
+      # Swap the validated candidate in through adapters/lib/safe_write.py — the same doctrine
+      # as every other installer's config write: a symlinked cordis.patch.yml (a dotfiles
+      # layout) is repointed at the file it points AT rather than replaced with a plain file,
+      # and the existing file's mode is kept exactly, never widened to the shell's umask.
+      PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$NEW" "$PATCH" <<'PY'
+import sys
+from pathlib import Path
+
+import safe_write
+
+new_path, patch_path = Path(sys.argv[1]), Path(sys.argv[2])
+safe_write.write_text(patch_path, new_path.read_text(encoding="utf-8"))
+new_path.unlink()
+PY
       echo "  [✓] Updated cordis.patch.yml: skill-search MCP + unlazy stop-hook + enforcement plugin (v$VERSION)"
     fi
   fi

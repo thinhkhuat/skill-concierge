@@ -114,3 +114,39 @@ def test_a_result_dsh_could_not_load_never_replaces_the_original(tmp_path):
     assert r.returncode != 0, "a failed check must fail the installer"
     assert patch.read_text() == flow, "the original must stay untouched"
     assert not (patch.parent / "cordis.patch.yml.new").exists()
+
+
+def test_symlinked_cordis_patch_yml_stays_a_symlink_and_keeps_its_mode(tmp_path):
+    """The same class of defect ADR-0072 fixed for the Claude Code registry write: swapping a
+    SYMLINKED cordis.patch.yml (a dotfiles-managed layout) for a plain file, and a freshly
+    written replacement inheriting the shell's umask instead of the locked-down file's own
+    mode. The installer must repoint the file the symlink points AT, through
+    adapters/lib/safe_write.py, exactly like every other installer's config write."""
+    home = tmp_path / "dsh"
+    prof = home / "profiles" / "tui"
+    prof.mkdir(parents=True)
+    (prof / "cordis.yml").write_text("[]\n")
+
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "cordis.patch.yml"
+    real.write_text(PRISTINE)
+    real.chmod(0o600)
+    patch = prof / "cordis.patch.yml"
+    patch.symlink_to(real)
+
+    env = dict(os.environ, SKILL_DSH_HOME=str(home), SKILL_CONCIERGE_LOG=str(tmp_path / "logs"),
+                EMBED_SHIM_PORT="9", SKILL_OWNER_AUTOSTART="0", SKILL_QDRANT_URL="http://127.0.0.1:9")
+    r = subprocess.run(["bash", str(ROOT / "adapters" / "dsh" / "install.sh")], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    assert patch.is_symlink(), "cordis.patch.yml must stay a symlink"
+    assert os.path.realpath(patch) == str(real), \
+        "the symlink must still point at the same dotfiles-managed file"
+    text = real.read_text()
+    assert _doctor()._dsh_patch_defects(text) == [], text
+    for entry in ("id: skill-concierge\n", "id: unlazy-stop\n", "id: skill-concierge-enforcer\n"):
+        assert entry in text
+    assert oct(real.stat().st_mode & 0o777) == oct(0o600), \
+        "the real file the symlink points at must not widen past 0600"
