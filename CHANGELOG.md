@@ -3,6 +3,38 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.54.2] — 2026-09-27
+
+### Removed
+- **The Docker embed-shim build files** (`Dockerfile`, `.dockerignore`) are removed from the repo. The
+  embed shim itself (`scripts/embed_server.py`, `bin/embed-shim`) still runs standalone; only the Docker
+  image build is gone, since ADR-0070 retired it from the deployment path and the built images are
+  archived outside the repo. Revert path: `git show 20b9768:Dockerfile > Dockerfile` and
+  `git show 20b9768:.dockerignore > .dockerignore` restore both files byte-for-byte.
+
+### Fixed
+- **Command Code installer:** the preflight that checks every JSON file before writing anything now also
+  checks its shape, not just that it parses — a top-level JSON array, or a `"mcpServers": null`, used to
+  pass the parse check and then crash mid-run after the mod and settings.json were already written. The
+  preflight now also covers the per-project `mcp.json` override, which it previously missed.
+- **ZCode installer:** the header now lists every refusal that stops the run before any write, including
+  the checkout refusals (a HEAD/version mismatch, a `git/` dir, or git being unreadable) alongside the
+  registry ones. The README's release notes for the ZCode downgrade refusal now also mention the refusal
+  when the registry has no matching entry, which shipped in the same release but went undocumented.
+- **Index owner:** a malformed port in `SKILL_QDRANT_URL`, `SKILL_OWNER_QUERY_PORT`, `EMBED_SHIM_PORT`, or
+  `SKILL_OWNER_EMBED_PORT` used to crash the owner at import, before it could even log anything. It now
+  falls back to the default port (6333 or 6363) and logs one line to stderr naming the bad value. `doctor.py`
+  had the identical crash for a malformed `SKILL_QDRANT_URL` port (its own port-agreement check with the
+  owner) and now falls back to the same default instead of crashing.
+- **Installer staging dirs:** the four installers that export a fresh copy through a staging dir beside
+  their destination (Claude Code, Codex, OMP, ZCode) now remove that staging dir when the run is killed
+  (`EXIT`/`INT`/`TERM`), not just on a normal finish or a checked failure, and prune any staging dir older
+  than 60 minutes left over from an earlier killed run before starting a new export.
+- **Doctor:** a Claude Code or OMP install registry file that exists but does not parse now reports "could
+  not be read — install state unknown" instead of reading the same as "never installed". It is WARN in a
+  normal run and FAILs under `--cutover`, the same rule already applied to an installed copy of unknown
+  version. A registry file that was never written still reads as never-installed, unchanged.
+
 ## [0.54.1] — 2026-09-27
 
 ### Fixed — ADR-0073: the audit scores what the standing order binds; installers repair what doctor flags
