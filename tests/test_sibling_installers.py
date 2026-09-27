@@ -18,7 +18,6 @@ neither adapter's script differs between the two."""
 import json
 import os
 import shutil
-import stat
 import subprocess
 from pathlib import Path
 
@@ -305,6 +304,48 @@ def test_only_the_matching_scope_record_is_repointed_omp(tmp_path):
     assert recs[1] == other, recs[1]
 
 
+# ── ZCode: registry existence checked, and a downgrade refused, before any cache write ──────
+
+def test_zcode_refuses_when_registry_file_is_missing(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home = tmp_path / "home"
+    home.mkdir()
+    r = _run_zcode(tmp_path, repo, home)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no skill-concierge@skill-concierge entry" in (r.stdout + r.stderr)
+    cache_root = home / ".zcode" / "cli" / "plugins" / "cache"
+    assert not cache_root.exists(), "must refuse before any write to the cache"
+
+
+def test_zcode_refuses_when_registry_has_no_matching_entry(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    home = tmp_path / "home"
+    plugins_dir = home / ".zcode" / "cli" / "plugins"
+    plugins_dir.mkdir(parents=True)
+    (plugins_dir / "installed_plugins.json").write_text(
+        json.dumps({"plugins": [{"id": "some-other@marketplace", "installPath": "/x", "version": "1.0.0"}]}))
+    r = _run_zcode(tmp_path, repo, home)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no skill-concierge@skill-concierge entry" in (r.stdout + r.stderr)
+    assert not (plugins_dir / "cache").exists(), "must refuse before any write to the cache"
+
+
+def test_zcode_refuses_to_downgrade(tmp_path):
+    """M3: a newer copy is already active per the registry's own installPath manifest —
+    a stale checkout must never repoint ZCode backwards, and must never touch the cache."""
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    deployed = tmp_path / "home" / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "3.0.0"
+    home = _seed_zcode_home(tmp_path, installed_version="3.0.0", install_path=deployed)
+    (deployed / ".claude-plugin").mkdir(parents=True)
+    (deployed / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "3.0.0"}))
+    r = _run_zcode(tmp_path, repo, home)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "refusing to downgrade" in (r.stdout + r.stderr)
+    cache_2_0_0 = deployed.parent / "2.0.0"
+    assert not cache_2_0_0.exists(), "must refuse before exporting the older checkout"
+    assert (deployed / ".claude-plugin" / "plugin.json").read_text() == json.dumps({"version": "3.0.0"})
+
+
 # ── Item 7 (Command Code): a root path holding an apostrophe AND a double quote ─────────────
 
 def test_apostrophe_and_double_quote_in_root_path(tmp_path):
@@ -328,12 +369,60 @@ def test_apostrophe_and_double_quote_in_root_path(tmp_path):
     assert "SyntaxError" not in r.stderr, r.stderr
     # An unquoted heredoc lets bash run the backticks inside the embedded Python's comments.
     assert "command not found" not in r.stderr, r.stderr
+    assert "verify: OK" in r.stdout, r.stdout + r.stderr
 
     mcp = json.loads((home / ".commandcode" / "mcp.json").read_text())
     assert mcp["mcpServers"]["skill-search"]["command"] == f"{root}/bin/skill-search-mcp"
     settings = json.loads((home / ".commandcode" / "settings.json").read_text())
     assert any(str(root) in h.get("command", "")
                for b in settings["hooks"]["SessionStart"] for h in b["hooks"])
+
+
+def test_commandcode_verify_failure_exits_nonzero(tmp_path):
+    """M2: a genuinely broken install (no MCP launcher on disk) must make verify's own
+    `bad` flag exit the script non-zero — printing "verify: FAILED" while returning 0
+    would let a caller (or a test) read the run as successful."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    # No bin/skill-search-mcp created — the MCP launcher check must fail verify.
+    home = tmp_path / "home"
+    home.mkdir()
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "verify: FAILED" in r.stdout, r.stdout + r.stderr
+    assert "MCP launcher not found" in r.stdout, r.stdout + r.stderr
+
+
+def test_commandcode_refuses_a_malformed_settings_json_instead_of_resetting_it(tmp_path):
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    settings = home / ".commandcode" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    broken = '{"hooks": {"SessionStart": [}'   # malformed on purpose
+    settings.write_text(broken)
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert settings.read_text() == broken, "the malformed file must be left byte-identical"
 
 
 # ── Sibling smoke tests (not owned here): must not choke on an apostrophe in the root path ──

@@ -43,6 +43,17 @@ echo "==> skill-concierge → ZCode sync (from: $ROOT)"
 VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: $VERSION"
 
+# ver_ge A B — true iff dotted-integer version A >= B ("0.43.10" >= "0.43.9"). Same
+# comparator adapters/claude-code/install.sh uses (the one-directional doctrine).
+_ver_ge() {
+  [ "$1" = "$2" ] && return 0
+  awk -v a="$1" -v b="$2" 'BEGIN{
+    na=split(a,A,"."); nb=split(b,B,"."); n=(na>nb)?na:nb
+    for(i=1;i<=n;i++){x=(i<=na)?A[i]+0:0; y=(i<=nb)?B[i]+0:0
+      if(x>y) exit 0; if(x<y) exit 1}
+    exit 0}'
+}
+
 # _is_own_checkout — true when $ROOT is its own git top level. Compared by file identity (-ef), so a
 # symlinked or case-variant path to a real checkout still counts; a plain directory inside some other
 # repo does not.
@@ -109,6 +120,44 @@ _export_to() {
   fi
   mv "$stage" "$dest"
 }
+
+# ── 1b. Registry must already have a skill-concierge@skill-concierge entry, and the
+# copy it names must not be newer than this checkout — both checked BEFORE any write to
+# the cache, so a missing/broken registry or a stale checkout never leaves an export
+# sitting in the cache that this run then aborts out of (M3).
+if ! DEPLOYED="$(python3 - "$REG_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(2)   # registry file missing, empty, or unreadable JSON
+for p in data.get("plugins", []):
+    if isinstance(p, dict) and p.get("id") == "skill-concierge@skill-concierge":
+        ip = p.get("installPath") or ""
+        ver = ""
+        if ip:
+            pf = Path(ip) / ".claude-plugin" / "plugin.json"
+            try:
+                ver = json.loads(pf.read_text(encoding="utf-8")).get("version") or ""
+            except (OSError, ValueError):
+                ver = ""   # entry exists but its active copy's manifest is unreadable
+        print(ver)
+        sys.exit(0)
+sys.exit(1)   # no matching entry in the registry
+PY
+)"; then
+  echo "!! no skill-concierge@skill-concierge entry in $REG_FILE (or the registry is" >&2
+  echo "   missing/unreadable) — install it once via Settings → Plugin Management →" >&2
+  echo "   Discover (Get), then re-run this sync." >&2
+  exit 1
+fi
+if [ -n "$DEPLOYED" ] && ! _ver_ge "$VERSION" "$DEPLOYED"; then
+  echo "!! refusing to downgrade: the ZCode registry's active copy is v$DEPLOYED, newer" >&2
+  echo "   than this checkout v$VERSION. Update the checkout (git pull) or keep the newer" >&2
+  echo "   deployed copy — a stale checkout never downgrades (ADR-0042 doctrine)." >&2
+  exit 1
+fi
 
 # ── 2. Export the release tree into the versioned cache dir ──────────────────
 DEST="$CACHE_BASE/$VERSION"

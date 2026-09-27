@@ -63,8 +63,10 @@ settings = {}
 if settings_path.exists():
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except Exception:
-        settings = {}
+    except Exception as e:
+        print(f"  [!] {settings_path} exists but is not valid JSON ({e}) — refusing to "
+              "overwrite it; fix or remove it by hand, then re-run", file=sys.stderr)
+        sys.exit(1)
 
 hooks = settings.setdefault("hooks", {})
 
@@ -135,8 +137,10 @@ mcp_data = {}
 if mcp_path.exists():
     try:
         mcp_data = json.loads(mcp_path.read_text(encoding="utf-8"))
-    except Exception:
-        mcp_data = {}
+    except Exception as e:
+        print(f"  [!] {mcp_path} exists but is not valid JSON ({e}) — refusing to "
+              "overwrite it; fix or remove it by hand, then re-run", file=sys.stderr)
+        sys.exit(1)
 
 servers = mcp_data.setdefault("mcpServers", {})
 servers["skill-search"] = {
@@ -175,8 +179,10 @@ data = {}
 if local_mcp.exists():
     try:
         data = json.loads(local_mcp.read_text(encoding="utf-8"))
-    except Exception:
-        data = {}
+    except Exception as e:
+        print(f"  [!] {local_mcp} exists but is not valid JSON ({e}) — refusing to "
+              "overwrite it; fix or remove it by hand, then re-run", file=sys.stderr)
+        sys.exit(1)
 
 servers = data.setdefault("mcpServers", {})
 servers["skill-search"] = {
@@ -230,10 +236,15 @@ except Exception as e:
 try:
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     cmds = []
+    sc_hook_scripts = ("doctrine.py", "auto_reindex.py", "auto_overrides.py",
+                       "auto_flywheel.py", "auto_promote.py")
     for block in (settings.get("hooks", {}).get("SessionStart") or []):
         for h in (block.get("hooks") or []):
             c = h.get("command", "")
-            if "skill-concierge" in c:
+            # Keyed on the installed hook script paths, not a "skill-concierge" substring
+            # in the repo dir name — a root whose path doesn't contain that literal
+            # string (e.g. a test fixture) still installs real, working hooks.
+            if any(f"hooks/scripts/{name}" in c for name in sc_hook_scripts):
                 cmds.append(c)
     if cmds:
         print(f"    SessionStart hooks: {len(cmds)} skill-concierge entries")
@@ -261,8 +272,8 @@ except Exception as e:
     bad = True
 if bad:
     print("    verify: FAILED — see lines above", flush=True)
-else:
-    print("    verify: OK")
+    sys.exit(1)
+print("    verify: OK")
 PYEOF
 # Doctor's harness-specific row (WARN-only, so we surface it but don't fail on it).
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Command Code integration" || true
