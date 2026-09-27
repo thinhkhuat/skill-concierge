@@ -1,14 +1,18 @@
-"""scripts/git_stash_guard.py — the PreToolUse(Bash) gate that denies a state-changing
-`git stash` in this repo (owner rule: no git stash; ADR-none, added directly in response to
-two accidental uses during v0.54.2 release work). Covers the draft's own `_selftest()` case
-list directly (import, not subprocess, for speed) plus one real end-to-end invocation through
-stdin — the exact shape Claude Code actually feeds a PreToolUse hook — so a wiring mistake in
-`main()`'s own JSON handling (not just `decide()`'s logic) is caught too."""
+"""scripts/git_stash_guard.py — the PreToolUse(Bash) gate that denies, by default, any
+`git stash` invocation that can change state (owner rule: no git stash; added directly in
+response to two accidental uses during v0.54.2 release work, then hardened to deny every
+form that tokenizes as a `git ... stash` invocation, since several such forms slipped past the
+first draft). Covers the draft's own `_selftest()` case list directly (import, not subprocess,
+for speed), one real end-to-end invocation through stdin — the exact shape Claude Code actually
+feeds a PreToolUse hook — and a real-git proof in a throwaway `/tmp` repo that the six
+previously-confirmed bypasses really do create a stash when the guard is not in the way."""
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,14 +20,39 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "git_stash_guard.py"
 
+# Deny-by-default core: bare/optioned forms, global git options, env prefixes, absolute
+# path, backslash escape, and the fused `git-stash` executable name.
 DENY_COMMANDS = [
     "git stash", "git stash -u", "git stash push -m x", "git stash pop", "git stash apply",
     "git stash drop", "git stash clear", "git -C /tmp/x stash", "git add . && git stash -u",
-    "FOO=1 git stash save wip", "cd a; git stash branch b",
+    "FOO=1 git stash save wip", "cd a; git stash branch b", "git -c k=v stash",
+    "git --git-dir=/x stash", "git --no-pager stash", "GIT_DIR=x git stash",
+    "/usr/bin/git stash", "\\git stash", "git-stash push -m x",
 ]
+
+# Forms the first draft allowed although each creates a real stash (confirmed in a scratch
+# repo). `test_confirmed_bypass_creates_a_real_stash_without_the_guard` proves the six in
+# REQUIRED_BYPASS_COMMANDS really do stash; all are denied here.
+BYPASS_DENY_COMMANDS = [
+    "git stash -m list", "git stash -m show", "git stash -- list",
+    "(cd sub && git stash)", "(git stash)", "{ git stash; }",
+    "if true; then git stash; fi", "time git stash", "nice git stash", "exec git stash",
+    "git stash&", "bash -c 'git stash'", "echo $(git stash)", "eval git stash",
+    "xargs git stash",
+]
+
+# Six forms proven, in a scratch repo, to create a stash: each MUST be denied.
+REQUIRED_BYPASS_COMMANDS = [
+    "git stash -m list", "git stash -- list", "(cd sub && git stash)",
+    "if true; then git stash; fi", "time git stash", "git stash&",
+]
+
+DENY_COMMANDS = DENY_COMMANDS + BYPASS_DENY_COMMANDS
+
 ALLOW_COMMANDS = [
     "git stash list", "git stash show -p", "git status", "echo git stash", "git commit -m 'stash'",
-    "ls stash", "git show HEAD:x",
+    "ls stash", "git show HEAD:x", "git -C x stash list", "echo 'git stash'",
+    "git log --grep stash", "grep stash file",
 ]
 
 
@@ -97,3 +126,51 @@ def test_malformed_stdin_fails_open():
                        capture_output=True, text=True, timeout=10)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == ""
+
+
+def _make_scratch_repo():
+    """A throwaway git repo under /tmp, with one committed file so a later edit gives a
+    dirty tree `git stash` can act on, and a `sub/` directory for the subshell-cd form.
+    Never touches a real repo or worktree."""
+    repo = tempfile.mkdtemp(prefix="stash-guard-proof-")
+    run = lambda *a: subprocess.run(a, cwd=repo, check=True, capture_output=True, text=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "guard-proof@test.local")
+    run("git", "config", "user.name", "guard proof")
+    (Path(repo) / "f.txt").write_text("a\n")
+    # Also tracked as "list": `git stash -- list` reads "list" as a pathspec, which
+    # only actually creates a stash if something named "list" is dirty to match it.
+    (Path(repo) / "list").write_text("a\n")
+    (Path(repo) / "sub").mkdir()
+    run("git", "add", "f.txt", "list")
+    run("git", "commit", "-q", "-m", "init")
+    return repo
+
+
+def _stash_count(repo):
+    r = subprocess.run(["git", "stash", "list"], cwd=repo, capture_output=True, text=True, check=True)
+    return len([line for line in r.stdout.splitlines() if line.strip()])
+
+
+@pytest.mark.parametrize("command", REQUIRED_BYPASS_COMMANDS)
+def test_confirmed_bypass_creates_a_real_stash_without_the_guard(command):
+    """Proof, not a guard test: in a throwaway `/tmp` repo this test creates and deletes
+    (never a real repo or worktree), each of the six confirmed bypass forms is run
+    WITHOUT the guard in the way and really does create exactly one stash entry — the
+    evidence `decide()` above is now denying, not a claim about the guard's own behavior."""
+    repo = _make_scratch_repo()
+    try:
+        (Path(repo) / "f.txt").write_text("dirty\n")
+        (Path(repo) / "list").write_text("dirty\n")
+        before = _stash_count(repo)
+        # `; wait` only matters for the backgrounded `git stash&` form; it is a no-op
+        # for every other command since there is no background job to wait for.
+        r = subprocess.run(command + "\nwait\n", shell=True, executable="/bin/bash",
+                           cwd=repo, capture_output=True, text=True, timeout=10)
+        after = _stash_count(repo)
+        assert after == before + 1, (
+            f"expected {command!r} to create exactly one real stash in the scratch repo; "
+            f"before={before} after={after} rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r}"
+        )
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
