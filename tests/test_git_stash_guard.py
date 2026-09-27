@@ -4,7 +4,7 @@ response to two accidental uses during v0.54.2 release work, then hardened to de
 form that tokenizes as a `git ... stash` invocation, since several such forms slipped past the
 first draft). Covers the draft's own `_selftest()` case list directly (import, not subprocess,
 for speed), one real end-to-end invocation through stdin — the exact shape Claude Code actually
-feeds a PreToolUse hook — and a real-git proof in a throwaway `/tmp` repo that the nine
+feeds a PreToolUse hook — and a real-git proof in a throwaway `/tmp` repo that the twelve
 previously-confirmed bypasses really do create a stash when the guard is not in the way."""
 import importlib.util
 import json
@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,7 @@ DENY_COMMANDS = [
 ]
 
 # Forms the first draft allowed although each creates a real stash (confirmed in a scratch
-# repo). `test_confirmed_bypass_creates_a_real_stash_without_the_guard` proves the nine in
+# repo). `test_confirmed_bypass_creates_a_real_stash_without_the_guard` proves the twelve in
 # REQUIRED_BYPASS_COMMANDS really do stash; all are denied here.
 BYPASS_DENY_COMMANDS = [
     "git stash -m list", "git stash -m show", "git stash -- list",
@@ -45,13 +46,24 @@ BYPASS_DENY_COMMANDS = [
     "sudo -u me git stash", "env -i A=1 git stash", "eval 'git stash'",
     # Fails safe: an unquoted `git stash` is denied even as another program's argument.
     "echo git stash",
+    # `-c` inside a flag cluster, after other options, or on a shell named by a variable.
+    "bash -lc 'git stash'", "zsh -ic 'git stash'", "sh -xc 'git stash'",
+    "bash -c -- 'git stash'", "bash --norc -c 'git stash'", "bash -o pipefail -c 'git stash'",
+    "$SHELL -c 'git stash'", "${SHELL:-bash} -c 'git stash'", "tcsh -c 'git stash'",
+    "fish -c 'git stash'",
+    # A quote inside a comment is not a quote to bash: it must not swallow or split the
+    # command lines around it.
+    "# don't touch\ngit stash\n# it's fine", "# say \"hi\ngit stash\n# bye\"",
+    "# don't\ngit stash;echo x", "# it's\n(git stash)", "# it's\ngit stash&&echo ok",
+    "# it's\ncd sub && git stash&",
 ]
 
-# Nine forms proven, in a scratch repo, to create a stash: each MUST be denied.
+# Twelve forms proven, in a scratch repo, to create a stash: each MUST be denied.
 REQUIRED_BYPASS_COMMANDS = [
     "git stash -m list", "git stash -- list", "(cd sub && git stash)",
     "if true; then git stash; fi", "time git stash", "git stash&",
     "case x in x) git stash;; esac", "nice -n 10 git stash", "time -p git stash",
+    "bash -ec 'git stash'", "# don't touch\ngit stash\n# it's fine", "# it's\n(git stash)",
 ]
 
 DENY_COMMANDS = DENY_COMMANDS + BYPASS_DENY_COMMANDS
@@ -75,6 +87,44 @@ def guard():
 @pytest.mark.parametrize("command", DENY_COMMANDS)
 def test_decide_denies_every_state_changing_stash_form(command, guard):
     assert guard.decide(command), f"expected a deny reason for {command!r}"
+
+
+def test_a_long_command_is_decided_well_inside_the_hook_timeout(guard):
+    """A hook that times out does not block the call, so a slow verdict is an allow. A
+    1,000-line command of variable words with a `-c`-style flag after them and a trailing
+    stash must still be denied, fast (the hook's timeout is 10 s)."""
+    command = "\n".join(['cd "$REPO"'] + ['cp "$SRC" "$DST"'] * 1000
+                        + ["tar -czf $OUT/backup.tgz $DST", "git stash push -m wip"])
+    start = time.monotonic()
+    assert guard.decide(command)
+    assert time.monotonic() - start < 1.0
+
+
+def test_chained_evals_are_decided_fast(guard):
+    """Each `eval` used to re-check the rest of the command, doubling the work per `eval`,
+    so about twenty of them outlasted the hook timeout and let the call through."""
+    command = " ".join(["eval $A"] * 40) + " -c x; git stash"
+    start = time.monotonic()
+    assert guard.decide(command) == guard.REASON
+    assert time.monotonic() - start < 1.0
+
+
+def test_a_command_too_deep_or_too_large_to_check_is_denied(guard):
+    """Past the work cap, or past Python's recursion limit (which used to crash the hook
+    and fail open), the guard denies instead of letting the command through unchecked."""
+    deep = "echo " + "$(" * 2000 + "x" + ")" * 2000
+    huge = 'cp "$S" "$D"\n' * 100_000
+    for command in (deep, huge):
+        start = time.monotonic()
+        assert guard.decide(command) == guard.REASON_TOO_COMPLEX
+        assert time.monotonic() - start < 1.0
+
+
+def test_a_long_ordinary_script_stays_allowed(guard):
+    """The work cap leaves room for real work: a 10,000-line stash-free script passes."""
+    command = "\n".join(['cd "$REPO"'] + ['cp "$SRC" "$DST"'] * 10_000
+                        + ["tar -czf $OUT/b.tgz $DST"])
+    assert guard.decide(command) is None
 
 
 @pytest.mark.parametrize("command", ALLOW_COMMANDS)
@@ -163,7 +213,7 @@ def _stash_count(repo):
 @pytest.mark.parametrize("command", REQUIRED_BYPASS_COMMANDS)
 def test_confirmed_bypass_creates_a_real_stash_without_the_guard(command):
     """Proof, not a guard test: in a throwaway `/tmp` repo this test creates and deletes
-    (never a real repo or worktree), each of the nine confirmed bypass forms is run
+    (never a real repo or worktree), each of the twelve confirmed bypass forms is run
     WITHOUT the guard in the way and really does create exactly one stash entry — the
     evidence `decide()` above is now denying, not a claim about the guard's own behavior."""
     repo = _make_scratch_repo()

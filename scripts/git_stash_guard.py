@@ -21,7 +21,8 @@ WHAT IT DOES — DENY BY DEFAULT
     shell keywords (`if`/`then`, `case … in x)`), grouping (`( … )`, `{ …; }`) and
     environment prefixes (`GIT_DIR=x`) irrelevant: none of them can hide the git word.
     Also checked, recursively: a shell running a command string (`bash -c '…'`,
-    `sh -c "…"`), `eval`'s arguments, and command substitution (`$(…)`, backticks)
+    `bash -lc '…'`, `$SHELL -c '…'`: any shell name or variable followed by a flag
+    cluster holding `c`), `eval`'s arguments, and command substitution (`$(…)`, backticks)
     wherever it sits. Separators (`&&`, `||`, `;`, `|`, `&`, newline) split commands.
 
     A command that only mentions the word inside a quoted string (a commit message,
@@ -44,6 +45,7 @@ FAILS OPEN
 """
 import json
 import os
+import re
 import shlex
 import sys
 
@@ -53,10 +55,26 @@ REASON = ("git stash is blocked in this repo (owner rule: no git stash). A stash
           "with `git show <ref>:<path>` / `git diff <ref>`, keep work in a WIP commit on a "
           "branch, or isolate it with `git worktree add`. `git stash list` / `git stash show` "
           "stay allowed. Deliberate human override: GIT_STASH_GUARD=0.")
+REASON_TOO_COMPLEX = (
+    "This command is too large or too deeply nested for the git-stash guard to check in time, "
+    "so it is blocked rather than let through unchecked (a hook that times out does not block). "
+    "Split it into smaller commands, or write long text to a file first. Deliberate human "
+    "override: GIT_STASH_GUARD=0.")
+# Characters one verdict may examine, recursion included, plus 10 per nested check. A
+# 10,000-line script costs about 400,000; the cap keeps the slowest command near one second,
+# far inside the hook's 10 s timeout.
+_WORK_LIMIT = 1_000_000
+
+
+class _TooComplex(Exception):
+    pass
 
 _GIT_GLOBAL_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
-_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "ash"}
+_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "yash", "posh", "fish",
+           "csh", "tcsh", "pwsh"}
 _SEPARATORS = {"&&", "||", ";", "|", "&"}
+_VAR_WORD_RE = re.compile(r"^\$(\{[^}]*\}|[A-Za-z_0-9]+)$")    # $SHELL, ${SHELL:-bash}
+_C_FLAG_RE = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")             # -c, -lc, -ic, -xc
 
 def _extract_substitutions(command):
     """Return (outer, inners): OUTER has every top-level `$(...)` and backtick span
@@ -115,19 +133,29 @@ def _stash_first_arg_denied(toks, i):
     return first not in READ_ONLY
 
 
-def _group_is_denied(toks):
+def _group_is_denied(toks, budget):
     """TOKS is one already-separated command (no `&&`/`;`/`|`/`&` inside it). Return
     True if ANY word in it starts a state-changing `git stash`, whatever precedes it."""
+    shell_checked = eval_checked = False
     for idx, tok in enumerate(toks):
         base = os.path.basename(tok)
-        if base in _SHELLS:
-            for j in range(idx + 1, len(toks) - 1):
-                if toks[j] == "-c":
-                    if decide(toks[j + 1]) is not None:
-                        return True
-                    break
-        elif base == "eval" and idx + 1 < len(toks):
-            if decide(" ".join(toks[idx + 1:])) is not None:
+        if not shell_checked and (base in _SHELLS or _VAR_WORD_RE.match(tok)):
+            # `-c` alone or inside a flag cluster (`-lc`, `-ic`): the shell runs its first
+            # operand. Every later operand, and the word right after each such cluster, is
+            # checked, so no option can shift the command string out of view. Only the
+            # first shell word per command needs this: a later one's words are a subset of
+            # these, and checking each would cost time quadratic in the command's length.
+            shell_checked = True
+            rest = toks[idx + 1:]
+            if any(_C_FLAG_RE.match(t) for t in rest) and any(
+                    (not t.startswith("-") or (j and _C_FLAG_RE.match(rest[j - 1])))
+                    and _decide(t, budget) is not None for j, t in enumerate(rest)):
+                return True
+        elif base == "eval" and not eval_checked and idx + 1 < len(toks):
+            # The first `eval` checks everything after it; a later one's words are a subset.
+            # Checking each would double the work per `eval`.
+            eval_checked = True
+            if _decide(" ".join(toks[idx + 1:]), budget) is not None:
                 return True
         elif base == "git-stash":
             if _stash_first_arg_denied(toks, idx + 1):
@@ -144,23 +172,34 @@ def _group_is_denied(toks):
 def decide(command: str):
     """'deny' reason string if COMMAND runs a state-changing git stash anywhere in it
     (any word position, a shell `-c` string, `eval`, or a `$(...)`/backtick
-    substitution), else None."""
-    command = command or ""
+    substitution), else None. A command too large or too deeply nested to check within
+    _WORK_LIMIT is denied with REASON_TOO_COMPLEX: a hook that times out, or crashes and
+    fails open, would let it through unchecked."""
+    try:
+        return _decide(command or "", [_WORK_LIMIT])
+    except (_TooComplex, RecursionError):
+        return REASON_TOO_COMPLEX
+
+
+def _decide(command, budget):
+    budget[0] -= len(command) + 10          # a fixed share for the call itself
+    if budget[0] < 0:
+        raise _TooComplex
     outer, inners = _extract_substitutions(command)
     for inner in inners:
-        if decide(inner) is not None:
+        if _decide(inner, budget) is not None:
             return REASON
 
     toks = [t for t in _tokenize(outer) if t not in (")", "}")]
     group = []
     for t in toks:
         if t in _SEPARATORS:
-            if _group_is_denied(group):
+            if _group_is_denied(group, budget):
                 return REASON
             group = []
         else:
             group.append(t)
-    if _group_is_denied(group):
+    if _group_is_denied(group, budget):
         return REASON
     return None
 
@@ -196,6 +235,8 @@ def _selftest():
         "xargs git stash", "echo git stash",
         "case x in x) git stash;; esac", "nice -n 10 git stash", "time -p git stash",
         "sudo -u me git stash", "env -i A=1 git stash", "eval 'git stash'",
+        "bash -lc 'git stash'", "zsh -ic 'git stash'", "$SHELL -c 'git stash'",
+        "bash -c -- 'git stash'", "# don't touch\ngit stash\n# it's fine", "# it's\n(git stash)",
     ]
     allow = [
         "git stash list", "git stash show -p", "git status", "git commit -m 'stash'",
