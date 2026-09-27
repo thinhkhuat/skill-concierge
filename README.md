@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.55.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.55.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -437,6 +437,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.55.1` — **published, a guard fix: the git-stash guard now catches a shell's `-c` inside a flag cluster (`bash -lc`, `zsh -ic`, `sh -xc`) and on a shell named by a variable (`$SHELL -c`), knows more shells (fish, csh, tcsh, mksh, yash, posh, pwsh), and can no longer be pushed past its hook timeout (which lets a command through): chained `eval`s are checked in linear time and a command too large or too deep to check is denied. Heredoc handling is unchanged.**
 
 `0.55.0` — **published, findability detection (ADR-0074): the system now measures whether each installed skill can be found by the most distinctive word in its own name, keeps a ratcheted baseline, warns in doctor's new "Findability" row when a new skill is not findable or a known one regresses, and ships the pre-registered base-vs-candidate harness (`precision_eval.py --mode findability`); three retrieval fixes (`SKILL_DECLARED_TRIGGERS`, `SKILL_SEARCH_COMPLEMENT`) are built but OFF, having failed the precision bar on their own, so the index and every search result are byte-identical to 0.54.x at the defaults; doctor also turns a crashing check into a FAIL row instead of dying.**
 

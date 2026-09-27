@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.55.1] — 2026-09-27
+
+### Fixed
+- **git-stash guard missed `-c` inside a flag cluster.** A shell runs its command string for any flag
+  cluster holding `c`, but the guard looked only for a literal `-c` token right after a shell name. So
+  `bash -lc '…'`, `zsh -ic '…'`, `sh -xc '…'`, `bash -c -- '…'` and a shell named by a variable
+  (`$SHELL -c '…'`, `${SHELL:-bash} -c '…'`) all ran a stash past it. Now any shell name or variable
+  followed by such a cluster has every later operand checked as a command. The shell list adds fish,
+  mksh, yash, posh, csh, tcsh and pwsh.
+- **The guard could run past its hook timeout, and a timed-out hook lets the command run.** Each
+  `eval` re-checked the whole rest of the command, doubling the work per `eval`, so about twenty chained
+  `eval`s outlasted the 10 s timeout. Only the first `eval` and the first shell word of each command now
+  re-check what follows (a later one's words are a subset). Every verdict now also runs under a work
+  cap, and a command too large or too deeply nested to check within it is denied with a message
+  saying so, instead of being let through unchecked. Deep nesting used to crash the guard, which
+  fails open. The slowest command now takes about one second; a 10,000-line script is still allowed.
+- Heredoc handling is unchanged from 0.55.0: a heredoc body is still checked as commands, so a
+  journal or commit message written through a heredoc that mentions the command is denied. Write such
+  text to a file first. A real-git proof covers twelve forms.
+
 ## [0.55.0] — 2026-09-27
 
 ### Added — ADR-0074: findability is a ratcheted invariant (detection only)
