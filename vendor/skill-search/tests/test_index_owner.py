@@ -745,6 +745,32 @@ def test_malformed_port_env_falls_back_instead_of_crashing_at_import(tmp_path, b
     assert "notaport" in r.stderr
 
 
+@pytest.mark.parametrize("bad_value", [" 7363", "7363 ", "+7363", "7_363", "７３６３"])
+def test_strict_grammar_rejects_whitespace_sign_underscore_and_full_width_digits(tmp_path, bad_value):
+    """Plain int() silently accepts all five of these — stripping whitespace, accepting a
+    leading sign, and normalizing an underscore digit-group separator or a full-width
+    digit — so a caller using bare int() would derive 7363 from every one of them while
+    bash's `_safe_port` (ASCII `[0-9]+` only) and `urlsplit().port` both reject them. The
+    strict grammar must reject them too, on both port-shaping override env vars."""
+    env = dict(os.environ)
+    for k in ("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT", "SKILL_QDRANT_URL", "EMBED_SHIM_PORT"):
+        env.pop(k, None)
+    env["SKILL_OWNER_QUERY_PORT"] = bad_value
+    env["EMBED_SHIM_PORT"] = bad_value
+    script = (
+        "import json\n"
+        "from skill_search import index_owner as io_\n"
+        "print(json.dumps([io_.QUERY_PORT, io_.EMBED_PORT]))\n")
+    script_path = tmp_path / "port_strict_grammar_probe.py"
+    script_path.write_text(script, encoding="utf-8")
+    env["PYTHONPATH"] = str(SRC)
+    r = subprocess.run([sys.executable, str(script_path)], env=env,
+                       capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [6333, 6363], \
+        f"{bad_value!r} must fall back to the defaults, not be silently accepted as 7363"
+
+
 @pytest.mark.parametrize("bad_env,bad_value", [
     ({"SKILL_OWNER_QUERY_PORT": "70000"}, "70000"),
     ({"SKILL_OWNER_QUERY_PORT": "-5"}, "-5"),
@@ -753,8 +779,10 @@ def test_malformed_port_env_falls_back_instead_of_crashing_at_import(tmp_path, b
 ])
 def test_out_of_range_port_env_falls_back_instead_of_crashing_at_bind(tmp_path, bad_env, bad_value):
     """int() alone accepts "70000" or "-5" with no error — the crash used to happen much
-    later, inside socket.bind(), with no useful message. The range is now checked at the
-    same import-time point as the non-numeric case."""
+    later, inside socket.bind(), with no useful message. "70000" is caught by the explicit
+    1-65535 range check; "-5" is caught earlier, by the strict ASCII-digit-only grammar
+    (a '-' sign is not a digit) — both land on the same default, with the bad value named
+    in one stderr line either way."""
     env = dict(os.environ)
     for k in ("SKILL_OWNER_QUERY_PORT", "SKILL_OWNER_EMBED_PORT", "SKILL_QDRANT_URL", "EMBED_SHIM_PORT"):
         env.pop(k, None)
@@ -771,7 +799,7 @@ def test_out_of_range_port_env_falls_back_instead_of_crashing_at_bind(tmp_path, 
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [6333, 6363]
     assert bad_value in r.stderr
-    assert "out of range" in r.stderr
+    assert "out of range" in r.stderr or "not a strictly ASCII-digit port" in r.stderr
 
 
 def test_log_lines_are_not_duplicated_when_stderr_shares_the_log_file(tmp_path):

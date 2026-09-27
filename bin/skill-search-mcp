@@ -115,10 +115,13 @@ print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON" 2>/dev/null)"; th
   fi
 fi
 
-# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT.
-# Every port-deriving caller (index_owner.py, doctor.py, this launcher, setup.sh) applies
-# this identical rule, so a malformed EMBED_SHIM_PORT lands every one of them on the same
-# port instead of this launcher probing an address the owner itself refused to bind to.
+# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT: ASCII
+# digits only, no leading/trailing whitespace, no sign, no underscore separator.
+# Every port-deriving caller (index_owner.py, doctor.py, the enforcer hook, this launcher,
+# setup.sh) applies this identical grammar — the Python callers import/mirror
+# scripts/port_grammar.py, this and setup.sh implement it natively in bash — so a malformed
+# EMBED_SHIM_PORT lands every one of them on the same port instead of this launcher probing
+# an address the owner itself refused to bind to.
 _safe_port() {
   case "$1" in
     ''|*[!0-9]*) echo "$2"; return ;;

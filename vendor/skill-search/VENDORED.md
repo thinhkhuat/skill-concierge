@@ -479,3 +479,25 @@ plugin-level customization layer and these engine patches.
   owner and doctor on the same port instead of doctor crashing first. Covered by
   `tests/test_index_owner.py::test_malformed_port_env_falls_back_instead_of_crashing_at_import`.
   Not upstream: re-apply on re-vendor.
+- **Out-of-range port fallback (v0.54.2, same commit as the malformed-port fallback above,
+  previously undocumented here):** a *numeric but out-of-range* value (`"70000"`, `"-5"`, `"0"`)
+  used to pass the bare `int(...)` parse and reach `socket.bind()`, crashing the owner there
+  instead of at import. `_valid_port(value)` (`1 <= value <= 65535`) gates both derivations the
+  same way the malformed-value `try`/`except` does, falling back to 6333/6363 on either failure
+  mode. Covered by `tests/test_index_owner.py::test_out_of_range_port_env_falls_back_instead_of_crashing_at_bind`.
+  Not upstream: re-apply on re-vendor.
+- **Strict ASCII-digit port grammar (v0.54.2 round 3):** the two checks above still accepted
+  every value Python's bare `int()` accepts — leading/trailing whitespace, a leading `+`/`-`
+  sign, an underscore digit-group separator (`"7_363"`), and full-width Unicode decimal digits
+  (`"７３６３"`) — while `scripts/doctor.py`, `hooks/scripts/enforcer.py`, and the bash callers
+  (`bin/skill-search-mcp`, `setup.sh`) all reject those forms. A single misconfigured env var
+  could therefore make the owner bind one port while every other caller derived a different
+  one from the identical value. `_STRICT_PORT_RE = re.compile(r"^[0-9]{1,5}$")` and
+  `_strict_int(raw)` now gate BOTH `QUERY_PORT` and `EMBED_PORT` before the range check, matching
+  the ASCII-digits-only grammar every other caller applies. Every other Python caller imports
+  the single shared implementation at `scripts/port_grammar.py`; this file stays import-free of
+  the rest of the repo (it must remain portable on its own — see "What this provides" above), so
+  the grammar is MIRRORED here inline instead, at the cost of the duplication this note exists to
+  flag. Keep the two copies in lockstep by hand; there is no automated drift check. Covered by
+  `tests/test_index_owner.py::test_strict_grammar_rejects_whitespace_sign_underscore_and_full_width_digits`
+  and `tests/test_port_agreement.py`. Not upstream: re-apply on re-vendor.

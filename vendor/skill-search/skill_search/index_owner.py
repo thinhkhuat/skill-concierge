@@ -83,19 +83,38 @@ DB_PATH = Path(os.environ.get("SKILL_INDEX_DB")
 # Port defaults mirror every caller (doctor.py, setup.sh, bin/skill-search-mcp, the
 # enforcer): a configured SKILL_QDRANT_URL/EMBED_SHIM_PORT is honored before falling back to
 # the Qdrant/embed-shim well-known ports, so an owner started standalone lands on the same
-# port its callers expect. A malformed value (non-numeric, or an int outside 1-65535) must
-# not crash the owner here — this runs at import, before there is any log file or listener to
-# report through other than stderr, and the owner falling back to the well-known port is
-# still reachable. int() alone accepts an out-of-range value like "70000" with no error; the
-# crash then happens much later, deep inside socket.bind(), with no useful message — so the
-# range is checked here too, at the same point as the non-numeric case.
+# port its callers expect. A malformed value must not crash the owner here — this runs at
+# import, before there is any log file or listener to report through other than stderr, and
+# the owner falling back to the well-known port is still reachable.
+#
+# GRAMMAR (mirrors scripts/port_grammar.py — this module stays import-free of the rest of the
+# repo, so the grammar is duplicated here on purpose; see vendor/skill-search/VENDORED.md):
+# ASCII digits only ('0'-'9'), no leading/trailing whitespace, no sign, no '_' digit-group
+# separator, no full-width digit, and the integer must be 1-65535. Plain `int()` alone
+# accepts " 7363", "+7363", "7_363" and full-width "７３６３" (it silently strips whitespace,
+# accepts a leading sign, and normalizes non-ASCII decimal digits) as well as an
+# out-of-range value like "70000" — the strict regex below rejects the first four, and the
+# explicit range check catches the fifth before it can reach `socket.bind()`, where it would
+# otherwise crash much later with no useful message. `urlsplit(...).port` is ALREADY this
+# strict for the URL-derived fallback (it raises ValueError for every one of those same
+# malformed forms), so only the scalar override env vars need the extra check here.
+_STRICT_PORT_RE = re.compile(r"^[0-9]{1,5}$")
+
+
 def _valid_port(value):
     return isinstance(value, int) and 1 <= value <= 65535
 
 
+def _strict_int(raw):
+    if not _STRICT_PORT_RE.match(raw):
+        raise ValueError(f"{raw!r} is not a strictly ASCII-digit port")
+    return int(raw)
+
+
 try:
-    QUERY_PORT = int(os.environ.get("SKILL_OWNER_QUERY_PORT")
-                     or urlsplit(os.environ.get("SKILL_QDRANT_URL", "")).port or 6333)
+    _query_override = os.environ.get("SKILL_OWNER_QUERY_PORT")
+    QUERY_PORT = (_strict_int(_query_override) if _query_override
+                 else urlsplit(os.environ.get("SKILL_QDRANT_URL", "")).port or 6333)
     if not _valid_port(QUERY_PORT):
         raise ValueError(f"port {QUERY_PORT} is out of range 1-65535")
 except (TypeError, ValueError) as _exc:
@@ -103,8 +122,8 @@ except (TypeError, ValueError) as _exc:
           f"malformed port ({_exc}); falling back to 6333", file=sys.stderr)
     QUERY_PORT = 6333
 try:
-    EMBED_PORT = int(os.environ.get("SKILL_OWNER_EMBED_PORT")
-                     or os.environ.get("EMBED_SHIM_PORT") or 6363)
+    _embed_override = os.environ.get("SKILL_OWNER_EMBED_PORT") or os.environ.get("EMBED_SHIM_PORT")
+    EMBED_PORT = _strict_int(_embed_override) if _embed_override else 6363
     if not _valid_port(EMBED_PORT):
         raise ValueError(f"port {EMBED_PORT} is out of range 1-65535")
 except (TypeError, ValueError) as _exc:

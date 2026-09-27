@@ -13,11 +13,13 @@
 #   ENFORCER_AUTHORIZED_SKIP=0 restore the enforcer's old silent getaway/intent_skip (ADR-0015)
 set -euo pipefail
 
-# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT.
-# Every port-deriving caller (index_owner.py, doctor.py, bin/skill-search-mcp, this script)
-# applies this identical rule, so a malformed port lands every one of them on the same
-# default instead of this script probing or exporting an address the owner itself refused
-# to bind to.
+# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT: ASCII
+# digits only, no leading/trailing whitespace, no sign, no underscore separator.
+# Every port-deriving caller (index_owner.py, doctor.py, the enforcer hook, bin/skill-search-mcp,
+# this script) applies this identical grammar — the Python callers import/mirror
+# scripts/port_grammar.py, this and bin/skill-search-mcp implement it natively in bash — so a
+# malformed port lands every one of them on the same default instead of this script probing or
+# exporting an address the owner itself refused to bind to.
 _safe_port() {
   case "$1" in
     ''|*[!0-9]*) echo "$2"; return ;;

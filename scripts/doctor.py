@@ -144,7 +144,21 @@ def read_mcp_env():
     )
 
 
-QURL, BACKEND, MODEL = read_mcp_env()
+sys.path.insert(0, str(ROOT / "scripts"))
+import port_grammar  # noqa: E402  (needs ROOT on sys.path first)
+
+_RAW_QURL, BACKEND, MODEL = read_mcp_env()
+# The same strict grammar every port-deriving caller applies (scripts/port_grammar.py):
+# ASCII digits only, 1-65535. A malformed OR merely absent port in SKILL_QDRANT_URL must
+# land doctor on the SAME well-known default the index owner (index_owner.py) falls back
+# to — reassigning QURL itself, not just a side variable, means every direct network call
+# below that uses QURL gets the corrected address too. Left unfixed, a URL with no port at
+# all (e.g. a trailing "http://127.0.0.1:") does not raise, but `http.client`/`urllib` then
+# silently connect on port 80 (the browser default) instead of failing or using 6333.
+QURL = port_grammar.safe_url(_RAW_QURL, 6333)
+if QURL != _RAW_QURL:
+    print(f"skill-concierge doctor: SKILL_QDRANT_URL={_RAW_QURL!r} has no usable port; "
+          f"using {QURL!r}", file=sys.stderr)
 SS_BIN = VENV / "bin" / "skill-search"
 PY_BIN = VENV / "bin" / "python"
 # The local index owner (skill_search.index_owner) replaces the Qdrant + embed-shim
@@ -156,44 +170,10 @@ INDEX_DB = Path(os.environ.get("SKILL_INDEX_DB", Path.home() / ".cache/skill-sea
 OWNER_LOG = LOGDIR / "index-owner.log"
 ENAME = os.environ.get("SKILL_EMBED_CONTAINER", "skill-concierge-embed-shim")
 
-
-def _valid_port(value):
-    return isinstance(value, int) and 1 <= value <= 65535
-
-
-def _safe_embed_port(raw, default=6363):
-    """The same rule index_owner.py applies to EMBED_SHIM_PORT/SKILL_OWNER_EMBED_PORT: a
-    non-numeric or out-of-range value must not send doctor probing an address the owner
-    itself refused to bind to — fall back to the same default the owner falls back to."""
-    if not raw:
-        return default
-    try:
-        port = int(raw)
-    except (TypeError, ValueError):
-        print(f"skill-concierge doctor: EMBED_SHIM_PORT={raw!r} is not a valid port; "
-              f"falling back to {default}", file=sys.stderr)
-        return default
-    if not _valid_port(port):
-        print(f"skill-concierge doctor: EMBED_SHIM_PORT={raw!r} is out of range 1-65535; "
-              f"falling back to {default}", file=sys.stderr)
-        return default
-    return port
-
-
 # The owner's two ports as configured (store URL + embed port), 6333/6363 by default: a
 # container publishing either one is in the owner's way; one on some other port is not.
-# A malformed value must not crash doctor before it can report anything, and must not send
-# doctor probing a different address than the one the owner (index_owner.py) actually falls
-# back to — both derivations apply the identical non-numeric/out-of-range rule.
-try:
-    _store_port = urllib.parse.urlsplit(QURL).port or 6333
-    if not _valid_port(_store_port):
-        raise ValueError(f"port {_store_port} is out of range 1-65535")
-except ValueError as _exc:
-    print(f"skill-concierge doctor: SKILL_QDRANT_URL={QURL!r} has a malformed port "
-          f"({_exc}); falling back to 6333", file=sys.stderr)
-    _store_port = 6333
-_embed_port = _safe_embed_port(os.environ.get("EMBED_SHIM_PORT"))
+_store_port = urllib.parse.urlsplit(QURL).port
+_embed_port = port_grammar.parse_port(os.environ.get("EMBED_SHIM_PORT"), 6363)
 EMBED_BASE = f"http://127.0.0.1:{_embed_port}"
 OWNER_PORTS = (str(_store_port), str(_embed_port))
 # The embed parity probe: one English and one Vietnamese prompt, owner vs in-process.

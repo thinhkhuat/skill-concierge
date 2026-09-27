@@ -48,53 +48,54 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-def _valid_port(value):
-    return isinstance(value, int) and 1 <= value <= 65535
+# The one strict port grammar every port-deriving caller applies (scripts/port_grammar.py:
+# owner, doctor, this hook, the bash launcher, setup.sh) — ASCII digits only, 1-65535,
+# deliberately narrower than a bare int() (which also accepts " 7363", "+7363", "7_363" and
+# full-width digits). Mirrored inline, never imported, ONLY inside the vendored
+# index_owner.py, which must stay import-free of this repo's own code; every other caller,
+# this one included, imports it. Fails silent to a minimal same-grammar fallback if the file
+# is ever missing (packaging skew) — this hook must never crash on an import it doesn't
+# strictly need to keep running.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import port_grammar
+except Exception:  # pragma: no cover - defensive; see docstring above
+    import re as _re
 
+    class port_grammar:  # noqa: N801 - deliberately shaped like the module it stands in for
+        _RE = _re.compile(r"^[0-9]{1,5}$")
 
-def _safe_port(raw, default):
-    """The same non-numeric/out-of-range rule every port-deriving caller applies
-    (index_owner.py, doctor.py, setup.sh, bin/skill-search-mcp): a malformed EMBED_SHIM_PORT
-    must land here on the same default those callers fall back to, not send this hook
-    trying to reach an address nothing is listening on."""
-    if not raw:
-        return default
-    try:
-        port = int(raw)
-    except (TypeError, ValueError):
-        print(f"skill-concierge enforcer: EMBED_SHIM_PORT={raw!r} is not a valid port; "
-              f"falling back to {default}", file=sys.stderr)
-        return default
-    if not _valid_port(port):
-        print(f"skill-concierge enforcer: EMBED_SHIM_PORT={raw!r} is out of range 1-65535; "
-              f"falling back to {default}", file=sys.stderr)
-        return default
-    return port
+        @staticmethod
+        def parse_port(raw, default):
+            if raw is None or not port_grammar._RE.match(raw):
+                return default
+            port = int(raw)
+            return port if 1 <= port <= 65535 else default
 
-
-def _safe_qdrant_url(raw, default_port=6333):
-    """Reconstructs `raw` with a validated port when its own port is unparseable or out of
-    range — the same rule index_owner.py and doctor.py apply, so this hook never tries a
-    store address the owner itself would have refused to bind to. A URL with no port at all,
-    or a port that is already valid, is returned unchanged."""
-    try:
-        port = urlsplit(raw).port
-    except ValueError as exc:
-        print(f"skill-concierge enforcer: SKILL_QDRANT_URL={raw!r} has a malformed port "
-              f"({exc}); falling back to port {default_port}", file=sys.stderr)
-        return f"http://localhost:{default_port}"
-    if port is not None and not _valid_port(port):
-        print(f"skill-concierge enforcer: SKILL_QDRANT_URL={raw!r} has a port out of range "
-              f"1-65535; falling back to port {default_port}", file=sys.stderr)
-        return f"http://localhost:{default_port}"
-    return raw
+        @staticmethod
+        def safe_url(url, default_port, default_host="localhost", default_scheme="http"):
+            try:
+                parsed = urlsplit(url)
+                port = parsed.port
+            except ValueError:
+                parsed = urlsplit("")
+                port = None
+            if port is not None and 1 <= port <= 65535:
+                return url
+            scheme = parsed.scheme or default_scheme
+            host = parsed.hostname or default_host
+            return f"{scheme}://{host}:{default_port}"
 
 
 # ── endpoints ────────────────────────────────────────────────────────────────
-EMBED_PORT = _safe_port(os.environ.get("EMBED_SHIM_PORT"), 6363)
+EMBED_PORT = port_grammar.parse_port(os.environ.get("EMBED_SHIM_PORT"), 6363)
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
 EMBED_URL = f"http://{EMBED_HOST}:{EMBED_PORT}/embed"
-QDRANT_URL = _safe_qdrant_url(os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333")).rstrip("/")
+_RAW_QDRANT_URL = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = port_grammar.safe_url(_RAW_QDRANT_URL, 6333).rstrip("/")
+if QDRANT_URL != _RAW_QDRANT_URL.rstrip("/"):
+    print(f"skill-concierge enforcer: SKILL_QDRANT_URL={_RAW_QDRANT_URL!r} has no usable "
+          f"port; using {QDRANT_URL!r}", file=sys.stderr)
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 
