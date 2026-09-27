@@ -115,12 +115,28 @@ print(json.load(open(sys.argv[1]))["version"])' "$PLUGIN_JSON" 2>/dev/null)"; th
   fi
 fi
 
+# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT.
+# Every port-deriving caller (index_owner.py, doctor.py, this launcher, setup.sh) applies
+# this identical rule, so a malformed EMBED_SHIM_PORT lands every one of them on the same
+# port instead of this launcher probing an address the owner itself refused to bind to.
+_safe_port() {
+  case "$1" in
+    ''|*[!0-9]*) echo "$2"; return ;;
+  esac
+  if [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null; then
+    echo "$1"
+  else
+    echo "$2"
+  fi
+}
+
 # ── index owner autostart: the owner replaced Docker's restart policy, so every MCP start
 # checks it. Start it DETACHED when /health does not answer and never wait — a duplicate
 # start is harmless (the loser of the owner's file lock exits in milliseconds), and the MCP
 # handshake must never block on a model load. SKILL_OWNER_AUTOSTART=0 disables it.
+EMBED_PORT="$(_safe_port "${EMBED_SHIM_PORT:-}" 6363)"
 if [ "${SKILL_OWNER_AUTOSTART:-1}" != "0" ] \
-   && ! curl -s -m 1 "http://127.0.0.1:${EMBED_SHIM_PORT:-6363}/health" >/dev/null 2>&1; then
+   && ! curl -s -m 1 "http://127.0.0.1:${EMBED_PORT}/health" >/dev/null 2>&1; then
   OWNER_LOG="${SKILL_CONCIERGE_LOG:-$HOME/.claude/skill-concierge/logs}/index-owner.log"
   mkdir -p "$(dirname "$OWNER_LOG")" 2>/dev/null || true
   # Own session (start_new_session=True, like enforcer.py/doctor.py) so the owner never

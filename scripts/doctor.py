@@ -152,21 +152,50 @@ PY_BIN = VENV / "bin" / "python"
 # one SQLite file it alone writes. `GET /` on the store port answers OWNER_TITLE — the same
 # probe the owner itself uses to tell a sibling owner from a foreign answerer.
 OWNER_TITLE = "skill-concierge index owner (Qdrant-compatible subset)"
-EMBED_BASE = f"http://127.0.0.1:{os.environ.get('EMBED_SHIM_PORT', '6363')}"
 INDEX_DB = Path(os.environ.get("SKILL_INDEX_DB", Path.home() / ".cache/skill-search/index.sqlite"))
 OWNER_LOG = LOGDIR / "index-owner.log"
 ENAME = os.environ.get("SKILL_EMBED_CONTAINER", "skill-concierge-embed-shim")
+
+
+def _valid_port(value):
+    return isinstance(value, int) and 1 <= value <= 65535
+
+
+def _safe_embed_port(raw, default=6363):
+    """The same rule index_owner.py applies to EMBED_SHIM_PORT/SKILL_OWNER_EMBED_PORT: a
+    non-numeric or out-of-range value must not send doctor probing an address the owner
+    itself refused to bind to — fall back to the same default the owner falls back to."""
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        print(f"skill-concierge doctor: EMBED_SHIM_PORT={raw!r} is not a valid port; "
+              f"falling back to {default}", file=sys.stderr)
+        return default
+    if not _valid_port(port):
+        print(f"skill-concierge doctor: EMBED_SHIM_PORT={raw!r} is out of range 1-65535; "
+              f"falling back to {default}", file=sys.stderr)
+        return default
+    return port
+
+
 # The owner's two ports as configured (store URL + embed port), 6333/6363 by default: a
 # container publishing either one is in the owner's way; one on some other port is not.
-# A malformed SKILL_QDRANT_URL port must not crash doctor before it can report anything —
-# fall back to the same 6333 the index owner itself falls back to (index_owner.py).
+# A malformed value must not crash doctor before it can report anything, and must not send
+# doctor probing a different address than the one the owner (index_owner.py) actually falls
+# back to — both derivations apply the identical non-numeric/out-of-range rule.
 try:
     _store_port = urllib.parse.urlsplit(QURL).port or 6333
+    if not _valid_port(_store_port):
+        raise ValueError(f"port {_store_port} is out of range 1-65535")
 except ValueError as _exc:
     print(f"skill-concierge doctor: SKILL_QDRANT_URL={QURL!r} has a malformed port "
           f"({_exc}); falling back to 6333", file=sys.stderr)
     _store_port = 6333
-OWNER_PORTS = (str(_store_port), os.environ.get("EMBED_SHIM_PORT", "6363"))
+_embed_port = _safe_embed_port(os.environ.get("EMBED_SHIM_PORT"))
+EMBED_BASE = f"http://127.0.0.1:{_embed_port}"
+OWNER_PORTS = (str(_store_port), str(_embed_port))
 # The embed parity probe: one English and one Vietnamese prompt, owner vs in-process.
 PARITY_TEXTS = ("find the right skill to deploy a web app",
                 "tìm kỹ năng phù hợp để triển khai ứng dụng web")

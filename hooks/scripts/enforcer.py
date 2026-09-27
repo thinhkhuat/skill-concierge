@@ -45,12 +45,56 @@ import unicodedata
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def _valid_port(value):
+    return isinstance(value, int) and 1 <= value <= 65535
+
+
+def _safe_port(raw, default):
+    """The same non-numeric/out-of-range rule every port-deriving caller applies
+    (index_owner.py, doctor.py, setup.sh, bin/skill-search-mcp): a malformed EMBED_SHIM_PORT
+    must land here on the same default those callers fall back to, not send this hook
+    trying to reach an address nothing is listening on."""
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        print(f"skill-concierge enforcer: EMBED_SHIM_PORT={raw!r} is not a valid port; "
+              f"falling back to {default}", file=sys.stderr)
+        return default
+    if not _valid_port(port):
+        print(f"skill-concierge enforcer: EMBED_SHIM_PORT={raw!r} is out of range 1-65535; "
+              f"falling back to {default}", file=sys.stderr)
+        return default
+    return port
+
+
+def _safe_qdrant_url(raw, default_port=6333):
+    """Reconstructs `raw` with a validated port when its own port is unparseable or out of
+    range — the same rule index_owner.py and doctor.py apply, so this hook never tries a
+    store address the owner itself would have refused to bind to. A URL with no port at all,
+    or a port that is already valid, is returned unchanged."""
+    try:
+        port = urlsplit(raw).port
+    except ValueError as exc:
+        print(f"skill-concierge enforcer: SKILL_QDRANT_URL={raw!r} has a malformed port "
+              f"({exc}); falling back to port {default_port}", file=sys.stderr)
+        return f"http://localhost:{default_port}"
+    if port is not None and not _valid_port(port):
+        print(f"skill-concierge enforcer: SKILL_QDRANT_URL={raw!r} has a port out of range "
+              f"1-65535; falling back to port {default_port}", file=sys.stderr)
+        return f"http://localhost:{default_port}"
+    return raw
+
 
 # ── endpoints ────────────────────────────────────────────────────────────────
-EMBED_PORT = os.environ.get("EMBED_SHIM_PORT", "6363")
+EMBED_PORT = _safe_port(os.environ.get("EMBED_SHIM_PORT"), 6363)
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
 EMBED_URL = f"http://{EMBED_HOST}:{EMBED_PORT}/embed"
-QDRANT_URL = os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333").rstrip("/")
+QDRANT_URL = _safe_qdrant_url(os.environ.get("SKILL_QDRANT_URL", "http://localhost:6333")).rstrip("/")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 

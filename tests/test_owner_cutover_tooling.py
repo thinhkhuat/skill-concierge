@@ -435,6 +435,20 @@ def test_a_malformed_qdrant_url_port_does_not_crash_doctor_at_import(monkeypatch
     assert dr.OWNER_PORTS[0] == "6333"
 
 
+@pytest.mark.parametrize("raw", ["notaport", "70000", "-5"])
+def test_a_malformed_embed_shim_port_falls_back_to_the_same_default_the_owner_uses(
+        monkeypatch, raw):
+    """EMBED_BASE and OWNER_PORTS[1] both derive from EMBED_SHIM_PORT by plain string
+    interpolation, with no numeric or range check — doctor used to probe a malformed or
+    out-of-range address instead of the 6363 default the owner itself falls back to."""
+    for k in _ENGINE_SUITE_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("EMBED_SHIM_PORT", raw)
+    dr = _load("doctor_malformed_embed_port_t", ROOT / "scripts" / "doctor.py")
+    assert dr.OWNER_PORTS[1] == "6363"
+    assert dr.EMBED_BASE == "http://127.0.0.1:6363"
+
+
 def test_owner_log_row(dr, tmp_path, monkeypatch):
     log = tmp_path / "index-owner.log"
     monkeypatch.setattr(dr, "OWNER_LOG", log)

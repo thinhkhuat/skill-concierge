@@ -13,10 +13,26 @@
 #   ENFORCER_AUTHORIZED_SKIP=0 restore the enforcer's old silent getaway/intent_skip (ADR-0015)
 set -euo pipefail
 
+# _safe_port RAW DEFAULT — echoes RAW if it is a bare integer in 1-65535, else DEFAULT.
+# Every port-deriving caller (index_owner.py, doctor.py, bin/skill-search-mcp, this script)
+# applies this identical rule, so a malformed port lands every one of them on the same
+# default instead of this script probing or exporting an address the owner itself refused
+# to bind to.
+_safe_port() {
+  case "$1" in
+    ''|*[!0-9]*) echo "$2"; return ;;
+  esac
+  if [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ] 2>/dev/null; then
+    echo "$1"
+  else
+    echo "$2"
+  fi
+}
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$ROOT/vendor/skill-search"
 VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
-EPORT="${EMBED_SHIM_PORT:-6363}"
+EPORT="$(_safe_port "${EMBED_SHIM_PORT:-}" 6363)"
 OWNER_TITLE="skill-concierge index owner (Qdrant-compatible subset)"
 
 PYTHON="${SKILL_PYTHON:-}"
@@ -100,7 +116,7 @@ mkdir -p "$NEW_LOG"
 # it within a minute anyway; this makes a same-version code change land now). Only a process
 # whose `GET /` answers the owner title is signalled — never a container or another service.
 store_port="$(printf '%s' "$QURL" | sed -E 's#^[a-z]+://[^:/]+:?([0-9]*).*#\1#')"
-store_port="${store_port:-6333}"
+store_port="$(_safe_port "$store_port" 6333)"
 if curl -s -m 2 "http://127.0.0.1:$store_port/" 2>/dev/null | grep -qF "$OWNER_TITLE"; then
   for pid in $(lsof -nP -t -iTCP:"$store_port" -sTCP:LISTEN 2>/dev/null); do
     kill "$pid" 2>/dev/null || true
