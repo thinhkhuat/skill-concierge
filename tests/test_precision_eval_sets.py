@@ -50,6 +50,14 @@ def test_gains_losses(pe):
     assert gained == 1 and lost == 1
 
 
+def test_lost_gained_cases_identifies_the_individual_pairs(pe):
+    pairs = [("q1", "a"), ("q2", "b"), ("q3", "c"), ("q4", "d")]
+    base = [True, True, False, False]
+    cand = [True, False, True, False]
+    lost, gained = pe.lost_gained_cases(pairs, base, cand)
+    assert lost == [("q2", "b")] and gained == [("q3", "c")]
+
+
 # ── cd_bar ───────────────────────────────────────────────────────────────────────────────────
 def test_cd_bar_passes_on_a_clean_win(pe):
     # +4/-0: p = 1/2**4 = 0.0625 <= 0.10. A smaller n cannot clear 0.10 even at zero losses

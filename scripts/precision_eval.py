@@ -256,6 +256,14 @@ def gains_losses(base_hits, cand_hits) -> tuple:
     return gained, lost
 
 
+def lost_gained_cases(pairs, base_hits, cand_hits) -> tuple:
+    """([(text, target), ...] lost, [(text, target), ...] gained) — the individual cases
+    behind cd_bar's aggregate counts, for the release evidence's full lost-case list."""
+    lost = [pairs[i] for i, (b, c) in enumerate(zip(base_hits, cand_hits)) if b and not c]
+    gained = [pairs[i] for i, (b, c) in enumerate(zip(base_hits, cand_hits)) if c and not b]
+    return lost, gained
+
+
 def cd_bar(base_hits, cand_hits) -> dict:
     """One (set, view) bar 2 verdict: net top-6 change >= 0 AND the sign test clears 0.10."""
     gained, lost = gains_losses(base_hits, cand_hits)
@@ -487,10 +495,18 @@ def run_findability(args) -> int:
         cand_enf = [_enforcer_hit6(enf_cand, q, t) for q, t in pairs]
         cd_results[f"{label}_mcp"] = cd_bar(base_mcp, cand_mcp)
         cd_results[f"{label}_enforcer"] = cd_bar(base_enf, cand_enf)
+        cd_cases = {"mcp": lost_gained_cases(pairs, base_mcp, cand_mcp),
+                   "enforcer": lost_gained_cases(pairs, base_enf, cand_enf)}
         for view in ("mcp", "enforcer"):
             r = cd_results[f"{label}_{view}"]
             print(f"{label} [{view}]: n={len(pairs)} +{r['gained']}/-{r['lost']} "
                   f"net {r['net']:+d} p={r['p']}  -> {'PASS' if r['passed'] else 'FAIL'}")
+            lost, _gained = cd_cases[view]
+            if lost:
+                print(f"  {label} [{view}] LOST cases ({len(lost)}):")
+                for q, t in lost:
+                    print(f"    LOST  {t!r} <- {q!r}")
+        cd_results[f"{label}_cases"] = cd_cases
     vn_counts = {"C": len(c_sets["vn"]), "D": len(d_sets["vn"])}
     print(f"  (English rows gate the bar; Vietnamese reported separately: "
           f"C={vn_counts['C']}, D={vn_counts['D']})")
