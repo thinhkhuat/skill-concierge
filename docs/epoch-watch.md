@@ -32,7 +32,10 @@ Two REQ-004 behavior changes, both epoch-scoped (never pooled across this line):
 - **Exact search replaces Qdrant's approximate order.** The parity replay
   (`plans/reports/cutover-readiness-260926.md`) measured live Qdrant's default (HNSW-approximate)
   order against the owner's exact-cosine order on the same 540 prompts (500 ledger human prompts +
-  40 EN/VN) used for TASK-016: the raw 40-row over-fetch differs on 292-295/540 (305/540 in the switch-day re-run, 2026-09-27 01:47), but on the 8
+  40 EN/VN) used for TASK-016: the raw 40-row over-fetch differs on 292-295/540 (305/540 in the
+  switch-day re-run, 2026-09-27 01:47 — `~/.cache/skill-search/cutover-evidence-260926/cutover-step1.log:10`,
+  "approximate-vs-exact (live, retrieve shape): 305/540 prompts where Qdrant's default search order
+  differed from exact"), but on the 8
   skills actually offered (`TOP_K`), order differs on 66/540 prompts (12 %) and which skills
   appear differs on 14/540 (2.6 %). So roughly 1 offer in 8 changes, toward the true nearest
   neighbours — recall can only improve, and the replay never found an approximate score beating

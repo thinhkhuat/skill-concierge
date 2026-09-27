@@ -26,7 +26,9 @@ All notable changes to **skill-concierge**. Format loosely follows
   on 127.0.0.1 the same error still counts as a foreign listener.
 - `doctor --cutover` no longer fails a harness that is present but never had the plugin installed; an
   installed copy of unknown version still fails.
-- `setup.sh` starts the owner on the store and embed ports it probes and stops, taken from `.mcp.json`.
+- `setup.sh` starts the owner on the store port it probes and stops (taken from `.mcp.json`) and the
+  embed port it has been using throughout (`EMBED_SHIM_PORT` or the 6363 default — `.mcp.json` carries
+  no embed-port key).
 - Doctor's "Index owner" row shows the database path; its downgrade note says the owner keeps serving.
 - Tests: the launcher tests run in a temp dir with a temp database and free ports, so they can never
   start the real owner; the ZCode selftest no longer reads the real install registry; new regression
