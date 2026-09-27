@@ -18,10 +18,30 @@ Queries embedded via the ENGINE path (same space as the index). Run under the en
   $HOME/.claude/skill-concierge/venv/bin/python3 scripts/precision_eval.py
 
   --selftest   ranking/metric math self-check (no network)
+
+--mode findability (ADR-0074, design plans/260927-1450-findability-at-the-root SS4 E): the
+pre-registered evaluation harness for an index- or ranking-shaping change (F1/F2/X/K). Runs a
+BASE owner (the live index) against a CANDIDATE owner (a staging build) over five sets:
+  W  every claude-invocable installed skill's name-word probe (the SAME rule
+     `skill_search.findability` uses for its own ratchet) -> MCP-view rank, base vs candidate.
+  C  real interactive turns (scripts/calibrate_jev_gate.py's `load_corpus`/`is_positive`/
+     `gold`), meta skills excluded, English-gating / Vietnamese reported separately.
+  D  the same corpus's `search_queries` -> the skill that turn invoked.
+  N  every current installed skill's negatives in eval/scenarios-shadow/*.json (if generated;
+     absent corpus reports "0/0, not independently verified", never a false PASS-by-omission)
+     plus the incident's 7 hand-written controls (evidence/curated_measure.py's NEGATIVE list,
+     copied verbatim, target tk-gdelt-doctor).
+  G  the 3 GDELT name queries (#1 bar) plus the paraphrase query (F3's, reported only).
+Flags: --base-url/--base-embed-port, --candidate-url/--candidate-embed-port (default = base,
+so `--mode findability` alone runs a trivial base-vs-itself check), --collection, --corpus
+(the private real-turn corpus — read, never copied into this repo), --markdown (also emit a
+markdown evidence block). Exit 0 iff every GATING bar (W, C, D per view, N, G-name) passes.
 """
 import argparse
 import glob
+import importlib.util
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -38,6 +58,37 @@ LIVE = os.environ.get("SKILL_COLLECTION", "claude_skills")
 SHADOW = os.environ.get("SKILL_SHADOW_COLLECTION", "claude_skills_shadow")
 FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.20"))
 TOPK = 10
+
+# ── findability mode (ADR-0074) ─────────────────────────────────────────────────────────────
+REAL_TURN_CORPUS = Path(os.environ.get(
+    "SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "skill-concierge")) / \
+    "jev-calibration" / "real-turn-labels.jsonl"
+SHADOW_SCENARIOS_DIR = Path(os.environ.get("SKILL_SCENARIOS_SHADOW_DIR", ROOT / "eval" / "scenarios-shadow"))
+# skill-concierge's OWN skills — evaluating "can we find OUR OWN governance skills" is a
+# different, distracting question from "can we find a real task skill" (design SS4 E, set C).
+META_SKILLS = {"skill-search", "doctor", "setup", "flywheel", "catalogs", "consult",
+               "keep-on", "blocklist", "skill-usage-audit"}
+GDELT_SKILL = "tk-gdelt-doctor"
+# The 3 queries that literally NAME gdelt (the #1 bar) — plans/.../evidence/gdelt_probe.py's
+# default list minus its one non-name-bearing paraphrase, copied verbatim.
+GDELT_NAME_QUERIES = ["my gdelt tone query crashed with a unicode error",
+                      "move the gdelt-ngrams archive to another server", "gdelt"]
+GDELT_PARAPHRASE_QUERY = "is my local news archive up to date and healthy"   # F3's; reported only
+# The incident's 7 hand-written controls — plans/.../evidence/curated_measure.py's NEGATIVE
+# list, copied verbatim 2026-09-27. Target: GDELT_SKILL must NOT newly rank top-3 for these.
+GDELT_INCIDENT_CONTROLS = [
+    "ssh to rtx-wsl permission denied",
+    "write a vietnamese news briefing about the economy",
+    "godot shader programming",
+    "search the web for today's news",
+    "check disk space on my mac",
+    "move my postgres database to another server",
+    "monitor vietnamese news sites for new articles",
+]
+N_RANK_DEPTH = 10          # N/G only ever test "top 3" / "#1" — no need for W's deeper probe
+SIGN_TEST_P_BAR = 0.10
+N_VIOLATION_RATE_BAR = 0.01
+N_VIOLATION_GAIN_FRACTION = 1.0 / 3.0
 
 
 def _post(url, payload, timeout=60.0):
@@ -181,9 +232,325 @@ def run():
     return 0
 
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+# findability mode (ADR-0074) — pre-registered evaluation harness, design SS4 E
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+
+# ── bar math: pure, no I/O, no network — the whole reason it is decomposed this way ────────
+def sign_test_p(lost: int, gained: int) -> float:
+    """One-sided binomial sign-test p-value: P(X <= lost) under Binomial(lost + gained, 0.5).
+    A SMALL p means it would be unlikely, if gains/losses were an unbiased coin flip, to see
+    this FEW losses — i.e. losses are rare relative to gains (design bar 2's "p <= 0.10
+    against loss"). n == 0 (nothing changed either way) is the strongest possible no-loss
+    signal, not an undefined one, so it returns 0.0 rather than raising or returning 1.0."""
+    n = lost + gained
+    if n == 0:
+        return 0.0
+    return sum(math.comb(n, i) for i in range(0, lost + 1)) / (2 ** n)
+
+
+def gains_losses(base_hits, cand_hits) -> tuple:
+    """(gained, lost) from two parallel "was the gold skill in the cut" boolean sequences."""
+    gained = sum(1 for b, c in zip(base_hits, cand_hits) if c and not b)
+    lost = sum(1 for b, c in zip(base_hits, cand_hits) if b and not c)
+    return gained, lost
+
+
+def cd_bar(base_hits, cand_hits) -> dict:
+    """One (set, view) bar 2 verdict: net top-6 change >= 0 AND the sign test clears 0.10."""
+    gained, lost = gains_losses(base_hits, cand_hits)
+    net = gained - lost
+    p = sign_test_p(lost, gained)
+    return {"gained": gained, "lost": lost, "net": net, "p": round(p, 4),
+            "passed": net >= 0 and p <= SIGN_TEST_P_BAR}
+
+
+def w_bar(w_rows: list, topn: int = 3) -> dict:
+    """Bar 1 (v4.1 wording, the fix for the v4 review's blocker): no W probe leaves the top
+    `topn`, and the count of probes in the top `topn` must not fall."""
+    leavers = [r for r in w_rows if r["base_rank"] <= topn and r["cand_rank"] > topn]
+    base_top = sum(1 for r in w_rows if r["base_rank"] <= topn)
+    cand_top = sum(1 for r in w_rows if r["cand_rank"] <= topn)
+    return {"leavers": leavers, "base_top3": base_top, "cand_top3": cand_top,
+            "passed": not leavers and cand_top >= base_top}
+
+
+def n_bar(violations: int, n_total: int, recall_gains: int) -> dict:
+    """Bar 3 (Thinh's decision): violations <= 1% of N AND <= 1/3 of the recall gains
+    (W + C + D). Vacuously satisfied on an empty N (0/0) — the CALLER must still disclose
+    that as unverified, never print it as a measured pass."""
+    if n_total == 0:
+        return {"rate_ok": True, "gain_ok": True, "passed": True}
+    rate_ok = violations <= N_VIOLATION_RATE_BAR * n_total
+    gain_ok = violations <= N_VIOLATION_GAIN_FRACTION * recall_gains
+    return {"rate_ok": rate_ok, "gain_ok": gain_ok, "passed": rate_ok and gain_ok}
+
+
+def g_bar(name_query_ranks: list) -> dict:
+    """Bar 4: the 3 GDELT name queries at #1 in the MCP view (candidate)."""
+    return {"ranks": name_query_ranks, "passed": bool(name_query_ranks)
+            and all(r == 1 for r in name_query_ranks)}
+
+
+# ── module loading: two fresh enforcer instances (base/candidate each bake their OWN
+# QDRANT_URL/EMBED_PORT into module globals at import time — one shared, cached instance
+# cannot serve both) ─────────────────────────────────────────────────────────────────────────
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _enforcer_for(cal, qdrant_url: str, embed_port: int):
+    """A fresh enforcer pinned at (qdrant_url, embed_port), reusing `cal.load_enforcer`'s own
+    body — its cache is reset first so base and candidate get genuinely separate instances."""
+    os.environ["SKILL_QDRANT_URL"] = qdrant_url
+    os.environ["EMBED_SHIM_PORT"] = str(embed_port)
+    os.environ.setdefault("SKILL_CONCIERGE_HARNESS", "claude")
+    cal.ENF = None
+    return cal.load_enforcer()
+
+
+def _mcp_rank(fnd, embed_cache: dict, embed_base: str, query_base: str, collection: str,
+             scope_filter, text: str, target: str, depth: int) -> int:
+    """The MCP-view rank of `target` for `text`, via `skill_search.findability`'s own
+    name-word probe machinery (never re-embedded twice for the same (embed_base, text) —
+    a free win when --candidate-url defaults to --base-url)."""
+    key = (embed_base, text)
+    if key not in embed_cache:
+        embed_cache[key] = fnd._owner_embed(embed_base, text)
+    rank, _winner = fnd.name_word_rank(query_base, collection, scope_filter,
+                                       embed_cache[key], target, depth)
+    return rank
+
+
+def _enforcer_hit6(enf, text: str, target: str) -> bool:
+    """Is `target` in the enforcer's own installed top-6 for `text`?"""
+    vector = enf._embed(text)
+    return any(n == target for n, _d, _s in enf._retrieve(vector))
+
+
+# ── corpus loading ───────────────────────────────────────────────────────────────────────────
+def _cd_pairs(cal, enf, corpus_path: Path) -> tuple:
+    """(C, D) sets, each {"en": [(text, target), ...], "vn": [...]}. C = prompt -> gold();
+    D = the row's first `search_queries` entry -> gold(). Meta skills excluded from both;
+    `is_positive`/`gold` are `calibrate_jev_gate.py`'s own, reused verbatim."""
+    rows = cal.load_corpus(corpus_path)
+    c = {"en": [], "vn": []}
+    d = {"en": [], "vn": []}
+    for r in rows:
+        if not cal.is_positive(r):
+            continue
+        g = sorted(cal.gold(r))
+        if not g or g[0] in META_SKILLS:
+            continue
+        target = g[0]
+        lang = "en" if enf._is_english(r["prompt"]) else "vn"
+        c[lang].append((r["prompt"], target))
+        sq = r.get("search_queries")
+        if isinstance(sq, str) and sq.startswith("["):
+            try:
+                sq = json.loads(sq.replace("'", '"'))
+            except (ValueError, TypeError):
+                sq = []
+        for q in (sq or [])[:1]:
+            if isinstance(q, str) and q.strip():
+                d[lang].append((q, target))
+    return c, d
+
+
+def _n_pairs(installed_names: set) -> list:
+    """[(skill, negative_text), ...]: every CURRENT installed skill's authored negatives in
+    eval/scenarios-shadow/*.json (llm_eval_gen.py's output, gitignored — absent on a fresh
+    checkout is normal, never an error) plus the incident's 7 hand-written controls."""
+    rows = []
+    if SHADOW_SCENARIOS_DIR.is_dir():
+        for f in sorted(SHADOW_SCENARIOS_DIR.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            skill = data.get("skill")
+            if skill not in installed_names:
+                continue
+            for neg in data.get("negative") or []:
+                if isinstance(neg, str) and neg.strip():
+                    rows.append((skill, neg))
+    if GDELT_SKILL in installed_names:
+        rows += [(GDELT_SKILL, q) for q in GDELT_INCIDENT_CONTROLS]
+    return rows
+
+
+def _markdown_block(base_url, cand_url, w_result, cd_results, vn_counts, n_result,
+                    n_pairs_n, violations, g_result, g_ranks, overall) -> str:
+    lines = ["## Findability evidence (ADR-0074)",
+            f"- base `{base_url}` vs candidate `{cand_url}`",
+            f"- **W** (name-word, MCP view): base top-3 {w_result['base_top3']}, "
+            f"candidate top-3 {w_result['cand_top3']}, leavers {len(w_result['leavers'])} "
+            f"-> **{'PASS' if w_result['passed'] else 'FAIL'}**"]
+    for label in ("C", "D"):
+        for view in ("mcp", "enforcer"):
+            r = cd_results[f"{label}_{view}"]
+            lines.append(f"- **{label} [{view}]**: +{r['gained']}/-{r['lost']} "
+                         f"(net {r['net']:+d}, p={r['p']}) -> "
+                         f"**{'PASS' if r['passed'] else 'FAIL'}**")
+    lines.append(f"  - Vietnamese slice (informational, not gated): C={vn_counts['C']}, "
+                f"D={vn_counts['D']}")
+    lines.append(f"- **N**: {len(violations)}/{n_pairs_n} violations -> "
+                f"**{'PASS' if n_result['passed'] else 'FAIL'}**"
+                + ("" if n_pairs_n else " (vacuous — eval/scenarios-shadow/ not generated "
+                                       "here, NOT independently verified)"))
+    lines.append(f"- **G** (name queries, MCP view): {g_ranks} -> "
+                f"**{'PASS' if g_result['passed'] else 'FAIL'}**")
+    lines.append(f"- **Overall: {'PASS' if overall else 'FAIL'}**")
+    return "\n".join(lines)
+
+
+def run_findability(args) -> int:
+    os.chdir(Path.home())      # pin the view, mirroring skill_search.findability's own sweep
+    cal = _load_module("precision_eval_calibrate_jev_gate", ROOT / "scripts" / "calibrate_jev_gate.py")
+    from skill_search import findability as fnd
+    from skill_search import server as srv
+    from skill_search import skills_discovery as sd
+
+    base_url, base_port = args.base_url, args.base_embed_port
+    cand_url = args.candidate_url or args.base_url
+    cand_port = (args.candidate_embed_port if args.candidate_embed_port is not None
+                else args.base_embed_port)
+    base_embed, cand_embed = f"http://127.0.0.1:{base_port}", f"http://127.0.0.1:{cand_port}"
+
+    enf_base = _enforcer_for(cal, base_url, base_port)
+    enf_cand = _enforcer_for(cal, cand_url, cand_port)
+    scope_filter = srv._scope_filter()
+    embed_cache = {}
+
+    def rank(embed_base, query_base, text, target, depth):
+        return _mcp_rank(fnd, embed_cache, embed_base, query_base, args.collection,
+                         scope_filter, text, target, depth)
+
+    print(f"\nfindability eval (ADR-0074)  base={base_url} embed=:{base_port}  "
+          f"candidate={cand_url} embed=:{cand_port}  collection={args.collection}")
+
+    # ---- W ----
+    all_skills = sd.discover_skills()
+    installed_names = {s["name"] for s in all_skills
+                       if not str(s.get("scope", "")).startswith("catalog:")}
+    df = fnd.document_frequency(all_skills)
+    w_skills = fnd._installed_skills(enf_base, sd)
+    w_rows = []
+    for s in w_skills:
+        tok = fnd.probe_token(s["name"], df)
+        if tok is None:
+            continue
+        br = rank(base_embed, base_url, tok, s["name"], fnd.NAME_RANK_DEPTH)
+        cr = rank(cand_embed, cand_url, tok, s["name"], fnd.NAME_RANK_DEPTH)
+        w_rows.append({"skill": s["name"], "token": tok, "base_rank": br, "cand_rank": cr})
+    w_result = w_bar(w_rows)
+    print(f"W: {len(w_rows)} probes  base top-3 {w_result['base_top3']}  "
+          f"candidate top-3 {w_result['cand_top3']}  leavers {len(w_result['leavers'])}  "
+          f"-> {'PASS' if w_result['passed'] else 'FAIL'}")
+    for r in w_result["leavers"][:20]:
+        print(f"    LEFT TOP-3  {r['skill']!r} ({r['token']!r}): "
+              f"{r['base_rank']} -> {r['cand_rank']}")
+
+    # ---- C / D ----
+    c_sets, d_sets = _cd_pairs(cal, enf_base, args.corpus)
+    cd_results = {}
+    for label, pairs in (("C", c_sets["en"]), ("D", d_sets["en"])):
+        base_mcp = [rank(base_embed, base_url, q, t, N_RANK_DEPTH) <= 6 for q, t in pairs]
+        cand_mcp = [rank(cand_embed, cand_url, q, t, N_RANK_DEPTH) <= 6 for q, t in pairs]
+        base_enf = [_enforcer_hit6(enf_base, q, t) for q, t in pairs]
+        cand_enf = [_enforcer_hit6(enf_cand, q, t) for q, t in pairs]
+        cd_results[f"{label}_mcp"] = cd_bar(base_mcp, cand_mcp)
+        cd_results[f"{label}_enforcer"] = cd_bar(base_enf, cand_enf)
+        for view in ("mcp", "enforcer"):
+            r = cd_results[f"{label}_{view}"]
+            print(f"{label} [{view}]: n={len(pairs)} +{r['gained']}/-{r['lost']} "
+                  f"net {r['net']:+d} p={r['p']}  -> {'PASS' if r['passed'] else 'FAIL'}")
+    vn_counts = {"C": len(c_sets["vn"]), "D": len(d_sets["vn"])}
+    print(f"  (English rows gate the bar; Vietnamese reported separately: "
+          f"C={vn_counts['C']}, D={vn_counts['D']})")
+
+    # ---- N ----
+    n_pairs = _n_pairs(installed_names)
+    violations = []
+    for skill, text in n_pairs:
+        br = rank(base_embed, base_url, text, skill, N_RANK_DEPTH)
+        cr = rank(cand_embed, cand_url, text, skill, N_RANK_DEPTH)
+        if br > 3 and cr <= 3:
+            violations.append({"skill": skill, "query": text, "base_rank": br, "cand_rank": cr})
+    recall_gains = (sum(1 for r in w_rows if r["base_rank"] > 3 and r["cand_rank"] <= 3)
+                    + cd_results["C_mcp"]["gained"] + cd_results["D_mcp"]["gained"])
+    n_result = n_bar(len(violations), len(n_pairs), recall_gains)
+    print(f"N: {len(violations)}/{len(n_pairs)} violations "
+          f"(bar <= {N_VIOLATION_RATE_BAR * 100:.0f}% AND <= 1/3 of the recall gains "
+          f"{recall_gains})  -> {'PASS' if n_result['passed'] else 'FAIL'}"
+          + ("" if n_pairs else "  [N is EMPTY on this machine (eval/scenarios-shadow/ not "
+                                "generated) — this PASS is VACUOUS, not independently verified]"))
+    for v in violations:
+        print(f"    VIOLATION  {v['skill']!r} <- {v['query']!r}: "
+              f"{v['base_rank']} -> {v['cand_rank']}")
+
+    # ---- G ----
+    g_applicable = GDELT_SKILL in installed_names
+    g_ranks = ([rank(cand_embed, cand_url, q, GDELT_SKILL, N_RANK_DEPTH)
+               for q in GDELT_NAME_QUERIES] if g_applicable else [])
+    g_result = g_bar(g_ranks) if g_applicable else {"ranks": [], "passed": True}
+    if g_applicable:
+        g_base_ranks = [rank(base_embed, base_url, q, GDELT_SKILL, N_RANK_DEPTH)
+                        for q in GDELT_NAME_QUERIES]
+        g_para_rank = rank(cand_embed, cand_url, GDELT_PARAPHRASE_QUERY, GDELT_SKILL, N_RANK_DEPTH)
+        print(f"G (name, #1 bar): base {g_base_ranks} -> candidate {g_ranks}  "
+              f"-> {'PASS' if g_result['passed'] else 'FAIL'}")
+        print(f"G (paraphrase, F3's territory — reported only, never gated): "
+              f"candidate rank {g_para_rank}")
+    else:
+        print(f"G: {GDELT_SKILL!r} is not installed here — not applicable "
+              "(counted as PASS, not independently verified)")
+
+    gating = {"W": w_result["passed"], "C_mcp": cd_results["C_mcp"]["passed"],
+             "C_enforcer": cd_results["C_enforcer"]["passed"],
+             "D_mcp": cd_results["D_mcp"]["passed"],
+             "D_enforcer": cd_results["D_enforcer"]["passed"],
+             "N": n_result["passed"], "G": g_result["passed"]}
+    overall = all(gating.values())
+    print("\nPASS/FAIL by bar: " + "  ".join(f"{k}={'PASS' if v else 'FAIL'}"
+                                              for k, v in gating.items()))
+    print(f"OVERALL: {'PASS' if overall else 'FAIL'} "
+          f"({sum(gating.values())}/{len(gating)} bars)")
+
+    if args.markdown:
+        print("\n" + _markdown_block(base_url, cand_url, w_result, cd_results, vn_counts,
+                                     n_result, len(n_pairs), violations, g_result, g_ranks,
+                                     overall))
+    return 0 if overall else 1
+
+
 def main():
-    ap = argparse.ArgumentParser(description="full 495-way recall + precision gate")
+    ap = argparse.ArgumentParser(description="full 495-way recall + precision gate, or "
+                                              "--mode findability (ADR-0074)")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--mode", choices=("495", "findability"), default="495",
+                    help="495 = the original full-495-way recall/precision gate (default); "
+                         "findability = the ADR-0074 base-vs-candidate harness")
+    ap.add_argument("--base-url", default=os.environ.get("SKILL_QDRANT_URL", "http://127.0.0.1:6333"),
+                    help="findability mode: the BASE owner's Qdrant-compatible query URL")
+    ap.add_argument("--base-embed-port", type=int,
+                    default=int(os.environ.get("EMBED_SHIM_PORT", "6363")),
+                    help="findability mode: the BASE owner's embed port")
+    ap.add_argument("--candidate-url", default=None,
+                    help="findability mode: the CANDIDATE owner's query URL "
+                         "(default: same as --base-url, for a trivial self-check)")
+    ap.add_argument("--candidate-embed-port", type=int, default=None,
+                    help="findability mode: the CANDIDATE owner's embed port "
+                         "(default: same as --base-embed-port)")
+    ap.add_argument("--collection", default=os.environ.get("SKILL_COLLECTION", "claude_skills"),
+                    help="findability mode: the collection name on BOTH owners")
+    ap.add_argument("--corpus", type=Path, default=REAL_TURN_CORPUS,
+                    help="findability mode: the private real-turn corpus (read, never copied)")
+    ap.add_argument("--markdown", action="store_true",
+                    help="findability mode: also print a markdown evidence block")
     args = ap.parse_args()
     if args.selftest:
         # selftest must not require the engine import
@@ -193,10 +560,20 @@ def main():
             bad.append("rank_of wrong")
         if rank_of(ranked, "z") != (None, None):
             bad.append("missing-name rank wrong")
+        if abs(sign_test_p(8, 24) - 0.0035) > 1e-3:
+            bad.append("sign_test_p wrong (n=32,lost=8)")
+        if sign_test_p(0, 0) != 0.0:
+            bad.append("sign_test_p(0,0) must be 0.0, not undefined")
+        if not w_bar([{"base_rank": 1, "cand_rank": 1}])["passed"]:
+            bad.append("w_bar wrong on a no-op")
+        if n_bar(0, 0, 0)["passed"] is not True:
+            bad.append("n_bar must vacuously pass on an empty N")
         if bad:
             print("precision_eval --selftest FAIL:", bad); return 1
-        print("precision_eval --selftest OK: rank_of + missing-name handling")
+        print("precision_eval --selftest OK: rank_of + missing-name handling + bar math")
         return 0
+    if args.mode == "findability":
+        return run_findability(args)
     return run()
 
 
