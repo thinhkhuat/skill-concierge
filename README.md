@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.54.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.54.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -437,6 +437,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.54.1` — **published, ADR-0073 plus index-owner follow-ups: the audit scores what the standing order binds and the miner samples by prompt hash; installers repair a missing dir or launcher, refuse unreadable git and staged version changes, and the Command Code installer no longer runs its embedded Python's text as shell; `--cutover` skips harnesses without the plugin and fails an installed copy of unknown version; the owner's IPv6 probe carve-out applies to `::1` only; `setup.sh` starts the owner on the configured ports; doctor's "Index owner" row shows the database path; the v0.54.0 epoch is opened in `docs/epoch-watch.md`.**
 
 `0.54.0` — **published, ADR-0070: a local index owner replaces the Qdrant container and the Docker embed shim — one process serves Qdrant's REST subset on 6333 and `/embed`, `/health` and `/jev` on 6363 from a SQLite store, starts itself on demand, and needs no Docker; the engine drops `qdrant-client` and its embedded mode. Upgrading takes the switch-over steps in the CHANGELOG, not just a plugin update.** See [CHANGELOG](CHANGELOG.md).
 `0.52.9` — **published, ADR-0072: the installers fail closed — the Codex installer requires the launcher, MCP and hooks files, stages its copy and swaps it in, and always asks Codex whether the plugin is installed and enabled; paths never become code in any installer; the Claude Code registry repoint keeps a symlink and its permissions and repoints only the refreshed scope; doctor flags a missing launcher.** See [CHANGELOG](CHANGELOG.md).

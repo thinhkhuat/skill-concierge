@@ -3,6 +3,40 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.54.1] — 2026-09-27
+
+### Fixed — ADR-0073: the audit scores what the standing order binds; installers repair what doctor flags
+- **Audit:** a later continuation part counts only as a real skill name (a used skill, or a hyphenated
+  installed one; test and marketplace copies are skipped). Turns opened by a task notification, a
+  cross-session message or another harness string stay scored; a program's prompt opens an unscored turn
+  in either storage form. A skip ruling copied by a resumed session counts once, and the report adds the
+  skip verdicts on work-prompt turns beside the headline.
+- **Miner:** the balanced `prompt_intent` sample is chosen by a hash of the prompt text, spread across
+  projects, not the first rows in file order.
+- **Installers:** a missing install dir or launcher is exported again instead of failing silently; a
+  checkout git cannot read, or a staged but uncommitted version change, is refused before any write;
+  exports are staged and swapped in; the registry repoint changes only the record the run read. The
+  Command Code installer passes its embedded Python through quoted heredocs, so it no longer prints
+  `unknown: command not found`.
+- **Doctor:** the Codex row requires `.codex/hooks.json`; a row whose deployed manifest cannot be read
+  reports version None instead of the registry's claim.
+
+### Fixed — index-owner follow-ups after 0.54.0
+- The owner's start-up probe treats a missing-loopback address error as "nobody there" on `::1` only;
+  on 127.0.0.1 the same error still counts as a foreign listener.
+- `doctor --cutover` no longer fails a harness that is present but never had the plugin installed; an
+  installed copy of unknown version still fails.
+- `setup.sh` starts the owner on the store and embed ports it probes and stops, taken from `.mcp.json`.
+- Doctor's "Index owner" row shows the database path; its downgrade note says the owner keeps serving.
+- Tests: the launcher tests run in a temp dir with a temp database and free ports, so they can never
+  start the real owner; the ZCode selftest no longer reads the real install registry; new regression
+  tests cover the launcher's fail-open owner start and the owner's loading-state `routes`.
+
+### Docs
+- `docs/epoch-watch.md` opens the v0.54.0 epoch (switch 2026-09-27 06:45 +07, commit `dfcbb6b`).
+- `SKILL_OWNER_AUTOSTART` wording in README and AGENTS.md; the 0.54.0 upgrade notes carry the switch-over
+  rules inline.
+
 ## [0.54.0] — 2026-09-27
 
 0.53 is skipped (D7).
