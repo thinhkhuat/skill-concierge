@@ -106,6 +106,11 @@ _export_to() {
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
   mkdir -p "$parent"
   find "$parent" -maxdepth 1 -name '.skill-concierge-staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  # $parent here sits under $CACHE_BASE ($ZCODE_PLUGINS/cache/skill-concierge/skill-concierge)
+  # — this plugin's OWN cache dir, never shared with another plugin — so a bare '.staging.*'
+  # found here is provably ours too: a leftover from a run killed under a version before the
+  # prefix above was renamed to be skill-concierge-specific. Safe to prune the same way.
+  find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
   stage="$(mktemp -d "$parent/.skill-concierge-staging.XXXXXX")"
   trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
   if _is_own_checkout; then
@@ -183,49 +188,47 @@ chmod +x "$DEST/bin/"* "$DEST/setup.sh" \
 echo "    bin/ + installer exec bits ensured"
 
 # ── 4. Registry update: only the record this run read, resolved through a symlink, written
-# atomically, backed up only after a change-during-run check passes (same doctrine as the
-# claude-code/OMP repoint) ───────────────────────────────────────────────────
-python3 - "$REG_FILE" "$DEST" "$VERSION" <<'PY'
-import json, os, shutil, sys, time
-from pathlib import Path
-reg_path = Path(os.path.realpath(sys.argv[1]))
-install_path, version = sys.argv[2], sys.argv[3]
-raw = reg_path.read_bytes()
-data = json.loads(raw.decode("utf-8"))
-entry = None
-for p in data.get("plugins", []):
-    if p.get("id") == "skill-concierge@skill-concierge":
-        entry = p
-        break
-if entry is None:
-    print("!! no skill-concierge@skill-concierge entry in the registry — install once via "
-          "Settings → Plugin Management → Discover (Get), then re-run this sync.", file=sys.stderr)
+# atomically via adapters/lib/safe_write.py (same doctrine as the claude-code/OMP repoint),
+# backed up only after a change-during-run check passes ───────────────────────────────────
+PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$REG_FILE" "$DEST" "$VERSION" <<'PY'
+import sys
+import time
+
+import safe_write
+
+reg_path, install_path, version = sys.argv[1:4]
+
+
+def mutate(data):
+    entry = None
+    for p in data.get("plugins", []):
+        if p.get("id") == "skill-concierge@skill-concierge":
+            entry = p
+            break
+    if entry is None:
+        raise RuntimeError("no skill-concierge@skill-concierge entry in the registry — install once "
+                           "via Settings → Plugin Management → Discover (Get), then re-run this sync.")
+    entry["version"] = version
+    entry["installPath"] = install_path
+    entry["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+
+
+try:
+    _real, backup = safe_write.write_registry(reg_path, mutate, "zcode")
+except RuntimeError as e:
+    print(f"!! {e}", file=sys.stderr)
     sys.exit(1)
-entry["version"] = version
-entry["installPath"] = install_path
-entry["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-tmp_path = reg_path.with_name(reg_path.name + f".tmp-{os.getpid()}")
-tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-shutil.copymode(reg_path, tmp_path)
-if reg_path.read_bytes() != raw:
-    tmp_path.unlink()
-    print("!! installed_plugins.json changed while this ran (a live session?) — not repointed; re-run",
-          file=sys.stderr)
-    sys.exit(1)
-reg_dir = Path(sys.argv[1]).parent
-backup = reg_dir / f"installed_plugins.json.bak-zcode-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-backup.write_bytes(raw)
-for old in sorted(reg_dir.glob("installed_plugins.json.bak-zcode-*"))[:-5]:
-    old.unlink()
-os.replace(tmp_path, reg_path)
 print(f"    registry → v{version} (backup: {backup.name})")
 PY
 
 # ── 5. Optional manual MCP fallback merge ────────────────────────────────────
 if [ "$MCP_FALLBACK" = "1" ]; then
-  python3 - "$ROOT/adapters/zcode/mcp.json" "$CONFIG_FILE" <<'PY'
+  PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT/adapters/zcode/mcp.json" "$CONFIG_FILE" <<'PY'
 import json, shutil, sys, time
 from pathlib import Path
+
+import safe_write
+
 src, cfg_path = Path(sys.argv[1]), Path(sys.argv[2])
 server = json.loads(src.read_text(encoding="utf-8"))["mcpServers"]["skill-search"]
 if not cfg_path.exists():
@@ -237,7 +240,7 @@ cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
 mcp = cfg.setdefault("mcp", {})
 servers = mcp.setdefault("servers", {})
 servers["skill-search"] = server
-cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+safe_write.write_text(cfg_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
 print(f"    merged mcp.servers.skill-search (backup: {backup.name})")
 PY
   echo "    NOTE: the plugin .mcp.json layer remains primary; remove this user-scope entry"

@@ -25,9 +25,11 @@ INSTALL_SH = {
 }
 
 
-def _export_to_body(text):
+def _func_body(text, name):
+    """Extracts one bash function's full text verbatim, by brace depth — handles a body
+    containing nested `{ … }` blocks (loops, conditionals), unlike a bare line-range slice."""
     lines = text.splitlines(keepends=True)
-    start = next(i for i, l in enumerate(lines) if l.startswith("_export_to() {"))
+    start = next(i for i, l in enumerate(lines) if l.startswith(f"{name}() {{"))
     depth = 0
     end = start
     for i in range(start, len(lines)):
@@ -36,6 +38,10 @@ def _export_to_body(text):
             end = i
             break
     return "".join(lines[start:end + 1])
+
+
+def _export_to_body(text):
+    return _func_body(text, "_export_to")
 
 
 # The staging-cleanup fix itself, not the whole function (a pre-existing, unrelated wording/
@@ -343,3 +349,82 @@ def test_a_signal_killed_codex_export_leaves_no_staging_dir_behind(tmp_path):
     assert rc != 0
     assert not list(cache.glob(".skill-concierge-staging.*"))
     assert not (cache / cx.SSOT_VERSION).exists()
+
+
+# ── Legacy `.staging.*` prefix (pre-rename runs) ─────────────────────────────────────────────
+# The prefix used to be a bare `.staging.*` before it was renamed to the skill-concierge-
+# specific `.skill-concierge-staging.*` above. A run killed under an OLDER version, before
+# that rename shipped, can still have left a bare `.staging.*` dir behind — and the renamed
+# prune glob no longer matches it. claude-code, codex, and zcode each own their own cache
+# parent outright (`.../skill-concierge/skill-concierge`), so a bare `.staging.*` found there
+# is provably ours too and gets pruned the same way (>60 minutes old only). OMP's cache
+# parent is shared by every OMP plugin, so a bare `.staging.*` there is left untouched —
+# already proven by test_omp_stale_prune_only_touches_our_own_prefix_not_a_foreign_tool above.
+
+def test_legacy_bare_staging_prefix_is_pruned_in_claude_code(tmp_path):
+    repo = _make_repo(tmp_path, "2.0.0")
+    home, cache_base = _seed_claude_home(tmp_path, installed_version="1.9.0")
+    cache_base.mkdir(parents=True, exist_ok=True)
+    legacy = cache_base / ".staging.legacy01"
+    legacy.mkdir()
+    (legacy / "leftover.txt").write_text("from a run killed before the prefix rename")
+    old_time = time.time() - 3700   # > 60 minutes old
+    os.utime(legacy, (old_time, old_time))
+
+    env = installer_env(tmp_path, home, _fake_claude_dir(tmp_path))
+    r = subprocess.run(["bash", str(INSTALL_SH["claude-code"]), "--root", str(repo)],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not legacy.exists(), "a legacy bare .staging.* dir older than 60 minutes must be pruned too"
+    assert (cache_base / "2.0.0" / "bin" / "skill-search-mcp").exists()
+
+
+def _run_export_to_direct(install_path, dest):
+    """Runs ONLY `_export_to` (plus the `_is_own_checkout` it calls), extracted verbatim
+    from `install_path`, against a throwaway non-git $ROOT — never the full installer.
+    Codex's `_export_to` is only reached AFTER a successful `codex plugin add`, and this
+    repo's own fake `codex` CLI test double faithfully wipes the ENTIRE cache dir on a
+    successful `add` (matching real Codex's observed behavior) — so a full end-to-end run
+    would remove a pre-seeded legacy dir via THAT wipe regardless of whether `_export_to`'s
+    own prune line exists, and could never tell the two apart. Isolating `_export_to` itself
+    is the only way to prove this specific fix, not an unrelated side effect upstream of it."""
+    text = install_path.read_text()
+    export_body = _export_to_body(text)
+    is_own_checkout_body = _func_body(text, "_is_own_checkout")
+    fake_root = dest.parent.parent / "fake-root"
+    fake_root.mkdir(parents=True, exist_ok=True)
+    (fake_root / "marker.txt").write_text("throwaway non-git root for a direct _export_to call\n")
+    script = (f'set -euo pipefail\nROOT="{fake_root}"\n{is_own_checkout_body}\n{export_body}\n'
+              f'_export_to "$1"\n')
+    return subprocess.run(["bash", "-c", script, "_", str(dest)],
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_legacy_bare_staging_prefix_is_pruned_in_codex(tmp_path):
+    cache = tmp_path / "cache" / "skill-concierge" / "skill-concierge"
+    cache.mkdir(parents=True, exist_ok=True)
+    legacy = cache / ".staging.legacy01"
+    legacy.mkdir()
+    old_time = time.time() - 3700
+    os.utime(legacy, (old_time, old_time))
+
+    r = _run_export_to_direct(INSTALL_SH["codex"], cache / "2.0.0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not legacy.exists(), "a legacy bare .staging.* dir older than 60 minutes must be pruned too"
+    assert (cache / "2.0.0").exists()
+
+
+def test_legacy_bare_staging_prefix_is_pruned_in_zcode(tmp_path):
+    repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+    home = sib._seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=tmp_path / "irrelevant")
+    cache = home / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+    cache.mkdir(parents=True, exist_ok=True)
+    legacy = cache / ".staging.legacy01"
+    legacy.mkdir()
+    old_time = time.time() - 3700
+    os.utime(legacy, (old_time, old_time))
+
+    r = sib._run_zcode(tmp_path, repo, home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not legacy.exists(), "a legacy bare .staging.* dir older than 60 minutes must be pruned too"
+    assert (cache / "2.0.0").exists()

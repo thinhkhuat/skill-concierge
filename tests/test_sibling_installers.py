@@ -121,6 +121,11 @@ def _run_zcode(tmp_path, root, home):
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy(INSTALL_SH["zcode"], dest / "install.sh")
     (dest / "install.sh").chmod(0o755)
+    # SCRIPT_DIR/../lib must resolve inside the fixture the same way it does for the real
+    # checkout: adapters/lib/ is a real dependency of install.sh, not test-only scaffolding.
+    lib_dest = root / "adapters" / "lib"
+    if not lib_dest.exists():
+        shutil.copytree(ROOT / "adapters" / "lib", lib_dest)
     env = installer_env(tmp_path, home)
     return subprocess.run(["bash", str(dest / "install.sh")],
                            env=env, capture_output=True, text=True, timeout=120)
@@ -582,6 +587,57 @@ def test_commandcode_nested_wrong_shape_leaves_every_file_byte_identical(tmp_pat
     assert mcp.read_text() == mcp_good, "mcp.json must be left byte-identical"
     assert project_mcp.read_text() == project_mcp_good, "the project mcp.json must be left byte-identical"
     assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
+
+
+def test_commandcode_write_keeps_a_symlinked_settings_json_a_symlink_and_a_0600_mcp_json_0600(tmp_path):
+    """The same class of defect ADR-0072 fixed for the Claude Code registry write: a plain
+    `os.replace(tmp, path)` swaps a SYMLINKED settings.json for a plain file (breaking a
+    dotfiles-manager setup) and a fresh tmp file inherits the shell's umask, silently
+    widening a 0600 mcp.json (which can hold another MCP server's API token in its own
+    "env") to a world-readable mode."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    cmd = home / ".commandcode"
+    cmd.mkdir(parents=True)
+
+    # settings.json is a symlink into a dotfiles-managed target (a common real-world layout).
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real_settings = dotfiles / "commandcode-settings.json"
+    real_settings.write_text(json.dumps({"hooks": {}, "keep": "me"}))
+    (cmd / "settings.json").symlink_to(real_settings)
+
+    # mcp.json holds another MCP server's token and is locked down to owner-only.
+    mcp = cmd / "mcp.json"
+    mcp.write_text(json.dumps({"mcpServers": {"other-server": {"env": {"TOKEN": "s3cr3t"}}}}))
+    mcp.chmod(0o600)
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    assert (cmd / "settings.json").is_symlink(), "settings.json must stay a symlink"
+    assert os.path.realpath(cmd / "settings.json") == str(real_settings), \
+        "the symlink must still point at the same dotfiles-managed file"
+    updated = json.loads(real_settings.read_text())
+    assert updated["keep"] == "me" and "SessionStart" in updated["hooks"], \
+        "the REAL file the symlink points at must carry the new content"
+
+    assert oct(mcp.stat().st_mode & 0o777) == oct(0o600), "mcp.json must not widen past 0600"
+    mcp_data = json.loads(mcp.read_text())
+    assert mcp_data["mcpServers"]["other-server"]["env"]["TOKEN"] == "s3cr3t", \
+        "an unrelated MCP server's own entry must survive the merge"
+    assert "skill-search" in mcp_data["mcpServers"]
 
 
 # ── Sibling smoke tests (not owned here): must not choke on an apostrophe in the root path ──

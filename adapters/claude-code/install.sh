@@ -127,6 +127,12 @@ _export_to() {
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
   mkdir -p "$parent"
   find "$parent" -maxdepth 1 -name '.skill-concierge-staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  # $parent here sits under $CLAUDE_PLUGIN_CACHE ($HOME/.claude/plugins/cache/skill-concierge/
+  # skill-concierge) — this plugin's OWN cache dir, never shared with another plugin — so a
+  # bare '.staging.*' found here is provably ours too: a leftover from a run killed under a
+  # version before the prefix above was renamed to be skill-concierge-specific. Safe to prune
+  # the same way.
+  find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
   stage="$(mktemp -d "$parent/.skill-concierge-staging.XXXXXX")"
   trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
   if _is_own_checkout; then
@@ -247,49 +253,45 @@ else
     HEAD_SHA=""
     if _is_own_checkout; then HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "")"; fi
 
-    # ── Registry repoint: only the record this run read (its scope and project). The write goes
-    # to the file a symlink points at (a dotfiles setup), keeps its permissions, and is swapped in
-    # with os.replace, so no reader ever sees half a file. If the file changed since it was read (a
-    # live Claude Code session writing it), the repoint stops rather than overwrite that change; a
-    # write in the instant between that last check and the swap is not caught. The backup sits
-    # beside the registry path Claude Code reads; the newest five are kept. ──
-    python3 - "$CLAUDE_PLUGINS_JSON" "$DEST" "$VERSION" "$HEAD_SHA" "$SCOPE" "$PROJECT_PATH" <<'PY'
-import json, os, shutil, sys, time
-from pathlib import Path
-reg_path = Path(os.path.realpath(sys.argv[1]))
-install_path, version, head_sha, scope, project = sys.argv[2:7]
-raw = reg_path.read_bytes()
-data = json.loads(raw.decode("utf-8"))
-entry = data.get("plugins", {}).get("skill-concierge@skill-concierge")
-if not entry:
-    print("!! registry lost the skill-concierge@skill-concierge entry mid-run", file=sys.stderr)
-    sys.exit(1)
-records = entry if isinstance(entry, list) else [entry]
-targets = [r for r in records
-           if r.get("scope", "user") == scope and (r.get("projectPath") or "") == project] or records[:1]
+    # ── Registry repoint: only the record this run read (its scope and project). The write
+    # goes through adapters/lib/safe_write.py, which resolves the file a symlink points at (a
+    # dotfiles setup), keeps its permissions, and swaps it in with os.replace, so no reader ever
+    # sees half a file. If the file changed since it was read (a live Claude Code session writing
+    # it), the repoint stops rather than overwrite that change; a write in the instant between
+    # that last check and the swap is not caught. The backup sits beside the registry path Claude
+    # Code reads; the newest five are kept. ──
+    PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$CLAUDE_PLUGINS_JSON" "$DEST" "$VERSION" "$HEAD_SHA" "$SCOPE" "$PROJECT_PATH" <<'PY'
+import sys
+import time
+
+import safe_write
+
+reg_path, install_path, version, head_sha, scope, project = sys.argv[1:7]
 now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-for rec in targets:
-    rec["version"] = version
-    rec["installPath"] = install_path
-    rec["lastUpdated"] = now
-    if head_sha:
-        rec["gitCommitSha"] = head_sha
-    else:
-        rec.pop("gitCommitSha", None)   # a plain copy has no commit of its own
-tmp_path = reg_path.with_name(reg_path.name + f".tmp-{os.getpid()}")
-tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-shutil.copymode(reg_path, tmp_path)
-if reg_path.read_bytes() != raw:
-    tmp_path.unlink()
-    print("!! installed_plugins.json changed while this ran (a live session?) — not repointed; re-run",
-          file=sys.stderr)
+
+
+def mutate(data):
+    entry = data.get("plugins", {}).get("skill-concierge@skill-concierge")
+    if not entry:
+        raise RuntimeError("registry lost the skill-concierge@skill-concierge entry mid-run")
+    records = entry if isinstance(entry, list) else [entry]
+    targets = [r for r in records
+               if r.get("scope", "user") == scope and (r.get("projectPath") or "") == project] or records[:1]
+    for rec in targets:
+        rec["version"] = version
+        rec["installPath"] = install_path
+        rec["lastUpdated"] = now
+        if head_sha:
+            rec["gitCommitSha"] = head_sha
+        else:
+            rec.pop("gitCommitSha", None)   # a plain copy has no commit of its own
+
+
+try:
+    _real, backup = safe_write.write_registry(reg_path, mutate, "claude-code")
+except RuntimeError as e:
+    print(f"!! {e}", file=sys.stderr)
     sys.exit(1)
-reg_dir = Path(sys.argv[1]).parent
-backup = reg_dir / f"installed_plugins.json.bak-claude-code-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-backup.write_bytes(raw)
-for old in sorted(reg_dir.glob("installed_plugins.json.bak-claude-code-*"))[:-5]:
-    old.unlink()
-os.replace(tmp_path, reg_path)
 where = f"scope {scope}" + (f", project {project}" if project else "")
 print(f"    registry → v{version} for {where} (backup: {backup.name})")
 PY

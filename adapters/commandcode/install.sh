@@ -78,15 +78,18 @@ MOD_DST="$MODS_DIR/skill-concierge.ts"
 
 # ── 1-4. Compute every JSON transform in memory first; a failure anywhere in this step
 # exits before a single byte is written or the mod is copied. Only once every transform has
-# succeeded does the commit phase write each file (atomically: tmp file + rename) and copy
-# the mod — so a shape wrong enough to pass the preflight above but wrong at a NESTED level
-# (e.g. "hooks.SessionStart": null, or an entry whose own "hooks" list holds something that
-# is not an object) can no longer crash mid-run after earlier steps already wrote their part.
-python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" <<'PY'
+# succeeded does the commit phase write each file (atomically, symlink- and mode-safe via
+# adapters/lib/safe_write.py) and copy the mod — so a shape wrong enough to pass the
+# preflight above but wrong at a NESTED level (e.g. "hooks.SessionStart": null, or an entry
+# whose own "hooks" list holds something that is not an object) can no longer crash mid-run
+# after earlier steps already wrote their part.
+PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
+
+import safe_write
 
 root = sys.argv[1]
 settings_path = Path(sys.argv[2])
@@ -197,10 +200,7 @@ def with_session_start_hooks(settings, root):
 
 
 def atomic_write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    safe_write.write_text(path, json.dumps(data, indent=2) + "\n")
 
 
 # ── Compute (nothing written yet) ──

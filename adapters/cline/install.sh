@@ -52,9 +52,12 @@ echo "    shims → $CLINE_HOOKS/{UserPromptSubmit,PostToolUse}.cjs (bridge: $BR
 
 # ── 3. MCP merge (backup first, idempotent) ──────────────────────────────────
 if [ "$NO_MCP" = "0" ]; then
-  python3 - "$ROOT/adapters/cline/mcp.json" "$CLINE_SETTINGS" <<'PY'
+  PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT/adapters/cline/mcp.json" "$CLINE_SETTINGS" <<'PY'
 import json, shutil, sys, time
 from pathlib import Path
+
+import safe_write
+
 src, cfg_path = Path(sys.argv[1]), Path(sys.argv[2])
 server = json.loads(src.read_text(encoding="utf-8"))["mcpServers"]["skill-search"]
 cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +81,7 @@ else:
         print("    !! an existing skill-search row differs — OVERWRITING (was it manually "
               "edited? compare with the backup)", file=sys.stderr)
     servers["skill-search"] = server
-    cfg_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    safe_write.write_text(cfg_path, json.dumps(existing, indent=2, ensure_ascii=False) + "\n")
     print(f"    merged mcpServers.skill-search → {cfg_path}")
 PY
 else

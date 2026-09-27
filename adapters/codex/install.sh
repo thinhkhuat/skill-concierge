@@ -166,6 +166,12 @@ _export_to() {
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
   mkdir -p "$parent"
   find "$parent" -maxdepth 1 -name '.skill-concierge-staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  # $parent here sits under $CODEX_PLUGIN_CACHE ($HOME/.codex/plugins/cache/skill-concierge/
+  # skill-concierge) — this plugin's OWN cache dir, never shared with another plugin — so a
+  # bare '.staging.*' found here is provably ours too: a leftover from a run killed under a
+  # version before the prefix above was renamed to be skill-concierge-specific. Safe to prune
+  # the same way.
+  find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
   stage="$(mktemp -d "$parent/.skill-concierge-staging.XXXXXX")"
   trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
   if _is_own_checkout; then
