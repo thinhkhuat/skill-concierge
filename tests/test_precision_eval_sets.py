@@ -246,8 +246,8 @@ def test_enforcer_for_produces_independently_configured_instances(pe, cal, monke
     base = pe._enforcer_for(cal, "http://127.0.0.1:11111", 22222)
     cand = pe._enforcer_for(cal, "http://127.0.0.1:33333", 44444)
     assert base is not cand
-    assert base.QDRANT_URL == "http://127.0.0.1:11111" and base.EMBED_PORT == "22222"
-    assert cand.QDRANT_URL == "http://127.0.0.1:33333" and cand.EMBED_PORT == "44444"
+    assert base.QDRANT_URL == "http://127.0.0.1:11111" and base.EMBED_PORT == 22222
+    assert cand.QDRANT_URL == "http://127.0.0.1:33333" and cand.EMBED_PORT == 44444
     assert base.RUNNING_HARNESS == "claude" and cand.RUNNING_HARNESS == "claude"
 
 
