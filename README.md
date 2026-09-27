@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.54.2-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.55.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -437,6 +437,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.55.0` — **published, findability detection (ADR-0074): the system now measures whether each installed skill can be found by the most distinctive word in its own name, keeps a ratcheted baseline, warns in doctor's new "Findability" row when a new skill is not findable or a known one regresses, and ships the pre-registered base-vs-candidate harness (`precision_eval.py --mode findability`); three retrieval fixes (`SKILL_DECLARED_TRIGGERS`, `SKILL_SEARCH_COMPLEMENT`) are built but OFF, having failed the precision bar on their own, so the index and every search result are byte-identical to 0.54.x at the defaults; doctor also turns a crashing check into a FAIL row instead of dying.**
 
 `0.54.2` — **published, a cleanup release: the Docker embed-shim build files are removed (the images are
 archived outside the repo; ADR-0070 already retired the image from the deployment path); the Command Code

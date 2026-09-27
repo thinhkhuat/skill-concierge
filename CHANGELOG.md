@@ -3,6 +3,55 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.55.0] — 2026-09-27
+
+### Added — ADR-0074: findability is a ratcheted invariant (detection only)
+- **Findability sweep and ratchet** (`vendor/skill-search/skill_search/findability.py`). Two read-only probes run against the local index owner:
+  - each installed skill's rank for the most distinctive word in its own name, measured the way `search_skills` ranks;
+  - how often each skill's own trigger phrases still find it, measured the way the enforcer retrieves.
+  - Results are written to `~/.claude/skill-concierge/findability.json` (`SKILL_FINDABILITY_PATH`).
+  - The first sweep sets the baseline and warns about nothing. After that, a sweep warns when:
+    - a new skill is not in the top 3 for its own name word;
+    - a known skill falls out of the top 3;
+    - a known skill's own-phrase score drops by ≥ 0.25 to below 0.5.
+  - `python -m skill_search.findability --accept <skill>` resets one skill's baseline.
+  - The first live sweep found 113 of 149 skills with a distinctive name word outside the top 3 for it. Until now nothing reported this.
+- **Automatic sweep after a reindex.** When a reindex embeds or deletes points, `build_index` launches the sweep:
+  - detached, from `~`, pinned to the Claude view;
+  - throttled to one run per 10 minutes;
+  - quiet when the owner is unreachable.
+
+  `SKILL_FINDABILITY=0` disables it. The flag is not index-shaping, so it stays out of `ENGINE_ENV_KEYS`.
+- **doctor "Findability" row** (read-only): WARN on any sweep warning, OK with the backlog count otherwise. It never runs a sweep and never calls the owner.
+- **`scripts/precision_eval.py --mode findability`:** the pre-registered base-vs-candidate harness. It runs five sets and prints every lost case:
+  - W: name words;
+  - C: real turns;
+  - D: real search queries;
+  - N: precision negatives (`SKILL_SCENARIOS_SHADOW_DIR`);
+  - G: the GDELT name queries.
+
+### Changed — built and tested, but OFF by default
+- **`SKILL_DECLARED_TRIGGERS`** (default 0) covers two changes:
+  - exclusion sentences ("Not for …") are no longer indexed as positive trigger phrases;
+  - a guarded list-form `when_to_use` becomes separate declared phrases.
+- **`SKILL_SEARCH_COMPLEMENT`** (default 0): in `search_skills`, installed rows rank ahead of an external-catalog row that scores within 0.08 of them.
+- **Why both stay off:** they failed the pre-registered precision bar.
+  - The external rule caused 129 of 131 violations.
+  - The phrase fixes alone lifted name-word top-3 hits only from 35 to 36, which left 2 violations against a bound of 1.
+- **Next:** v0.56.0 judges them together with a keyword channel. `=1` plus a reindex turns either on for local evaluation.
+- **At the shipped defaults the index is byte-identical to 0.54.x.** Both staging builds embedded 0 points; a sorted SHA-256 over all 44,602 points matched, and so did the raw file MD5.
+
+### Fixed
+- **doctor:** a check that raises no longer takes the whole report down. It becomes a FAIL row naming the exception, and every other row still reports. The Findability row also checks nested field types, so a malformed `findability.json` gives a WARN instead of a crash.
+- **Tests:** the vendored end-to-end indexing test no longer walks the operator's real `~/.claude` skills and plugin cache. It flaked whenever another session edited a skill. The vendored conftest also sets `SKILL_FINDABILITY=0`, so no test can launch a sweep.
+
+- **Owner ports:** the findability sweep and `precision_eval.py`'s owner-URL defaults derive the owner's
+  ports through `skill_search.ports`, the same rule the owner binds by.
+
+### Epoch
+- `server.py` changed, so by the epoch rule the measurement window restarts at this release's go-live commit.
+- Ranking is unchanged at the defaults, so a metric shift across the boundary is environmental, not a design effect.
+
 ## [0.54.2] — 2026-09-27
 
 ### Removed

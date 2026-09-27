@@ -13,6 +13,15 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.55.0 — findability detection; ranking unchanged (no new watch items)
+
+**Epoch start moves to each harness's v0.55.0 go-live.**
+- v0.55.0 changes `vendor/skill-search/skill_search/server.py` (the findability sweep hook and two retrieval changes that ship OFF). At the shipped defaults the index and every search result are byte-identical to v0.54.2 (0 points embedded on both staging builds; a sorted SHA-256 over 44,602 points and the raw file MD5 both matched).
+- The epoch rule keys on the commit, so W30-W33 below window from the v0.55.0 go-live. Any shift across the boundary is environmental, not a design effect.
+- **Findability** is watched in doctor's "Findability" row, not the ledger: a backlog count plus warnings for a new unfindable skill or a regression. The first live sweep's backlog was 113 of 149 skills.
+
+---
+
 ## v0.54.2 — cleanup release; the v0.54.0 watch items carry on (no new watch items)
 
 **Epoch start moves to each harness's v0.54.2 go-live.**
