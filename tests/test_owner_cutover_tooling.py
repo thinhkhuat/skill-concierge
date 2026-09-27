@@ -688,7 +688,7 @@ def test_launcher_starts_owner_when_health_fails(tmp_path, switch, started):
     assert marker.exists() is started
     if started:
         assert marker.read_text().strip() == "skill_search.index_owner"
-        # H2: the owner must land in its OWN process group, never the launcher's (bash
+        # The owner must land in its OWN process group, never the launcher's (bash
         # `subprocess.run` here shares this test process's pgid, since it is not itself
         # started with a new session) — a `nohup ... &` regression would put the child
         # back in that shared group.
@@ -757,12 +757,12 @@ def test_setup_has_no_docker_start_path_and_starts_owner():
     text = (ROOT / "setup.sh").read_text()
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     assert "docker" not in code
-    # H2: started via argv, not "-m skill_search.index_owner" string-glued on one nohup line
+    # Started via argv, not "-m skill_search.index_owner" string-glued on one nohup line
     assert '"skill_search.index_owner"' in code
     assert "start_new_session=True" in code
     # the stop is guarded by the owner title, so it can never signal a container's process
     assert "index owner (Qdrant-compatible subset)" in code
-    # M4: the engine resync takes the SAME mkdir lock bin/skill-search-mcp's background
+    # The engine resync takes the SAME mkdir lock bin/skill-search-mcp's background
     # resync uses, so the two can never race pip against the shared venv.
     assert ".engine-resync.lock" in code
     # The owner it starts must bind the SAME store/embed ports this script just
