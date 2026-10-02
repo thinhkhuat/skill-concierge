@@ -377,6 +377,18 @@ WIDE_CACHE = CAL_DIR / "wide-scores.jsonl"
 CATALOG_SNAPSHOT = CAL_DIR / "invocable-catalog.json"   # the catalogue the last replay/wide run scored against
 
 
+# W24 drift trigger. Tuned 2026-10-03 by Thinh's order (was a flat 10 %): 5 %, tightened to 2 % once
+# the catalogue passes 500 skills (the size where a third 250-option wide chunk appears). Why: the
+# 494 -> 542 move (+9.7 %, 106 names turned over) never tripped 10 %. Revert: return 0.10 here and
+# restore "> 10 %" in docs/epoch-watch.md W24.
+W24_TRIGGER, W24_TRIGGER_LARGE, W24_LARGE_N = 0.05, 0.02, 500
+
+
+def w24_trigger(base_n, med):
+    """Drift share that trips W24: tighter when the replay or the live catalogue exceeds W24_LARGE_N."""
+    return W24_TRIGGER_LARGE if max(base_n or 0, med or 0) > W24_LARGE_N else W24_TRIGGER
+
+
 def catalog_hash(catalog):
     return hashlib.sha256(json.dumps(catalog, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -600,6 +612,7 @@ def cmd_live(a):
     except (OSError, ValueError):
         base_n = None
     drift = abs(med - base_n) / base_n if med is not None and base_n else None
+    trigger = w24_trigger(base_n, med)
     try:
         catalog = live_catalog()
     except Exception as e:  # noqa: BLE001 — Qdrant down: report the rest
@@ -608,7 +621,8 @@ def cmd_live(a):
     print(f"W24 catalogue size on rows: median {med} min {min(ns, default=None)} max {max(ns, default=None)};"
           f" replay catalogue {base_n} (snapshot {CATALOG_SNAPSHOT.name}); this cwd now "
           f"{len(catalog) if catalog is not None else '?'}"
-          + (f"; drift from the replay {100 * drift:.0f}% (trigger > 10%)" if drift is not None else ""))
+          + (f"; drift from the replay {100 * drift:.1f}% (trigger > {100 * trigger:.0f}%)"
+             if drift is not None else ""))
     tail = [p for r in ok if r.get("band") == "offer" for _n, p in (r.get("offered") or [])[1:]]
     print(f"W22 tail rows on live offers: {len(tail)}; below p {TAIL_CUTS[0]}: {100 * below(tail, TAIL_CUTS[0]):.0f}%")
 

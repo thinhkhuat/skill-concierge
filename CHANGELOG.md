@@ -3,6 +3,16 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [Unreleased]
+
+### Changed
+- **W24 catalogue-drift trigger tightened (owner's order, 2026-10-03).** `calibrate_jev_gate.py live` now
+  flags drift above 5 %, or above 2 % once the replay or live catalogue exceeds 500 skills (was a flat
+  10 %). The 494 → 542 move (+9.7 %, 106 names turned over: `pstack` +54, `ouroboros` −21, keep-off and
+  blocklist changes, new personal skills) had passed unflagged. The owner confirmed 542 as the correct
+  current catalogue. Revert: `w24_trigger` in `scripts/calibrate_jev_gate.py` and the W24 row in
+  `docs/epoch-watch.md`.
+
 ## [0.55.2] — 2026-09-28
 
 ### Fixed

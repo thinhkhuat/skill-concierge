@@ -104,7 +104,7 @@ def test_live_report(run):
     assert "W23 latency ms p50 800 p90 2000" in out
     assert "errors 33.3% {'TimeoutError': 1, 'ValueError': 1}" in out and "via {'relay': 3, 'direct': 1}" in out
     assert "W24 catalogue size on rows: median 494 min 490 max 500; replay catalogue 494" in out
-    assert "this cwd now 3; drift from the replay 0%" in out
+    assert "this cwd now 3; drift from the replay 0.0% (trigger > 5%)" in out
     assert "W22 tail rows on live offers: 6; below p 0.01: 50%" in out
     assert "W21 jev_skip turns: 1; of them the agent then used a skill: 1" in out
     assert "session abcdef123 turn u-skip at 2026-09-26T10:30 used ['ak-git']" in out
@@ -112,6 +112,15 @@ def test_live_report(run):
     assert "W22 sdk / claude -p: used skill in the offer 1/1 (100%)" in out
     assert "W22 skill-concierge dev sessions: used skill in the offer 0/1 (0%)" in out
     assert PRIVATE not in out
+
+
+@pytest.mark.parametrize("base_n, med, want", [
+    (494, 494, 0.05), (500, 499, 0.05),     # at or below 500 skills: 5 %
+    (501, 480, 0.02), (494, 522, 0.02),     # replay or live catalogue above 500: 2 %
+    (None, None, 0.05),
+])
+def test_w24_trigger_tightens_above_500_skills(base_n, med, want):
+    assert C.w24_trigger(base_n, med) == want
 
 
 def test_since_with_offset_is_the_same_instant(run):
