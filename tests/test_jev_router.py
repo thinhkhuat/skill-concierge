@@ -37,8 +37,11 @@ CATALOG = [("update-config", "Configure the Claude Code harness via settings.jso
 
 def _load(tmp_path, **env):
     old = dict(os.environ)
-    for k in ("ENFORCER_JEV_ROUTER", "ENFORCER_JEV_GATE"):   # the router is read at import: an
-        os.environ.pop(k, None)                              # exported off switch must not leak in
+    for k in ("ENFORCER_JEV_ROUTER", "ENFORCER_JEV_GATE",    # the router is read at import: an exported
+              "ENFORCER_JEV_URL", "ENFORCER_JEV_KEY",        # off switch or this machine's gateway wiring
+              "ENFORCER_JEV_MODEL", "ENFORCER_JEV_TIMEOUT",  # must not leak in
+              "ENFORCER_JEV_FITS_FLOOR", "FLYWHEEL_LLM_ENDPOINT"):
+        os.environ.pop(k, None)
     os.environ.update({"SKILL_CONCIERGE_LOG": str(tmp_path), **env})
     try:
         spec = importlib.util.spec_from_file_location(f"enforcer_router_{abs(hash((str(tmp_path), str(env))))}", ENFORCER)
@@ -67,13 +70,13 @@ def _run(mod, monkeypatch, prompt=PROMPT, rerank=None, jev_error=None, key="test
     """main() on a fake stdin -> (stdout, jev calls, embed reached, ledger rows)."""
     calls, reached = [], {"embed": False}
 
-    def fake_call(state, questions, k):
+    def fake_call(state, questions, tier, key, timeout):
         calls.append((state, sorted(questions)))
         if jev_error:
             raise jev_error
         if any(q.startswith("wide::") for q in questions):
-            return _wide([n for n, _ in CATALOG]), "relay"
-        return rerank, "relay"
+            return _wide([n for n, _ in CATALOG]), "relay", "jev-1.13.0"
+        return rerank, "relay", "jev-1.13.0"
 
     def fake_embed(_text):
         reached["embed"] = True
@@ -120,6 +123,13 @@ def test_confident_choice_still_offers_the_ranked_rows(tmp_path, monkeypatch):
     assert rows[-1]["band"] == "offer" and out.index("update-config") < out.index("ak-git")
     assert rows[-1]["jev"]["lead"] == "update-config" and rows[-1]["jev"]["via"] == "relay"
     assert mod.WHOLE_SHELF_HEAD.strip() in out and mod.PREVIEW_HEAD.strip() not in out   # the agent is told what it holds
+
+
+def test_router_event_records_the_model_and_its_tunable_settings(tmp_path, monkeypatch):
+    mod = _load(tmp_path, ENFORCER_JEV_FITS_FLOOR="0.25", ENFORCER_JEV_TIMEOUT="2.0")
+    _, _, _, rows = _run(mod, monkeypatch, rerank=CONFIDENT)
+    ev = rows[-1]["jev"]
+    assert (ev["model"], ev["floor"], ev["to"]) == (mod.JEV_MODEL, 0.25, 2.0)
 
 
 def test_offer_is_capped_and_in_choice_order(tmp_path, monkeypatch):
@@ -236,11 +246,11 @@ def test_relay_falls_back_to_direct_only_when_the_route_is_missing(tmp_path, mon
                             (mod.urllib.error.HTTPError(mod.JEV_RELAY_URL, 401, "auth", {}, None), False)):
         seen.clear()
         if direct:
-            assert mod._jev_call({}, {}, "k") == ({"ok": True}, "direct")
+            assert mod._jev_call({}, {}, mod._jev_bench()[0], "k", 1.0) [:2] == ({"ok": True}, "direct")
             assert seen == [mod.JEV_RELAY_URL, mod.JEV_URL]
         else:
             with pytest.raises(type(failure)):
-                mod._jev_call({}, {}, "k")
+                mod._jev_call({}, {}, mod._jev_bench()[0], "k", 1.0)
             assert seen == [mod.JEV_RELAY_URL]
 
 

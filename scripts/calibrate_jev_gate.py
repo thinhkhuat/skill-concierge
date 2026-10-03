@@ -133,13 +133,30 @@ def ckey(variant, model, state, cands):
     return hashlib.sha256(blob.encode()).hexdigest()[:20]
 
 
-def call(enf, key, model, state, qs, timeout):
-    body = {"model": model, "state": state, "questions": qs}
+def tier_for(enf, a):
+    """The bench tier that serves `--model` (ADR-0075): the hook's own tier when the bench lists the model,
+    else one built on `--endpoint` (ts = TypeSafe, gw = the owner's gateway)."""
+    for t in enf._jev_bench():
+        if t["model"] == a.model:
+            return t
+    if a.endpoint == "gw":
+        if not enf.JEV_GW_URL:
+            sys.exit("--endpoint gw needs FLYWHEEL_LLM_ENDPOINT (https) for the gateway URL")
+        return {"ep": "gw", "model": a.model, "url": enf.JEV_GW_URL, "timeout": enf.JEV_GW_TIMEOUT_S}
+    return {"ep": "ts", "model": a.model, "url": enf.JEV_URL, "timeout": enf.JEV_TIMEOUT_S}
+
+
+def call(enf, tier, state, qs, timeout):
+    body = {"model": tier["model"], "state": state, "questions": qs}
+    url = enf._jev_direct_url(tier["url"], tier["ep"])   # the hook's host pin: each key to its own host
+    key = enf._jev_key(tier)
     err = None
     for attempt in range(4):
         t0 = time.time()
         try:
-            ans = enf._post_json(enf.JEV_URL, body, timeout, {"Authorization": "Bearer " + key})
+            ans = enf._post_json(url, body, timeout, {"Authorization": "Bearer " + key})
+            if ans.get("model") is not None and enf._jev_model_base(ans["model"]) != enf._jev_model_base(tier["model"]):
+                return None, None, None, "JevModelMismatch"   # never cache another model's answers
             return ans["answers"], int((time.time() - t0) * 1000), ans.get("usage"), None
         except Exception as e:  # noqa: BLE001 — retried, then reported (never cached)
             err = type(e).__name__
@@ -186,16 +203,17 @@ def read_cache():
 
 
 def cmd_replay(a):
-    key = os.environ.get("TYPESAFE_API_KEY", "")
-    if not key:
-        sys.exit("TYPESAFE_API_KEY is not set")
     enf = load_enforcer()
+    tier = tier_for(enf, a)
+    if not enf._jev_key(tier):
+        sys.exit(f"no Jev key for the {tier['ep']} endpoint")
     pos, unl = pick(enf, load_corpus(a.corpus), a.unlabelled, a.seed)
     rows = {r["uuid"]: r for r in pos + unl}
     print(f"{len(pos)} positives, {len(unl)} traffic, {len(rows)} unique turns", flush=True)
     cat_h = None
+    shape = question_shape(enf)
     if a.shelf == "wide":   # the proposed live pipeline: Jev ranks the whole catalogue first
-        catalog = live_catalog(record=True)
+        catalog = live_catalog()
         cat_h = catalog_hash(catalog)
         desc = dict(catalog)
         shelves = {}
@@ -203,6 +221,8 @@ def cmd_replay(a):
             a.variant = variant
             for u, rec in wide_answers(enf, a, list(rows.values()), catalog).items():
                 shelves[(u, variant)] = [(n, (desc.get(n) or n)[:DESC_CHARS]) for n in enf._jev_shortlist(rec["ans"])]
+        if shelves:
+            record_snapshot(catalog)
     else:
         with ThreadPoolExecutor(a.jobs) as ex:
             base = dict(zip(rows, ex.map(lambda r: shelf(enf, r["prompt"]), rows.values())))
@@ -215,12 +235,13 @@ def cmd_replay(a):
         for u, r in rows.items():
             st, cands = build_state(r, variant), shelves.get((u, variant), [])
             k = ckey(variant, a.model, st, cands)
-            if k not in cache and cands:
+            hit = cache.get(k)
+            if cands and not (hit and usable(hit, shape) and (a.shelf != "wide" or hit.get("cat") == cat_h)):
                 todo.append((u, k, st, cands))
         print(f"{variant}: {len(rows) - len(todo)} cached/empty-shelf, {len(todo)} to score", flush=True)
 
         def one(t):
-            return t, call(enf, key, a.model, t[2], enf._jev_rerank_questions(t[3]), a.timeout)
+            return t, call(enf, tier, t[2], enf._jev_rerank_questions(t[3]), a.timeout)
 
         done = fails = 0
         with ThreadPoolExecutor(a.jobs) as ex, open(CACHE, "a", encoding="utf-8") as fh:
@@ -229,7 +250,7 @@ def cmd_replay(a):
                 if ans is None:
                     fails += 1
                     continue
-                fh.write(json.dumps({"k": k, "variant": variant, "model": a.model, "uuid": u, "src": a.shelf, "cat": cat_h,
+                fh.write(json.dumps({"k": k, "variant": variant, "model": a.model, "uuid": u, "src": a.shelf, "cat": cat_h, "qs": shape,
                                      "shelf": [n for n, _ in cands], "ans": ans, "ms": ms,
                                      "usage": usage}) + "\n")
                 fh.flush()
@@ -267,13 +288,29 @@ def signals(rec):
 
 
 def scored(enf, a):
+    """Cached answers for today's catalogue (or the one `--catalog-hash` names), asked in today's
+    question shape. Zero matches exits with the catalogues the cache does hold — a silent 0/0 reads
+    like data."""
     pos, unl = pick(enf, load_corpus(a.corpus), a.unlabelled, a.seed)
-    cat_h = catalog_hash(live_catalog()) if a.shelf == "wide" else None
-    by_uuid = {rec["uuid"]: rec for rec in read_cache().values()
-               if rec["variant"] == a.variant and rec["model"] == a.model
-               and rec.get("src", "mpnet") == a.shelf and rec.get("cat") == cat_h}
+    pinned = getattr(a, "catalog_hash", None)
+    cat_h = (pinned or catalog_hash(live_catalog())) if a.shelf == "wide" else None
+    shape = question_shape(enf)
+    same = [rec for rec in read_cache().values()
+            if rec["variant"] == a.variant and rec["model"] == a.model and rec.get("src", "mpnet") == a.shelf]
+    by_uuid = {rec["uuid"]: rec for rec in same if rec.get("cat") == cat_h and usable(rec, shape)}
     P = [(r, by_uuid[r["uuid"]]) for r in pos if r["uuid"] in by_uuid]
     U = [(r, by_uuid[r["uuid"]]) for r in unl if r["uuid"] in by_uuid]
+    if not P and not U:
+        held = {}
+        for rec in same:
+            if usable(rec, shape):
+                c = rec.get("cat") or "unrecorded"   # exploratory records predate the field
+                held[c] = held.get(c, 0) + 1
+        sys.exit(f"no cached {a.variant}/{a.model}/{a.shelf} answers for catalogue {cat_h} in question shape {shape}; "
+                 f"the cache holds (catalogue: answers) {held or 'nothing usable'} — score one with --catalog-hash, "
+                 f"or re-run `replay` on today's catalogue")
+    print(f"scored {len(P)}/{len(pos)} positives, {len(U)}/{len(unl)} traffic (catalogue {cat_h}, shape {shape})",
+          file=sys.stderr)
     return P, U, len(pos), len(unl)
 
 
@@ -393,15 +430,41 @@ def catalog_hash(catalog):
     return hashlib.sha256(json.dumps(catalog, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def live_catalog(record=False):
+def live_catalog():
     """The catalogue the live hook would send Jev from this cwd: the enforcer's own `_jev_catalog`
     (project isolation makes it cwd-dependent). The cache key carries the full catalogue, so a
-    changed catalogue is never replayed from stale scores. `record` (replay/wide only) writes the
-    snapshot W24 compares live traffic against; reading commands never overwrite it."""
-    cat = [list(x) for x in load_enforcer()._jev_catalog()]
-    if record:
-        CATALOG_SNAPSHOT.write_text(json.dumps(cat))
-    return cat
+    changed catalogue is never replayed from stale scores. Read-only: see `record_snapshot`."""
+    return [list(x) for x in load_enforcer()._jev_catalog()]
+
+
+def record_snapshot(catalog, baseline=True):
+    """Called only after a run holds answers for `catalog` — never before the key check, so a run that
+    exits early cannot replace W24's baseline. One file per catalogue hash keeps every scored catalogue
+    readable after the live one moves on; `invocable-catalog.json` is the one W24 compares against."""
+    blob = json.dumps(catalog)
+    (CAL_DIR / f"catalog-{catalog_hash(catalog)}.json").write_text(blob)
+    if baseline:   # a replay moves W24's baseline; `wide` holds recall only, not the policy W22 relies on
+        CATALOG_SNAPSHOT.write_text(blob)
+
+
+# Answers cached before records stored their question shape count as this one: the live builders' shape
+# from v0.51.0 to this change. The 2026-09-26 exploratory records (`gate::`/`relevant::`/`now` keys) asked
+# extra Nouls in the same request; their `which`/`fits` questions are the same text, and they are accepted
+# deliberately — they carry the `mpnet` baseline. Never update the constant: a builder change must make
+# those answers unusable, not re-bless them.
+LEGACY_SHAPE = "78e0cf3a362fc430"   # computed from the builders at 0b03c88 (v0.51.0) and at 18f62cd: equal
+
+
+def question_shape(enf):
+    """What the live builders ask, on fixed input: instruction wording, description cuts, chunk size.
+    A cached answer is reused only under the same shape (cache keys hold names and state, not text)."""
+    dummy = [(f"s{i}", "d" * 2000) for i in range(enf.JEV_CHUNK * 2 + 7)]
+    asked = [enf._jev_wide_questions(dummy), enf._jev_rerank_questions(dummy[:3])]
+    return hashlib.sha256(json.dumps(asked, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def usable(rec, shape):
+    return rec.get("qs", LEGACY_SHAPE) == shape
 
 
 def wide_answers(enf, a, rows, catalog):
@@ -410,7 +473,10 @@ def wide_answers(enf, a, rows, catalog):
     if WIDE_CACHE.exists():
         cache = {json.loads(line)["k"]: json.loads(line) for line in open(WIDE_CACHE, encoding="utf-8")}
     qs = enf._jev_wide_questions(catalog)     # the live builder: replay == hook
-    key = os.environ.get("TYPESAFE_API_KEY", "")
+    shape = question_shape(enf)
+    cache = {k: rec for k, rec in cache.items() if usable(rec, shape)}
+    tier = tier_for(enf, a)
+    key = enf._jev_key(tier)
     todo, keys = [], {}
     for r in rows:
         st = build_state(r, a.variant)
@@ -419,12 +485,12 @@ def wide_answers(enf, a, rows, catalog):
         if k not in cache:
             todo.append((r, k, st))
     if todo and not key:
-        sys.exit("TYPESAFE_API_KEY is not set")
+        sys.exit("no Jev key: set ENFORCER_JEV_KEY or TYPESAFE_API_KEY")
     print(f"wide: {len(rows) - len(todo)} cached, {len(todo)} to score", flush=True)
     with ThreadPoolExecutor(a.jobs) as ex, open(WIDE_CACHE, "a", encoding="utf-8") as fh:
-        for (r, k, st), (ans, ms, usage, err) in ex.map(lambda t: (t, call(enf, key, a.model, t[2], qs, a.timeout)), todo):
+        for (r, k, st), (ans, ms, usage, err) in ex.map(lambda t: (t, call(enf, tier, t[2], qs, a.timeout)), todo):
             if ans is not None:
-                rec = {"k": k, "uuid": r["uuid"], "variant": a.variant, "ans": ans, "ms": ms, "usage": usage}
+                rec = {"k": k, "uuid": r["uuid"], "variant": a.variant, "qs": shape, "ans": ans, "ms": ms, "usage": usage}
                 fh.write(json.dumps(rec) + "\n")
                 cache[k] = rec
     os.chmod(WIDE_CACHE, 0o600)
@@ -434,11 +500,13 @@ def wide_answers(enf, a, rows, catalog):
 def cmd_wide(a):
     """Recall of the used skill: retrieval's shortlist vs a Jev ranking of the WHOLE catalogue."""
     enf = load_enforcer()
-    catalog = live_catalog(record=True)
+    catalog = live_catalog()
     names = {n.split(":")[-1] for n, _ in catalog}
     pos, _ = pick(enf, load_corpus(a.corpus), 0, a.seed)
     pos = [r for r in pos if gold(r) & names]            # gold still invocable today
     by = wide_answers(enf, a, pos, catalog)
+    if by:
+        record_snapshot(catalog, baseline=False)
     suite = {rec["uuid"]: rec for rec in read_cache().values()
              if rec["variant"] == a.variant and rec.get("src", "mpnet") == "mpnet"}
     n = hit_ret = hit_wide = hit_union = 0
@@ -472,7 +540,13 @@ def cmd_policy(a):
     enf = load_enforcer()
     a.shelf = "wide"
     P, U, _, _ = scored(enf, a)
-    catalog = dict(live_catalog())
+    snap = CAL_DIR / f"catalog-{a.catalog_hash}.json" if a.catalog_hash else None
+    if snap and snap.exists():          # the scored catalogue: descriptions and the installed set
+        catalog = dict(json.loads(snap.read_text()))
+    else:
+        catalog = dict(live_catalog())
+        if snap:
+            print(f"(no {snap.name}: descriptions and the installed set come from today's catalogue)")
 
     def decide(rec):
         sl = [(n, (catalog.get(n) or n)[:DESC_CHARS]) for n in rec["shelf"]]
@@ -698,10 +772,15 @@ def main():
         if name in ("replay", "wide"):
             s.add_argument("--jobs", type=int, default=6)
             s.add_argument("--timeout", type=float, default=15.0)
+            s.add_argument("--endpoint", default="ts", choices=("ts", "gw"),
+                           help="for a --model the bench does not list: TypeSafe (ts) or the owner's gateway (gw)")
         if name == "replay":
             s.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=VARIANTS)
         else:
             s.add_argument("--variant", default="ctx", choices=VARIANTS)
+        if name in ("curve", "fit", "rank", "policy"):
+            s.add_argument("--catalog-hash", help="score the cached answers of this catalogue instead of today's "
+                                                  "(the zero-match error lists the cached ones)")
         if name in ("fit", "policy"):
             s.add_argument("--target", type=float, default=0.03, help="max false-NO rate (95%% upper bound)")
             s.add_argument("--holdout-from", default="2026-09-01", help="fit before this local date, test from it")

@@ -43,6 +43,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -1490,11 +1491,22 @@ JEV_ROUTER = (os.environ.get("ENFORCER_JEV_ROUTER", "1") != "0"
               and os.environ.get("ENFORCER_JEV_GATE", "1") != "0")
 JEV_URL = os.environ.get("ENFORCER_JEV_URL", "https://api.typesafe.ai/v1/systemone")
 # The warm-connection relay in the local index owner. The key rides that request in clear text, so the relay
-# is used only over loopback; any other shim host means direct HTTPS calls.
+# is used only over loopback; any other shim host means direct HTTPS calls. The relay forwards to TypeSafe
+# only, so another SystemOne endpoint (the owner's gateway, ADR-0075) is always called directly.
 JEV_RELAY_URL = (f"http://{EMBED_HOST}:{EMBED_PORT}/jev"
-                 if EMBED_HOST in ("127.0.0.1", "localhost", "::1") else None)
+                 if EMBED_HOST in ("127.0.0.1", "localhost", "::1")
+                 and (urllib.parse.urlsplit(JEV_URL).hostname or "").lower() == "api.typesafe.ai" else None)
 JEV_MODEL = os.environ.get("ENFORCER_JEV_MODEL", "jev-1.13.0")   # pinned: jev-latest drifts
 JEV_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_TIMEOUT", "1.5"))   # per call; cold wide p90 1.25 s
+# The owner's SystemOne gateway (ADR-0075): the FLYWHEEL_LLM_* seam's host, path /v1/systemone. Slower than
+# TypeSafe's warm relay (wide p50 0.9-1.2 s, max 1.7 s measured 2026-10-03), hence its own per-call timeout.
+_FW = urllib.parse.urlsplit(os.environ.get("FLYWHEEL_LLM_ENDPOINT", ""))
+JEV_GW_HOST = (_FW.hostname or "").lower() if _FW.scheme == "https" else ""
+JEV_GW_URL = f"https://{_FW.netloc}/v1/systemone" if JEV_GW_HOST else None
+# Each key goes only to its own endpoint's host over https (loopback for tests): TypeSafe's key to
+# api.typesafe.ai, the gateway's key to the FLYWHEEL_LLM_* seam's host (ADR-0075).
+JEV_EP_HOSTS = {"ts": {"api.typesafe.ai"}, "gw": {JEV_GW_HOST} if JEV_GW_HOST else set()}
+JEV_GW_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_GATEWAY_TIMEOUT", "2.0"))
 # Thread start -> join. Capped at 3.0 s whatever the env says: the annex queries run after the join and
 # the hook is killed at 5 s, so a larger budget would trade a slow offer for no offer at all.
 JEV_BUDGET_S = min(float(os.environ.get("ENFORCER_JEV_BUDGET", "3.0")), 3.0)
@@ -1681,54 +1693,148 @@ def _jev_decide(answers: dict, shortlist: list):
     return "offer", rows, conf, best
 
 
-def _jev_call(state: dict, questions: dict, key: str):
-    """One System One request -> (answers, via). Goes through the local index owner's warm relay; a shim
-    without the route (404) or not listening falls back to one direct call. A timeout is not
+class JevModelMismatch(ValueError):
+    """Jev answered with a model other than the pinned one: the calibration does not hold for it."""
+
+
+def _jev_bench() -> list:
+    """The ordered SystemOne tiers one turn may try (ADR-0075), from ENFORCER_JEV_BENCH: space-separated
+    `<endpoint>:<model>`, endpoint `ts` (TypeSafe: ENFORCER_JEV_URL, TYPESAFE_API_KEY, the warm relay) or
+    `gw` (the owner's gateway, JEV_GW_URL). Unset = TypeSafe alone with JEV_MODEL, as before. A malformed
+    entry, or a `gw` entry with no gateway configured, is dropped — the hook never fails on config."""
+    tiers = []
+    for entry in os.environ.get("ENFORCER_JEV_BENCH", f"ts:{JEV_MODEL}").split():
+        ep, _, model = entry.partition(":")
+        if not model:
+            continue
+        if ep == "ts":
+            tiers.append({"ep": "ts", "model": model, "url": JEV_URL, "timeout": JEV_TIMEOUT_S})
+        elif ep == "gw" and JEV_GW_URL:
+            tiers.append({"ep": "gw", "model": model, "url": JEV_GW_URL, "timeout": JEV_GW_TIMEOUT_S})
+    return tiers
+
+
+def _jev_key(tier: dict) -> str:
+    """Per endpoint, read per call: TypeSafe's own key, or the gateway's (ENFORCER_JEV_KEY, else the
+    FLYWHEEL_LLM_* seam's key)."""
+    if tier["ep"] == "gw":
+        return os.environ.get("ENFORCER_JEV_KEY") or os.environ.get("FLYWHEEL_LLM_API_KEY", "")
+    return os.environ.get("TYPESAFE_API_KEY", "")
+
+
+def _jev_direct_url(url: str = None, ep: str = "ts") -> str:
+    """`url` (default ENFORCER_JEV_URL), refused unless it is https to endpoint `ep`'s own host, or a
+    loopback host (tests) — so a mis-set variable cannot send a key to another host, and neither key can
+    reach the other endpoint."""
+    url = url or JEV_URL
+    u = urllib.parse.urlsplit(url)
+    host = (u.hostname or "").lower()
+    if (u.scheme == "https" and host in JEV_EP_HOSTS.get(ep, set())) or host in ("127.0.0.1", "localhost", "::1"):
+        return url
+    raise ValueError(f"Jev URL for endpoint {ep!r} must be https to {sorted(JEV_EP_HOSTS.get(ep, set()))}")
+
+
+def _jev_model_base(model: str) -> str:
+    """`openrouter/typesafe/jev-1.13` and `typesafe/jev-1.13-20260917` -> `jev-1.13`: a gateway's provider
+    path and a dated snapshot suffix name the same model; the version does not."""
+    return re.sub(r"-\d{8}$", "", model.rsplit("/", 1)[-1])
+
+
+def _jev_answers(resp: dict, pinned: str = None):
+    """(answers, the model id Jev returned) after checking it ran the pinned model, up to provider path and
+    snapshot date. Both TypeSafe and the gateway return `model` (verified 2026-10-03); the exact id is kept
+    because a new dated snapshot under the same pin is a model update the ledger should show."""
+    pinned = pinned or JEV_MODEL
+    model = resp.get("model")
+    if model is not None and _jev_model_base(model) != _jev_model_base(pinned):
+        raise JevModelMismatch(f"Jev answered with {model!r}, pinned {pinned!r}")
+    return resp["answers"], model
+
+
+def _jev_call(state: dict, questions: dict, tier: dict, key: str, timeout: float):
+    """One System One request on one bench tier -> (answers, via, returned model). A TypeSafe tier goes
+    through the local index owner's warm relay (which forwards to TypeSafe only); a shim without the route
+    (404) or not listening falls back to one direct call. A gateway tier is always direct. A timeout is not
     retried — the per-turn budget is spent."""
-    body = {"model": JEV_MODEL, "state": state, "questions": questions}
+    body = {"model": tier["model"], "state": state, "questions": questions}
     auth = {"Authorization": "Bearer " + key}
-    if JEV_RELAY_URL is None:
-        return _post_json(JEV_URL, body, JEV_TIMEOUT_S, auth)["answers"], "direct"
-    try:
-        return _post_json(JEV_RELAY_URL, body, JEV_TIMEOUT_S,
-                          {**auth, "X-Jev-Timeout": str(JEV_TIMEOUT_S)})["answers"], "relay"
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
-    except urllib.error.URLError as e:
-        if not isinstance(e.reason, ConnectionRefusedError):
-            raise
-    return _post_json(JEV_URL, body, JEV_TIMEOUT_S, auth)["answers"], "direct"
+    if tier["ep"] == "ts" and JEV_RELAY_URL is not None:
+        try:
+            answers, model = _jev_answers(_post_json(JEV_RELAY_URL, body, timeout,
+                                                     {**auth, "X-Jev-Timeout": str(timeout)}), tier["model"])
+            return answers, "relay", model
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        except urllib.error.URLError as e:
+            if not isinstance(e.reason, ConnectionRefusedError):
+                raise
+    answers, model = _jev_answers(_post_json(_jev_direct_url(tier["url"], tier["ep"]), body, timeout, auth),
+                                  tier["model"])
+    return answers, "direct", model
+
+
+def _jev_timed_out(e: BaseException) -> bool:
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
 
 
 def _jev_route(prompt: str, transcript_path: str) -> dict:
     """One ADR-0061 routing decision -> {"result": (verdict, rows, best_fit) | None, "event": {...}}.
     Result None = not eligible or failed: the embedding path decides. Runs in a worker thread, so
     it returns its telemetry instead of writing module state."""
-    key = os.environ.get("TYPESAFE_API_KEY", "")
-    if not (JEV_ROUTER and key and _is_english(prompt)):
+    bench = _jev_bench()
+    if not (JEV_ROUTER and _is_english(prompt) and any(_jev_key(t) for t in bench)):
         return {"result": None, "event": None}
     t0 = time.time()
+    deadline = t0 + JEV_BUDGET_S
+    fell, err = [], "NoTier"
     try:
         catalog = _jev_catalog()
         prev, skills = _jev_context(transcript_path)
-        state = {"request": prompt[:JEV_MAX_CHARS], "recent_context": prev,
-                 "skills_already_loaded_this_session": skills}
-        wide, via = _jev_call(state, _jev_wide_questions(catalog), key)
-        t1 = time.time()
-        desc = dict(catalog)
-        shortlist = [(n, desc[n]) for n in _jev_shortlist(wide) if n in desc]
-        if not shortlist:
-            raise ValueError("wide answer names none of the catalogue")
-        rerank, _ = _jev_call(state, _jev_rerank_questions(shortlist), key)
-        verdict, rows, conf, best = _jev_decide(rerank, shortlist)
-        return {"result": (verdict, rows, best), "event": {
-            "ms": int((time.time() - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
-            "conf": round(conf, 3), "fit": round(best, 3), "via": via, "n": len(catalog),
-            "ctx": bool(prev), "lead": rows[0][0] if rows else None}}
     except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
             http.client.HTTPException) as e:
         return {"result": None, "event": _jev_err(type(e).__name__, t0)}
+    state = {"request": prompt[:JEV_MAX_CHARS], "recent_context": prev,
+             "skills_already_loaded_this_session": skills}
+    desc = dict(catalog)
+    # ADR-0075: tiers in order. A fast failure moves the turn to the next tier when that tier can still
+    # finish inside the budget; a timeout ends the chain (its budget is spent, the call may be billed).
+    for i, tier in enumerate(bench):
+        key = _jev_key(tier)
+        if not key:
+            fell.append([tier["model"], "NoKey"])
+            continue
+        if deadline - time.time() < tier["timeout"]:
+            fell.append([tier["model"], "NoTime"])
+            break
+        try:
+            wide, via, answered = _jev_call(state, _jev_wide_questions(catalog), tier, key,
+                                  min(tier["timeout"], deadline - time.time()))
+            t1 = time.time()
+            shortlist = [(n, desc[n]) for n in _jev_shortlist(wide) if n in desc]
+            if not shortlist:
+                raise ValueError("wide answer names none of the catalogue")
+            rerank, _, _ = _jev_call(state, _jev_rerank_questions(shortlist), tier, key,
+                                  max(0.05, min(tier["timeout"], deadline - time.time())))
+            verdict, rows, conf, best = _jev_decide(rerank, shortlist)
+        except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
+                http.client.HTTPException) as e:
+            err = type(e).__name__
+            if _jev_timed_out(e):
+                return {"result": None, "event": {**_jev_err(err, t0), **({"fell": fell} if fell else {}),
+                                                  "model": tier["model"]}}
+            fell.append([tier["model"], err])
+            continue
+        return {"result": (verdict, rows, best), "event": {
+            "ms": int((time.time() - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
+            "conf": round(conf, 3), "fit": round(best, 3), "via": via, "n": len(catalog),
+            "ctx": bool(prev), "lead": rows[0][0] if rows else None,
+            # which tier answered (`rmodel` = the exact id Jev returned: a new dated snapshot under the same
+            # pin shows here), and the env-tunable settings, which leave no commit for the epoch windows to see
+            "model": tier["model"], "rmodel": answered, "tier": i, "floor": JEV_FITS_FLOOR,
+            "to": tier["timeout"],
+            **({"fell": fell} if fell else {})}}
+    return {"result": None, "event": {**_jev_err(err, t0), "fell": fell}}
 
 
 def _jev_err(name: str, t0: float) -> dict:
@@ -1806,11 +1912,22 @@ def _authorized_skip_inject(kind: str, sid: str = "", hint: bool = True, **fmt) 
         return
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Every call here is a POST to a fixed service; a 3xx is an error, never a hop. urllib's default
+    re-sends the Authorization header (the TypeSafe key) to the redirect target on 301/302/303."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None   # urllib then raises HTTPError for the 3xx
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _post_json(url: str, payload: dict, timeout: float, headers: dict = None) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _OPENER.open(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 

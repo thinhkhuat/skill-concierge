@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.55.2-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.56.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -437,6 +437,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.56.0` — **published, the Jev bench (ADR-0075): `ENFORCER_JEV_BENCH` orders SystemOne tiers (TypeSafe, then the owner's gateway models), a fast failure moves the turn to the next tier, and the ledger records which model served it; the TypeSafe key no longer follows a redirect; a keyless calibrator run no longer overwrites its catalogue snapshot; W24 trips at 5 %, 2 % above 500 skills.**
 
 `0.55.2` — **published, a guard fix: the git-stash guard's `-c` flag test is now linear in a word's length (one long option-like word could hold the 0.55.1 guard past its hook timeout, which lets a command through); AGENTS.md documents the guard's too-complex denial and the heredoc note.**
 

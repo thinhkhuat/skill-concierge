@@ -3,7 +3,33 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
-## [Unreleased]
+## [0.56.0] — 2026-10-03
+
+### Fixed
+- **The TypeSafe key could follow a redirect to another host.** `_post_json` used urllib's default opener,
+  which on a 301/302/303 re-sends the request as a GET with the `Authorization` header to the new host
+  (reproduced on two loopback servers with a dummy token). Every enforcer POST now refuses redirects,
+  and the direct Jev call refuses an `ENFORCER_JEV_URL` other than `https://api.typesafe.ai` or a loopback
+  host before the key leaves; the calibrator's `call` uses the same pin. Tests: `tests/test_jev_transport.py`.
+- **A keyless `calibrate_jev_gate.py wide` overwrote W24's catalogue snapshot.** The snapshot was written
+  before the key check; it now is written only after a run holds answers, and one `catalog-<hash>.json` is
+  kept per scored catalogue. `curve`/`fit`/`rank`/`policy` no longer print a silent 0/0 when today's
+  catalogue has no cached answers: they exit naming the catalogues the cache holds, and
+  `--catalog-hash <h>` scores a named one. Cached answers are reused only under the same question shape
+  (wording, description cuts, chunk size); answers cached before the shape was stored count as the
+  v0.51.0 shape, which is unchanged to date. Tests: `tests/test_calibrate_cache.py`.
+
+### Added
+- **The Jev bench (ADR-0075).** `ENFORCER_JEV_BENCH` orders SystemOne tiers — `ts:<model>` (TypeSafe,
+  through the warm relay) and `gw:<model>` (the owner's gateway, `https://<FLYWHEEL_LLM_ENDPOINT host>/v1/systemone`,
+  its own key and a 2.0 s per-call timeout). A fast failure moves the turn to the next tier that still
+  fits the 3.0 s budget; a timeout ends the chain. Unset = TypeSafe alone, as before. The calibrator scores
+  any tier with `--model` (plus `--endpoint gw` for a model the bench does not list). Tests:
+  `tests/test_jev_bench.py`.
+- **The router's ledger event records the model and its env-tunable settings** (`model`, `tier`, `floor`,
+  `to`, and `fell` for tiers that failed first).
+  A response naming a model other than the pinned one raises `JevModelMismatch`, so the turn falls back
+  to the embedding path and the error is visible in W23.
 
 ### Changed
 - **W24 catalogue-drift trigger tightened (owner's order, 2026-10-03).** `calibrate_jev_gate.py live` now
