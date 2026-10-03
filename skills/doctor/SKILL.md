@@ -54,9 +54,8 @@ the engine's own `skill-search --health`, so the two never drift.
    (also stopping + disabling a revived `skill-search-qdrant`/`skill-concierge-embed-shim`
    container if an old harness copy brought Docker back onto the owner's ports),
    `--reindex` a stale/dark index, re-apply the settings overrides, purge
-   junk utterance layers, and regenerate the keep-off offer-suppression map into
-   `~/.claude/skill-concierge/keep-off.json` (re-run on every `--fix` pass; inert while the
-   ledger window is thin — ADR-0054).
+   junk utterance layers. It never builds or refreshes the keep-off map — that is consent-only
+   (ADR-0077); the `Keep-off` row only reports.
 
    > **Heads-up:** the overrides fix writes `~/.claude/settings.json` (backed up first) via
    > `scripts/apply-overrides.py`. The user invoking doctor is consent for that; mention it
@@ -82,10 +81,11 @@ the engine's own `skill-search --health`, so the two never drift.
   is stale (copied engine, not refreshed by `/plugin update`). Fix: rerun setup.sh, then restart.
 - **search returns nothing or stale** → `Index owner` / `Retrieval health`. Fix: `--fix` (reindex)
   — note the SessionStart `auto_reindex` hook now self-heals index staleness in the background.
-- **`Keep-off` row is WARN ("no generated map yet")** → the ledger-derived suppression map has not
-  been built on this machine. Fix: `--fix` (regenerates every pass; stays inert until ≥40 clean
-  offered turns exist — ADR-0011/0054). A skill you take inline that gets dropped → add it to
-  keep-on (exempt).
+- **`Keep-off` row** only reports; `--fix` never touches the map (ADR-0077). No map, or a map
+  without `"approved_by_user": true`, hides nothing and is OK (an unapproved map's names are
+  reported as ignored). WARN means the file is invalid JSON or has no `keep_off` list. To get
+  suppression, run `python3 scripts/build_keep_off.py` to see a proposal and `--apply` only after
+  Thinh says yes. A skill you take inline that gets dropped → add it to keep-on (exempt).
 - **skills you expect aren't offered / a new skill leaks its full description** → `Settings overrides`
   (now flags override **drift**). Fix: `--fix` (re-apply) — or nothing: the SessionStart
   `auto_overrides` hook self-heals the budget on drift (ADR-0025).

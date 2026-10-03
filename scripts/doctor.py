@@ -2195,40 +2195,31 @@ KEEPOFF_DURABLE = Path(os.environ.get(
 
 
 def check_keepoff():
-    """ADR-0011 offer-suppression map, activated by ADR-0054. The generated map lives in the
-    durable home (a plugin update cannot wipe it); the shipped config/keep-off.json is only
-    the empty seed. A missing durable map is WARN + auto-fixable: `--fix` runs the generator,
-    whose own data-sufficiency guard emits an empty (inert) map while the post-epoch window
-    is still thin, so the fix is always safe to apply."""
+    """ADR-0011 offer-suppression map, consent-only since ADR-0077. Doctor only READS it: no
+    fixer builds or refreshes it. A map hides skills only when it carries `approved_by_user:
+    true` (saved by `build_keep_off.py --apply` after Thinh's yes); any other map hides nothing."""
     path = KEEPOFF_DURABLE
+    how = "propose with scripts/build_keep_off.py; save with --apply only after Thinh approves"
     if not path.exists():
-        return {"id": "keepoff", "label": "Keep-off", "status": WARN,
-                "detail": "no generated map yet (empty seed in use) — doctor --fix builds it "
-                          "from the ledger; inert until the window is data-sufficient",
-                "fix": "keepoff"}
+        return {"id": "keepoff", "label": "Keep-off", "status": OK,
+                "detail": f"no approved map — nothing hidden ({how})", "fix": None}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except JSON_READ_ERRORS:
-        return {"id": "keepoff", "label": "Keep-off", "status": FAIL,
-                "detail": f"{path} invalid JSON — enforcer fails open, nothing suppressed",
-                "fix": "keepoff"}
+        return {"id": "keepoff", "label": "Keep-off", "status": WARN,
+                "detail": f"{path} invalid JSON — enforcer fails open, nothing hidden", "fix": None}
     names = data.get("keep_off") if isinstance(data, dict) else None
     if not isinstance(names, list):
-        return {"id": "keepoff", "label": "Keep-off", "status": FAIL,
-                "detail": f"{path} has no \"keep_off\" list", "fix": "keepoff"}
-    gen = data.get("generated_at", "?")
-    if not data.get("data_sufficient"):
-        # OK but REFRESHABLE: `--fix` re-runs this fixer even on an OK row (REFRESH_FIXERS) so
-        # the map populates once the window is data-sufficient without a manual generator run.
+        return {"id": "keepoff", "label": "Keep-off", "status": WARN,
+                "detail": f"{path} has no \"keep_off\" list — nothing hidden", "fix": None}
+    if data.get("approved_by_user") is not True:
         return {"id": "keepoff", "label": "Keep-off", "status": OK,
-                "detail": f"inert — window too thin ({data.get('window_offered_turns', '?')} offered "
-                          f"turns < {data.get('min_window_offered_turns', '?')}; generated {gen}); "
-                          "regenerates on doctor --fix",
-                "fix": "keepoff"}
+                "detail": f"{path} is not approved by Thinh — it hides nothing ({len(names)} names "
+                          f"ignored, generated {data.get('generated_at', '?')}; {how})", "fix": None}
     return {"id": "keepoff", "label": "Keep-off", "status": OK,
-            "detail": f"{len(names)} chronic never-take skill(s) dropped from the menu "
-                      f"(window {data.get('window', '?')}, generated {gen}; doctor --fix refreshes) — {path}",
-            "fix": "keepoff"}
+            "detail": f"{len(names)} skill(s) hidden from the menu by Thinh's approved map "
+                      f"(window {data.get('window', '?')}, saved {data.get('generated_at', '?')}) — {path}",
+            "fix": None}
 
 
 def check_findability():
@@ -2395,24 +2386,9 @@ def fix_purge_junk():
     return True, msg + ("; reindexed" if r.returncode == 0 else "; reindex FAILED — rerun doctor --fix")
 
 
-def fix_keepoff():
-    """Regenerate the keep-off map into the durable home (ADR-0054). Safe: the generator's
-    data-sufficiency guard writes an empty map when the post-epoch window is thin, and the
-    enforcer fails open on anything malformed."""
-    py = PY_BIN if PY_BIN.exists() else Path(sys.executable)
-    KEEPOFF_DURABLE.parent.mkdir(parents=True, exist_ok=True)
-    r = _run([str(py), str(ROOT / "scripts" / "build_keep_off.py"), "--out", str(KEEPOFF_DURABLE)])
-    if r.returncode != 0:
-        return False, (r.stderr.strip() or "build_keep_off failed")
-    first = (r.stdout.strip().splitlines() or ["generated"])[0]
-    return True, f"{first} → {KEEPOFF_DURABLE}"
-
-
 AUTO_FIXERS = {"owner": fix_owner_start, "containers": fix_containers, "reindex": fix_reindex,
                "overrides": fix_overrides,
-               "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk,
-               "keepoff": fix_keepoff}
-REFRESH_FIXERS = {"keepoff"}   # re-run on --fix even when the row is OK (ledger-derived artifact)
+               "prompt_intent": fix_prompt_intent, "purge_junk": fix_purge_junk}   # ADR-0077: no fixer for the keep-off map — it is saved only with Thinh's consent
 
 
 # ---------- run + report ----------
@@ -2461,7 +2437,7 @@ def _selftest():
     assert overall([]) == OK
     assert QURL.startswith("http")
     assert set(AUTO_FIXERS) <= {"owner", "containers", "reindex", "overrides", "prompt_intent",
-                                "purge_junk", "keepoff"}
+                                "purge_junk"}
     # _stale_only: stale + fully reachable + indexed + nothing dark/stale-point -> WARN-worthy
     healthy_emb = {"reachable": True}
     serving_qd = {"reachable": True, "indexed": 495}
@@ -2990,10 +2966,7 @@ def main():
     report(results)
 
     if args.fix:
-        # REFRESH_FIXERS run on every --fix pass even when their row is OK: the keep-off map is
-        # a ledger-derived artifact that must be re-derived as the window grows (ADR-0054).
-        todo = [r for r in results if r.get("fix") in AUTO_FIXERS
-                and (r["status"] in (FAIL, WARN) or r.get("fix") in REFRESH_FIXERS)]
+        todo = [r for r in results if r.get("fix") in AUTO_FIXERS and r["status"] in (FAIL, WARN)]
         manual = [r for r in results if r["status"] in (FAIL, WARN)
                   and r.get("fix") and r.get("fix") not in AUTO_FIXERS]
         if todo:

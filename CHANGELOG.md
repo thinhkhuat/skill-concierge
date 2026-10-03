@@ -3,6 +3,18 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.57.1] — 2026-10-04
+
+### Changed
+- **The keep-off map is consent-only** ([ADR-0077](docs/adr/0077-keep-off-map-is-consent-only.md)). Owner's order:
+  the list is built only with his consent and never automatically. `setup.sh` no longer builds it and
+  `doctor --fix` no longer refreshes it (`fix_keepoff` and `REFRESH_FIXERS` removed; the `Keep-off` row only
+  reports). `scripts/build_keep_off.py` prints a proposal and writes nothing; `--apply`, run after his yes,
+  saves the map with `"approved_by_user": true`. The enforcer's `_load_keepoff` honours only a map carrying that
+  marker, so the unapproved 45-skill map `setup.sh` built during the 0.57.0 release now hides nothing. Guard:
+  `tests/test_keep_off_consent.py`. The ledger "taken" count's gaps (`get_skill`, slash and inline takes,
+  subagent invocations, collapsed repeated prompts) are not fixed here.
+
 ## [0.57.0] — 2026-10-04
 
 ### Fixed

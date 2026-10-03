@@ -19,6 +19,8 @@ proven** (needs a traffic window).
   (`DOMINANCE_RATIO`). *(Historical note: deterministic routes and keep-off were inert here;
   since v0.47.0 / ADR-0054 routes are config-driven and ON, and keep-off regenerates from the
   durable home via `doctor --fix`.)*
+  *(Note, 2026-10-04: superseded for keep-off — [ADR-0077](adr/0077-keep-off-map-is-consent-only.md) made it
+  consent-only; nothing regenerates it and an unapproved map hides nothing.)*
 
 ## Mechanism (the one idea)
 A single description vector sits in mpnet's compressed 0.18–0.40 cosine band → "measures topic, not
