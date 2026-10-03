@@ -591,3 +591,19 @@ plugin-level customization layer and these engine patches.
   that would re-embed the pre-backfill phrases. `build_index` now sets `_LLM_TRIG_CACHE = None`
   beside the existing `_CURATED_TRIG_CACHE = None`. Covered by
   `tests/test_llm_trigger_cache_reset.py`. Not upstream: re-apply on re-vendor.
+
+- **`server.py` consult sieve flags `SKILL_CONSULT_SLOTS` and `SKILL_CONSULT_RRF` (plans/261003-1907-consult-sieve-recall-fixes, phase 2):**
+  two query-time flags on `consult_candidates`, both default OFF and read on every call (like
+  `SKILL_SEARCH_COMPLEMENT`); neither is in `scripts/engine_env.py`'s `ENGINE_ENV_KEYS`, because
+  neither shapes a point. `SKILL_CONSULT_SLOTS=1` runs one installed-only (`must_not tier=external`)
+  and one external-only (`must tier=external`) query per vector (vectors embedded once), reserves
+  `max(1, round(CONSULT_INSTALLED_SHARE * top_n))` installed slots (a short tier lends its unused
+  slots to the other), returns installed rows then externals, and adds `blocks: {installed, external}`
+  counted after the blocklist filter. `SKILL_CONSULT_RRF=1` orders each tier by reciprocal-rank
+  fusion (`_rrf_order`, k = `CONSULT_RRF_K`) instead of best raw score; `score` stays the best raw
+  score. `CONSULT_INSTALLED_SHARE = 0.7` and `CONSULT_RRF_K = 60` are pre-registered plain constants,
+  never tuned. `_fuse_ranked` and `search_skills` are unchanged; both flags off runs today's path.
+  Deployment: the shared-venv resync (automatic on a plugin version bump, `bin/skill-search-mcp`, or
+  `pip install --force-reinstall --no-deps vendor/skill-search`) plus an MCP restart; no reindex.
+  Covered by `tests/test_consult_slots.py` and `tests/test_consult_rrf.py`. Not upstream: re-apply
+  on re-vendor.

@@ -3,6 +3,18 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [Unreleased]
+
+### Added
+- **Two consult-sieve flags, both default OFF; nothing is enabled.** `SKILL_CONSULT_SLOTS` makes
+  `consult_candidates` reserve about 70% of `top_n` for installed skills and return externals after them
+  (`blocks` in the response); `SKILL_CONSULT_RRF` orders its per-query lists by reciprocal-rank fusion
+  (k = 60) instead of the max raw score. Both are read per call and stay out of `ENGINE_ENV_KEYS`.
+  `scripts/sieve_recall.py` is the held-out evaluation instrument. The pre-registered gate failed for every
+  decision: slots 33.7 -> 33.7, RRF 33.7 -> 34.9 recall@20 (n=83); the three `consult` SKILL.md
+  query-wording changes failed too and were not applied
+  ([verdict](plans/261003-1907-consult-sieve-recall-fixes/reports/phase-03-gate-verdict.md)).
+
 ## [0.57.1] — 2026-10-04
 
 ### Changed

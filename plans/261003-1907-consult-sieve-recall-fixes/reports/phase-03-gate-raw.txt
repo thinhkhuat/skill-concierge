@@ -1,0 +1,51 @@
+INDEX-LOCK points=44730 base=2902 names_sha256=13a374b8348a6714b8962ee83be1a1abaa97e5f8f5b6f030e5096f134562aa02
+index drift vs build: +0 -0
+cases dropped, label no longer indexed: 0
+cases dropped by the leak check: 85
+INDEX-LOCK points=44730 base=2902 names_sha256=13a374b8348a6714b8962ee83be1a1abaa97e5f8f5b6f030e5096f134562aa02
+VERDICT: slots FAIL n=83 recall@20 33.7 -> 33.7 (gain 0.0 pts) G2=False G3=False (lost 1, gained 1) G4 p=0.7500 holm=False (sessions +1/-1) G5=True (median ext 6, share 55.9->30.7) G6=True (p90 47->58 ms) guard_lower=0.0 guard_ok=True
+  LOST slots: antigravity:varlock-claude-skill (5866353b)
+VERDICT: rrf FAIL n=83 recall@20 33.7 -> 34.9 (gain 1.2 pts) G2=False G3=False (lost 1, gained 2) G4 p=0.5000 holm=False (sessions +2/-1) G5=True (median ext 11, share 55.9->55.4) G6=True (p90 47->45 ms) guard_lower=0.0 guard_ok=True
+  LOST rrf: superpowers:systematic-debugging (f696bb0f)
+VERDICT: task FAIL (proxy) n=60 recall@20 21.7 -> 18.3 (gain -3.3 pts) G2=False G3=False (lost 3, gained 1) G4 p=0.9375 holm=False (sessions +1/-3) G5=True (median ext 12.0, share 58.2->58.9) G6=True (p90 47->52 ms) guard_lower=0.0 guard_ok=True
+  LOST task: vn-gov-docx (a3222334)
+  LOST task: to-prd (68b4c9ea)
+  LOST task: superpowers:systematic-debugging (f696bb0f)
+VERDICT: how FAIL (proxy) n=83 recall@20 33.7 -> 33.7 (gain 0.0 pts) G2=False G3=False (lost 2, gained 2) G4 p=0.6875 holm=False (sessions +2/-2) G5=True (median ext 11, share 55.9->54.7) G6=True (p90 47->55 ms)
+  LOST how: to-prd (68b4c9ea)
+  LOST how: superpowers:systematic-debugging (f696bb0f)
+VERDICT: split FAIL (proxy) n=83 recall@20 33.7 -> 34.9 (gain 1.2 pts) G2=False G3=False (lost 6, gained 7) G4 p=0.6230 holm=False (sessions +5/-5) G5=True (median ext 11, share 55.9->58.0) G6=True (p90 47->44 ms)
+  LOST split: vn-gov-docx (a3222334)
+  LOST split: writing-clearly-and-concisely (e2e81729)
+  LOST split: superpowers-developing-for-claude-code:developing-claude-code-plugins (e782a519)
+  LOST split: ak-git (237dbf62)
+  LOST split: superpowers:systematic-debugging (f696bb0f)
+  LOST split: officecli-xlsx (5fe4d2e1)
+FIDELITY (rank of the chosen skill, top_n 40, flags off; 41 = >40)
+  run  primary                      real  generated
+    0  vn-editor                        1         41
+    1  vn-editor                       41         41
+    2  compound-to-skill               41         40
+    3  ak-agent-browser                41         41
+    4  ak-cook                         41         41
+    5  impeccable                      41         41
+    6  vn-news-coverage-tracker         1          2
+    7  tk-research                     41         41
+    8  ak-plan                         41         41
+    9  session-handoff                 41          4
+   10  hooks-audit                     41         41
+   11  compound-to-skill               28         34
+  median absolute rank difference 0.0; both <=20 or both >20 in 10 of 12 runs
+STRATUM all: cases 83 sessions 59 recall@20 A0 33.7  A1 33.7  A2 34.9  T 31.3  H 33.7  S 34.9
+STRATUM english: cases 75 sessions 55 recall@20 A0 32.0  A1 30.7  A2 33.3  T 30.7  H 32.0  S 33.3
+STRATUM process: cases 4 sessions 4 recall@20 A0 0.0  A1 0.0  A2 25.0  T 0.0  H 0.0  S 0.0
+STRATUM unknown: cases 0 sessions 0 recall@20 A0 n/a  A1 n/a  A2 n/a  T n/a  H n/a  S n/a
+STRATUM not_offered: cases 60 sessions 44 recall@20 A0 21.7  A1 21.7  A2 23.3  T 18.3  H 21.7  S 25.0
+STRATUM offered: cases 23 sessions 21 recall@20 A0 65.2  A1 65.2  A2 65.2  T 65.2  H 65.2  S 60.9
+RECALL A0: n=83 @20 33.7  @40 36.1  p50 39 ms  p90 47 ms
+RECALL A1: n=83 @20 33.7  @40 43.4  p50 50 ms  p90 58 ms
+RECALL A2: n=83 @20 34.9  @40 41.0  p50 39 ms  p90 45 ms
+RECALL T: n=83 @20 31.3  @40 36.1  p50 43 ms  p90 53 ms
+RECALL H: n=83 @20 33.7  @40 36.1  p50 44 ms  p90 55 ms
+RECALL S: n=83 @20 34.9  @40 39.8  p50 37 ms  p90 44 ms
+exit 0

@@ -107,6 +107,26 @@ def _search_complement_on() -> bool:
     return os.environ.get("SKILL_SEARCH_COMPLEMENT", "0") != "0"
 
 
+# Consult sieve flags (plans/261003-1907-consult-sieve-recall-fixes, phase 2). Both are
+# query-time, read per call like _search_complement_on, default OFF, and deliberately NOT in
+# scripts/engine_env.py's ENGINE_ENV_KEYS (they never shape a point).
+#   SKILL_CONSULT_SLOTS: installed skills get reserved sieve slots; externals follow in
+#     their own block, so the external catalogue cannot crowd installed skills out.
+#   SKILL_CONSULT_RRF: the sieve orders by reciprocal-rank fusion instead of best raw score.
+# CONSULT_INSTALLED_SHARE and CONSULT_RRF_K are pre-registered plain constants, fixed before
+# the held-out gate runs so they can never be swept to make a bar pass.
+CONSULT_INSTALLED_SHARE = 0.7
+CONSULT_RRF_K = 60
+
+
+def _consult_slots_on() -> bool:
+    return os.environ.get("SKILL_CONSULT_SLOTS", "0") != "0"
+
+
+def _consult_rrf_on() -> bool:
+    return os.environ.get("SKILL_CONSULT_RRF", "0") != "0"
+
+
 # Multi-vector trigger layer: index each skill's intent phrases as separate points and
 # MAX-pool them at query time (group_by name). Default ON; set SKILL_MULTIVECTOR=0 + reindex
 # to revert to one bare vector per skill. (Validated: 2.2x rank-1/separation, flat false-fire.)
@@ -1218,6 +1238,42 @@ def _fuse_ranked(group_lists: list, top_k: int, with_paths: bool = False) -> lis
     return out
 
 
+def _rrf_order(group_lists: list, k: int) -> list:
+    """Skill names in reciprocal-rank-fusion order (consult sieve only). A skill's rank in
+    one list is its 1-based position among that list's groups that carry hits; its fused
+    value is the sum of 1/(k+rank) over the lists it appears in. Ties break on the best raw
+    score, then the name. `_fuse_ranked` (MAX pool) is untouched."""
+    fused: dict = {}
+    best: dict = {}
+    for groups in group_lists:
+        rank = 0
+        seen: set = set()
+        for g in groups:
+            if not g.get("hits"):
+                continue
+            h = g["hits"][0]
+            name = (h.get("payload") or {}).get("name", g.get("id"))
+            if name in seen:
+                continue
+            seen.add(name)
+            rank += 1
+            fused[name] = fused.get(name, 0.0) + 1.0 / (k + rank)
+            if name not in best or h["score"] > best[name]:
+                best[name] = h["score"]
+    return sorted(fused, key=lambda n: (-fused[n], -best[n], n))
+
+
+def _consult_tier_rows(group_lists: list, n: int, rrf: bool) -> list:
+    """Up to `n` sieve rows from one set of group lists, MAX-ordered (today's behaviour)
+    or RRF-ordered. Each row's `score` stays its best raw score either way."""
+    if not rrf:
+        return _fuse_ranked(group_lists, n, with_paths=True)
+    names = {(g["hits"][0].get("payload") or {}).get("name", g.get("id"))
+             for groups in group_lists for g in groups if g.get("hits")}
+    by_name = {r["name"]: r for r in _fuse_ranked(group_lists, max(1, len(names)), with_paths=True)}
+    return [by_name[nm] for nm in _rrf_order(group_lists, CONSULT_RRF_K) if nm in by_name][:n]
+
+
 @mcp.tool()
 def search_skills(query: str, extra_queries: list[str] | None = None) -> str:
     """Find skills relevant to a task by SEMANTIC match over full descriptions.
@@ -1286,6 +1342,10 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
     serves only one sub-goal still surfaces. top_n widens the cut (default 20,
     clamped to 40).
 
+    Order: best raw score by default, reciprocal rank when SKILL_CONSULT_RRF=1;
+    `score` is always the best raw score. When SKILL_CONSULT_SLOTS=1, installed rows
+    come first, then externals, counted in `blocks`.
+
     Returns rows {name, description, score, origin?, disabled_in?, capsule?, path?,
     external?} plus one response `note` on reading origin. Installed rows carry
     `path` (deep-read the body via Read at that path); external rows carry `external` (deep-read via get_skill(name) — the Skill tool cannot invoke
@@ -1299,13 +1359,33 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
         return json.dumps({"error": "queries must carry at least one non-empty "
                                     "sub-goal phrasing"})
     top_n = max(1, min(int(top_n or 20), 40))
-    scope_filter = _scope_filter()
-    group_lists = [
-        _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=top_n, filter=scope_filter)
-        for qv in embed_queries(qs)
-    ]
-    rows = [r for r in _fuse_ranked(group_lists, top_n, with_paths=True)
-            if not _blocked(r.get("name", ""))]
+    slots, rrf = _consult_slots_on(), _consult_rrf_on()
+    blocks = None
+    if slots:
+        # Installed-only and external-only queries per vector (vectors embedded once);
+        # installed rows keep reserved slots, a short tier lends its unused ones.
+        vectors = embed_queries(qs)
+        inst_lists = [_qdrant.query_groups(COLLECTION, qv, group_by="name", limit=top_n,
+                                           filter=_installed_only_filter()) for qv in vectors]
+        ext_lists = [_qdrant.query_groups(COLLECTION, qv, group_by="name", limit=top_n,
+                                          filter=_external_only_filter()) for qv in vectors]
+        inst = _consult_tier_rows(inst_lists, top_n, rrf)
+        ext = _consult_tier_rows(ext_lists, top_n, rrf)
+        share = max(1, round(CONSULT_INSTALLED_SHARE * top_n))
+        n_inst = min(len(inst), max(share, top_n - len(ext)))
+        n_ext = min(len(ext), top_n - n_inst)
+        inst = [r for r in inst[:n_inst] if not _blocked(r.get("name", ""))]
+        ext = [r for r in ext[:n_ext] if not _blocked(r.get("name", ""))]
+        rows = inst + ext
+        blocks = {"installed": len(inst), "external": len(ext)}
+    else:
+        scope_filter = _scope_filter()
+        group_lists = [
+            _qdrant.query_groups(COLLECTION, qv, group_by="name", limit=top_n, filter=scope_filter)
+            for qv in embed_queries(qs)
+        ]
+        rows = [r for r in _consult_tier_rows(group_lists, top_n, rrf)
+                if not _blocked(r.get("name", ""))]
     # The winning group hit may be a trigger point whose payload omits `path`
     # (payloads vary per point); the deterministic per-skill id always carries it —
     # same fast path get_skill uses, batched once for all missing rows.
@@ -1330,6 +1410,8 @@ def consult_candidates(queries: list[str], top_n: int = 20) -> str:
             have += 1
     out = {"queries": qs, "results": rows,
            "capsule_coverage": {"have": have, "total": len(rows)}}
+    if blocks is not None:
+        out["blocks"] = blocks
     if rows and _row_origin_on():
         out["note"] = ROW_NOTE
     warning = _staleness_warning()
