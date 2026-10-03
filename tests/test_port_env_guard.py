@@ -4,7 +4,7 @@ or `SKILL_OWNER_EMBED_PORT` from an environment mapping. Patching the port rule 
 caller never held, because nothing stopped a NEW raw read from creeping back in outside that
 one home — this test is that stop.
 
-It parses every `.py` file in the repo (excluding `tests/` and `vendor/skill-search/tests/`,
+It parses every `.py` file in the repo that git does not ignore (excluding `tests/` and `vendor/skill-search/tests/`,
 which legitimately set these vars to configure the process under test, and `ports.py` itself)
 and fails if any file contains a RAW READ of one of the four names from an environment-like
 mapping:
@@ -27,6 +27,7 @@ zero raw reads; a listed file gets exactly the recorded count — one more occur
 recorded (a NEW raw read added later) still fails the guard.
 """
 import ast
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,8 +47,22 @@ EXCLUDED_PREFIXES = ("tests/", "vendor/skill-search/tests/", ".git/", "__pycache
 ALLOWLIST = {}
 
 
+def _repo_py_files():
+    """Tracked plus untracked-but-not-ignored `.py` files: git-ignored output (a stale
+    `vendor/**/build/`, venvs) is not source and is never shipped. Without a usable git, every
+    file on disk is scanned, as before."""
+    try:
+        out = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
+                             cwd=ROOT, capture_output=True, check=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return sorted(ROOT.rglob("*.py"))
+    return sorted({ROOT / rel for rel in out.decode().split("\0") if rel})
+
+
 def _iter_py_files():
-    for p in sorted(ROOT.rglob("*.py")):
+    for p in _repo_py_files():
+        if not p.is_file():
+            continue
         rel = p.relative_to(ROOT).as_posix()
         if rel == PORTS_MODULE:
             continue

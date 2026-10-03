@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.56.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.57.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -437,6 +437,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.57.0` — **published, Jev typed questions beyond the router (ADR-0076): `consult --fast` ranks candidates with a Jev fit matrix (`SKILL_CONSULT_JEV`, default ON as evidence only), a Jev sibling-margin filter for flywheel utterances ships inert (`SKILL_TRIGGER_JEV_FILTER`: the staging findability gate failed, so no live thresholds file exists), redacted text-only history for the router's rerank call ships OFF (`ENFORCER_JEV_HISTORY`: the replay verdict was FAIL), and a relay timeout no longer re-sends the Jev request to the next bench tier; the MIT notice for the ported pieces is `THIRD_PARTY_NOTICES`.**
 
 `0.56.0` — **published, the Jev bench (ADR-0075): `ENFORCER_JEV_BENCH` orders SystemOne tiers (TypeSafe, then the owner's gateway models), a fast failure moves the turn to the next tier, and the ledger records which model served it; the TypeSafe key no longer follows a redirect; a keyless calibrator run no longer overwrites its catalogue snapshot; W24 trips at 5 %, 2 % above 500 skills.**
 

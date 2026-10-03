@@ -34,7 +34,7 @@ LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 _SHAPES = ("SINGLE", "CHAIN", "NONE")
 
 
-def append_verdict(shape, primary, chain, externals):
+def append_verdict(shape, primary, chain, externals, jev=None):
     try:
         row = {
             "t": round(time.time(), 3),
@@ -44,6 +44,8 @@ def append_verdict(shape, primary, chain, externals):
             "chain": [c.strip() for c in chain.split(",") if c.strip()] if chain else [],
             "externals": externals,
         }
+        if isinstance(jev, dict):
+            row["jev"] = jev
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -82,10 +84,17 @@ def _selftest():
             LEDGER = LOG_DIR / "ledger.log"
             assert append_verdict("SINGLE", "x", "x", 0) is False, \
                 "unwritable path must fail silent (False), not raise"
+            # optional jev field: kept when an object, dropped otherwise
+            LOG_DIR = Path(td)
+            LEDGER = LOG_DIR / "ledger.log"
+            assert append_verdict("SINGLE", "x", "x", 0, jev={"ms": 5, "top": "x"})
+            assert append_verdict("SINGLE", "x", "x", 0, jev=[1])
+            rows = [json.loads(l) for l in LEDGER.read_text().splitlines()]
+            assert rows[-2]["jev"] == {"ms": 5, "top": "x"} and "jev" not in rows[-1]
     finally:
         LEDGER, LOG_DIR = saved
     print("consult_log --selftest OK: verdict row shape + chain parsing + NONE "
-          "+ fail-silent append")
+          "+ fail-silent append + optional jev field")
 
 
 if __name__ == "__main__":
@@ -98,6 +107,8 @@ if __name__ == "__main__":
                    help="comma-separated ordered chain (empty when NONE)")
     p.add_argument("--externals", type=int, default=0,
                    help="how many picks in the verdict are external-catalog skills")
+    p.add_argument("--jev", default="",
+                   help="optional JSON object from consult_fit.py: {ms, requests, model, top}")
     p.add_argument("--selftest", action="store_true")
     args = p.parse_args()
 
@@ -106,5 +117,9 @@ if __name__ == "__main__":
     else:
         if not args.shape:
             p.error("--shape is required (SINGLE | CHAIN | NONE)")
+        try:
+            jev = json.loads(args.jev) if args.jev else None
+        except ValueError:
+            jev = None
         sys.exit(0 if append_verdict(args.shape, args.primary, args.chain,
-                                     args.externals) else 1)
+                                     args.externals, jev) else 1)

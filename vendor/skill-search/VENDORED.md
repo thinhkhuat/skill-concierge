@@ -583,3 +583,11 @@ plugin-level customization layer and these engine patches.
   `tests/test_findability.py` (ratchet math pure; the leave-one-out exclusion and the name-word
   rank query proven against a real ephemeral owner from `owner_factory`) and, at the repo root,
   `tests/test_findability_doctor.py` + `tests/test_precision_eval_sets.py`. Not upstream.
+
+- **`server.py` `build_index` resets `_LLM_TRIG_CACHE` (v0.57.0, phase 3 of plans/261003-1601-jev-fit-matrix-trigger-filter-router-history):**
+  `_llm_utterance_phrases` fills `_LLM_TRIG_CACHE` once per process and nothing reset it, so an
+  in-process reindex (the MCP server's `reindex` tool) re-embedded the utterance corpus it read at
+  first use, not the file on disk. After the trigger-filter backfill rewrites `triggers.json`
+  that would re-embed the pre-backfill phrases. `build_index` now sets `_LLM_TRIG_CACHE = None`
+  beside the existing `_CURATED_TRIG_CACHE = None`. Covered by
+  `tests/test_llm_trigger_cache_reset.py`. Not upstream: re-apply on re-vendor.

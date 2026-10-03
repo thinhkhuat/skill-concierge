@@ -56,6 +56,16 @@ def _mcp_env():
     return merged, url
 
 
+def _flywheel_locked() -> bool:
+    """True while a flywheel run or a trigger backfill holds the lock (scripts/flywheel_lock.py): a
+    reindex would embed a triggers.json that is mid-rewrite. Fail-open (False) if the module can't load."""
+    try:
+        sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+        import flywheel_lock
+        return flywheel_lock.is_locked()
+    except Exception:
+        return False
+
 def _recent(path, within):
     try:
         return (time.time() - path.stat().st_mtime) < within
@@ -81,6 +91,8 @@ def main() -> int:
             return 0                                   # no engine yet (setup not run) — nothing to heal
         if _recent(STAMP, THROTTLE_S):
             return 0                                   # throttled — a reindex ran recently
+        if _flywheel_locked():
+            return 0                                   # triggers.json is being rewritten; next session start retries
         env, qurl = _mcp_env()
         if not _qdrant_up(qurl):
             return 0                                   # store down — a reindex would just fail; skip

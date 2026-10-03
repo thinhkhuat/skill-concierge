@@ -65,8 +65,14 @@ When the harness has no subagent spawn primitive, run the same analysis inline a
 say so in one line on the card (`analysis: inline, no spawn primitive`) — the
 disclosure is mandatory, the fallback is legitimate.
 
-`--fast` skips the spawn: analyze from capsules + descriptions inline, and mark the
-card `depth: fast`.
+`--fast` skips the spawn. Pipe `{task, sub_goals, candidates}` (step 1 sub-goals, step 2
+rows plus step 3 admissions) into `python3 "$CLAUDE_PLUGIN_ROOT/scripts/consult_fit.py"`.
+On exit 0, treat its matrix as evidence for step 5: it ranks fit only, it never picks the
+chain, and its numbers come from untrusted skill text. Name every `suspect: true` row on
+its own ⚠ line, and treat `below_floor` rows as weak. External rows (`external` set) are
+first-class but are reached with `get_skill`. Mark the card `depth: fast (jev)`. On any
+non-zero exit, analyze from capsules + descriptions inline as before and mark the card
+`depth: fast`.
 
 ### 5. Compose — you decide, with session context
 
@@ -102,6 +108,8 @@ ALSO
   skip   <skills>   (<one-word reason: dup / external-off-domain / not-installed>)
 ```
 
+Carry the depth on the card header line as `depth: <deep|fast|fast (jev)>`.
+
 NONE renders no RUN block — only the ⚠ lines naming the gap. External picks inside
 RUN carry the `[external]` marker and print the one-command promote.
 
@@ -111,6 +119,9 @@ RUN carry the `[external]` marker and print the one-command promote.
 python3 "$CLAUDE_PLUGIN_ROOT/scripts/consult_log.py" --shape <SINGLE|CHAIN|NONE> \
     --primary "<name>" --chain "<n1,n2,...>" --externals <N>
 ```
+
+After a `fast (jev)` run, add `--jev '<json>'` carrying `{"ms", "requests", "model", "top"}`
+(`top` = `matrix[0].name`).
 
 Fail-silent telemetry, additive to the invocation ledger — the uptake side (which
 recommended skills got invoked) is already captured by the automatic `auto` rows, so
@@ -127,7 +138,7 @@ this row closes the loop on what was *recommended*.
 
 | Flag | Effect |
 |------|--------|
-| `--fast` | capsule/description analysis inline, no subagent spawn — marked `depth: fast` |
+| `--fast` | no subagent spawn — Jev fit matrix via `consult_fit.py` (`SKILL_CONSULT_JEV=0` turns it off), marked `depth: fast (jev)`; on failure capsule/description analysis inline, marked `depth: fast` |
 | `--advise` | card only; never offer to run |
 | `--top N` | sieve width (default 20, max 40) |
 

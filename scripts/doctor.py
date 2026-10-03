@@ -2358,25 +2358,34 @@ def fix_purge_junk():
     if not bad:
         return True, "nothing to purge"
 
+    import flywheel_lock
+    if not flywheel_lock.acquire(block=False):
+        return False, "flywheel running; retry later"
     backup = TRIGGERS.with_suffix(f".json.bak-junk-{int(time.time())}")
     try:
         shutil.copy2(TRIGGERS, backup)
         triggers = json.loads(TRIGGERS.read_text(encoding="utf-8"))
+        # Drop the generation-cache keys FIRST: if the triggers save then fails, the junk stays and is
+        # regenerated; the other order could leave a purged entry that the flywheel believes is current.
+        cache = llm_triggers.load_cache()
+        for name in bad:
+            cache.pop(llm_triggers.CACHE_PREFIX + name, None)
+        llm_triggers.save_cache(cache)
         for name in bad:
             entry = triggers.get(name) or {}
             prose = entry.get("prose_triggers") or []
             if prose:   # keep the hand/prose layer; only the LLM layer was poisoned
                 triggers[name] = {"source": "prose-phrase", "triggers": prose, "n": len(prose)}
+                jev = (entry.get("llm_triggers") or {}).get("jev")
+                if isinstance(jev, dict) and jev:   # the Jev audit (dropped phrases, scores) outlives the purge
+                    triggers[name]["llm_triggers"] = {"jev": jev}
             else:
                 triggers.pop(name, None)
-        TRIGGERS.write_text(json.dumps(triggers, indent=2, ensure_ascii=False), encoding="utf-8")
-
-        cache = llm_triggers.load_cache()
-        for name in bad:
-            cache.pop(llm_triggers.CACHE_PREFIX + name, None)
-        llm_triggers.save_cache(cache)
+        llm_triggers.save_triggers(triggers, TRIGGERS)
     except (OSError, TypeError, ValueError, AttributeError) as exc:
         return False, f"purge failed ({type(exc).__name__}: {exc}); backup at {backup}"
+    finally:
+        flywheel_lock.release()
 
     msg = (f"purged {len(bad)} junk utterance layers (backup: {backup.name}); "
            f"the flywheel will regenerate them")

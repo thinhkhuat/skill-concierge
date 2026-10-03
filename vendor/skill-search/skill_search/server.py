@@ -980,8 +980,9 @@ def _arrange_tiers(installed_rows: list, external_rows: list, top_k: int) -> lis
 # points for deleted skills are removed. force=True does a clean full rebuild.
 # ---------------------------------------------------------------------------
 def build_index(force: bool = False) -> dict:
-    global _CURATED_TRIG_CACHE
+    global _CURATED_TRIG_CACHE, _LLM_TRIG_CACHE
     _CURATED_TRIG_CACHE = None          # re-read the operator's curated phrases every build
+    _LLM_TRIG_CACHE = None              # ...and the utterance corpus: an in-process reindex must not embed a stale one
     skills = discover_skills()
 
     # Guard the embedder-swap footgun: a collection built at one dimension can't

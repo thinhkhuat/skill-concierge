@@ -3,6 +3,46 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.57.0] — 2026-10-04
+
+### Fixed
+- **A relay timeout no longer re-sends the Jev request to the next bench tier.** The owner's relay reports an
+  upstream timeout as HTTP 502 `{"error": "TimeoutError"}`; the enforcer only recognised a raw
+  `TimeoutError`, so the turn moved on to the next tier and the request was billed twice, against the
+  rule that a timeout ends the chain (ADR-0075). `_jev_call` now maps a relay-reported timeout to
+  `TimeoutError`. Test: `tests/test_jev_relay_timeout.py` (fails without the fix).
+- **`tests/test_port_env_guard.py` failed on a stale git-ignored build copy.** It now scans only files git
+  does not ignore.
+- **`build_triggers.py` run by hand erased the utterance layer.** It now carries every existing
+  `llm_triggers` block (audit included) over and rebuilds the union with the same merge rule. Test:
+  `test_build_triggers_keeps_utterance_layer`.
+
+### Added
+- **Jev typed questions beyond the router (ADR-0076).** A shared offline client, `scripts/jev_client.py`
+  (token-limit batching, rate cap, direct calls), plus `_jev_tokens`, `_jev_typed_user_text` and
+  `_jev_redact` in the enforcer.
+- **`consult --fast` fit matrix** (`scripts/consult_fit.py`, `SKILL_CONSULT_JEV`, default ON as evidence
+  only): one Jev `choice` per sub-goal ranks the candidates, a `fits` floor and an `avoid` check annotate
+  them, and any failure falls back to inline analysis. `consult_log.py` takes `--jev`. Its extractor reads
+  the MCP `{"result": "<json>"}` result shape. The first live `--eval` was `CHECK: INSUFFICIENT` (n=2 of
+  13 runs).
+- **Jev sibling-margin filter for flywheel utterances** (`scripts/trigger_filter.py`,
+  `SKILL_TRIGGER_JEV_FILTER`). It ships inert: the staging findability gate failed on the name-neighbour
+  bar (11/3368 violations against 0 in the control), so no live thresholds file, backfill or
+  `corpus_epoch` event exists.
+- **Redacted text-only history for the router's rerank call** (`ENFORCER_JEV_HISTORY`, default `0`, plus
+  `ENFORCER_JEV_HISTORY_TOKENS` and `ENFORCER_JEV_HISTORY_BYTES`). `calibrate_jev_gate.py` gains
+  `replay --gate`, the `hist` variant and `hist-compare`; the recorded verdict was FAIL (follow-up recall
+  +1.2 points against +3.0 required), so the flag stays off.
+- **`THIRD_PARTY_NOTICES`**: the MIT notice for the ideas and pieces ported from fast-jev-compaction.
+
+### Changed
+- **All `triggers.json` writers take the flywheel lock** (`llm_triggers.py`, `build_triggers.py`,
+  `doctor.py --fix`, the backfill); `auto_reindex` skips while it is held.
+- **The vendored engine re-reads the utterance corpus on every reindex** (`build_index` resets
+  `_LLM_TRIG_CACHE`; recorded in `vendor/skill-search/VENDORED.md`).
+- Private calibration files are created mode 0600.
+
 ## [0.56.0] — 2026-10-03
 
 ### Fixed

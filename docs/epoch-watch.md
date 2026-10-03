@@ -13,6 +13,20 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.57.0 — Jev typed questions: consult matrix live, utterance filter inert, router history off
+
+**Epoch starts.** W34: the v0.57.0 go-live of `consult --fast` (`SKILL_CONSULT_JEV` default ON). W35: the first `corpus_epoch` ledger event, once a future calibration passes the staging gate — none exists yet, so W35 has no epoch and nothing to measure today. W36: the moment the owner switches `ENFORCER_JEV_HISTORY` on (an env change; the router event's `hist` field marks it) — it applies only if he does.
+- v0.57.0 changes `hooks/scripts/enforcer.py`: a relay-reported timeout now ends the bench chain instead of re-sending to the next tier ([ADR-0076](adr/0076-jev-typed-questions-consult-triggers-history.md)). Router rates (W21-W24) window from this go-live; the chain behaviour on a timeout differs from v0.56.0.
+- The utterance filter ships inert (no live thresholds file) and the router history ships OFF, so the live trigger corpus and the router's rerank state are unchanged at the shipped defaults.
+
+| # | Watch | How | Trigger | Action |
+|---|-------|-----|---------|--------|
+| W34 | Consult fit matrix | `consult_verdict` rows since go-live: share of fast consults with a `jev` field and `jev.ms` p90; plus `python3 scripts/consult_fit.py --eval` once 30 eligible runs exist. Known at ship: the first `--eval` (2026-10-03) found 13 runs, only 2 eligible (`CHECK: INSUFFICIENT`) because in 11 of 13 the primary the agent chose was not among the sieve's candidates, so the sieve's recall is itself worth reading | p90 > 4000 ms; `jev` missing on most fast consults; or the eval prints `CHECK: FAIL` | `SKILL_CONSULT_JEV=0`, then review; check `python3 scripts/jev_client.py --probe` |
+| W35 | Utterance filter effect (only after a `corpus_epoch` event) | doctor's Findability row after the `corpus_epoch` reindex against the reading before it; W22 on the embedding path, windowed from that event | a new Findability warning, or a higher backlog | restore the backup, `python3 scripts/trigger_filter.py reindex`, re-run `calibrate` |
+| W36 | Router history (only if the owner turns it on) | `calibrate_jev_gate.py live` W22/W23 split by rows with `jev.hist.used` against those without; count `hist.reask` | p90 `ms` > 1500, W22 below the ctx rows, or `reask` on > 10 % of rows | `ENFORCER_JEV_HISTORY=0` |
+
+---
+
 ## v0.55.0 — findability detection; ranking unchanged (no new watch items)
 
 **Epoch start moves to each harness's v0.55.0 go-live.**

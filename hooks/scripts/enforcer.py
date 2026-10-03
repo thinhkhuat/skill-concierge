@@ -1519,6 +1519,85 @@ JEV_RERANK_DESC = 400
 JEV_OFFER_ROWS = 5      # measured: top 5 -> 74 % recall, top 3 -> 65 %, today's 8-row menu -> 36 %
 JEV_CTX_CHARS = 1500
 JEV_TAIL_BYTES = 262144  # transcript tail read for the conversation context
+
+# Ported from fast-jev-compaction (MIT), src/state.ts estimateTokens: a word costs one token per six
+# letters, a digit half a token, any other symbol nine tenths; lands 2-18 % above Jev's own counts.
+_JEV_TOKEN_PIECES = re.compile(r"[A-Za-z]+|[0-9]+|[^\sA-Za-z0-9]")
+
+
+def _jev_tokens(text: str) -> int:
+    tokens = 0.0
+    for m in _JEV_TOKEN_PIECES.finditer(text):
+        piece = m.group(0)
+        if piece[0].isascii() and piece[0].isdigit():
+            tokens += len(piece) / 2
+        elif piece[0].isascii() and piece[0].isalpha():
+            tokens += 1 + (len(piece) - 1) // 6
+        else:
+            tokens += 0.9
+    return math.ceil(tokens)
+
+
+# Secret shapes replaced before any transcript text leaves the machine (ADR-0076).
+_JEV_SECRET_RES = (
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{35}"),
+    re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]{12,}", re.I),
+    re.compile(r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*"),            # a bare JWT
+    # a secret-named key, quoted or not, any case (JSON `"OPENAI_API_KEY": "v"`, `api_key = v`, `x-api-key: v`)
+    re.compile(r"(?:api[_-]?key|token|secret|passw(?:or)?d)[\"']?[ \t]*[=:][ \t]*[\"']?[^\s\"',;}]+", re.I),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"aws_secret_access_key\s*[=:]\s*\S+", re.I),
+    re.compile(r"(?<=://)[^/\s:@]+:[^@\s]+(?=@)"),                                        # user:pass in a URL
+    # a key block, to its END marker, or to the end of the text when a truncated paste has none
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S),
+)
+
+
+def _jev_redact(text: str) -> str:
+    for rx in _JEV_SECRET_RES:
+        text = rx.sub("[redacted]", text)
+    return text
+
+
+# Plain user records that carry command output or wrappers, not words Thinh typed.
+_JEV_NOT_TYPED = ("<bash-stdout>", "<bash-stderr>", "<bash-input>", "<local-command-stdout>",
+                  "<local-command-stderr>", "<command-name>", "<command-message>",
+                  "This session is being continued")
+_JEV_REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+# Blocks other hooks and harnesses prepend to a typed prompt: the persona rules, and the injected skill
+# list that runs up to the `[User Request]` marker (or, with no marker, to the end of the text).
+_JEV_INJECTED_RES = (re.compile(r"\[Assistant Rules\].*?(?:\[/Assistant Rules\]|\Z)", re.S),
+                     re.compile(r"\[Relevant skills for this request\].*?(?:\[User Request\]|\Z)", re.S))
+
+
+def _jev_typed_user_text(record: dict):
+    """The redacted text Thinh typed in a transcript `user` record, or None for anything else: meta and
+    sidechain records, tool results, harness messages, command output and slash-command wrappers."""
+    if not isinstance(record, dict) or record.get("type") != "user" or record.get("isMeta") \
+            or record.get("isSidechain"):
+        return None
+    msg = record.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+    else:
+        return None
+    text = text.strip()
+    if not text or _HARNESS_MSG_RE.match(text) or text.startswith(_JEV_NOT_TYPED):
+        return None
+    text = _JEV_REMINDER_RE.sub("", text)
+    for rx in _JEV_INJECTED_RES:
+        text = rx.sub("", text)
+    text = text.strip()
+    return _jev_redact(text) if text else None
 # Verbatim from docs.typesafe.ai/cookbooks/skill_suggestion.md (fetched 2026-09-26).
 JEV_CHOICE_INSTRUCTIONS = ("Which of these skills, if any, is the right one to load to help with the "
                            "user's latest request?")
@@ -1570,7 +1649,8 @@ def _jev_context(transcript_path: str):
             continue
         if not isinstance(rec, dict) or rec.get("isSidechain"):
             continue
-        content = (rec.get("message") or {}).get("content")
+        msg = rec.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
         if rec.get("type") == "assistant" and isinstance(content, list):
             for b in content:
                 if not isinstance(b, dict):
@@ -1578,7 +1658,8 @@ def _jev_context(transcript_path: str):
                 if b.get("type") == "text" and (b.get("text") or "").strip():
                     prev = b["text"]
                 elif b.get("type") == "tool_use":
-                    nm, inp = b.get("name") or "", b.get("input") or {}
+                    nm, inp = b.get("name") or "", b.get("input")
+                    inp = inp if isinstance(inp, dict) else {}
                     if nm == "Skill":
                         seen(str(inp.get("skill") or ""))
                     elif nm.endswith("get_skill"):
@@ -1588,10 +1669,196 @@ def _jev_context(transcript_path: str):
                             seen(m)
         elif rec.get("type") == "user":
             text = content if isinstance(content, str) else " ".join(
-                b.get("text", "") for b in content or [] if isinstance(b, dict))
+                str(b.get("text") or "") for b in content or [] if isinstance(b, dict))
             for m in _SKILL_BASE_DIR.findall(text + " "):
                 seen(m)
     return prev[-JEV_CTX_CHARS:], skills[-3:]
+
+
+# ── rerank history (ENFORCER_JEV_HISTORY, default OFF) ──────────────────────────────────────────────
+# Text only (ADR-0076): Thinh's typed words and assistant `text` blocks, secrets redacted, tools by NAME,
+# never a tool input or output. Used by the rerank call only; the wide call keeps today's state.
+JEV_HISTORY = os.environ.get("ENFORCER_JEV_HISTORY", "0") == "1"
+
+
+def _env_int(name: str, default: int) -> int:
+    """A malformed tunable falls back to its default: a hook never dies at import over an env typo."""
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+JEV_HISTORY_TOKENS = _env_int("ENFORCER_JEV_HISTORY_TOKENS", 10000)
+JEV_HISTORY_BYTES = _env_int("ENFORCER_JEV_HISTORY_BYTES", 2097152)
+JEV_HISTORY_PINNED = 6      # the last entries are shrunk last
+JEV_HISTORY_JOIN_S = 0.2    # most the rerank waits for a history still being fitted
+JEV_REASK_MIN_S = 0.5       # budget left that still allows the skip guard's second rerank
+JEV_HISTORY_NOTE = ("Earlier turns of this coding-assistant conversation, oldest first. Only typed text "
+                    "and assistant replies are shown; tools are listed by name.")
+_JEV_ABRIDGE_HEAD, _JEV_ABRIDGE_TAIL = 400, 150
+
+
+def _jev_history_entries(lines: list, window: int = 0) -> list:
+    """Allow-listed conversation entries from transcript JSONL lines, oldest first. Consecutive assistant
+    records (text and tool_use blocks arrive as separate records) merge into one entry. Lines are read from
+    the newest backwards and reading stops once the entries hold about `window` estimated tokens (0 = no
+    limit): older turns could only be collapsed or left out by the fitter anyway, so decoding and
+    tokenizing a 2 MiB tail of short turns would be wasted work."""
+    out, seen = [], 0                       # newest first while reading
+    for line in reversed(lines):
+        if window and seen >= window:
+            break
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("type") == "user":
+            text = _jev_typed_user_text(rec)
+            if text:
+                out.append({"role": "user", "text": text})
+                seen += len(text) // 4 + 25
+        elif rec.get("type") == "assistant" and not rec.get("isSidechain"):
+            msg = rec.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            texts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"
+                     and isinstance(b.get("text"), str) and b["text"].strip()]
+            tools = [b["name"] for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
+                     and isinstance(b.get("name"), str)]
+            if not texts and not tools:
+                continue
+            text = _jev_redact("\n".join(texts).strip())
+            if out and out[-1]["role"] == "assistant":      # an earlier record of the same reply
+                last = out[-1]
+                last["text"] = "\n".join(t for t in (text, last["text"]) if t)
+                if tools:
+                    last["tools"] = tools + last.get("tools", [])
+            else:
+                out.append({"role": "assistant", "text": text, **({"tools": tools} if tools else {})})
+            seen += len(text) // 4 + 3 + 8 * len(tools)
+    out.reverse()
+    return out
+
+
+def _jev_history_lines(lines: list, budget: int, prompt: str, skills: list = ()):
+    """Pure. Transcript JSONL lines -> {"conversation", "stage", "tokens"} fitted under `budget` tokens
+    (the whole rerank state counted), or None for an empty history or one that cannot fit. Never raises
+    on malformed records. Stage order ported from fast-jev-compaction (MIT), src/state.ts fitState."""
+    entries = _jev_history_entries(lines, 3 * budget)
+    cur = {_jev_redact(prompt).strip(), prompt.strip()}
+    if entries and entries[-1]["role"] == "user" and entries[-1]["text"].strip() in cur:
+        entries.pop()
+    if not entries:
+        return None
+    base = _jev_tokens(json.dumps({"request": prompt[:JEV_MAX_CHARS], "conversation_note": JEV_HISTORY_NOTE,
+                                   "conversation": [], "skills_already_loaded_this_session": list(skills)},
+                                  ensure_ascii=False))
+    cost = [_jev_tokens(json.dumps(e, ensure_ascii=False)) + 1 for e in entries]
+    total = sum(cost)           # running sum: each stage step adjusts it, so a stage is O(n), not O(n^2)
+
+    def retoken(i):
+        nonlocal total
+        new = _jev_tokens(json.dumps(entries[i], ensure_ascii=False)) + 1
+        total += new - cost[i]
+        cost[i] = new
+
+    def drop(i):
+        nonlocal total
+        total -= cost[i]
+        cost[i] = 0
+
+    n = len(entries)
+    keep = [True] * n                                        # stages 5-6 leave entries out
+
+    def finish(stage):
+        return {"conversation": [e for e, k in zip(entries, keep) if k], "stage": stage, "tokens": base + total}
+
+    if base + total <= budget:
+        return finish("full")
+    old = list(range(max(0, n - JEV_HISTORY_PINNED)))
+    pinned = list(range(max(0, n - JEV_HISTORY_PINNED), n))
+    cap = _JEV_ABRIDGE_HEAD + _JEV_ABRIDGE_TAIL
+    for i in old + pinned:                                   # 2. long texts abridged, oldest first
+        t = entries[i]["text"]
+        if len(t) > cap:
+            entries[i]["text"] = (t[:_JEV_ABRIDGE_HEAD] + f"\n[... {len(t) - cap} chars omitted ...]\n"
+                                  + t[-_JEV_ABRIDGE_TAIL:])
+            retoken(i)
+            if base + total <= budget:
+                return finish("texts abridged")
+    for i in old:                                            # 3. old messages collapsed
+        if entries[i]["text"]:
+            entries[i]["text"] = f"[... {len(entries[i]['text'])} chars omitted ...]"
+            retoken(i)
+            if base + total <= budget:
+                return finish("old messages collapsed")
+    for i in old:                                            # 4. old tool lists become counts
+        tools = entries[i].get("tools")
+        if isinstance(tools, list):
+            counts = {}
+            for nm in tools:
+                counts[nm] = counts.get(nm, 0) + 1
+            entries[i]["tools"] = counts
+            retoken(i)
+            if base + total <= budget:
+                return finish("old tools counted")
+    for i in old:                                            # 5. old messages left out, oldest first
+        keep[i] = False
+        drop(i)
+        if base + total <= budget:
+            return finish("old messages left out")
+    for i in pinned:                                         # 6. oldest dropped, pinned included
+        keep[i] = False
+        drop(i)
+        if base + total <= budget:
+            return finish("oldest dropped")
+    return None
+
+
+def _jev_history(transcript_path: str, prompt: str, skills: list = (), info: dict = None):
+    """The fitted rerank history from a bounded transcript tail, or None. Catches every exception: the
+    caller treats None as 'use today's state'. `info["err"]` names why, when a dict is passed."""
+    try:
+        with open(transcript_path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - JEV_HISTORY_BYTES))
+            lines = fh.read().decode("utf-8", "replace").splitlines()[1 if size > JEV_HISTORY_BYTES else 0:]
+        res = _jev_history_lines(lines, JEV_HISTORY_TOKENS, prompt, skills)
+        if res is None and info is not None:
+            info["err"] = "Empty"
+        return res
+    except Exception as e:  # noqa: BLE001 — history is an extra: any failure falls back to today's state
+        if info is not None:
+            info["err"] = type(e).__name__
+        return None
+
+
+def _jev_history_state(prompt: str, skills: list, hist: dict) -> dict:
+    return {"request": prompt[:JEV_MAX_CHARS], "conversation_note": JEV_HISTORY_NOTE,
+            "conversation": hist["conversation"], "skills_already_loaded_this_session": skills}
+
+
+def _jev_history_start(transcript_path: str, prompt: str, skills: list):
+    """Fit the history in a daemon thread so it overlaps the wide call. -> (thread, box)."""
+    box = {}
+
+    def work():
+        t = time.time()
+        info = {}
+        try:
+            box["hist"] = _jev_history(transcript_path, prompt, skills, info)
+        except Exception as e:  # noqa: BLE001 — a patched or broken helper must not end the thread loudly
+            box["hist"], info["err"] = None, type(e).__name__
+        box["err"] = info.get("err")
+        box["ms"] = int((time.time() - t) * 1000)
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    return th, box
 
 
 def _row_invocable(name: str, scope) -> bool:
@@ -1764,6 +2031,10 @@ def _jev_call(state: dict, questions: dict, tier: dict, key: str, timeout: float
                                                      {**auth, "X-Jev-Timeout": str(timeout)}), tier["model"])
             return answers, "relay", model
         except urllib.error.HTTPError as e:
+            # The relay answers an upstream timeout with 502 {"error": "<exception class>"}: that is a
+            # timeout (the chain ends), not a fast failure to re-send on the next tier.
+            if e.code == 502 and _jev_relay_timeout(e):
+                raise TimeoutError("relay: upstream timeout") from e
             if e.code != 404:
                 raise
         except urllib.error.URLError as e:
@@ -1772,6 +2043,15 @@ def _jev_call(state: dict, questions: dict, tier: dict, key: str, timeout: float
     answers, model = _jev_answers(_post_json(_jev_direct_url(tier["url"], tier["ep"]), body, timeout, auth),
                                   tier["model"])
     return answers, "direct", model
+
+
+def _jev_relay_timeout(e: urllib.error.HTTPError) -> bool:
+    """True when a relay 502's JSON body names a timeout class."""
+    try:
+        err = json.loads(e.read()).get("error")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return err in ("TimeoutError", "timeout", "ReadTimeout")
 
 
 def _jev_timed_out(e: BaseException) -> bool:
@@ -1794,9 +2074,15 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
     except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
             http.client.HTTPException) as e:
         return {"result": None, "event": _jev_err(type(e).__name__, t0)}
+    if JEV_HISTORY:   # the history's redaction rule covers every text this flag lets leave the machine
+        prev = _jev_redact(prev)
     state = {"request": prompt[:JEV_MAX_CHARS], "recent_context": prev,
              "skills_already_loaded_this_session": skills}
     desc = dict(catalog)
+    hth = hbox = None
+    if JEV_HISTORY:   # fitted alongside the wide call, never ahead of it
+        hth, hbox = _jev_history_start(transcript_path, prompt, skills)
+    hist_ev = None
     # ADR-0075: tiers in order. A fast failure moves the turn to the next tier when that tier can still
     # finish inside the budget; a timeout ends the chain (its budget is spent, the call may be billed).
     for i, tier in enumerate(bench):
@@ -1814,9 +2100,29 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             shortlist = [(n, desc[n]) for n in _jev_shortlist(wide) if n in desc]
             if not shortlist:
                 raise ValueError("wide answer names none of the catalogue")
-            rerank, _, _ = _jev_call(state, _jev_rerank_questions(shortlist), tier, key,
+            rstate, hist_ev = state, None
+            if hth is not None:
+                hth.join(min(JEV_HISTORY_JOIN_S, max(0.0, deadline - time.time() - tier["timeout"])))
+                hist = None if hth.is_alive() else hbox.get("hist")
+                if hist is not None:
+                    rstate = _jev_history_state(prompt, skills, hist)
+                    hist_ev = {"tok": hist["tokens"], "stage": hist["stage"], "ms": hbox["ms"],
+                               "used": True, "reask": False}
+                else:
+                    hist_ev = {"err": "Slow" if hth.is_alive() else (hbox.get("err") or "Empty")}
+            questions = _jev_rerank_questions(shortlist)
+            rerank, _, _ = _jev_call(rstate, questions, tier, key,
                                   max(0.05, min(tier["timeout"], deadline - time.time())))
             verdict, rows, conf, best = _jev_decide(rerank, shortlist)
+            if verdict == "skip" and rstate is not state:
+                # History alone must never cause the authorized skip: a skip needs today's state to agree.
+                hist_ev["reask"] = True
+                if deadline - time.time() < JEV_REASK_MIN_S:
+                    return {"result": None, "event": {**_jev_err("HistorySkip", t0), "model": tier["model"],
+                                                      "hist": hist_ev}}
+                rerank, _, _ = _jev_call(state, questions, tier, key,
+                                      max(0.05, min(tier["timeout"], deadline - time.time())))
+                verdict, rows, conf, best = _jev_decide(rerank, shortlist)
         except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
                 http.client.HTTPException) as e:
             err = type(e).__name__
@@ -1833,7 +2139,7 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             # pin shows here), and the env-tunable settings, which leave no commit for the epoch windows to see
             "model": tier["model"], "rmodel": answered, "tier": i, "floor": JEV_FITS_FLOOR,
             "to": tier["timeout"],
-            **({"fell": fell} if fell else {})}}
+            **({"fell": fell} if fell else {}), **({"hist": hist_ev} if hist_ev else {})}}
     return {"result": None, "event": {**_jev_err(err, t0), "fell": fell}}
 
 

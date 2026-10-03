@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import urllib.error
 from pathlib import Path
 
@@ -145,9 +146,16 @@ def validate_reply(reply):
     return None
 
 
-def merge_utterance_layer(triggers, name, utterances, cap=MAX_TRIGGERS):
+def merge_utterance_layer(triggers, name, utterances, cap=MAX_TRIGGERS, audit=None, orig=None):
     """Additively merge an llm-utterance trigger layer into triggers[name].
-    Mutates and returns `triggers`. See module docstring for the shape rationale."""
+    Mutates and returns `triggers`. See module docstring for the shape rationale.
+
+    `audit` (the Jev filter's `llm_triggers.jev` block) is stored beside the phrases, and every
+    phrase the cap cuts is appended to its `dropped` list as `{"t", "i", "why": "cap"}`, `i` being
+    the phrase's index in `orig` (default: `utterances`) — so kept + dropped always restores the
+    original list. Without `audit` the result is byte-identical to the unfiltered merge."""
+    orig = utterances if orig is None else orig
+    cut = utterances[cap:]
     utterances = utterances[:cap]
     existing = triggers.get(name)
     # re-derive from the TRUE original prose layer, never the already-combined
@@ -162,12 +170,18 @@ def merge_utterance_layer(triggers, name, utterances, cap=MAX_TRIGGERS):
         seen.add(key)
         combined.append(p)
     combined = combined[:cap]
+    layer = {"source": "llm-utterance", "triggers": utterances, "n": len(utterances)}
+    if audit is not None:
+        audit["dropped"] = list(audit.get("dropped", [])) + [
+            {"t": t, "i": orig.index(t), "why": "cap"} for t in cut]
+        audit["dropped"].sort(key=lambda d: d["i"])
+        layer["jev"] = audit
     triggers[name] = {
         "source": "prose-phrase+llm-utterance" if prose else "llm-utterance",
         "triggers": combined,
         "n": len(combined),
         "prose_triggers": prose,
-        "llm_triggers": {"source": "llm-utterance", "triggers": utterances, "n": len(utterances)},
+        "llm_triggers": layer,
     }
     return triggers
 
@@ -178,8 +192,23 @@ def load_triggers():
     return {}
 
 
-def save_triggers(triggers):
-    TRIGGERS_FILE.write_text(json.dumps(triggers, indent=2, ensure_ascii=False), encoding="utf-8")
+def save_triggers(triggers, path=None):
+    """Atomic: dump to a sibling temp file, then os.replace — a failure leaves the old file intact."""
+    path = Path(TRIGGERS_FILE if path is None else path)
+    text = json.dumps(triggers, indent=2, ensure_ascii=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, (path.stat().st_mode & 0o777) if path.exists() else 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def load_cache():
@@ -221,6 +250,12 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     triggers = load_triggers()
     cache = load_cache()
 
+    # Jev sibling-margin filter (phase 3): on only with the flag AND a calibrated thresholds file.
+    jev_ctx, jev_res = None, {}
+    import trigger_filter
+    if trigger_filter.active():
+        jev_ctx = trigger_filter.Ctx(installed=skills if catalog is None else flywheel_llm.live_skills())
+
     def _needs_work(name):
         """Unchanged + already merged -> nothing to do."""
         h = flywheel_llm.body_hash(skills.get(name, ""))
@@ -251,6 +286,10 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
                                           rate_s=rate, schema=SCHEMA)
                 if vn_count(clean_triggers(reply.get("triggers", []))) < 2:
                     print(f"WARN: {name}: still <2 Vietnamese triggers after retry (kept)")
+            if jev_ctx is not None and not validate_reply(reply):
+                # Scoring never fails the skill: any Jev/sibling error keeps every phrase.
+                jev_res[name] = trigger_filter.filter_phrases(name, desc, clean_triggers(reply["triggers"]),
+                                                              jev_ctx)
         except (
             AttributeError,
             IndexError,
@@ -272,7 +311,13 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
         if err:
             print(f"WARN: skipping {name}: {err}")
             return {"name": name, "status": "error", "detail": err}
-        merge_utterance_layer(triggers, name, clean_triggers(reply["triggers"]))
+        phrases = clean_triggers(reply["triggers"])
+        res = jev_res.pop(name, None)
+        if res is None:
+            merge_utterance_layer(triggers, name, phrases)
+        else:
+            jev_ctx.cache.add_many(res["new_rows"])
+            merge_utterance_layer(triggers, name, res["kept"], audit=res["audit"], orig=phrases)
         cache[CACHE_PREFIX + name] = h
         save_triggers(triggers)
         save_cache(cache)
@@ -378,5 +423,13 @@ if __name__ == "__main__":
     if args.selftest:
         _selftest()
     else:
-        run(limit=args.limit, only=args.only, rate=args.rate, catalog=args.catalog,
-            workers=args.workers)
+        import flywheel_lock
+        if not flywheel_lock.acquire(block=False):
+            print(f"SKIP: flywheel already running — another run holds {flywheel_lock.LOCK_PATH}",
+                  file=sys.stderr)
+            sys.exit(4)
+        try:
+            run(limit=args.limit, only=args.only, rate=args.rate, catalog=args.catalog,
+                workers=args.workers)
+        finally:
+            flywheel_lock.release()
