@@ -8,8 +8,12 @@ only, and skill text is untrusted: it lives in named state fields, never inside 
 
   echo '{"task": ..., "sub_goals": [...], "candidates": [...]}' | python3 scripts/consult_fit.py
   python3 scripts/consult_fit.py --eval [--extract-only] [--limit N]   # post-ship check (W34)
+  echo '{"task": ..., "queries": [...]}' | python3 scripts/consult_fit.py widen   # sieve + Jev top 10 -> 20 rows
+  python3 scripts/consult_fit.py widen --selftest                      # offline checks
 
-Exit: 0 ok, 2 bad input or Jev failure (JSON error on stdout), 3 disabled (SKILL_CONSULT_JEV=0).
+Exit (fit): 0 ok, 2 bad input or Jev failure (JSON error on stdout), 3 disabled (SKILL_CONSULT_JEV=0).
+Exit (widen): 0 ok (a Jev failure is still 0: `jev.failed`), 2 bad input, 4 sieve engine unavailable.
+`widen` is governed only by SKILL_CONSULT_JEV_WIDEN; SKILL_CONSULT_JEV=0 does not stop it.
 """
 import argparse
 import hashlib
@@ -18,8 +22,10 @@ import math
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -340,7 +346,244 @@ def run_eval(args) -> int:
     return 0
 
 
+# --- widen: Jev's top 10 ahead of the sieve rows -------------------------------------------------------
+# Ported from scripts/sieve_recall.py (jev_round_robin, jev_top, jev_setup, union_rows), the logic the
+# pre-registered iteration-2 gate (D_J20) measured: one attempt on the ts tier, 3 s, empty conversation
+# context, the whole-catalogue wide questions, round-robin across catalogue chunks.
+
+WIDEN_CUT, WIDEN_JEV_K, WIDEN_TIMEOUT = 20, 10, 3.0
+WIDEN_TASK_CAP = 4000
+WIDEN_ENGINE_TIMEOUT = 90.0     # under the agent's 120 s Bash limit, so exit 4 is reported, not killed
+
+
+def widen_clean(task: str) -> str:
+    """The request as it may leave the machine: injected blocks stripped and secret shapes redacted over
+    the WHOLE text first, then whitespace collapsed and cut to 4000 characters. A cut drops the last token:
+    half a secret matches no redaction pattern. (The gate cut the raw text first, then cleaned it, so the two
+    can differ for ANY request over 4000 characters: here the cut counts cleaned characters.)"""
+    enf = jc.load_enforcer()
+    text = enf._JEV_REMINDER_RE.sub("", task or "")
+    for rx in enf._JEV_INJECTED_RES:
+        text = rx.sub("", text)
+    text = re.sub(r"\s+", " ", enf._jev_redact(text)).strip()
+    if len(text) > WIDEN_TASK_CAP:
+        text = re.sub(r"\S*$", "", text[:WIDEN_TASK_CAP]).rstrip()
+    return text
+
+
+def jev_round_robin(answers: dict) -> list:
+    """Rank 1 of every wide chunk in chunk order, then rank 2, and so on; chunk probabilities are never
+    compared across chunks."""
+    chunks = []
+    for k in sorted((k for k in answers if k.startswith("wide::")), key=lambda k: int(k.split("::")[1])):
+        p = answers[k]["probabilities"]
+        chunks.append(sorted(p, key=lambda n: -p[n]))
+    out = []
+    for i in range(max(map(len, chunks), default=0)):
+        out += [c[i] for c in chunks if i < len(c)]
+    return out
+
+
+def jev_top(task: str, catalog_fn=None, ask_fn=None) -> list:
+    """[(name, description)] Jev's top WIDEN_JEV_K for the cleaned request. Raises on any failure."""
+    if not task:
+        raise jc.JevError("empty request")
+    enf = jc.load_enforcer()
+    tiers = [t for t in enf._jev_bench() if t["ep"] == "ts"]
+    if not tiers or not enf._jev_key(tiers[0]):
+        raise jc.JevError("no ts tier or no TYPESAFE_API_KEY")
+    cat = (catalog_fn or enf._jev_catalog)()
+    if not cat:
+        raise jc.JevError("installed catalogue is empty")
+    state = {"request": task, "recent_context": "", "skills_already_loaded_this_session": []}
+    answers, _meta = (ask_fn or jc.ask)(state, enf._jev_wide_questions(cat), WIDEN_TIMEOUT,
+                                        tiers=[tiers[0]], retries=0)
+    desc = dict(cat)
+    return [(n, desc.get(n, "")) for n in jev_round_robin(answers)[:WIDEN_JEV_K]]
+
+
+def widen_rows(jev: list, sieve_rows: list, cut: int = WIDEN_CUT) -> list:
+    """Jev rows first, then the sieve rows in order, deduplicated by full skill key, cut to `cut`
+    (sieve_recall.union_rows). A Jev row that is also a sieve row keeps the sieve row's fields, minus
+    `external`: Jev only picks installed skills, and the installed copy wins the key."""
+    skey = jc.load_enforcer()._skill_key
+    by_key = {}
+    for r in sieve_rows:
+        by_key.setdefault(skey(r["name"]), r)
+    out, seen = [], set()
+    for n, d in jev:
+        k = skey(n)
+        if k not in seen:
+            seen.add(k)
+            out.append({**{f: v for f, v in by_key[k].items() if f != "external"}, "source": "both"}
+                       if k in by_key else {"name": n, "description": d, "source": "jev"})
+    for r in sieve_rows:
+        k = skey(r["name"])
+        if k not in seen:
+            seen.add(k)
+            out.append({**r, "source": "sieve"})
+    return out[:cut]
+
+
+class SieveUnavailable(RuntimeError):
+    """The installed engine could not produce sieve rows."""
+
+
+# The engine child gets only what the engine reads: process basics, python path, harness identity and the
+# engine's own SKILL_*/QDRANT/EMBED/DSH vars. No API key of any provider.
+_CHILD_ENV_EXACT = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV",
+                    "TRIGGERS_MAX", "OMPCODE", "ZCODE_PLUGIN_ROOT", "DSH_SHELL"}
+_CHILD_ENV_PREFIX = ("SKILL_", "QDRANT", "EMBED_", "DSH_", "LC_", "XDG_", "HF_", "TRANSFORMERS_", "CLAUDE_")
+_ENGINE_CHILD = ("import json, sys\n"
+                 "from skill_search import server\n"
+                 "print(server.consult_candidates(json.load(sys.stdin), 40))\n")
+
+
+def sieve_rows_from_engine(queries: list, python: str = None) -> list:
+    """consult_candidates(queries, top_n 40) from the INSTALLED engine (the one the MCP server runs), in a
+    child of the venv python, run in the CALLER's working directory (the engine's skill view is cwd-scoped:
+    a session project's own skills only show from there), flags off, engine env from .mcp.json, trimmed to
+    what the engine reads. Raises SieveUnavailable."""
+    import engine_env
+    py = python or os.environ.get("SKILL_CONCIERGE_VENV_PYTHON") or str(
+        Path.home() / ".claude" / "skill-concierge" / "venv" / "bin" / "python3")
+    env = {k: v for k, v in engine_env.engine_env().items()
+           if k in _CHILD_ENV_EXACT or k in engine_env.ENGINE_ENV_KEYS or k.startswith(_CHILD_ENV_PREFIX)}
+    env.update(SKILL_CONSULT_SLOTS="0", SKILL_CONSULT_RRF="0")
+    try:
+        r = subprocess.run([py, "-c", _ENGINE_CHILD], input=json.dumps(queries), env=env, cwd=os.getcwd(),
+                           capture_output=True, text=True, timeout=WIDEN_ENGINE_TIMEOUT)
+        data = json.loads(r.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        raise SieveUnavailable(type(e).__name__) from e
+    rows = data.get("results") if isinstance(data, dict) else None
+    if r.returncode != 0 or not isinstance(rows, list) or (isinstance(data, dict) and "error" in data):
+        raise SieveUnavailable("engine error")
+    return rows
+
+
+def _check_rows(rows) -> list:
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and isinstance(r.get("name"), str)
+                                             and r["name"].strip() for r in rows):
+        raise ValueError("candidates must be a results list of objects with a name")
+    return rows
+
+
+def widen(task: str, candidates=None, queries=None, catalog_fn=None, ask_fn=None, engine_fn=None) -> dict:
+    """Output for a request plus either `candidates` (a consult_candidates response or its results list)
+    or `queries` (the sieve is then run here). Every row carries `source`; `jev.state` is widened, not-widened
+    (Jev failed) or off (SKILL_CONSULT_JEV_WIDEN=0)."""
+    if not isinstance(task, str) or not task.strip():
+        raise ValueError("task must be a non-empty string")
+    off = os.environ.get("SKILL_CONSULT_JEV_WIDEN", "1") == "0"
+    pool = ThreadPoolExecutor(max_workers=1)
+    t0, jev, failed, fut = time.perf_counter(), [], False, None
+    try:
+        if candidates is None:
+            if not isinstance(queries, list) or not queries or not all(
+                    isinstance(q, str) and q.strip() for q in queries):
+                raise ValueError("queries must be a non-empty list of strings")
+        if not off:   # Jev runs while the sieve does
+            fut = pool.submit(lambda: jev_top(widen_clean(task), catalog_fn, ask_fn))
+        if candidates is None:
+            rows = (engine_fn or sieve_rows_from_engine)(queries)
+        else:
+            rows = candidates.get("results") if isinstance(candidates, dict) else candidates
+        rows = _check_rows(rows)
+        if fut is not None:
+            try:
+                jev = fut.result()
+            except Exception:  # noqa: BLE001 — any Jev failure leaves the sieve rows
+                failed = True
+    finally:
+        pool.shutdown(wait=True)
+    out = widen_rows(jev, rows)
+    return {"results": out, "jev": {
+        "ms": 0 if off else int((time.perf_counter() - t0) * 1000), "failed": failed,
+        "added": sum(1 for r in out if r["source"] == "jev"),
+        "state": "off" if off else "not-widened" if failed else "widened"}}
+
+
+def widen_selftest() -> int:
+    """Offline: fake catalogue, fake ask, fake engine. Prints WIDEN-SELFTEST-OK only when every check holds."""
+    keys = ("TYPESAFE_API_KEY", "SKILL_CONSULT_JEV_WIDEN", "ENFORCER_JEV_BENCH")
+    saved = {k: os.environ.get(k) for k in keys}
+    os.environ["TYPESAFE_API_KEY"] = "sk-selftest"
+    os.environ.pop("SKILL_CONSULT_JEV_WIDEN", None)
+    os.environ.pop("ENFORCER_JEV_BENCH", None)
+    sent, bad = [], []
+    cat = [(f"s{i}", f"desc {i}") for i in range(6)]
+
+    def ask(state, qs, timeout, tiers=None, retries=1):
+        sent.append((state, timeout, retries))
+        return {"wide::0": {"probabilities": {"s3": .9, "s1": .5, "s0": .1}},
+                "wide::1": {"probabilities": {"s5": .8, "s4": .2, "s2": .1}}}, {}
+
+    def boom(*a, **k):
+        raise jc.JevError("boom")
+    sieve = [{"name": n, "description": f"sieve {n}", "score": .5} for n in
+             ["s1"] + [f"x{i}" for i in range(30)]]
+
+    def check(label, ok):
+        if not ok:
+            bad.append(label)
+    try:
+        out = widen("do the thing", {"results": sieve}, catalog_fn=lambda: cat, ask_fn=ask)
+        names = [r["name"] for r in out["results"]]
+        check("order: round-robin Jev first", names[:4] == ["s3", "s5", "s1", "s4"])
+        check("cut to 20", len(names) == 20)
+        check("dedupe", len(names) == len(set(names)))
+        check("both keeps sieve fields", out["results"][2].get("score") == .5
+              and out["results"][2]["source"] == "both")
+        check("jev row from catalogue", out["results"][0] == {"name": "s3", "description": "desc 3", "source": "jev"})
+        check("added counts jev-only rows", out["jev"]["added"] == 5 and out["jev"]["failed"] is False
+              and out["jev"]["state"] == "widened")
+        check("sieve rows follow in order", names[6] == "x0" and out["results"][6]["source"] == "sieve")
+        check("call shape", sent[0][1:] == (WIDEN_TIMEOUT, 0) and sent[0][0]["recent_context"] == "")
+        out = widen("do the thing", {"results": sieve}, catalog_fn=lambda: cat, ask_fn=boom)
+        check("fallback keeps sieve rows", [r["name"] for r in out["results"]] == [r["name"] for r in sieve[:20]]
+              and out["jev"]["failed"] is True and out["jev"]["added"] == 0
+              and out["jev"]["state"] == "not-widened")
+        out = widen("do the thing", queries=["q"], catalog_fn=lambda: cat, ask_fn=ask, engine_fn=lambda q: sieve)
+        check("queries path runs the engine", out["results"][2]["name"] == "s1")
+        n = len(sent)
+        os.environ["SKILL_CONSULT_JEV_WIDEN"] = "0"
+        out = widen("do the thing", sieve, catalog_fn=lambda: cat, ask_fn=ask)
+        check("kill switch: no Jev call, same row shape", len(sent) == n and out["jev"]["state"] == "off"
+              and [r["name"] for r in out["results"]] == [r["name"] for r in sieve[:20]]
+              and all(r["source"] == "sieve" for r in out["results"]))
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("WIDEN-SELFTEST-OK" if not bad else "WIDEN-SELFTEST-FAIL: " + "; ".join(bad))
+    return 0 if not bad else 1
+
+
+def widen_main(argv, stdin=None) -> int:
+    if "--selftest" in argv:
+        return widen_selftest()
+    try:
+        d = json.loads((stdin or sys.stdin).read())
+        if not isinstance(d, dict):
+            raise ValueError("input must be an object")
+        if "candidates" not in d and "queries" not in d:
+            raise ValueError("give queries (the sieve runs here) or candidates")
+        out = widen(d.get("task"), d.get("candidates"), d.get("queries"))
+    except SieveUnavailable as e:
+        return _fail(f"sieve engine unavailable ({e})", 4)
+    except (OSError, ValueError) as e:
+        return _fail(str(e) if isinstance(e, ValueError) else type(e).__name__)
+    print(json.dumps(out, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None, stdin=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["widen"]:
+        return widen_main(argv[1:], stdin)
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--in", dest="infile")
     ap.add_argument("--eval", action="store_true")

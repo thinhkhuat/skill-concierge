@@ -1,0 +1,7 @@
+cases kept 83 (leak-dropped 85, label gone 0)
+RECALL A0@20: n=83 @20 33.7  p50 42 ms  p90 67 ms
+RECALL A0@40: n=83 @40 36.1  p50 43 ms  p90 70 ms
+RECALL SR40: n=83 @40 47.0  p50 54 ms  p90 92 ms
+RECALL J20: n=83 @20 56.6  p50 831 ms  p90 969 ms
+RECALL J40: n=83 @40 60.2  p50 831 ms  p90 969 ms
+JEV: calls 83 failed 0  p50 831 ms p90 969 ms

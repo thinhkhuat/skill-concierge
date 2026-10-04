@@ -1,0 +1,3 @@
+# Raw per-case outputs (skill names, ids, scores; no prompt text) stay on disk beside the
+# deliverable but out of the public repo: ~8 MB of rebuildable data.
+*.jsonl

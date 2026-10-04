@@ -34,7 +34,9 @@ LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 _SHAPES = ("SINGLE", "CHAIN", "NONE")
 
 
-def append_verdict(shape, primary, chain, externals, jev=None):
+_SIEVE = ("widened", "not-widened", "off")
+
+def append_verdict(shape, primary, chain, externals, jev=None, sieve=None, jev_added=None):
     try:
         row = {
             "t": round(time.time(), 3),
@@ -46,6 +48,10 @@ def append_verdict(shape, primary, chain, externals, jev=None):
         }
         if isinstance(jev, dict):
             row["jev"] = jev
+        if sieve in _SIEVE:
+            row["sieve"] = sieve
+        if isinstance(jev_added, int) and not isinstance(jev_added, bool) and jev_added >= 0:
+            row["jev_added"] = jev_added
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with LEDGER.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -109,6 +115,10 @@ if __name__ == "__main__":
                    help="how many picks in the verdict are external-catalog skills")
     p.add_argument("--jev", default="",
                    help="optional JSON object from consult_fit.py: {ms, requests, model, top}")
+    p.add_argument("--sieve", default="",
+                   help="how the candidate set was built: widened (Jev rows added), not-widened, off")
+    p.add_argument("--jev-added", default="",
+                   help="how many rows consult_fit.py widen added from Jev (its jev.added)")
     p.add_argument("--selftest", action="store_true")
     args = p.parse_args()
 
@@ -121,5 +131,9 @@ if __name__ == "__main__":
             jev = json.loads(args.jev) if args.jev else None
         except ValueError:
             jev = None
+        try:
+            jev_added = int(args.jev_added) if args.jev_added else None
+        except ValueError:
+            jev_added = None   # telemetry never loses the verdict row over a bad value
         sys.exit(0 if append_verdict(args.shape, args.primary, args.chain,
-                                     args.externals, jev) else 1)
+                                     args.externals, jev, args.sieve or None, jev_added) else 1)

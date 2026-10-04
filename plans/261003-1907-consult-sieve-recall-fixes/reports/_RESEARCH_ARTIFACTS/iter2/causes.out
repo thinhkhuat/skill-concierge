@@ -1,0 +1,12 @@
+A0@20 misses: 55
+C0 label blocklisted (unwinnable): 2
+C1 crowded out by externals (installed-only rank <=20): 7 [('come-clean', 1), ('vn-gov-docx', 1), ('ak-cook', 1), ('architecture', 1), ('ak-watzup', 1), ('officecli-xlsx', 1), ('vn-doc-complete', 1)]
+C2 MAX-pool burial (one query ranks it <=20, not C1): 1 [('unlazy', 1)]
+C3 no query ranks it in the top 100: 29 [('come-clean', 4), ('unlazy', 3), ('ak-debug', 2), ('plugin-scaffold', 2), ('ak-git', 2), ('directional-prompting', 2), ('vn-editor', 1), ('ak-worktree', 1), ('tk-servers-ssh-doctor', 1), ('vn-gov-docx', 1), ('vn-doc-complete', 1), ('keep-a-changelog', 1), ('superpowers-developing-for-claude-code:working-with-claude-code', 1), ('cron-best-practices', 1), ('ak-cook', 1), ('claude-hud-personalize', 1), ('vn-canu-reporting', 1), ('codebase-documenter', 1), ('which-skills', 1), ('verification-before-completion', 1)]
+C4 weak everywhere (best single-query rank 21-100, not C1/C2): 16 [('ak-cook', 2), ('memsearch:memory-config', 2), ('ak-brainstorm', 1), ('agentkit-the-tk-way', 1), ('ak-debug', 1), ('vn-gov-docx', 1), ('brief-me', 1), ('antigravity:fixing-metadata', 1), ('mattpocock-skills:grill-with-docs', 1), ('superpowers-developing-for-claude-code:developing-claude-code-plugins', 1), ('vn-canu-reporting', 1), ('vn-editor', 1), ('memsearch:memory-recall', 1), ('opus-validate', 1)]
+C1 recovered by A0 U jev10 @20: 4 of 7 | by slots+rrf @20: 5
+C2 recovered by A0 U jev10 @20: 1 of 1 | by slots+rrf @20: 1
+C3 recovered by A0 U jev10 @20: 7 of 29 | by slots+rrf @20: 0
+C4 recovered by A0 U jev10 @20: 11 of 16 | by slots+rrf @20: 1
+still missed by A0 U jev10 @20: 34 [('come-clean', 4), ('vn-gov-docx', 3), ('unlazy', 3), ('whereami', 2), ('vn-doc-complete', 2), ('plugin-scaffold', 2), ('directional-prompting', 2), ('vn-editor', 1), ('ak-worktree', 1), ('tk-servers-ssh-doctor', 1), ('ak-debug', 1), ('keep-a-changelog', 1), ('superpowers-developing-for-claude-code:working-with-claude-code', 1), ('cron-best-practices', 1), ('ak-cook', 1), ('ak-git', 1), ('claude-hud-personalize', 1), ('antigravity:fixing-metadata', 1), ('superpowers:systematic-debugging', 1), ('memsearch:memory-config', 1), ('vn-canu-reporting', 1), ('superpowers-developing-for-claude-code:developing-claude-code-plugins', 1), ('verification-before-completion', 1)]
+lost by A0 U jev10 @20 vs A0: [('a3222334', 'vn-gov-docx'), ('f696bb0f', 'superpowers:systematic-debugging')]

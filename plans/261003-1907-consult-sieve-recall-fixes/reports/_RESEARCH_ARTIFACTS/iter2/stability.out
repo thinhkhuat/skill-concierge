@@ -1,0 +1,6 @@
+wide errors run1/run2: 0 0 | rerank errors run1/run2: 0 0
+run1 jev-only @10 55.4 @20 61.4 | A0 U jev10 @20 59.0 @40 62.7 | wide ms p50/p90 703 797 max 915
+run2 jev-only @10 56.6 @20 61.4 | A0 U jev10 @20 60.2 @40 63.9 | wide ms p50/p90 706 808 max 916
+top-10 overlap run1 vs run2: mean 0.886 min 0.5
+cases whose jev top-10 hit flips between runs: 3
+models: {'jev-1.13.0'} {'jev-1.13.0'}

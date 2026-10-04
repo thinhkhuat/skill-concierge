@@ -12,8 +12,10 @@ The calling agent decides with session context you cannot see.
    ranking it. Metadata alone is not evidence — descriptions miss and over-claim;
    bodies carry the steps, scripts, and references that prove fit.
    - Installed rows: Read the body at the row's `path`.
-   - External rows (they carry `external`, not `path`): call
-     `get_skill("<exact name>")` for the full body.
+   - Rows without a `path` (external rows, which carry `external`, and rows the
+     Jev widening added, which carry `source: "jev"`): call
+     `get_skill("<exact name>")` for the full body. A `source: "jev"` row is
+     always an installed skill (set `installed: true`), only without a `path`.
    - A `capsule` on the row is a dossier for scanning breadth — it never substitutes
      for reading a finalist's body.
 2. Judge fit against the task's sub-goals from the body's actual content.

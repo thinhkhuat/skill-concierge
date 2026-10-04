@@ -1,0 +1,32 @@
+ts range 2026-06-29T18:35:32.137Z 2026-09-25T16:36:16.480Z
+router state Counter({'no-router': 83})
+band Counter({'offer': 62, 'fallback': 16, 'intent_skip': 3, 'getaway': 2})
+STRATUM all: n=83 sessions=59 | A0 33.7/36.1 | slots+rrf 42.2/47.0 | inst 41.0/44.6 | inst-rrf60 43.4/50.6 | jev wide-rr only 61.4/65.1 | A0 U jev10 59.0/62.7 | slots U jev10 60.2/65.1 | slots+rrf U jev10 57.8/65.1 | inst U jev10 60.2/65.1
+STRATUM not_offered: n=60 sessions=44 | A0 21.7/25.0 | slots+rrf 30.0/35.0 | inst 30.0/33.3 | inst-rrf60 30.0/38.3 | jev wide-rr only 51.7/56.7 | A0 U jev10 50.0/55.0 | slots U jev10 51.7/56.7 | slots+rrf U jev10 48.3/56.7 | inst U jev10 51.7/56.7
+STRATUM offered: n=23 sessions=21 | A0 65.2/65.2 | slots+rrf 73.9/78.3 | inst 69.6/73.9 | inst-rrf60 78.3/82.6 | jev wide-rr only 87.0/87.0 | A0 U jev10 82.6/82.6 | slots U jev10 82.6/87.0 | slots+rrf U jev10 82.6/87.0 | inst U jev10 82.6/87.0
+STRATUM no-router: n=83 sessions=59 | A0 33.7/36.1 | slots+rrf 42.2/47.0 | inst 41.0/44.6 | inst-rrf60 43.4/50.6 | jev wide-rr only 61.4/65.1 | A0 U jev10 59.0/62.7 | slots U jev10 60.2/65.1 | slots+rrf U jev10 57.8/65.1 | inst U jev10 60.2/65.1
+STRATUM english: n=75 sessions=55 | A0 32.0/33.3 | slots+rrf 38.7/42.7 | inst 38.7/42.7 | inst-rrf60 38.7/46.7 | jev wide-rr only 58.7/62.7 | A0 U jev10 56.0/58.7 | slots U jev10 56.0/61.3 | slots+rrf U jev10 53.3/61.3 | inst U jev10 56.0/61.3
+STRATUM non-english: n=8 sessions=6 | A0 50.0/62.5 | slots+rrf 75.0/87.5 | inst 62.5/62.5 | inst-rrf60 87.5/87.5 | jev wide-rr only 87.5/87.5 | A0 U jev10 87.5/100.0 | slots U jev10 100.0/100.0 | slots+rrf U jev10 100.0/100.0 | inst U jev10 100.0/100.0
+STRATUM excl. blocklisted label: n=81 sessions=58 | A0 34.6/37.0 | slots+rrf 43.2/48.1 | inst 42.0/45.7 | inst-rrf60 44.4/51.9 | jev wide-rr only 63.0/66.7 | A0 U jev10 60.5/64.2 | slots U jev10 61.7/66.7 | slots+rrf U jev10 59.3/66.7 | inst U jev10 61.7/66.7
+
+SESSION slots+rrf @20: gain 8.4 pts, sessions +7/-0 p=0.00781, bootstrap 95% lower 2.9
+SESSION slots+rrf @40: gain 10.8 pts, sessions +9/-1 p=0.01074, bootstrap 95% lower 2.8
+SESSION inst @20: gain 7.2 pts, sessions +7/-1 p=0.03516, bootstrap 95% lower 1.2
+SESSION inst @40: gain 8.4 pts, sessions +8/-1 p=0.01953, bootstrap 95% lower 2.5
+SESSION inst-rrf60 @20: gain 9.6 pts, sessions +8/-1 p=0.01953, bootstrap 95% lower 2.6
+SESSION inst-rrf60 @40: gain 14.5 pts, sessions +13/-2 p=0.00369, bootstrap 95% lower 5.6
+SESSION jev wide-rr only @20: gain 27.7 pts, sessions +21/-3 p=0.00014, bootstrap 95% lower 15.4
+SESSION jev wide-rr only @40: gain 28.9 pts, sessions +22/-4 p=0.00027, bootstrap 95% lower 15.9
+SESSION A0 U jev10 @20: gain 25.3 pts, sessions +19/-1 p=0.00002, bootstrap 95% lower 15.0
+SESSION A0 U jev10 @40: gain 26.5 pts, sessions +19/-0 p=0.00000, bootstrap 95% lower 17.6
+SESSION slots U jev10 @20: gain 26.5 pts, sessions +20/-1 p=0.00001, bootstrap 95% lower 16.9
+SESSION slots U jev10 @40: gain 28.9 pts, sessions +20/-1 p=0.00001, bootstrap 95% lower 18.7
+SESSION slots+rrf U jev10 @20: gain 24.1 pts, sessions +19/-2 p=0.00011, bootstrap 95% lower 14.1
+SESSION slots+rrf U jev10 @40: gain 28.9 pts, sessions +20/-1 p=0.00001, bootstrap 95% lower 18.8
+SESSION inst U jev10 @20: gain 26.5 pts, sessions +20/-1 p=0.00001, bootstrap 95% lower 16.9
+SESSION inst U jev10 @40: gain 28.9 pts, sessions +20/-1 p=0.00001, bootstrap 95% lower 18.7
+
+CAUSE hit: n=28 jev-wide top10 hits 23 top20 23; union A0+jev10 @20 26
+CAUSE 21-40: n=2 jev-wide top10 hits 1 top20 1; union A0+jev10 @20 1
+CAUSE 41-100: n=11 jev-wide top10 hits 7 top20 9; union A0+jev10 @20 7
+CAUSE >100: n=42 jev-wide top10 hits 15 top20 18; union A0+jev10 @20 15

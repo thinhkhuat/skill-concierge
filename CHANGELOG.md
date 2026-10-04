@@ -3,17 +3,30 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
-## [Unreleased]
+## [0.58.0] - 2026-10-04
 
 ### Added
+- **Consult widens its candidate set with Jev's whole-catalogue top 10** ([ADR-0078](docs/adr/0078-consult-sieve-jev-widening.md)).
+  `python3 scripts/consult_fit.py widen` takes the user's request and the `consult_candidates` response (consult now
+  asks for `top_n` 40), puts Jev's top 10 first, keeps the sieve rows after them, drops duplicates and cuts to 20;
+  each row carries `source` (`jev`, `both`, `sieve`). `skills/consult/SKILL.md` step 2 calls it, and
+  `agents/analyst.md` reads a row without a `path` with `get_skill`. Kill switch `SKILL_CONSULT_JEV_WIDEN`
+  (default ON, script-side, not in `ENGINE_ENV_KEYS`): `=0` returns the sieve rows with no Jev I/O. Any Jev
+  failure falls back to the sieve rows, and the card says `sieve: not widened`. Proof: the pre-registered
+  held-out gate (n=29 cases not shaped by a Jev offer) raised recall@20 from 24.1 to 48.3, 7 cases gained and
+  0 lost, sessions +6/-0, Holm p 0.0469 (a narrow margin); Jev p90 969 ms
+  ([raw](plans/261003-1907-consult-sieve-recall-fixes/reports/iter2-gate-raw.txt)). The cases are single-skill
+  turns with generated queries, a proxy, so the effect on real consult requests is unmeasured.
 - **Two consult-sieve flags, both default OFF; nothing is enabled.** `SKILL_CONSULT_SLOTS` makes
   `consult_candidates` reserve about 70% of `top_n` for installed skills and return externals after them
   (`blocks` in the response); `SKILL_CONSULT_RRF` orders its per-query lists by reciprocal-rank fusion
   (k = 60) instead of the max raw score. Both are read per call and stay out of `ENGINE_ENV_KEYS`.
-  `scripts/sieve_recall.py` is the held-out evaluation instrument. The pre-registered gate failed for every
-  decision: slots 33.7 -> 33.7, RRF 33.7 -> 34.9 recall@20 (n=83); the three `consult` SKILL.md
-  query-wording changes failed too and were not applied
-  ([verdict](plans/261003-1907-consult-sieve-recall-fixes/reports/phase-03-gate-verdict.md)).
+  The pre-registered gate failed for every decision: slots 33.7 -> 33.7, RRF 33.7 -> 34.9 recall@20 (n=83); the
+  three `consult` SKILL.md query-wording changes failed too and were not applied
+  ([verdict](plans/261003-1907-consult-sieve-recall-fixes/reports/phase-03-gate-verdict.md)). A second gate on
+  fresh data (both flags together at 40 rows, n=57) failed again: recall@40 28.1 -> 33.3, 5 gained and 2 lost,
+  Holm p 0.2266, so both stay OFF.
+- **`scripts/sieve_recall.py`**, the held-out evaluation instrument for the consult sieve, used by both gates.
 
 ## [0.57.1] — 2026-10-04
 

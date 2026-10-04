@@ -1,0 +1,7 @@
+kept cases 83
+replica mismatches at 40: 37
+jev catalog 604 chunks 3
+wide tokens est 29893
+bench [('ts', 'jev-1.13.0', 1.5), ('gw', 'openrouter/typesafe/jev-1.13', 2.0), ('gw', 'oc/jev-1.13-free', 2.0), ('gw', 'ocz/jev-1.13-free', 2.0)]
+labels in jev catalog 38 / 43
+labels missing from jev catalog: ['antigravity:fixing-metadata', 'antigravity:varlock-claude-skill', 'pdf:pdf', 'superpowers:systematic-debugging', 'whereami']

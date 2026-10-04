@@ -13,6 +13,16 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.58.0 — consult widening with Jev's top 10 (ADR-0078)
+
+**Epoch starts.** W37: the v0.58.0 go-live of `consult_fit.py widen` in consult step 2 (`SKILL_CONSULT_JEV_WIDEN` default ON). No `hooks/`, `enforcer.py` or `server.py` change, so the per-turn offer metrics (W21-W24, W30-W33) do not restart here. Consult candidate sets change: the first 10 rows come from Jev, the rest from the sieve, 20 in total ([ADR-0078](adr/0078-consult-sieve-jev-widening.md)). The W34 readings (`jev` on consult verdict rows) now sit on a different candidate set and must window from this go-live.
+
+| # | Watch | How | Trigger | Action |
+|---|-------|-----|---------|--------|
+| W37 | Live consult widening | The widen outcome is on the consult card and in the `widen` output (`jev.failed`, `jev.ms`, `jev.added`, row `source`), not in the ledger: `consult_verdict` rows carry no widen field. Read the cards or transcripts of consult runs since go-live: (a) share of cards saying `sieve: not widened`; (b) `jev.ms` p90 and `jev.failed` rate; (c) whether the chosen primary has `source` `jev` (or `both`) or `sieve`, and how many of the 11-of-13 "primary not among the sieve rows" cases from the W34 finding now find it among the 20 rows (admitted by hand at step 3 counts as a miss). Small n is "insufficient data", never a rate | (a) or (b) failure rate above 5% (the pre-registered Jev-arm bar was p90 <= 1500 ms; the gate run saw p90 969 ms, 0 failures in 57 calls); (c) the primary comes from a `jev`-only row in no run once n >= 10 consults, or manual admissions at step 3 do not fall | `SKILL_CONSULT_JEV_WIDEN=0`, check `python3 scripts/jev_client.py --probe`; a recurring primary from `jev` rows is the first live evidence for the real-consult effect the gate could not measure |
+
+---
+
 ## v0.57.0 — Jev typed questions: consult matrix live, utterance filter inert, router history off
 
 **Epoch starts.** W34: the v0.57.0 go-live of `consult --fast` (`SKILL_CONSULT_JEV` default ON). W35: the first `corpus_epoch` ledger event, once a future calibration passes the staging gate — none exists yet, so W35 has no epoch and nothing to measure today. W36: the moment the owner switches `ENFORCER_JEV_HISTORY` on (an env change; the router event's `hist` field marks it) — it applies only if he does.

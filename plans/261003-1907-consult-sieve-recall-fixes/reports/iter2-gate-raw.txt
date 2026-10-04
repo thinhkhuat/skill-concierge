@@ -1,0 +1,19 @@
+provenance: script sha256 fb50d1e2f52dc16a84227d1d20ded3724049bc10d8ba6823ab69658ce937688b rules sha256 7563fc4c459fbb43600e4ce64c71a548e22cc180e753770ef2d9844333393d15 prereg sha256 60c3389de3b41940e896458a87e38d644730ca6e6353583cdec79033cf1fbaaa
+INDEX-LOCK points=44761 base=2914 names_sha256=e8e0a64233b0de516e32a2e77f8e501d39260b1be62340eb02a1087c490cf323
+index drift vs build: +0 -0
+cases dropped, label no longer indexed: 0
+cases dropped by the leak check: 47
+cases kept 57; offer_source {'jev': 28, 'embed_or_none': 18, 'pre_router': 11}
+INDEX-LOCK points=44761 base=2914 names_sha256=e8e0a64233b0de516e32a2e77f8e501d39260b1be62340eb02a1087c490cf323
+VERDICT: D_J20 PASS n=29 (J20 vs A0@20, not_jev) recall@20 24.1 -> 48.3 (gain 24.1 pts) G2=True G3=True (lost 0, gained 7) G4 p=0.0156 holm_p=0.0469 holm=True (sessions +6/-0) G5=True (median ext 7, share 61.9->33.1) G6=True (p90 73->969 ms)
+VERDICT: D_SR40 FAIL n=57 (SR40 vs A0@40, all) recall@40 28.1 -> 33.3 (gain 5.3 pts) G2=True G3=False (lost 2, gained 5) G4 p=0.2266 holm_p=0.2266 holm=False (sessions +5/-2) G5=True (median ext 12, share 62.3->30.6) G6=True (p90 75->92 ms)
+  LOST D_SR40: ak-scout (9ed303d8)
+  LOST D_SR40: come-clean (73a4562c)
+VERDICT: D_J40 PASS n=29 (J40 vs A0@40, not_jev) recall@40 27.6 -> 51.7 (gain 24.1 pts) G2=True G3=True (lost 0, gained 7) G4 p=0.0156 holm_p=0.0469 holm=True (sessions +6/-0) G5=True (median ext 20, share 60.4->48.9) G6=True (p90 75->969 ms)
+SHIP: D_J20
+JEV: calls 57 failed 0  p50 839 ms p90 969 ms
+RECALL A0@20: n=57 @20 22.8  p50 42 ms  p90 67 ms
+RECALL A0@40: n=57 @40 28.1  p50 43 ms  p90 75 ms
+RECALL SR40: n=57 @40 33.3  p50 57 ms  p90 92 ms
+RECALL J20: n=57 @20 57.9  p50 839 ms  p90 969 ms
+RECALL J40: n=57 @40 59.6  p50 839 ms  p90 969 ms

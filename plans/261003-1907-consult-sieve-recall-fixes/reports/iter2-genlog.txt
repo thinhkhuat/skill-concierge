@@ -1,0 +1,29 @@
+249 calls planned; model cmc/deepseek/deepseek-v4.1-flash; 12 keys already recorded
+09:27:26 call 3 how f6c16d2f-e17d-4cea-b err=JSONDecodeError: Extra data: line 2 column 1 (char 87)
+09:28:08 call 10 how a788f2a1-62f6-4549-b err=None
+09:28:51 call 20 how b8e19dd7-a9cf-414e-9 err=None
+09:29:31 call 30 how 58218a40-7deb-45e6-b err=None
+09:30:15 call 40 how 93902f0d-b070-4b2e-b err=None
+09:31:07 call 50 split 8a373da8-0992-4032-8 err=None
+09:31:58 call 60 d0 b4a93c45-1a67-4f76-9 err=None
+09:32:43 call 70 d0 0bee75bf-48ce-4238-9 err=None
+09:33:30 call 80 split 27af62e2-97f0-4680-a err=None
+09:34:21 call 90 split 29bbfcb0-6c8b-449d-8 err=None
+09:35:01 call 100 d0 a742cfd5-77a3-47a5-9 err=None
+09:35:21 call 105 how 79bca5c4-171a-492d-9 err=JSONDecodeError: Extra data: line 2 column 1 (char 159)
+09:35:55 call 110 how 66efb7b4-4488-4148-8 err=None
+09:36:26 call 120 split dc9be7ef-8e58-4f24-b err=None
+09:37:29 call 130 split 1af13b1b-56e2-4c9c-b err=None
+09:38:21 call 140 how 08cd17a2-5054-459d-b err=None
+09:39:03 call 150 how 65df87ab-1f00-453a-8 err=None
+09:39:48 call 160 how f41b7622-49ab-434f-9 err=None
+09:40:23 call 168 how 358955a3-eec9-40cc-b err=JSONDecodeError: Extra data: line 2 column 1 (char 102)
+09:40:31 call 170 split 358955a3-eec9-40cc-b err=None
+09:41:12 call 180 how 98228dcd-7977-4000-b err=None
+09:41:53 call 190 how d6e5e7cb-a6ef-488e-9 err=None
+09:42:43 call 200 split c2538a9d-ba50-4058-9 err=None
+09:43:31 call 210 split e2815192-6bde-4c87-a err=None
+09:44:27 call 220 split bf9aa6c9-dda3-4660-a err=None
+09:45:09 call 230 d0 fid:3 err=None
+made 237 calls, 3 failed
+workers 4: 237 calls in 1100s = 12.9 calls/min

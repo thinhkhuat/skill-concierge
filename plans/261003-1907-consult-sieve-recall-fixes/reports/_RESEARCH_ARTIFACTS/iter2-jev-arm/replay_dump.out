@@ -1,0 +1,16 @@
+rep
+1
+RECALL A0@20: n=83 @20 33.7  p50 41 ms  p90 53 ms
+RECALL A0@40: n=83 @40 36.1  p50 42 ms  p90 55 ms
+RECALL SR40: n=83 @40 47.0  p50 55 ms  p90 78 ms
+RECALL J20: n=83 @20 57.8  p50 862 ms  p90 1128 ms
+RECALL J40: n=83 @40 61.4  p50 862 ms  p90 1128 ms
+JEV: calls 83 failed 0  p50 862 ms p90 1128 ms
+rep
+2
+RECALL A0@20: n=83 @20 33.7  p50 41 ms  p90 68 ms
+RECALL A0@40: n=83 @40 36.1  p50 43 ms  p90 71 ms
+RECALL SR40: n=83 @40 47.0  p50 55 ms  p90 85 ms
+RECALL J20: n=83 @20 55.4  p50 839 ms  p90 1011 ms
+RECALL J40: n=83 @40 59.0  p50 839 ms  p90 1011 ms
+JEV: calls 83 failed 0  p50 839 ms p90 1011 ms

@@ -1,0 +1,27 @@
+{
+ "files_scanned": 1699,
+ "rows_written": 3592,
+ "dup_prompt_records": 82,
+ "excluded_by_kind": {
+  "harness_msg": 2785,
+  "command": 2659,
+  "origin:task-notification": 1745,
+  "scheduled_task": 917,
+  "orchestrator_payload": 837,
+  "compact_summary": 201,
+  "sdk_programmatic": 179,
+  "queued_msg": 76,
+  "sdk_fixture_replay": 59,
+  "channel_relay": 43,
+  "dispatched_session": 5,
+  "origin:auto-continuation": 1
+ },
+ "ledger_rows_indexed": 15068
+}
+iteration-1 cutoff 2026-09-26T09:05:44.285Z; excluded sessions 172
+extracted rows 3592; not after cutoff 3036; in an excluded session 0; excluded uuid 0; kept 556
+sha256 real-turn-labels-iter2.jsonl 0fbefcf637ef180ab0f302ec9e8243ca2e0cd91e44aaf054a7ec61a02e9ed05e
+
+real	0m11.283s
+user	0m9.451s
+sys	0m0.722s

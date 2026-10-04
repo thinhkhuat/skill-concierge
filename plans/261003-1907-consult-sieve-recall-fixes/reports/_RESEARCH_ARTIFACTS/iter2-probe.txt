@@ -1,0 +1,8 @@
+12 calls planned; model cmc/deepseek/deepseek-v4.1-flash; 0 keys already recorded
+09:26:51 call 10 how f04a1f88-fccd-4560-b err=None
+made 12 calls, 0 failed
+workers 4: 12 calls in 79s = 9.1 calls/min
+
+real	1m18.921s
+user	0m0.141s
+sys	0m0.037s
