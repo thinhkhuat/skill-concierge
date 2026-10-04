@@ -24,7 +24,7 @@ Scope: Thinh's order (2026-10-04 09:18): "I WANT THE PLAN TO BE WORKED ON, CONTI
   EXPECT: FIX-PROVEN
   EVIDENCE: automatic-evidence=v1; definition-sha256=faeb96ac40eddcf66c4f9a080912a8027ee0fe606976bbafc3274f9698b3dc31; exit=0; EXPECT=matched; output-sha256=290c320563b31ba819f25aeb96fe8d31fdc2359aa415c60e50241cf666b27793; output-bytes=11; shell=/bin/sh; cwd=/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge; path=af1f965b1c2e/81 entries
 
-- [ ] G5: The proven fix (J20: Jev top 10 + sieve rows, cut to 20) is switched on by default in consult, tested, released as a new version, pushed, and installed in Claude Code
+- [x] G5: The proven fix (J20: Jev top 10 + sieve rows, cut to 20) is switched on by default in consult, tested, released as a new version, pushed, and installed in Claude Code
   CHECK: python3 plans/261003-1907-consult-sieve-recall-fixes/verify_shipped.py
   EXPECT: J20-SHIPPED-AND-LIVE
-  EVIDENCE: pending
+  EVIDENCE: automatic-evidence=v1; definition-sha256=c3278c95c813d5ee60c16e46e40614720096d202afa003315583dfc209d78882; exit=0; EXPECT=matched; output-sha256=36a9d0c8699f2bed5458aaf18ab15edffab3979addd8d60888c1d41ac6237d7a; output-bytes=21; shell=/bin/sh; cwd=/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge; path=af1f965b1c2e/81 entries
