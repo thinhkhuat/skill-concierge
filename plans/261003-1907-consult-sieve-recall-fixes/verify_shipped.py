@@ -21,7 +21,7 @@ if "SKILL_CONSULT_JEV_WIDEN" not in fit:
 r = run(sys.executable, "scripts/consult_fit.py", "widen", "--selftest")
 if r.returncode or "WIDEN-SELFTEST-OK" not in r.stdout:
     fail(f"widen selftest: {r.stdout[-300:]}{r.stderr[-300:]}")
-if "consult_fit.py widen" not in (ROOT / "skills/consult/SKILL.md").read_text():
+if not re.search(r"consult_fit\.py\"?\s+widen", (ROOT / "skills/consult/SKILL.md").read_text()):
     fail("skills/consult/SKILL.md does not call `consult_fit.py widen`")
 ver = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
 if ver in ("0.57.1", "0.57.0"):
