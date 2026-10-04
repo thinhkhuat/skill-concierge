@@ -2,7 +2,7 @@
 """flywheel_llm.py — shared LLM client for the retrieval-flywheel generator
 scripts (llm_eval_gen.py, llm_triggers.py). Stdlib only. Any OpenAI-compatible
 endpoint; production today is the private cloud gateway api.thinhkhuat.com/v1
-(model cmc/MiniMaxAI/MiniMax-M3, FLYWHEEL_LLM_SCHEMA_MODE=off), configured
+(model and schema mode set by FLYWHEEL_LLM_MODEL / FLYWHEEL_LLM_SCHEMA_MODE), configured
 in ~/.config/harness-env.sh — the canonical cross-harness env home (caveats §20).
 
 Config resolution order (see _cfg below): real environment wins, then
