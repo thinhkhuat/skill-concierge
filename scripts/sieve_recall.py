@@ -6,17 +6,29 @@ turns, recorded query generation, and a gate harness that runs the REPO's own en
   build    freeze the case set (labels resolved to exact indexed names) -> private cases + manifest
   queries  generate the arm queries through the flywheel gateway (append, resume, lock);
            `--retry-failed` retries failed keys, `--freeze` locks the file by sha256
+  labels   (--iter >= 2) extract fresh labels and keep only turns after iteration 1, in new sessions
+  check-fresh / check-prereg   (--iter >= 2) the two proofs a fresh held-out gate needs
   gate     run the arms over the frozen cases under an index lock and print one VERDICT per
            decision; arms: A0 (today's doctrine, flags off), A1 (slots), A2 (RRF), T (task
-           sentence), H (process query), S (one sub-goal per query), C (the shipping combination)
+           sentence), H (process query), S (one sub-goal per query), C (the shipping combination).
+           Under --iter >= 2 the arms are A0@20, A0@40, SR40 (slots + RRF, top_n 40), J20 and J40
+           (Jev's whole-catalogue top 10, then the sieve rows) and the decisions are D_J20, D_SR40,
+           D_J40 (Holm m = 3)
+  replay-arms  (--iter 1 only) run the iteration-2 arms on the spent set and print recall: a
+           plumbing check against the diagnosis figures, never evidence
 
 Plan: plans/261003-1907-consult-sieve-recall-fixes/ (phase 1 holds every pre-registered rule;
 changing a rule after the freeze voids the gate). Private data lives in
 ~/.claude/skill-concierge/jev-calibration/ (dir 0700, files 0600), never in the repo.
 
+`--iter N` (global, default 1) selects an iteration: 1 is the original file set, untouched; N >= 2
+suffixes every private path with -iterN and never writes an iteration-1 file.
+
 Engine and gateway imports are lazy: the pure functions below need neither.
 """
 import argparse
+import concurrent.futures
+import datetime
 import hashlib
 import json
 import math
@@ -25,6 +37,7 @@ import random
 import re
 import statistics
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -35,12 +48,31 @@ sys.path.insert(0, str(ROOT / "scripts"))
 SEED = "sieve-recall-261004"
 HOME = Path(os.environ.get("SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "skill-concierge"))
 CAL_DIR = HOME / "jev-calibration"
-LABELS = CAL_DIR / "real-turn-labels.jsonl"
-CONSULT_EVAL = CAL_DIR / "consult-eval.jsonl"
-CASES = CAL_DIR / "sieve-eval-cases.jsonl"
-QUERIES = CAL_DIR / "sieve-eval-queries.jsonl"
-LOCK = CAL_DIR / "sieve-eval-queries.lock"
-MANIFEST = CAL_DIR / "sieve-eval-manifest.json"
+PLAN_DIR = ROOT / "plans" / "261003-1907-consult-sieve-recall-fixes"
+# iteration-1 file names; iteration N >= 2 inserts -iterN before the extension (see iter_path)
+_BASE = {"LABELS": "real-turn-labels.jsonl", "CASES": "sieve-eval-cases.jsonl",
+         "QUERIES": "sieve-eval-queries.jsonl", "LOCK": "sieve-eval-queries.lock",
+         "MANIFEST": "sieve-eval-manifest.json"}
+CONSULT_EVAL = CAL_DIR / "consult-eval.jsonl"      # real consult runs: shared by every iteration
+ITER = 1
+
+
+def iter_path(fname, n):
+    p = CAL_DIR / fname
+    return p if n == 1 else p.with_name(f"{p.stem}-iter{n}{p.suffix}")
+
+
+def set_iter(n):
+    """Point the private-path globals at iteration n. n = 1 is the original file set."""
+    global ITER, LABELS, CASES, QUERIES, LOCK, MANIFEST
+    if not isinstance(n, int) or n < 1:
+        raise ValueError(f"--iter must be an integer >= 1, got {n!r}")
+    ITER = n
+    LABELS, CASES, QUERIES, LOCK, MANIFEST = (iter_path(_BASE[k], n) for k in
+                                              ("LABELS", "CASES", "QUERIES", "LOCK", "MANIFEST"))
+
+
+set_iter(1)
 
 MAX_PER_LABEL = 5
 MIN_WORDS = 8
@@ -61,6 +93,29 @@ GUARD_LOWER_PTS = -5.0
 MISSING_FRACTION = 0.10
 ALPHA = 0.05
 BOOT_RESAMPLES = 2000
+
+# Iteration-2 constants (active only under --iter >= 2; see rules_sha256). Jev's catalogue is the
+# installed-only one the enforcer builds (`_jev_catalog`); calls go through scripts/jev_client.py.
+DECISIONS2 = ("D_J20", "D_SR40", "D_J40")   # Holm family: m = 3, fixed
+# decision -> (arm, baseline arm, primary stratum). "not_jev" = every case whose label was not in a
+# live offer the Jev router produced (offer_source embed_or_none or pre_router); "all" = every case.
+DECISION2 = {"D_J20": ("J20", "A0@20", "not_jev"),
+             "D_SR40": ("SR40", "A0@40", "all"),
+             "D_J40": ("J40", "A0@40", "not_jev")}
+# arm -> (SKILL_CONSULT_SLOTS, SKILL_CONSULT_RRF, top_n of the sieve call, Jev rows first, list cut)
+ARM2 = {"A0@20": ("0", "0", 20, 0, 20), "A0@40": ("0", "0", 40, 0, 40),
+        "SR40": ("1", "1", 40, 0, 40), "J20": ("0", "0", 40, 10, 20), "J40": ("0", "0", 40, 10, 40)}
+ARMS2 = tuple(ARM2)
+JEV_TOP_K = 10
+# Jev decisions only: their primary set (not_jev) is small by construction. False passes stay
+# controlled by the per-session sign test with Holm (G4); the case floor guards power, not error.
+MIN_N_JEV = 25
+JEV_TIMEOUT_S = 3.0
+JEV_RETRIES = 0                  # one attempt, ts tier only
+JEV_ORDER = "round-robin across catalogue chunks"
+G6_JEV_P90_MS = 1500.0           # the Jev arms' absolute p90 bound; SR40 keeps G6_P90_MS over its baseline
+OFFER_SOURCES = ("jev", "embed_or_none", "pre_router")
+SOURCES = ("fresh", "pre_router_unseen")   # a case's pool: new turns, or unseen iteration-1 corpus rows
 
 # Doctrine texts, fixed in advance. DOCTRINE_TODAY is skills/consult/SKILL.md steps 1 and 2 verbatim.
 DOCTRINE_TODAY = (
@@ -235,6 +290,22 @@ def router_group(label_key, ledger_offered):
     return "offered" if label_key in keys else "not_offered"
 
 
+def offer_source(group, ledger_jev):
+    """jev | embed_or_none. `jev` only when the live offer that turn came from the Jev router (the
+    ledger row carries a `jev` field without `err`) AND that offer held the label (group offered).
+    Any other turn, a failed or skipped router included, is embed_or_none."""
+    if group == "offered" and isinstance(ledger_jev, dict) and ledger_jev and not ledger_jev.get("err"):
+        return "jev"
+    return "embed_or_none"
+
+
+def drop_blocklisted(cases, blocked):
+    """(kept, dropped labels). `blocked(name)` is the enforcer's own blocklist test (a bare entry
+    blocks every qualified twin); a case whose indexed label it blocks can never be offered."""
+    kept = [c for c in cases if not blocked(c["label"])]
+    return kept, [c["label"] for c in cases if blocked(c["label"])]
+
+
 def _order_hash(tag, uid):
     return hashlib.sha256(f"{SEED}:{tag}{uid}".encode()).hexdigest()
 
@@ -322,6 +393,12 @@ def rules_sha256():
              "G6_P90_MS": G6_P90_MS, "GUARD_LOWER_PTS": GUARD_LOWER_PTS,
              "MISSING_FRACTION": MISSING_FRACTION, "ALPHA": ALPHA, "BOOT_RESAMPLES": BOOT_RESAMPLES,
              "SEED": SEED}
+    if ITER >= 2:   # iteration 1's fingerprint is the dict above, byte for byte
+        rules["ITER2"] = {"DECISIONS2": DECISIONS2, "DECISION2": DECISION2, "ARM2": ARM2,
+                          "JEV_TOP_K": JEV_TOP_K, "JEV_TIMEOUT_S": JEV_TIMEOUT_S, "JEV_RETRIES": JEV_RETRIES,
+                          "JEV_ORDER": JEV_ORDER, "G6_JEV_P90_MS": G6_JEV_P90_MS,
+                          "OFFER_SOURCES": OFFER_SOURCES, "HOLM_M": len(DECISIONS2),
+                          "MIN_N_JEV": MIN_N_JEV}
     return sha256_text(json.dumps(rules, sort_keys=True))
 
 
@@ -371,10 +448,11 @@ def guard_units(entries):
     return [tuple(v) for v in acc.values()]
 
 
-def gate_rules(base, arm, min_n=MIN_N):
+def gate_rules(base, arm, min_n=MIN_N, g6_abs=None):
     """Rules G1-G3, G5, G6 for one decision on its primary set. base/arm: parallel lists of
     {id, sid, label, hit, ms, ext, rows}. G4 (session sign test) is returned as a p-value for the
-    Holm step, which needs all five decisions."""
+    Holm step, which needs all five decisions. g6_abs: an absolute p90 bound for the arm (the Jev
+    arms) instead of baseline + G6_P90_MS."""
     n = len(base)
     out = {"n": n}
     if n < min_n:
@@ -394,7 +472,7 @@ def gate_rules(base, arm, min_n=MIN_N):
         G2=gain_pts >= G2_GAIN_PTS,
         G3=lost <= G3_LOSS_FRACTION * gained,
         G5=med_ext >= G5_MEDIAN_EXT and share_a <= share_b + G5_SHARE_RISE_PTS,
-        G6=p90a <= p90b + G6_P90_MS,
+        G6=p90a <= (p90b + G6_P90_MS if g6_abs is None else g6_abs),
         med_ext=med_ext, share_base=share_b, share_arm=share_a,
         p90_base=p90b, p90_arm=p90a,
         sessions_gained=gs, sessions_lost=ls, p=p,
@@ -494,8 +572,187 @@ def read_jsonl(path):
     return [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
 
 
+def read_manifest_at(path):
+    return json.loads(Path(path).read_text(encoding="utf-8")) if Path(path).exists() else {}
+
+
 def read_manifest():
-    return json.loads(MANIFEST.read_text(encoding="utf-8")) if MANIFEST.exists() else {}
+    return read_manifest_at(MANIFEST)
+
+
+# ── fresh held-out iterations (>= 2) ───────────────────────────────────────────────────────
+class FreshFail(RuntimeError):
+    """A named check of check-fresh / check-prereg failed (exit 1, never a gate verdict)."""
+    def __init__(self, check, detail):
+        super().__init__(f"{check}: {detail}")
+        self.check = check
+
+
+def parse_ts(ts):
+    """A corpus ts_utc string as an aware datetime; None when missing or unparseable."""
+    try:
+        return datetime.datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def iter1_exclusions():
+    """(sessions, uuids, cutoff_ts) of iteration 1, read-only. sessions: every iteration-1 case
+    session plus every session of an iteration-1 corpus turn that could feed a case (positive
+    under is_positive with MIN_WORDS words); uuids: every iteration-1 corpus turn and case;
+    cutoff_ts: the newest ts_utc string in the iteration-1 corpus."""
+    rows = read_jsonl(iter_path(_BASE["LABELS"], 1))
+    cases = read_jsonl(iter_path(_BASE["CASES"], 1))
+    if not rows or not cases:
+        raise RuntimeError("iteration-1 labels or cases are missing: nothing to exclude against")
+    cal = _cal()
+    sids = {c["sid"] for c in cases}
+    sids |= {r["sid"] for r in rows if cal.is_positive(r) and r["prompt_words"] >= MIN_WORDS}
+    uuids = {r["uuid"] for r in rows} | {c["uuid"] for c in cases}
+    stamped = [r["ts_utc"] for r in rows if parse_ts(r.get("ts_utc"))]
+    if not stamped:
+        raise RuntimeError("the iteration-1 corpus holds no parseable ts_utc")
+    return sids, uuids, max(stamped, key=parse_ts)
+
+
+def fresh_rows(rows, cutoff_ts, excl_sids, excl_uuids):
+    """Rows strictly newer than cutoff_ts, in no excluded session and not an excluded uuid, in that
+    order of exclusion. A row with no parseable ts_utc cannot be shown newer and is dropped.
+    Returns (kept, counts)."""
+    cut = parse_ts(cutoff_ts)
+    kept = []
+    c = {"raw": len(rows), "not_after_cutoff": 0, "excluded_session": 0, "excluded_uuid": 0}
+    for r in rows:
+        t = parse_ts(r.get("ts_utc"))
+        if t is None or t <= cut:
+            c["not_after_cutoff"] += 1
+        elif r["sid"] in excl_sids:
+            c["excluded_session"] += 1
+        elif r["uuid"] in excl_uuids:
+            c["excluded_uuid"] += 1
+        else:
+            kept.append(r)
+    c["kept"] = len(kept)
+    return kept, c
+
+
+def cmd_labels(args):
+    """Fresh labels for iteration N >= 2: run the extractor with its OUT at the iteration's labels
+    file, then rewrite that file keeping only fresh rows. Never touches an iteration-1 file."""
+    if ITER < 2:
+        print("labels needs --iter >= 2: iteration 1's corpus is never rewritten", file=sys.stderr)
+        return 2
+    if read_manifest().get("frozen"):
+        print("manifest is frozen: labels refused", file=sys.stderr)
+        return 2
+    sids, uuids, cutoff = iter1_exclusions()
+    import extract_turn_labels as X
+    X.OUT = str(LABELS)
+    X.extract()
+    rows = read_jsonl(LABELS)
+    kept, c = fresh_rows(rows, cutoff, sids, uuids)
+    write_private(LABELS, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept))
+    print(f"iteration-1 cutoff {cutoff}; excluded sessions {len(sids)}")
+    print(f"extracted rows {c['raw']}; not after cutoff {c['not_after_cutoff']}; "
+          f"in an excluded session {c['excluded_session']}; excluded uuid {c['excluded_uuid']}; kept {c['kept']}")
+    print(f"sha256 {LABELS.name} {sha256_file(LABELS)}")
+    return 0
+
+
+def prereg_path():
+    return PLAN_DIR / f"iter{ITER}-prereg.md"
+
+
+def gate_raw_path():
+    return PLAN_DIR / "reports" / f"iter{ITER}-gate-raw.txt"
+
+
+def prereg_sha():
+    p = prereg_path()
+    if not p.is_file():
+        raise RuntimeError(f"{p.name} is missing: write the pre-registration before the freeze")
+    return sha256_file(p)
+
+
+def check_fresh():
+    """Raise FreshFail naming the first failed check; return the counts line when all hold."""
+    if ITER < 2:
+        raise FreshFail("iteration", "check-fresh needs --iter >= 2")
+    man = read_manifest()
+    try:
+        check_freeze(man)
+    except (RuntimeError, OSError, KeyError) as e:
+        raise FreshFail("frozen", str(e))
+    cases = read_jsonl(CASES)
+    try:
+        sids, _uuids, cutoff = iter1_exclusions()
+    except RuntimeError as e:
+        raise FreshFail("iteration-1 data", str(e))
+    unseen = [c for c in cases if c.get("source") == "pre_router_unseen"]   # iteration-1 rows: not fresh by design
+    cases = [c for c in cases if c.get("source") != "pre_router_unseen"]
+    shared = sorted({c["sid"] for c in cases} & sids)
+    if shared:
+        raise FreshFail("sessions", f"{len(shared)} case session(s) also in iteration 1, e.g. {shared[0]}")
+    if (man.get("fresh") or {}).get("cutoff_ts") != cutoff:
+        raise FreshFail("cutoff", f"manifest cutoff {(man.get('fresh') or {}).get('cutoff_ts')} != iteration-1 corpus newest {cutoff}")
+    ts = {r["uuid"]: parse_ts(r.get("ts_utc")) for r in read_jsonl(LABELS)}
+    cut = parse_ts(cutoff)
+    stale = [c["id"] for c in cases if ts.get(c["uuid"]) is None or ts[c["uuid"]] <= cut]
+    if stale:
+        raise FreshFail("time", f"{len(stale)} case(s) not after {cutoff}, e.g. {stale[0]}")
+    cases += unseen
+    survive = len(cases) - len(leak_dropped(cases, load_generated()))
+    if survive < MIN_N:
+        raise FreshFail("leak-check", f"{survive} case(s) survive the leak check, need >= {MIN_N}")
+    return f"iteration {ITER}: cases {len(cases)}, surviving the leak check {survive}, newest iteration-1 turn {cutoff}"
+
+
+def cmd_check_fresh(args):
+    try:
+        line = check_fresh()
+    except FreshFail as e:
+        print(f"FRESH-HELDOUT-FAIL {e}", file=sys.stderr)
+        return 1
+    print(line)
+    print("FRESH-HELDOUT-OK")
+    return 0
+
+
+_PROV_PREREG_RE = re.compile(r"\bprereg sha256 ([0-9a-f]{64})\b")
+
+
+def check_prereg():
+    """Raise FreshFail naming the first failed check."""
+    if ITER < 2:
+        raise FreshFail("iteration", "check-prereg needs --iter >= 2")
+    want = read_manifest().get("prereg_sha256")
+    if not want:
+        raise FreshFail("manifest", "records no prereg_sha256 (the freeze did not run for this iteration)")
+    try:
+        got = prereg_sha()
+    except RuntimeError as e:
+        raise FreshFail("prereg-file", str(e))
+    if got != want:
+        raise FreshFail("prereg-file", f"{prereg_path().name} sha256 {got} != manifest {want}")
+    raw = gate_raw_path()
+    if not raw.is_file():
+        raise FreshFail("gate-raw", f"{raw.name} is missing")
+    hashes = [m.group(1) for line in raw.read_text(encoding="utf-8", errors="replace").splitlines()
+              if line.startswith("provenance:") for m in [_PROV_PREREG_RE.search(line)] if m]
+    if not hashes:
+        raise FreshFail("gate-raw", f"{raw.name} has no provenance line with a prereg sha256")
+    if want not in hashes:
+        raise FreshFail("gate-raw", f"provenance prereg sha256 {hashes[-1]} != manifest {want}")
+
+
+def cmd_check_prereg(args):
+    try:
+        check_prereg()
+    except FreshFail as e:
+        print(f"PREREG-MISMATCH {e}", file=sys.stderr)
+        return 1
+    print("PREREG-MATCHES-RUN")
+    return 0
 
 
 # ── build ──────────────────────────────────────────────────────────────────────────────────
@@ -504,13 +761,19 @@ def consult_sessions():
     return {r["session"] for r in read_jsonl(CONSULT_EVAL)}
 
 
-def build_cases(rows, points, consult_sids, meta_skills, is_positive):
+def build_cases(rows, points, consult_sids, meta_skills, is_positive, blocked=None, exclude_ids=None,
+                pre_router=False):
     """The pure build: rows (label corpus), points (indexed base points), the sessions that ran a
-    consult, META_SKILLS and the positive rule. Returns (cases, stats)."""
+    consult, META_SKILLS and the positive rule. Returns (cases, stats). `blocked` (iteration >= 2) is
+    the blocklist test: blocked-label cases are dropped after the per-label cap, and every case gains
+    its offer_source stratum and `source` (fresh). exclude_ids: case ids never taken (the iteration-1
+    cases); pre_router: the rows predate the Jev router, so offer_source is pre_router and source
+    pre_router_unseen. None = the iteration-1 build, unchanged."""
     idx = build_name_index(points)
     sess = set(consult_sids) | {r["sid"] for r in rows if r.get("consult_call")}
     stats = {"eligible_turns": 0, "resolved": {"exact": 0, "key": 0, "short": 0},
-             "ambiguous": [], "missing": [], "meta_dropped": [], "named_dropped": []}
+             "ambiguous": [], "missing": [], "meta_dropped": [], "named_dropped": [],
+             "blocklisted_dropped": []}
     cand = []
     for r in rows:
         if not (is_positive(r) and r["prompt_words"] >= MIN_WORDS and r["sid"] not in sess):
@@ -539,7 +802,14 @@ def build_cases(rows, points, consult_sids, meta_skills, is_positive):
                          "process": key in PROCESS_LABELS,
                          "english": bool(_enf()._is_english(r["prompt"])),
                          "task": task_sentence(r["prompt"]), "gen_text": gen_text(r["prompt"], r.get("prompt_chars", 0) > len(r["prompt"]))})
+            if exclude_ids and cand[-1]["id"] in exclude_ids:
+                cand.pop()
+            elif blocked is not None:
+                cand[-1]["offer_source"] = "pre_router" if pre_router else offer_source(cand[-1]["group"], r.get("ledger_jev"))
+                cand[-1]["source"] = "pre_router_unseen" if pre_router else "fresh"
     cases = pick_cases(cand)
+    if blocked is not None:
+        cases, stats["blocklisted_dropped"] = drop_blocklisted(cases, blocked)
     pair_of = {}
     for a, b in make_pairs(cases):
         pair_of[a], pair_of[b] = b, a
@@ -557,9 +827,41 @@ def cmd_build(args):
     pe = _pe()
     cal = _cal()
     rows = cal.load_corpus(LABELS)
+    fresh = None
+    if ITER >= 2:
+        i1 = read_manifest_at(iter_path(_BASE["MANIFEST"], 1))
+        i1_labels = iter_path(_BASE["LABELS"], 1)
+        if not i1.get("frozen") or sha256_file(i1_labels) != i1["inputs"][_BASE["LABELS"]]:
+            print("iteration 1 is not frozen or its labels file differs from its manifest: build refused",
+                  file=sys.stderr)
+            return 2
+        sids, uuids, cutoff = iter1_exclusions()
+        rows, c = fresh_rows(rows, cutoff, sids, uuids)
+        fresh = {"cutoff_ts": cutoff, "excluded_sessions": len(sids), "excluded_uuids": len(uuids),
+                 "rows_in_labels_file": c["raw"], "rows_dropped_at_build": c["raw"] - c["kept"],
+                 "iter1_labels_sha256": i1["inputs"][_BASE["LABELS"]],
+                 "iter1_cases_sha256": i1["cases_sha256"],
+                 "iter1_manifest_sha256": sha256_file(iter_path(_BASE["MANIFEST"], 1))}
     points = scroll_base_points()
     state = index_state()
-    cases, st = build_cases(rows, points, consult_sessions(), pe.META_SKILLS, cal.is_positive)
+    cases, st = build_cases(rows, points, consult_sessions(), pe.META_SKILLS, cal.is_positive,
+                            blocked=_enf()._blocked if ITER >= 2 else None)
+    pool = None
+    if ITER >= 2:   # pool extension: iteration-1 corpus rows that never became an iteration-1 case
+        i1_cases = read_jsonl(iter_path(_BASE["CASES"], 1))
+        i1_rows = cal.load_corpus(iter_path(_BASE["LABELS"], 1))
+        pre, pst = build_cases(i1_rows, points, consult_sessions(), pe.META_SKILLS, cal.is_positive,
+                               blocked=_enf()._blocked, exclude_ids={c["id"] for c in i1_cases}, pre_router=True)
+        spent = {c["sid"] for c in i1_cases}
+        row_of = {r["uuid"]: r for r in i1_rows}
+        pool = {"cases": len(pre), "labels": len({c["key"] for c in pre}), "sessions": len({c["sid"] for c in pre}),
+                "sessions_shared_with_spent_cases": len({c["sid"] for c in pre} & spent),
+                "cases_in_spent_sessions": sum(1 for c in pre if c["sid"] in spent),
+                "with_ledger_jev": sum(1 for c in pre if (row_of[c["uuid"]].get("ledger_jev") or {})),
+                "blocklisted_dropped": len(pst["blocklisted_dropped"]),
+                "eligible_turns": pst["eligible_turns"], "candidates_before_cap": pst["candidates_before_cap"]}
+        st["blocklisted_dropped"] = st["blocklisted_dropped"] + pst["blocklisted_dropped"]
+        cases = cases + pre
     groups = {g: sum(1 for c in cases if c["group"] == g) for g in ("not_offered", "offered", "unknown")}
     sessions = {c["sid"] for c in cases}
     sessions_no = {c["sid"] for c in cases if c["group"] == "not_offered"}
@@ -568,7 +870,7 @@ def cmd_build(args):
     cross = sum(1 for v in coll.values() if v["cross_tier"])
     manifest = {
         "seed": SEED, "built_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "inputs": {"real-turn-labels.jsonl": sha256_file(LABELS),
+        "inputs": {LABELS.name: sha256_file(LABELS),
                    "consult-eval.jsonl": sha256_file(CONSULT_EVAL),
                    "doctrine_today_sha256": sha256_text(DOCTRINE_TODAY)},
         "counts": {"labels_rows": len(rows), "eligible_turns": st["eligible_turns"],
@@ -590,6 +892,20 @@ def cmd_build(args):
         "index_names": state["names"],
         "pairs": pairs, "frozen": False,
     }
+    if fresh is not None:
+        manifest["iteration"] = ITER
+        manifest["fresh"] = fresh
+        sources = {o: sum(1 for c in cases if c["offer_source"] == o) for o in OFFER_SOURCES}
+        manifest["counts"]["blocklisted_dropped"] = len(st["blocklisted_dropped"])
+        manifest["counts"]["offer_source"] = sources
+        manifest["counts"]["primary_cases"] = sources["embed_or_none"] + sources["pre_router"]
+        manifest["counts"]["source"] = {o: sum(1 for c in cases if c["source"] == o) for o in SOURCES}
+        manifest["counts"]["primary_sessions"] = len({c["sid"] for c in cases if c["offer_source"] != "jev"})
+        manifest["counts"]["pool_extension"] = pool
+        manifest["dropped"]["blocklisted"] = sorted(set(st["blocklisted_dropped"]))
+        prior = read_manifest()   # fields the build does not own (generation records) survive a rebuild
+        if prior.get("generation"):
+            manifest["generation"] = prior["generation"]
     cases_text = "".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cases)
     write_private(CASES, cases_text)
     manifest["cases_sha256"] = sha256_file(CASES)
@@ -608,6 +924,12 @@ def cmd_build(args):
     for k, v in manifest["inputs"].items():
         print(f"sha256 {k} {v}")
     print(f"sha256 cases {manifest['cases_sha256']}")
+    if fresh is not None:
+        print(f"blocklisted cases dropped {c['blocklisted_dropped']}; offer_source {c['offer_source']}; "
+              f"source {c['source']}; primary set (not jev) {c['primary_cases']} cases / "
+              f"{c['primary_sessions']} sessions; pool extension {c['pool_extension']}")
+        print(f"fresh: cutoff {fresh['cutoff_ts']}; excluded sessions {fresh['excluded_sessions']}; "
+              f"labels rows {fresh['rows_in_labels_file']}; dropped at build {fresh['rows_dropped_at_build']}")
     return 0
 
 
@@ -681,11 +1003,15 @@ def jobs_for(cases, real_runs):
     return jobs
 
 
-def generate(jobs, chat_fn, model, path=None, retry_failed=False, log=print):
+def generate(jobs, chat_fn, model, path=None, retry_failed=False, log=print, workers=1):
     """Append one record per call as soon as it returns (flushed, fsync'd). A rerun skips keys already
-    written, failed ones included unless retry_failed. Returns (calls_made, failed_now)."""
+    written, failed ones included unless retry_failed. Returns (calls_made, failed_now).
+    workers > 1: a thread pool; each worker keeps chat_fn's own post-call pause, so N workers send at
+    most N calls per pause window, and one lock serialises the appends so lines never interleave."""
     path = Path(path or QUERIES)
     done = latest_records(path)
+    if workers > 1:
+        return _generate_parallel(jobs, chat_fn, model, path, done, retry_failed, log, workers)
     calls = failed = 0
     for cid, part, text in jobs:
         k = query_key(cid, part, SYSTEM[part])
@@ -705,6 +1031,40 @@ def generate(jobs, chat_fn, model, path=None, retry_failed=False, log=print):
         if calls % 10 == 0 or rec["err"]:
             log(f"{time.strftime('%H:%M:%S')} call {calls} {part} {cid[:20]} err={rec['err']}")
     return calls, failed
+
+
+def _generate_parallel(jobs, chat_fn, model, path, done, retry_failed, log, workers):
+    lock = threading.Lock()
+    pending, seen = [], set()
+    for cid, part, text in jobs:
+        k = query_key(cid, part, SYSTEM[part])
+        prior = done.get(k)
+        if k in seen or (prior is not None and not (retry_failed and prior.get("err"))):
+            continue
+        seen.add(k)
+        pending.append((k, cid, part, text))
+    tally = {"calls": 0, "failed": 0}
+
+    def one(job):
+        k, cid, part, text = job
+        rec = {"k": k, "case": cid, "part": part, "doctrine_sha": sha256_text(SYSTEM[part])[:16],
+               "model": model, "temperature": TEMPERATURE}
+        try:
+            rec["reply"] = chat_fn(SYSTEM[part], text)
+            rec["err"] = None
+        except Exception as e:  # noqa: BLE001 — recorded, retried only with --retry-failed
+            rec["reply"], rec["err"] = None, f"{type(e).__name__}: {str(e)[:200]}"
+        with lock:
+            tally["calls"] += 1
+            tally["failed"] += 1 if rec["err"] else 0
+            _append(path, rec)
+            if tally["calls"] % 10 == 0 or rec["err"]:
+                log(f"{time.strftime('%H:%M:%S')} call {tally['calls']} {part} {cid[:20]} err={rec['err']}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for f in [ex.submit(one, j) for j in pending]:
+            f.result()          # a BaseException (Ctrl-C) in a worker surfaces here; written lines stay
+    return tally["calls"], tally["failed"]
 
 
 def _strings(v):
@@ -751,6 +1111,12 @@ def cmd_queries(args):
         print("no manifest: run build first", file=sys.stderr)
         return 2
     cases = read_jsonl(CASES)
+    if args.freeze and ITER >= 2:
+        try:
+            prereg_sha()
+        except RuntimeError as e:
+            print(f"freeze refused: {e}", file=sys.stderr)
+            return 2
     if man.get("frozen"):
         # a re-freeze only re-records counts for the SAME file (a parser fix, never new queries)
         if args.freeze and not args.retry_failed and sha256_file(QUERIES) == man["queries"]["sha256"]:
@@ -767,11 +1133,23 @@ def cmd_queries(args):
         if args.freeze:
             return _freeze(man, cases, flywheel_llm.MODEL)
         jobs = jobs_for(cases, real_runs())
+        if getattr(args, "limit", 0):
+            jobs = jobs[:args.limit]
+        workers = max(1, getattr(args, "workers", 1))
         print(f"{len(jobs)} calls planned; model {flywheel_llm.MODEL}; "
               f"{len(latest_records())} keys already recorded")
+        t0 = time.time()
         calls, failed = generate(jobs, flywheel_llm.chat, flywheel_llm.MODEL,
-                                 retry_failed=args.retry_failed)
+                                 retry_failed=args.retry_failed, workers=workers)
         print(f"made {calls} calls, {failed} failed")
+        if workers > 1:
+            secs = time.time() - t0
+            print(f"workers {workers}: {calls} calls in {secs:.0f}s = {60.0 * calls / max(secs, 1e-9):.1f} calls/min")
+            m = read_manifest()
+            m.setdefault("generation", []).append(
+                {"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "workers": workers,
+                 "calls": calls, "failed": failed, "seconds": round(secs)})
+            write_private(MANIFEST, json.dumps(m, ensure_ascii=False, indent=1))
     finally:
         release_lock()
     return 0
@@ -780,6 +1158,11 @@ def cmd_queries(args):
 def _freeze(man, cases, model):
     if man.get("rules_sha256", rules_sha256()) != rules_sha256():
         raise RuntimeError("the gate rules changed since the freeze; a re-freeze cannot re-register them")
+    if ITER >= 2:
+        pre = prereg_sha()
+        if man.get("prereg_sha256", pre) != pre:
+            raise RuntimeError(f"{prereg_path().name} changed since the freeze; a re-freeze cannot re-register it")
+        man["prereg_sha256"] = pre
     recs = latest_records()
     by_part = {}
     for r in recs.values():
@@ -945,7 +1328,12 @@ def fidelity_report(rows):
 def check_freeze(man):
     if not man.get("frozen"):
         raise RuntimeError("the evaluation is not frozen: run `queries --freeze` first")
-    for label, path, want in (("labels", LABELS, man["inputs"]["real-turn-labels.jsonl"]),
+    if ITER >= 2:
+        pre = prereg_sha()
+        if pre != man.get("prereg_sha256"):
+            raise RuntimeError(f"{prereg_path().name} sha256 {pre} != the one recorded at the freeze "
+                               f"({man.get('prereg_sha256')})")
+    for label, path, want in (("labels", LABELS, man["inputs"][LABELS.name]),
                               ("cases", CASES, man["cases_sha256"]),
                               ("queries", QUERIES, man["queries"]["sha256"])):
         got = sha256_file(path)
@@ -974,9 +1362,18 @@ def run_arms(srv, cases, pairs, gen, arms):
     return res, comp
 
 
+def provenance_line():
+    line = f"provenance: script sha256 {sha256_file(Path(__file__))} rules sha256 {rules_sha256()}"
+    if ITER >= 2:
+        line += f" prereg sha256 {prereg_sha()}"
+    return line
+
+
 def cmd_gate(args):
     man = read_manifest()
     check_freeze(man)
+    if ITER >= 2:
+        return cmd_gate2(man, args)
     arms = [a for a in (args.arms.split(",") if args.arms else ARMS[:6]) if a]
     for a in arms:
         if a not in ARMS or a == "C":
@@ -992,7 +1389,7 @@ def cmd_gate(args):
     cases = read_jsonl(CASES)
     gen = load_generated()
     start = index_state()
-    print(f"provenance: script sha256 {sha256_file(Path(__file__))} rules sha256 {rules_sha256()}")
+    print(provenance_line())
     print(lock_line(start))
     built = set(man["index_names"])
     now = set(start["names"])
@@ -1179,23 +1576,250 @@ def run_combination(srv, cases, pairs, gen, res, comp, flags, parts):
     return lines
 
 
+# ── iteration 2: Jev union arms ────────────────────────────────────────────────────────────
+def jev_round_robin(answers):
+    """Jev's wide answers ({"wide::<chunk>": {"probabilities": {name: p}}}) as one ranking: rank 1 of
+    every chunk in chunk order, then rank 2, and so on. Chunk probabilities are not comparable
+    across chunks, so they are never merged by raw probability."""
+    chunks = []
+    for k in sorted((k for k in answers if k.startswith("wide::")), key=lambda k: int(k.split("::")[1])):
+        p = answers[k]["probabilities"]
+        chunks.append(sorted(p, key=lambda n: -p[n]))
+    out = []
+    for i in range(max(map(len, chunks), default=0)):
+        out += [c[i] for c in chunks if i < len(c)]
+    return out
+
+
+def union_rows(jev_names, sieve_rows, cut):
+    """Jev's names first (installed skills, never external), then the sieve rows in sieve order,
+    deduplicated by full skill key, truncated to `cut`. Rows are {"name", "external"}."""
+    out, seen = [], set()
+    for r in [{"name": n, "external": False} for n in jev_names] + list(sieve_rows):
+        k = skill_key(r["name"])
+        if k not in seen:
+            seen.add(k)
+            out.append({"name": r["name"], "external": bool(r.get("external"))})
+    return out[:cut]
+
+
+def jev_top(text, wide_questions, tier, ask, k=JEV_TOP_K):
+    """(names, ms, err) for one case. `ask` is jev_client.ask's signature. One attempt on one tier,
+    JEV_TIMEOUT_S, an empty conversation context. Any failure gives no rows and the error's class name:
+    the case still runs on its sieve rows."""
+    state = {"request": text[:4000], "recent_context": "", "skills_already_loaded_this_session": []}
+    t0 = time.perf_counter()
+    try:
+        answers, _meta = ask(state, wide_questions, JEV_TIMEOUT_S, tiers=[tier], retries=JEV_RETRIES)
+        names, err = jev_round_robin(answers)[:k], None
+    except Exception as e:  # noqa: BLE001 — recorded per case; a Jev failure never stops the run
+        names, err = [], type(e).__name__
+    return names, (time.perf_counter() - t0) * 1000.0, err
+
+
+def jev_setup():
+    """(wide_questions, ts tier, ask) from the live enforcer and jev_client; EngineError when Jev
+    cannot run at all (no ts tier, no key, empty catalogue) so a config error is not read as a
+    per-case failure."""
+    import jev_client
+    enf = jev_client.load_enforcer()
+    tiers = [t for t in enf._jev_bench() if t["ep"] == "ts"]
+    if not tiers or not enf._jev_key(tiers[0]):
+        raise EngineError("Jev: no ts tier or no TYPESAFE_API_KEY")
+    cat = enf._jev_catalog()
+    if not cat:
+        raise EngineError("Jev: the installed catalogue is empty")
+    return enf._jev_wide_questions(cat), tiers[0], jev_client.ask
+
+
+def _row2(case, rows, k, ms, extra=None):
+    out = {"id": case["id"], "sid": case["sid"], "label": case["label"], "hit": hit_at(case["label"], rows, k),
+           "ms": ms, "ext": sum(1 for r in rows if r.get("external")), "rows": len(rows)}
+    out.update(extra or {})
+    return out
+
+
+def run_case2(srv, case, queries, jev, n=0):
+    """All five iteration-2 arms for one case: {arm: row}. The three sieve calls rotate their order
+    by case index. The Jev call is made once and shared by J20 and J40. A Jev arm's latency is
+    max(sieve call, Jev call): the two run in parallel in the design under test. `jev(text)` ->
+    (names, ms, err)."""
+    calls = {"A0@20": ("0", "0", 20), "A0@40": ("0", "0", 40), "SR40": ("1", "1", 40)}
+    order = list(calls)[n % 3:] + list(calls)[:n % 3]
+    got = {a: call_engine(srv, queries, calls[a][2], calls[a][0], calls[a][1]) for a in order}
+    names, jms, err = jev(case["gen_text"])
+    sieve40, sms = got["A0@40"]
+    info = {"jev_ms": jms, "jev_failed": err is not None, "jev_err": err, "jev_names": names}
+    out = {a: _row2(case, got[a][0], ARM2[a][4], got[a][1]) for a in calls}
+    for a in ("J20", "J40"):
+        out[a] = _row2(case, union_rows(names, sieve40, ARM2[a][4]), ARM2[a][4], max(sms, jms), info)
+    return out
+
+
+def run_arms2(srv, cases, gen, jev):
+    """res[arm][case_id] over the cases that have d0 queries."""
+    res = {a: {} for a in ARMS2}
+    for n, case in enumerate(cases):
+        q = arm_queries("A0", gen, case)
+        if q:
+            for a, row in run_case2(srv, case, q, jev, n).items():
+                res[a][case["id"]] = row
+    return res
+
+
+def jev_report(res):
+    rows = list(res["J20"].values())
+    if not rows:
+        return ["JEV: no rows"]
+    failed = [r for r in rows if r["jev_failed"]]
+    ms = [r["jev_ms"] for r in rows]
+    errs = sorted({r["jev_err"] for r in failed})
+    return [f"JEV: calls {len(rows)} failed {len(failed)} {errs if errs else ''} p50 {pctl(ms, .5):.0f} ms "
+            f"p90 {pctl(ms, .9):.0f} ms"]
+
+
+def stratum_counts2(cases):
+    return {o: sum(1 for c in cases if c.get("offer_source") == o) for o in OFFER_SOURCES}
+
+
+def evaluate2(cases, res):
+    """D_J20, D_SR40, D_J40 on their primary sets, Holm m = 3. Returns the printed lines."""
+    lines, rules = [], {}
+    primary = {"all": [c["id"] for c in cases],
+               "not_jev": [c["id"] for c in cases if c.get("offer_source") != "jev"]}
+    for d in DECISIONS2:
+        arm, base, stratum = DECISION2[d]
+        ids = primary[stratum]
+        lacking = sum(1 for i in ids if i not in res[arm] or i not in res[base])
+        if lacking > MISSING_FRACTION * max(len(ids), 1):
+            rules[d] = {"n": len(ids), "verdict": "INSUFFICIENT", "G1": False,
+                        "why": f"{lacking} of {len(ids)} primary cases lack queries"}
+            continue
+        b, r = _pair(res, base, arm, ids)
+        jev = arm.startswith("J")
+        rules[d] = gate_rules(b, r, min_n=MIN_N_JEV if jev else MIN_N, g6_abs=G6_JEV_P90_MS if jev else None)
+    pvals = [rules[d]["p"] if rules[d].get("G1") else 1.0 for d in DECISIONS2]
+    adj = dict(zip(DECISIONS2, holm_adjusted(pvals)))
+    passed = {}
+    for d in DECISIONS2:
+        r = rules[d]
+        arm, base, stratum = DECISION2[d]
+        v = verdict_of(r, adj[d] <= ALPHA)
+        if v == "INSUFFICIENT":
+            lines.append(f"VERDICT: {d} INSUFFICIENT n={r['n']} {r.get('why', '')} ({arm} vs {base}, {stratum})")
+            continue
+        k = ARM2[arm][4]
+        lines.append(
+            f"VERDICT: {d} {v} n={r['n']} ({arm} vs {base}, {stratum}) recall@{k} {r['base_recall']:.1f} -> "
+            f"{r['arm_recall']:.1f} (gain {r['gain_pts']:.1f} pts) G2={r['G2']} G3={r['G3']} "
+            f"(lost {r['lost']}, gained {r['gained']}) G4 p={r['p']:.4f} holm_p={adj[d]:.4f} "
+            f"holm={adj[d] <= ALPHA} (sessions +{r['sessions_gained']}/-{r['sessions_lost']}) "
+            f"G5={r['G5']} (median ext {r['med_ext']}, share {r['share_base']:.1f}->{r['share_arm']:.1f}) "
+            f"G6={r['G6']} (p90 {r['p90_base']:.0f}->{r['p90_arm']:.0f} ms)")
+        lines += [f"  LOST {d}: {label} ({cid[:8]})" for cid, label in r["lost_cases"]]
+        if v == "PASS":
+            passed[d] = {"p": adj[d], "gain_pts": r["gain_pts"]}
+    if passed:
+        lines.append(f"SHIP: {ship_choice(passed)}")
+    return lines
+
+
+def recall_lines2(res):
+    out = []
+    for a in ARMS2:
+        rs = list(res[a].values())
+        if rs:
+            out.append(f"RECALL {a}: n={len(rs)} @{ARM2[a][4]} {100.0 * sum(r['hit'] for r in rs) / len(rs):.1f}  "
+                       f"p50 {pctl([r['ms'] for r in rs], .5):.0f} ms  p90 {pctl([r['ms'] for r in rs], .9):.0f} ms")
+    return out
+
+
+def _gate_cases(cases, gen, live_names):
+    """The cases the gate keeps: label still indexed, not dropped by the leak check."""
+    gone = {c["id"] for c in cases if c["label"] not in live_names}
+    leak = set(leak_dropped(cases, gen))
+    return [c for c in cases if c["id"] not in gone | leak], len(leak), len(gone)
+
+
+def cmd_gate2(man, args):
+    """The iteration-2 gate: the freeze was already checked by cmd_gate."""
+    if args.arms or args.combine or args.composites:
+        raise RuntimeError("--arms, --combine and --composites are iteration-1 options; "
+                           "iteration 2 always runs its five arms")
+    srv = load_engine()
+    wide, tier, ask = jev_setup()
+    cases = read_jsonl(CASES)
+    gen = load_generated()
+    start = index_state()
+    print(provenance_line())
+    print(lock_line(start))
+    print(f"index drift vs build: +{len(set(start['names']) - set(man['index_names']))} "
+          f"-{len(set(man['index_names']) - set(start['names']))}")
+    cases, nleak, ngone = _gate_cases(cases, gen, {p["name"] for p in scroll_base_points()})
+    print(f"cases dropped, label no longer indexed: {ngone}")
+    print(f"cases dropped by the leak check: {nleak}")
+    print(f"cases kept {len(cases)}; offer_source {stratum_counts2(cases)}")
+    call_engine(srv, ["warm up the skill index"], 20, "0", "0")
+    res = run_arms2(srv, cases, gen, lambda t: jev_top(t, wide, tier, ask))
+    end = index_state()
+    print(lock_line(end))
+    check_index_lock(start, end)
+    for line in evaluate2(cases, res) + jev_report(res) + recall_lines2(res):
+        print(line)
+    return 0
+
+
+def cmd_replay_arms(args):
+    """The iteration-2 arms on the spent iteration-1 cases and queries, read-only: recall per arm and
+    the Jev call stats. A plumbing check, never a verdict; refused for any later iteration."""
+    if ITER != 1:
+        print("replay-arms runs on the spent iteration-1 set only: use --iter 1", file=sys.stderr)
+        return 2
+    srv = load_engine()
+    wide, tier, ask = jev_setup()
+    gen = load_generated()
+    cases, nleak, ngone = _gate_cases(read_jsonl(CASES), gen, {p["name"] for p in scroll_base_points()})
+    print(f"cases kept {len(cases)} (leak-dropped {nleak}, label gone {ngone})")
+    call_engine(srv, ["warm up the skill index"], 20, "0", "0")
+    res = run_arms2(srv, cases, gen, lambda t: jev_top(t, wide, tier, ask))
+    for line in recall_lines2(res) + jev_report(res):
+        print(line)
+    return 0
+
+
 # ── cli ────────────────────────────────────────────────────────────────────────────────────
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--iter", type=int, default=1, metavar="N",
+                    help="iteration: 1 = the original file set (default); N >= 2 = suffixed -iterN files")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("labels", help="(--iter >= 2) extract fresh labels: newer than iteration 1, new sessions")
+    sub.add_parser("check-fresh", help="(--iter >= 2) print FRESH-HELDOUT-OK when the frozen iteration is fresh")
+    sub.add_parser("check-prereg", help="(--iter >= 2) print PREREG-MATCHES-RUN when the prereg hash matches the run")
     b = sub.add_parser("build", help="freeze the case set and write the manifest")
     b.add_argument("--force", action="store_true", help="rebuild even if frozen (starts a new evaluation)")
     q = sub.add_parser("queries", help="generate the arm queries (append, resume, lock)")
     q.add_argument("--retry-failed", action="store_true")
     q.add_argument("--freeze", action="store_true", help="record sha256 and lock the query file")
+    q.add_argument("--workers", type=int, default=1, metavar="N",
+                   help="parallel gateway calls (default 1 = serial); recorded in the manifest when > 1")
+    q.add_argument("--limit", type=int, default=0, metavar="N", help="only the first N planned calls (probe)")
+    sub.add_parser("replay-arms", help="(--iter 1 only) the iteration-2 arms on the spent set: recall, plumbing check")
     g = sub.add_parser("gate", help="run the arms and print verdicts")
     g.add_argument("--arms", help="comma list of A0,A1,A2,T,H,S (default all six)")
     g.add_argument("--composites", action="store_true", help="run composite pairs for A0/A1/A2")
     g.add_argument("--combine", help="FLAGS:PARTS, e.g. slots,rrf:task,how — arm C against A0")
     g.add_argument("--check-freeze", action="store_true", help="accepted for clarity; the gate always checks the freeze")
     args = ap.parse_args(argv)
+    if args.iter < 1:
+        ap.error("--iter must be >= 1")
+    set_iter(args.iter)
+    if args.cmd in ("labels", "check-fresh", "check-prereg") and args.iter < 2:
+        ap.error(f"{args.cmd} needs --iter >= 2")
     try:
-        return {"build": cmd_build, "queries": cmd_queries, "gate": cmd_gate}[args.cmd](args)
+        return {"build": cmd_build, "queries": cmd_queries, "gate": cmd_gate, "labels": cmd_labels,
+                "check-fresh": cmd_check_fresh, "check-prereg": cmd_check_prereg,
+                "replay-arms": cmd_replay_arms}[args.cmd](args)
     except (EngineError, RuntimeError) as e:
         print(f"ABORT: {e}", file=sys.stderr)
         return 2

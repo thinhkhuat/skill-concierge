@@ -6,8 +6,11 @@ the server module are all fakes. The live build, generation and gate runs are se
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +40,10 @@ def private_paths_in_tmp(tmp_path, monkeypatch):
                         ("CASES", "sieve-eval-cases.jsonl"), ("QUERIES", "sieve-eval-queries.jsonl"),
                         ("LOCK", "sieve-eval-queries.lock"), ("MANIFEST", "sieve-eval-manifest.json")):
         monkeypatch.setattr(S, name, cal / fname)
+    # iteration paths: ITER restored on teardown, the pre-registration and gate output redirected
+    monkeypatch.setattr(S, "ITER", 1)
+    monkeypatch.setattr(S, "PLAN_DIR", tmp_path / "plan")
+    (tmp_path / "plan" / "reports").mkdir(parents=True)
 
 
 def test_label_resolves_to_the_exact_indexed_name():
@@ -446,3 +453,637 @@ def test_text_sent_to_the_gateway_is_cleaned():
     half = "rotate the token ghp_" + "Zq9" * 4
     assert S.gen_text(half, truncated=True) == "rotate the token"
     assert S.jobs_for([], [{"task": raw}])[0][2] == out
+
+
+# ── iterations ─────────────────────────────────────────────────────────────────────────────
+def test_iteration_one_paths_are_the_original_names(tmp_path):
+    cal = tmp_path / "jev-calibration"
+    S.set_iter(1)
+    assert S.ITER == 1
+    assert [p.name for p in (S.LABELS, S.CASES, S.QUERIES, S.LOCK, S.MANIFEST)] == [
+        "real-turn-labels.jsonl", "sieve-eval-cases.jsonl", "sieve-eval-queries.jsonl",
+        "sieve-eval-queries.lock", "sieve-eval-manifest.json"]
+    assert all(p.parent == cal for p in (S.LABELS, S.CASES, S.QUERIES, S.LOCK, S.MANIFEST))
+
+
+def test_iteration_two_suffixes_every_private_path_and_keeps_modes(tmp_path):
+    cal = tmp_path / "jev-calibration"
+    S.set_iter(2)
+    assert S.ITER == 2
+    assert [p.name for p in (S.LABELS, S.CASES, S.QUERIES, S.LOCK, S.MANIFEST)] == [
+        "real-turn-labels-iter2.jsonl", "sieve-eval-cases-iter2.jsonl", "sieve-eval-queries-iter2.jsonl",
+        "sieve-eval-queries-iter2.lock", "sieve-eval-manifest-iter2.json"]
+    S.set_iter(13)
+    assert S.CASES.name == "sieve-eval-cases-iter13.jsonl"
+    S.set_iter(2)
+    S.write_private(S.CASES, "x\n")
+    S._append(S.QUERIES, {"k": 1})
+    S.acquire_lock()
+    assert stat.S_IMODE(os.stat(cal).st_mode) == 0o700
+    for p in (S.CASES, S.QUERIES, S.LOCK):
+        assert stat.S_IMODE(os.stat(p).st_mode) == 0o600
+    assert sorted(f.name for f in cal.iterdir()) == [
+        "sieve-eval-cases-iter2.jsonl", "sieve-eval-queries-iter2.jsonl", "sieve-eval-queries-iter2.lock"]
+    for bad in (0, -1, "2"):
+        with pytest.raises(ValueError):
+            S.set_iter(bad)
+
+
+def test_main_takes_a_global_iter_and_labels_needs_two(capsys):
+    with pytest.raises(SystemExit):
+        S.main(["labels"])                       # iteration 1's corpus is never rewritten
+    with pytest.raises(SystemExit):
+        S.main(["--iter", "0", "build"])
+    assert S.cmd_labels(argparse.Namespace()) == 2          # direct call at iteration 1: refused too
+    assert S.main(["--iter", "2", "check-prereg"]) == 1 and S.ITER == 2
+    assert S.MANIFEST.name == "sieve-eval-manifest-iter2.json"
+
+
+def lrow(uuid, sid, ts, positive=True, words=12):
+    return {"uuid": uuid, "sid": sid, "ts_utc": ts, "prompt_words": words,
+            "label": "NEEDS_SKILL" if positive else "NO_SKILL", "label_rule": "using+executed_this_turn",
+            "meta_session": False, "entry_class": "interactive", "interrupted": False,
+            "next_prompt_correction": None}
+
+
+def test_fresh_rows_keep_only_strictly_later_turns_in_new_sessions():
+    cut = "2026-09-26T09:05:44.285Z"
+    rows = [lrow("a", "s-new", "2026-09-26T09:05:44.286Z"),
+            lrow("b", "s-new2", "2026-09-26T09:05:44.285Z"),     # equal to the cutoff: not after
+            lrow("c", "s-new3", "2026-09-25T00:00:00Z"),
+            lrow("d", "s-old", "2026-09-27T00:00:00Z"),          # later turn of an iteration-1 session
+            lrow("e", "s-new4", "2026-09-27T00:00:00Z"),         # reused uuid
+            lrow("f", "s-new5", None),
+            lrow("g", "s-new6", "2026-10-01T10:00:00+00:00")]
+    kept, c = S.fresh_rows(rows, cut, {"s-old"}, {"e"})
+    assert [r["uuid"] for r in kept] == ["a", "g"]
+    assert c == {"raw": 7, "not_after_cutoff": 3, "excluded_session": 1, "excluded_uuid": 1, "kept": 2}
+
+
+def write_jsonl(path, rows):
+    S.write_private(path, "".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_iteration_one_exclusions_cover_case_and_feeding_sessions_and_the_cutoff():
+    rows = [lrow("u1", "s1", "2026-09-01T00:00:00Z"),                       # feeds a case
+            lrow("u2", "s2", "2026-09-26T09:05:44.285Z"),                   # positive, fed but capped out
+            lrow("u3", "s3", "2026-09-20T00:00:00Z", positive=False),       # not positive: session free
+            lrow("u4", "s4", "2026-09-20T00:00:00Z", words=3),              # too short: session free
+            lrow("u5", "s5", "garbage")]
+    write_jsonl(S.iter_path("real-turn-labels.jsonl", 1), rows)
+    write_jsonl(S.iter_path("sieve-eval-cases.jsonl", 1), [{"id": "u1|k", "uuid": "u1", "sid": "s1"},
+                                                          {"id": "x|k", "uuid": "x", "sid": "s9"}])
+    sids, uuids, cutoff = S.iter1_exclusions()
+    assert sids == {"s1", "s2", "s5", "s9"} and uuids == {"u1", "u2", "u3", "u4", "u5", "x"}
+    assert cutoff == "2026-09-26T09:05:44.285Z"
+    S.iter_path("sieve-eval-cases.jsonl", 1).unlink()
+    with pytest.raises(RuntimeError, match="missing"):
+        S.iter1_exclusions()
+
+
+CUT = "2026-09-26T09:05:44.285Z"
+
+
+def fresh_setup(n_cases=31, leaking=0, prereg=True):
+    """A frozen iteration-2 evaluation on disk plus the iteration-1 files it must not overlap."""
+    write_jsonl(S.iter_path("real-turn-labels.jsonl", 1), [lrow("o1", "old1", "2026-09-01T00:00:00Z"),
+                                                          lrow("o2", "old2", CUT)])
+    write_jsonl(S.iter_path("sieve-eval-cases.jsonl", 1), [{"id": "o1|k", "uuid": "o1", "sid": "old1"}])
+    S.set_iter(2)
+    cases = [{"id": f"n{i}|zeta{i}", "uuid": f"n{i}", "sid": f"new{i}", "key": f"zeta{i}", "label": f"zeta{i}"}
+             for i in range(n_cases)]
+    write_jsonl(S.LABELS, [lrow(c["uuid"], c["sid"], "2026-10-01T00:00:00Z") for c in cases])
+    write_jsonl(S.CASES, cases)
+    for i, c in enumerate(cases):
+        q = f"zeta{i} thing" if i < leaking else "do the thing"
+        S._append(S.QUERIES, {"k": f"{c['id']}|d0|x", "case": c["id"], "part": "d0", "reply": {"queries": [q]},
+                              "err": None})
+    if prereg:
+        S.prereg_path().write_text("pre-registered rules\n")
+    man = {"frozen": True, "iteration": 2, "rules_sha256": S.rules_sha256(),
+           "inputs": {S.LABELS.name: S.sha256_file(S.LABELS)}, "cases_sha256": S.sha256_file(S.CASES),
+           "queries": {"sha256": S.sha256_file(S.QUERIES)}, "fresh": {"cutoff_ts": CUT}}
+    if prereg:
+        man["prereg_sha256"] = S.sha256_file(S.prereg_path())
+    S.write_private(S.MANIFEST, json.dumps(man))
+    return cases, man
+
+
+def put_manifest(man):
+    S.write_private(S.MANIFEST, json.dumps(man))
+
+
+def fail_of(capsys):
+    assert S.cmd_check_fresh(None) == 1
+    return capsys.readouterr().err
+
+
+def test_check_fresh_passes_a_frozen_fresh_evaluation(capsys):
+    fresh_setup()
+    assert S.cmd_check_fresh(None) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[-1] == "FRESH-HELDOUT-OK" and "surviving the leak check 31" in out
+
+
+def test_check_fresh_refuses_iteration_one(capsys):
+    assert S.cmd_check_fresh(None) == 1 and "iteration" in capsys.readouterr().err
+
+
+def test_check_fresh_names_each_failed_check(capsys):
+    cases, man = fresh_setup()
+    put_manifest({**man, "frozen": False})
+    assert "frozen" in fail_of(capsys)
+    put_manifest(man)
+    S.CASES.write_text(S.CASES.read_text() + " ")             # a file changed after the freeze
+    assert "cases file changed" in fail_of(capsys)
+    # a case in an iteration-1 session
+    cases, man = fresh_setup()
+    cases[0]["sid"] = "old1"
+    write_jsonl(S.CASES, cases)
+    put_manifest({**man, "cases_sha256": S.sha256_file(S.CASES)})
+    err = fail_of(capsys)
+    assert "sessions" in err and "old1" in err
+    # a case whose label turn is not after the iteration-1 cutoff
+    cases, man = fresh_setup()
+    write_jsonl(S.LABELS, [lrow(c["uuid"], c["sid"], CUT if i == 3 else "2026-10-01T00:00:00Z")
+                           for i, c in enumerate(cases)])
+    put_manifest({**man, "inputs": {S.LABELS.name: S.sha256_file(S.LABELS)}})
+    assert "time" in fail_of(capsys)
+    # the manifest's recorded cutoff differs from the iteration-1 corpus
+    cases, man = fresh_setup()
+    put_manifest({**man, "fresh": {"cutoff_ts": "2026-09-01T00:00:00Z"}})
+    assert "cutoff" in fail_of(capsys)
+    # the leak check leaves 26 cases
+    fresh_setup(leaking=5)
+    err = fail_of(capsys)
+    assert "leak-check" in err and "26" in err
+
+
+def test_check_fresh_fails_when_the_prereg_changed_after_the_freeze(capsys):
+    fresh_setup()
+    S.prereg_path().write_text("edited after the freeze\n")
+    assert "frozen" in fail_of(capsys)
+
+
+def raw_with(h, line="provenance: script sha256 aa rules sha256 bb prereg sha256 "):
+    S.gate_raw_path().write_text(f"noise\n{line}{h}\nVERDICT: x\n")
+
+
+def test_check_prereg_passes_and_names_each_mismatch(capsys):
+    cases, man = fresh_setup()
+    h = man["prereg_sha256"]
+    assert S.cmd_check_prereg(None) == 1 and "gate-raw" in capsys.readouterr().err      # no raw file yet
+    raw_with(h)
+    assert S.cmd_check_prereg(None) == 0 and capsys.readouterr().out.strip() == "PREREG-MATCHES-RUN"
+    raw_with("0" * 64)                                                                  # run used another prereg
+    assert S.cmd_check_prereg(None) == 1 and "gate-raw" in capsys.readouterr().err
+    S.gate_raw_path().write_text(f"VERDICT: x\nsomething prereg sha256 {h}\n")        # not a provenance line
+    assert S.cmd_check_prereg(None) == 1 and "no provenance" in capsys.readouterr().err
+    raw_with(h)
+    S.prereg_path().write_text("edited\n")                                              # file changed since freeze
+    assert S.cmd_check_prereg(None) == 1 and "prereg-file" in capsys.readouterr().err
+    S.prereg_path().unlink()
+    assert S.cmd_check_prereg(None) == 1 and "missing" in capsys.readouterr().err
+    put_manifest({k: v for k, v in man.items() if k != "prereg_sha256"})
+    assert S.cmd_check_prereg(None) == 1 and "manifest" in capsys.readouterr().err
+    S.set_iter(1)
+    assert S.cmd_check_prereg(None) == 1
+
+
+def test_freeze_needs_the_prereg_and_records_its_hash():
+    S.set_iter(2)
+    S._ensure_dir()
+    S.write_private(S.CASES, json.dumps({"id": "c0", "gen_text": "t", "key": "k", "label": "k"}) + "\n")
+    S.write_private(S.MANIFEST, json.dumps({"frozen": False}))
+    S.generate(S.jobs_for([{"id": "c0", "gen_text": "t"}], []), fake_chat([]), "m", path=S.QUERIES,
+               log=lambda *_: None)
+    args = argparse.Namespace(freeze=True, retry_failed=False)
+    assert S.cmd_queries(args) == 2                                  # no iter2-prereg.md
+    assert not json.loads(S.MANIFEST.read_text())["frozen"]
+    S.prereg_path().write_text("rules\n")
+    assert S.cmd_queries(args) == 0
+    man = json.loads(S.MANIFEST.read_text())
+    assert man["frozen"] and man["prereg_sha256"] == S.sha256_file(S.prereg_path())
+    S.prereg_path().write_text("changed\n")                         # a re-freeze cannot re-register it
+    with pytest.raises(RuntimeError, match="prereg"):
+        S._freeze(man, [], "m")
+    # iteration 1 needs no prereg and records none
+    S.set_iter(1)
+    S.write_private(S.CASES, json.dumps({"id": "c0", "gen_text": "t", "key": "k", "label": "k"}) + "\n")
+    S.write_private(S.MANIFEST, json.dumps({"frozen": False}))
+    S.generate(S.jobs_for([{"id": "c0", "gen_text": "t"}], []), fake_chat([]), "m", path=S.QUERIES,
+               log=lambda *_: None)
+    assert S.cmd_queries(args) == 0 and "prereg_sha256" not in json.loads(S.MANIFEST.read_text())
+
+
+def test_gate_provenance_carries_the_prereg_hash_from_iteration_two():
+    assert "prereg" not in S.provenance_line()
+    S.set_iter(2)
+    S.prereg_path().write_text("rules\n")
+    line = S.provenance_line()
+    assert line.startswith("provenance: script sha256 ") and f"rules sha256 {S.rules_sha256()}" in line
+    assert line.endswith(f"prereg sha256 {S.sha256_file(S.prereg_path())}")
+
+
+# ── parallel generation ────────────────────────────────────────────────────────────────────
+def threaded_chat(calls, lock, fail_at=None, soft=False):
+    def chat(system, user):
+        with lock:
+            calls.append(user)
+            n = len(calls)
+        time.sleep(0.01)
+        if fail_at is not None and n == fail_at:
+            raise OSError("down") if soft else KeyboardInterrupt
+        return {"queries": [user + "x" * 5000]} if "queries" in system else {"query": user + "x" * 5000}
+    return chat
+
+
+def keys_once(path, jobs):
+    lines = path.read_text().splitlines()
+    recs = [json.loads(l) for l in lines]                 # an interleaved line would not parse
+    assert sorted(r["k"] for r in recs) == sorted({S.query_key(c, p, S.SYSTEM[p]) for c, p, _ in jobs})
+    return recs
+
+
+def test_parallel_generation_writes_every_key_once_and_resumes(tmp_path):
+    cases = [{"id": f"c{i}", "gen_text": f"task {i}"} for i in range(8)]
+    jobs = S.jobs_for(cases, [])                                       # 24 calls
+    path, lock = tmp_path / "q.jsonl", threading.Lock()
+    calls = []
+    assert S.generate(jobs, threaded_chat(calls, lock), "m", path=path, log=lambda *_: None, workers=3) == (24, 0)
+    assert len(calls) == 24
+    recs = keys_once(path, jobs)
+    assert all(r["model"] == "m" and r["temperature"] == 0.4 and r["reply"] for r in recs)
+    assert S.generate(jobs, threaded_chat([], lock), "m", path=path, log=lambda *_: None, workers=3) == (0, 0)
+    # a worker dies mid-run: what was written stays, the rerun completes the rest and nothing repeats
+    p2, calls2 = tmp_path / "q2.jsonl", []
+    with pytest.raises(KeyboardInterrupt):
+        S.generate(jobs, threaded_chat(calls2, lock, fail_at=7), "m", path=p2, log=lambda *_: None, workers=3)
+    done = len(S.read_jsonl(p2))
+    assert 0 < done < 24
+    calls3 = []
+    made, failed = S.generate(jobs, threaded_chat(calls3, lock), "m", path=p2, log=lambda *_: None, workers=3)
+    assert (made, failed) == (24 - done, 0)
+    keys_once(p2, jobs)
+    # failed calls are recorded, skipped on a rerun, retried with retry_failed
+    p3 = tmp_path / "q3.jsonl"
+    assert S.generate(jobs, threaded_chat([], lock, fail_at=5, soft=True), "m", path=p3,
+                      log=lambda *_: None, workers=3) == (24, 1)
+    assert S.generate(jobs, threaded_chat([], lock), "m", path=p3, log=lambda *_: None, workers=3) == (0, 0)
+    assert S.generate(jobs, threaded_chat([], lock), "m", path=p3, retry_failed=True,
+                      log=lambda *_: None, workers=3) == (1, 0)
+    assert all(not r["err"] for r in S.latest_records(p3).values())
+
+
+def test_workers_one_stays_serial(tmp_path):
+    seen = []
+
+    def chat(system, user):
+        seen.append(threading.current_thread())
+        return {"queries": ["q"]} if "queries" in system else {"query": "q"}
+    S.generate(S.jobs_for([{"id": "c", "gen_text": "t"}], []), chat, "m", path=tmp_path / "q.jsonl",
+               log=lambda *_: None)
+    assert set(seen) == {threading.current_thread()}
+
+
+# ── iteration 2: Jev union arms ────────────────────────────────────────────────────────────
+def wide(*chunks):
+    """Fake Jev wide answers: each chunk is {name: probability}."""
+    return {f"wide::{i}": {"probabilities": c} for i, c in enumerate(chunks)}
+
+
+def srows(*names, external=()):
+    return [{"name": n, "external": n in external} for n in names]
+
+
+def test_jev_round_robin_takes_rank_one_of_every_chunk_first():
+    ans = wide({"a": .9, "b": .5, "c": .1}, {"d": .3, "e": .2}, {"f": .8})
+    assert S.jev_round_robin(ans) == ["a", "d", "f", "b", "e", "c"]
+    # chunk keys sort numerically, not as text: chunk 10 comes after chunk 2
+    many = {f"wide::{i}": {"probabilities": {f"n{i}": .5}} for i in (10, 2, 1)}
+    assert S.jev_round_robin(many) == ["n1", "n2", "n10"]
+    assert S.jev_round_robin({}) == [] and S.jev_round_robin({"other": {}}) == []
+
+
+def test_union_puts_jev_first_then_sieve_deduped_and_truncated():
+    assert S.skill_key("ak:plan") == S.skill_key("ak-plan")
+    sieve = srows("s1", "ak-plan", "s3", "s4", "s5", external=("s1", "s3"))
+    out = S.union_rows(["j1", "ak:plan"], sieve, 4)
+    # jev rows first; the sieve row sharing a skill key with a jev row is dropped; cut at 4
+    assert [r["name"] for r in out] == ["j1", "ak:plan", "s1", "s3"]
+    assert [r["external"] for r in out] == [False, False, True, True]
+    assert [r["name"] for r in S.union_rows(["j1"], sieve, 40)] == ["j1", "s1", "ak-plan", "s3", "s4", "s5"]
+    assert [r["name"] for r in S.union_rows([], sieve, 2)] == ["s1", "ak-plan"]
+    # a jev name that is also an external sieve row counts once, as the jev (installed) row
+    both = S.union_rows(["s1"], sieve, 20)
+    assert [r["name"] for r in both].count("s1") == 1 and both[0]["external"] is False
+
+
+def test_jev_top_makes_one_attempt_on_the_ts_tier_with_an_empty_context():
+    seen = {}
+
+    def ask(state, questions, timeout, tiers=None, retries=1):
+        seen.update(state=state, timeout=timeout, tiers=tiers, retries=retries, q=questions)
+        return wide({"a": .9, "b": .8}, {"c": .7}), {}
+    names, ms, err = S.jev_top("x" * 5000, {"wide::0": {}}, {"ep": "ts"}, ask, k=2)
+    assert names == ["a", "c"] and err is None and ms >= 0
+    assert seen["timeout"] == 3.0 and seen["retries"] == 0 and seen["tiers"] == [{"ep": "ts"}]
+    assert seen["state"] == {"request": "x" * 4000, "recent_context": "",
+                             "skills_already_loaded_this_session": []}
+
+
+def test_a_failed_jev_call_gives_no_rows_and_the_case_still_runs_on_sieve_rows(monkeypatch):
+    def broken(state, questions, timeout, tiers=None, retries=1):
+        raise TimeoutError("slow")
+    names, ms, err = S.jev_top("t", {}, {"ep": "ts"}, broken)
+    assert names == [] and err == "TimeoutError"
+    sieve = [{"name": f"s{i}", "skill_key": i, "external": i % 2 == 0} for i in range(40)]
+    monkeypatch.setenv("SKILL_CONSULT_SLOTS", "0")
+    monkeypatch.setenv("SKILL_CONSULT_RRF", "0")
+    srv = SimpleNamespace(consult_candidates=lambda qs, n: json.dumps({"results": sieve[:n]}))
+    case = {"id": "c1", "sid": "s", "label": "s30", "gen_text": "task"}
+    out = S.run_case2(srv, case, ["q"], lambda t: S.jev_top(t, {}, {"ep": "ts"}, broken))
+    assert [r["name"] for r in S.union_rows([], sieve, 20)] == [f"s{i}" for i in range(20)]
+    assert out["J20"]["rows"] == 20 and out["J40"]["rows"] == 40
+    assert out["J20"]["hit"] is False and out["J40"]["hit"] is True      # s30 sits at sieve rank 31
+    assert out["J20"]["jev_failed"] is True and out["J20"]["jev_err"] == "TimeoutError"
+    assert out["J20"]["jev_ms"] >= 0 and out["J20"]["ext"] == 10
+
+
+def test_run_case2_joins_jev_rows_to_the_sieve_and_times_a_jev_arm_as_the_slower_call(monkeypatch):
+    monkeypatch.setenv("SKILL_CONSULT_SLOTS", "0")
+    monkeypatch.setenv("SKILL_CONSULT_RRF", "0")
+    flags = []
+
+    def consult(qs, n):
+        flags.append((os.environ["SKILL_CONSULT_SLOTS"], os.environ["SKILL_CONSULT_RRF"], n))
+        slow = os.environ["SKILL_CONSULT_SLOTS"] == "1"
+        rows = [{"name": f"s{i}"} for i in range(n)]
+        return json.dumps({"results": rows[::-1] if slow else rows})
+    srv = SimpleNamespace(consult_candidates=consult)
+    case = {"id": "c1", "sid": "s", "label": "jevhit", "gen_text": "task"}
+    out = S.run_case2(srv, case, ["q"], lambda t: (["jevhit"], 2500.0, None))
+    assert sorted(flags) == [("0", "0", 20), ("0", "0", 40), ("1", "1", 40)]
+    assert set(out) == set(S.ARMS2)
+    assert out["J20"]["hit"] and out["J40"]["hit"] and not out["A0@20"]["hit"]
+    assert out["J20"]["ms"] == out["J40"]["ms"] == 2500.0 and out["J20"]["jev_failed"] is False
+    assert out["SR40"]["rows"] == 40 and out["A0@20"]["rows"] == 20
+
+
+def test_offer_source_is_jev_only_when_a_working_router_offered_the_label():
+    ok = {"ms": 900, "fit": 0.6}
+    assert S.offer_source("offered", ok) == "jev"
+    assert S.offer_source("offered", {**ok, "err": "Timeout", "leg": "router"}) == "embed_or_none"
+    assert S.offer_source("offered", None) == "embed_or_none"
+    assert S.offer_source("offered", {}) == "embed_or_none"
+    assert S.offer_source("not_offered", ok) == "embed_or_none"      # the router served, the label was not in it
+    assert S.offer_source("unknown", ok) == "embed_or_none"
+
+
+def test_build_cases_stamps_the_stratum_from_each_turns_ledger_row_and_drops_blocked_labels(monkeypatch):
+    ok = {"ms": 900}
+    rows = [row("u1", "s1", ["alpha"], offered=[["alpha", .5]]) | {"ledger_jev": ok},
+            row("u2", "s2", ["beta"], offered=[["beta", .5]]) | {"ledger_jev": {"err": "X", "ms": 1}},
+            row("u3", "s3", ["gamma"], offered=[["zzz", .5]]) | {"ledger_jev": ok},
+            row("u4", "s4", ["delta"], offered=None),
+            row("u5", "s5", ["whereami"], offered=[]),
+            row("u6", "s6", ["whereami"], offered=[])]
+    points = pts("alpha", "beta", "gamma", "delta", "whereami")
+    plain, st0 = S.build_cases(rows, points, set(), set(), lambda r: True)
+    assert len(plain) == 6 and all("offer_source" not in c for c in plain)    # iteration 1 build unchanged
+    enf = S._enf()
+    monkeypatch.setattr(enf, "BLOCKLIST", frozenset({"whereami"}))
+    cases, st = S.build_cases(rows, points, set(), set(), lambda r: True, blocked=enf._blocked)
+    src = {c["label"]: c["offer_source"] for c in cases}
+    assert src == {"alpha": "jev", "beta": "embed_or_none", "gamma": "embed_or_none", "delta": "embed_or_none"}
+    assert st["blocklisted_dropped"] == ["whereami", "whereami"]
+    assert all(c["pair"] is None or c["pair"] in {x["id"] for x in cases} for c in cases)
+
+
+def test_blocklist_helper_blocks_a_qualified_twin_of_a_bare_entry_only():
+    enf = S._enf()
+    blocked = lambda n: n == "whereami" or n.endswith(":whereami")      # the enforcer's rule, spelled out
+    kept, dropped = S.drop_blocklisted([{"label": "whereami"}, {"label": "p:whereami"}, {"label": "p:other"}], blocked)
+    assert dropped == ["whereami", "p:whereami"] and kept == [{"label": "p:other"}]
+    saved = enf.BLOCKLIST
+    try:
+        enf.BLOCKLIST = frozenset({"whereami", "q:exact"})
+        assert enf._blocked("p:whereami") and enf._blocked("q:exact") and not enf._blocked("r:exact")
+    finally:
+        enf.BLOCKLIST = saved
+
+
+def test_cmd_build_iteration_two_records_stratum_counts_blocklist_drops_and_keeps_generation(monkeypatch, capsys):
+    def old(uuid, sid, labels, jev=None):
+        return lrow(uuid, sid, "2026-09-01T00:00:00Z") | row(uuid, sid, labels, offered=[]) | {"ledger_jev": jev}
+    write_jsonl(S.iter_path("real-turn-labels.jsonl", 1), [
+        old("o1", "old1", ["alpha"]),                                    # an iteration-1 case: never taken again
+        old("o2", "old1", ["alpha"], jev={"ms": 5}),                      # unseen, shares the spent session
+        old("o3", "old2", ["beta"]),                                      # unseen, own session
+        old("o4", "old3", ["whereami"])])                                 # unseen but blocklisted
+    write_jsonl(S.iter_path("sieve-eval-cases.jsonl", 1), [{"id": "o1|alpha", "uuid": "o1", "sid": "old1"}])
+    i1 = {"frozen": True, "inputs": {"real-turn-labels.jsonl": S.sha256_file(S.iter_path("real-turn-labels.jsonl", 1))},
+          "cases_sha256": "c"}
+    S.write_private(S.iter_path("sieve-eval-manifest.json", 1), json.dumps(i1))
+    S.set_iter(2)
+    ok = {"ms": 900}
+    new = [row("u1", "s1", ["alpha"], offered=[["alpha", .5]]) | {"ledger_jev": ok, "ts_utc": "2026-10-01T00:00:00Z"},
+           row("u2", "s2", ["beta"], offered=[]) | {"ts_utc": "2026-10-01T00:00:00Z"},
+           row("u3", "s3", ["whereami"], offered=[]) | {"ts_utc": "2026-10-01T00:00:00Z"}]
+    write_jsonl(S.LABELS, new)
+    S.write_private(S.CONSULT_EVAL, "")
+    S.write_private(S.MANIFEST, json.dumps({"generation": [{"workers": 4}], "stale": 1}))
+    enf = S._enf()
+    monkeypatch.setattr(enf, "BLOCKLIST", frozenset({"whereami"}))
+    points = pts("alpha", "beta", "whereami")
+    monkeypatch.setattr(S, "_pe", lambda: SimpleNamespace(META_SKILLS=set()))
+    monkeypatch.setattr(S, "_cal", lambda: SimpleNamespace(load_corpus=lambda p: S.read_jsonl(p), is_positive=lambda r: True))
+    monkeypatch.setattr(S, "scroll_base_points", lambda: points)
+    monkeypatch.setattr(S, "index_state", lambda: {"points_count": 3, "base_count": 3, "names_sha256": "x",
+                                                  "names": ["alpha", "beta", "whereami"]})
+    monkeypatch.setattr(S, "iter1_exclusions", lambda: (set(), set(), "2026-09-26T00:00:00Z"))
+    assert S.cmd_build(argparse.Namespace(force=False)) == 0
+    man = S.read_manifest()
+    c = man["counts"]
+    assert c["cases"] == 4 and c["blocklisted_dropped"] == 2          # one fresh, one pool
+    assert c["offer_source"] == {"jev": 1, "embed_or_none": 1, "pre_router": 2}
+    assert c["source"] == {"fresh": 2, "pre_router_unseen": 2}
+    assert c["primary_cases"] == 3 and c["primary_sessions"] == 3
+    assert c["pool_extension"]["cases"] == 2 and c["pool_extension"]["sessions"] == 2
+    assert c["pool_extension"]["sessions_shared_with_spent_cases"] == 1
+    assert c["pool_extension"]["cases_in_spent_sessions"] == 1 and c["pool_extension"]["with_ledger_jev"] == 1
+    assert c["pool_extension"]["blocklisted_dropped"] == 1
+    assert man["dropped"]["blocklisted"] == ["whereami"]
+    assert man["generation"] == [{"workers": 4}] and "stale" not in man
+    assert "primary set (not jev) 3 cases / 3 sessions" in capsys.readouterr().out
+    got = S.read_jsonl(S.CASES)
+    assert {c["offer_source"] for c in got} == {"jev", "embed_or_none", "pre_router"}
+    assert {c["id"] for c in got if c["source"] == "pre_router_unseen"} == {"o2|alpha", "o3|beta"}
+
+
+def test_iteration_one_rules_fingerprint_is_unchanged_and_iteration_two_has_its_own(monkeypatch):
+    assert S.ITER == 1
+    assert S.rules_sha256() == "97051cc4df983b33af26c3bdf30e4e7a29b2c7d0b0b32284c1754b38539cc251"
+    monkeypatch.setattr(S, "JEV_TOP_K", 5)                       # an iteration-2 constant: iteration 1 ignores it
+    assert S.rules_sha256() == "97051cc4df983b33af26c3bdf30e4e7a29b2c7d0b0b32284c1754b38539cc251"
+    monkeypatch.undo()
+    S.set_iter(2)
+    h2 = S.rules_sha256()
+    assert h2 != "97051cc4df983b33af26c3bdf30e4e7a29b2c7d0b0b32284c1754b38539cc251"
+    for name, val in (("JEV_TOP_K", 5), ("G6_JEV_P90_MS", 1400.0), ("JEV_TIMEOUT_S", 2.0),
+                      ("DECISIONS2", ("D_J20", "D_SR40")), ("OFFER_SOURCES", ("jev",))):
+        with monkeypatch.context() as m:
+            m.setattr(S, name, val)
+            assert S.rules_sha256() != h2, name
+    with monkeypatch.context() as m:
+        m.setitem(S.ARM2, "SR40", ("1", "1", 20, 0, 20))
+        assert S.rules_sha256() != h2
+
+
+def test_check_freeze_for_iteration_two_refuses_a_changed_iteration_two_rule():
+    cases, man = fresh_setup()
+    S.check_freeze(man)
+    S.G6_JEV_P90_MS, old = 1400.0, S.G6_JEV_P90_MS
+    try:
+        with pytest.raises(RuntimeError, match="gate rules differ"):
+            S.check_freeze(man)
+    finally:
+        S.G6_JEV_P90_MS = old
+
+
+def mk2(cases, hits, ms, ext=5, rows=20):
+    return {c["id"]: {"id": c["id"], "sid": c["sid"], "label": c["label"], "hit": hits(i), "ms": ms,
+                      "ext": ext, "rows": rows} for i, c in enumerate(cases)}
+
+
+def cases2(n_primary, n_jev):
+    out = [{"id": f"p{i}", "sid": f"sp{i}", "label": f"l{i}", "group": "not_offered",
+            "offer_source": "embed_or_none"} for i in range(n_primary)]
+    return out + [{"id": f"j{i}", "sid": f"sj{i}", "label": f"m{i}", "group": "offered",
+                   "offer_source": "jev"} for i in range(n_jev)]
+
+
+def res2(cases, j20_gain=0, j20_ms=800.0, sr_gain=0, sr_ms=10.0):
+    """A0 hits nothing; J20 gains the first j20_gain cases, SR40 the first sr_gain; J40 = A0."""
+    zero = lambda i: False
+    return {"A0@20": mk2(cases, zero, 10.0), "A0@40": mk2(cases, zero, 10.0, rows=40),
+            "J20": mk2(cases, lambda i: i < j20_gain, j20_ms), "J40": mk2(cases, zero, 800.0, rows=40),
+            "SR40": mk2(cases, lambda i: i < sr_gain, sr_ms, rows=40)}
+
+
+def test_iteration_two_decisions_use_their_primary_sets_and_holm_with_m_three():
+    cs = cases2(32, 8)
+    lines = S.evaluate2(cs, res2(cs, j20_gain=6))
+    by = {l.split()[1]: l for l in lines if l.startswith("VERDICT")}
+    assert set(by) == set(S.DECISIONS2) and S.DECISION2["D_SR40"][2] == "all"
+    # D_J20 is judged on the 32 primary cases, D_SR40 on all 40, D_J40 on the 32
+    assert " n=32 (J20 vs A0@20, not_jev)" in by["D_J20"] and " n=40 (SR40 vs A0@40, all)" in by["D_SR40"]
+    assert " n=32 (J40 vs A0@40, not_jev)" in by["D_J40"]
+    # six session-level gains, no losses: p = 0.5**6 = 0.0156; Holm with m = 3 gives 0.0469 <= 0.05
+    # (m = 5 would give 0.0781 and fail), and the other two decisions are not significant
+    assert "VERDICT: D_J20 PASS" in by["D_J20"] and "holm_p=0.0469" in by["D_J20"]
+    assert "VERDICT: D_SR40 FAIL" in by["D_SR40"] and "VERDICT: D_J40 FAIL" in by["D_J40"]
+    assert lines[-1] == "SHIP: D_J20"
+    assert S.holm_adjusted([0.5 ** 6, 1.0, 1.0])[0] == pytest.approx(3 * 0.5 ** 6)
+
+
+def test_iteration_two_jev_arms_have_an_absolute_p90_bound_and_sr40_a_relative_one():
+    cs = cases2(32, 8)
+    ok = S.evaluate2(cs, res2(cs, j20_gain=7, j20_ms=1500.0))
+    assert any(l.startswith("VERDICT: D_J20 PASS") for l in ok)
+    slow = S.evaluate2(cs, res2(cs, j20_gain=7, j20_ms=1501.0))
+    assert any(l.startswith("VERDICT: D_J20 FAIL") and "G6=False" in l for l in slow)
+    # SR40: 8 of 40 gained; p90 may sit 100 ms above its baseline (10 ms), not 101
+    on = S.evaluate2(cs, res2(cs, sr_gain=8, sr_ms=110.0))
+    assert any(l.startswith("VERDICT: D_SR40 PASS") for l in on)
+    off = S.evaluate2(cs, res2(cs, sr_gain=8, sr_ms=111.0))
+    assert any(l.startswith("VERDICT: D_SR40 FAIL") and "G6=False" in l for l in off)
+
+
+def test_iteration_two_primary_stratum_below_the_jev_floor_is_insufficient():
+    cs = cases2(24, 25)
+    lines = S.evaluate2(cs, res2(cs, j20_gain=20, sr_gain=20))
+    by = {l.split()[1]: l for l in lines if l.startswith("VERDICT")}
+    assert by["D_J20"].startswith("VERDICT: D_J20 INSUFFICIENT n=24")
+    assert by["D_J40"].startswith("VERDICT: D_J40 INSUFFICIENT n=24")
+    assert "n=49" in by["D_SR40"] and "INSUFFICIENT" not in by["D_SR40"]
+    assert not any(l.startswith("SHIP") for l in lines) or lines[-1] == "SHIP: D_SR40"
+
+
+def test_gate_under_iteration_two_refuses_iteration_one_options_and_replay_is_iteration_one_only(capsys):
+    S.set_iter(2)
+    with pytest.raises(RuntimeError, match="iteration-1 options"):
+        S.cmd_gate2({}, argparse.Namespace(arms="A0", combine=None, composites=False))
+    assert S.cmd_replay_arms(None) == 2
+    assert "iteration-1 set only" in capsys.readouterr().err
+
+
+def test_gate_dispatches_to_the_iteration_two_arms_only_after_the_freeze_checks(monkeypatch):
+    seen = []
+    monkeypatch.setattr(S, "cmd_gate2", lambda man, args: seen.append(man["iteration"]) or 0)
+    args = argparse.Namespace(arms=None, combine=None, composites=False)
+    cases, man = fresh_setup()
+    assert S.cmd_gate(args) == 0 and seen == [2]
+    S.PLAN_DIR.joinpath("iter2-prereg.md").write_text("edited after the freeze\n")
+    with pytest.raises(RuntimeError, match="prereg"):
+        S.cmd_gate(args)
+    assert seen == [2]
+
+
+def test_pool_extension_skips_iteration_one_cases_caps_among_the_rest_and_stamps_pre_router():
+    rows = [row(f"u{i}", f"s{i}", ["alpha"], offered=[]) for i in range(8)] + [row("w", "sw", ["whereami"], offered=[])]
+    points = pts("alpha", "whereami")
+    taken = {"u0|alpha", "u1|alpha"}
+    enf = S._enf()
+    saved = enf.BLOCKLIST
+    enf.BLOCKLIST = frozenset({"whereami"})
+    try:
+        pool, st = S.build_cases(rows, points, set(), set(), lambda r: True, blocked=enf._blocked,
+                                 exclude_ids=taken, pre_router=True)
+        fresh, _ = S.build_cases(rows, points, set(), set(), lambda r: True, blocked=enf._blocked)
+    finally:
+        enf.BLOCKLIST = saved
+    assert len(pool) == S.MAX_PER_LABEL                              # 6 unseen alpha rows, capped at 5 among themselves
+    assert not taken & {c["id"] for c in pool}
+    assert {c["offer_source"] for c in pool} == {"pre_router"} and {c["source"] for c in pool} == {"pre_router_unseen"}
+    assert st["blocklisted_dropped"] == ["whereami"]
+    assert {c["source"] for c in fresh} == {"fresh"} and {c["offer_source"] for c in fresh} == {"embed_or_none"}
+
+
+def test_the_not_jev_primary_set_holds_embed_or_none_and_pre_router_cases():
+    cs = cases2(10, 8) + [{"id": f"r{i}", "sid": f"sr{i}", "label": f"r{i}", "group": "not_offered",
+                           "offer_source": "pre_router", "source": "pre_router_unseen"} for i in range(22)]
+    lines = S.evaluate2(cs, res2(cs, j20_gain=0))
+    by = {l.split()[1]: l for l in lines if l.startswith("VERDICT")}
+    assert " n=32 (J20 vs A0@20, not_jev)" in by["D_J20"] and " n=40 (SR40 vs A0@40, all)" in by["D_SR40"]
+    assert S.stratum_counts2(cs) == {"jev": 8, "embed_or_none": 10, "pre_router": 22}
+
+
+def test_check_fresh_checks_session_and_time_on_fresh_cases_only_and_counts_unseen_cases_for_the_floor():
+    cases, man = fresh_setup(n_cases=31)
+    # an unseen iteration-1 row: it shares a spent session and is not after the cutoff, by design
+    extra = {"id": "o9|zeta99", "uuid": "o9", "sid": "old1", "key": "zeta99", "label": "zeta99",
+             "source": "pre_router_unseen", "offer_source": "pre_router"}
+    write_jsonl(S.CASES, cases + [extra])
+    S._append(S.QUERIES, {"k": "o9|zeta99|d0|x", "case": "o9|zeta99", "part": "d0", "reply": {"queries": ["do it"]}, "err": None})
+    man["cases_sha256"] = S.sha256_file(S.CASES)
+    man["queries"]["sha256"] = S.sha256_file(S.QUERIES)
+    put_manifest(man)
+    assert "cases 32" in S.check_fresh()
+    # the same row marked fresh would fail on the shared session
+    write_jsonl(S.CASES, cases + [{**extra, "source": "fresh"}])
+    man["cases_sha256"] = S.sha256_file(S.CASES)
+    put_manifest(man)
+    with pytest.raises(S.FreshFail, match="sessions"):
+        S.check_fresh()
+
+
+def test_jev_decisions_use_their_own_case_floor_and_sr40_keeps_thirty():
+    # 26 primary cases: enough for the Jev floor (25), not for the 30-case floor
+    cs = cases2(26, 0)
+    by = {l.split()[1]: l for l in S.evaluate2(cs, res2(cs, j20_gain=7)) if l.startswith("VERDICT")}
+    assert "INSUFFICIENT" not in by["D_J20"] and "INSUFFICIENT" not in by["D_J40"]
+    assert by["D_SR40"].startswith("VERDICT: D_SR40 INSUFFICIENT")
+    cs = cases2(24, 0)
+    by = {l.split()[1]: l for l in S.evaluate2(cs, res2(cs, j20_gain=7)) if l.startswith("VERDICT")}
+    assert by["D_J20"].startswith("VERDICT: D_J20 INSUFFICIENT")

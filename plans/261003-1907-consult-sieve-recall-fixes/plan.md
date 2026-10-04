@@ -1,7 +1,7 @@
 ---
 title: "Consult sieve recall: installed slots, rank fusion, query formation, and a pre-registered gate"
 description: "Measure consult sieve recall@20 on 167 frozen real-turn cases, then gate two default-OFF engine flags and three consult doctrine parts; a passing fix is turned on in the same run."
-status: pending
+status: completed
 priority: P1
 effort: 17h
 tags: [consult, sieve, recall, rrf, evaluation, pre-registration, vendored-engine]
