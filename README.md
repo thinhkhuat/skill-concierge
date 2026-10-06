@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.59.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.59.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -237,6 +237,7 @@ Behavior-changing kill-switches, all **default ON** except `SKILL_LLM_TRIGGERS` 
 | `ENFORCER_SELFREF_SKIP` | `1` (ON) | Enforcer authorizes a skip for the narrow self-referential recap lane (a turn that only asks to explain/rephrase the agent's own prior message). `=0` restores the old 2-lane behaviour. [ADR-0019](docs/adr/0019-over-fire-lane-and-gate-legibility.md). |
 | `ENFORCER_HARNESS_SKIP` | `1` (ON) | Harness-message lane: a prompt whose head is harness-generated (`<task-notification>`, `<system-reminder>`, cross-session/teammate messages, interrupted/continued banners, OMP `omp-msum` wrappers) is authorized to skip BEFORE the refusal guard, consult route, embed and every Qdrant call — ledger band `harness_skip`, no chain hint. `=0` routes such prompts like any other. [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
 | `ENFORCER_JEV_ROUTER` | `1` (ON) | Jev skill router, English prompts only (`TYPESAFE_API_KEY`): Jev ranks the whole invocable catalogue (chunked Choice, one call), re-checks the shortlist with one `fits` Noul per candidate (second call) and offers its top 5; best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) takes the fifth `SKILL-CHECK:` leg (band `jev_skip`). Runs in a worker thread overlapping embed/Qdrant, through the local index owner's warm `/jev` relay ([ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md); ported from the retired Docker embed shim); any failure or a blown `ENFORCER_JEV_BUDGET` (7.8 s) leaves the embedding path to decide. `ENFORCER_JEV_MODEL` pins `jev-1.13.0`. With `JEVD_URL` set to a running jevd (loopback http) its `/ladder` is the tier list instead of `ENFORCER_JEV_BENCH` ([ADR-0080](docs/adr/0080-jevd-as-the-jev-bench.md)); without jevd the index owner's relay serves Command Code as well as TypeSafe ([ADR-0081](docs/adr/0081-owner-relay-serves-command-code.md)). `=0` (or the ADR-0060 `ENFORCER_JEV_GATE=0`) reverts to the pre-v0.50.0 path. [ADR-0061](docs/adr/0061-jev-skill-router.md). |
+| `SKILL_JEVD_ENV_CHECK` | `1` (ON) | SessionStart (`hooks/scripts/doctrine.py`): when `JEVD_URL` in the session's environment is unset or not a loopback `http` URL (the enforcer then ignores it) but jevd answers `GET /health` on `127.0.0.1` (port from jevd's `config.toml`, default 4377), warn the user (`systemMessage`) and the agent (context): every Jev call of that session bypasses jevd and uses the session's own, possibly stale, keys. Silent when the Jev router is off or jevd is not running. `=0` turns the check off. |
 | `ENFORCER_DETERMINISTIC` | `1` (ON) | `config/deterministic-routes.json` phrases, matched as whole words, pin the named skill to the top of the offer (score 1.0, retrieved twin dropped), computed before embed so a timeout cannot lose it; honours keep-off, the blocklist and the harness-invocability test. `=0` disables (default-inert before `0.47.0`). [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
 | `SKILL_OWNER_AUTOSTART` | `1` (ON) | Enables both hook-side autostarts of the local index owner: `bin/skill-search-mcp` starting it when `/health` doesn't answer, and the enforcer hook starting it on a refused connection. `=0` disables both (`setup.sh`'s own start/restart is unaffected). [ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md). |
 | `ENFORCER_EMBED_TIMEOUT` / `ENFORCER_QDRANT_TIMEOUT` | `0.5` / `0.25` | Per-leg hard caps in seconds (0.35 / 0.1 before `0.47.0` — every epoch "outage" was censoring at the old caps). [ADR-0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md). |
@@ -413,7 +414,8 @@ Claude's own account-synced skills would render as installed in a harness cache 
 
 ### How a request flows
 
-1. **SessionStart** — `hooks/scripts/doctrine.py` injects the full SKILL-FIRST standing order once.
+1. **SessionStart** — `hooks/scripts/doctrine.py` injects the full SKILL-FIRST standing order once, and warns when jevd
+   is running but the session's `JEVD_URL` is unset or unusable (`SKILL_JEVD_ENV_CHECK`).
 2. **UserPromptSubmit** — `hooks/scripts/enforcer.py` runs the per-turn gate: skip harness-generated
    prompts before any I/O (task notifications, monitor events, cross-session messages, OMP summarizer
    calls — ADR-0054) → pin any skill the prompt names (deterministic routes, config-driven) → embed the
@@ -440,6 +442,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.59.1` — **published, SessionStart warns when a session bypasses a running jevd: when jevd answers on loopback but the session's `JEVD_URL` is unset or not a loopback `http` URL (the enforcer then ignores it), the doctrine hook tells the user (`systemMessage`) and the agent (a context line every adapter forwards); `SKILL_JEVD_ENV_CHECK=0` turns it off.**
 
 `0.59.0` — **published, Command Code joins the Jev router and the optional jevd relay becomes its bench: a `cc` tier with a 5.5 s span that falls through to TypeSafe on any failure (ADR-0079); when [jevd](https://github.com/thinhkhuat/jevd) answers, the hook reads its ladder and pins each call through it (ADR-0080; live turns 1.53-2.18 s through jevd vs 2.3-4.95 s direct); without jevd, the index owner's relay now keeps warm connections to Command Code too (`/jev/cc`, ADR-0081). An A/B/C test found no recall gain from richer wide-pass skill text (79.0 % vs 78.0 % and 77.5 %, not proven), so the 160-character text stays.**
 

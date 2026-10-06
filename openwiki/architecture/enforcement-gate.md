@@ -18,6 +18,11 @@ source of truth, no hardcoded copy), extracts the body between `<!-- DOCTRINE-ST
 `<!-- DOCTRINE-END -->` markers, and emits it as `additionalContext`. A malformed edit degrades to
 over-injecting the whole file, never to silence.
 
+The same hook warns when jevd answers on loopback but the session's `JEVD_URL` is unset or not a loopback `http`
+URL: the enforcer reads `JEVD_URL` from the environment the harness started with and ignores any other
+shape, so such a session bypasses jevd for every Jev call. The warning goes to the user (`systemMessage`) and to the agent (appended to the
+context); `SKILL_JEVD_ENV_CHECK=0` turns it off.
+
 Session-scoping (v0.14.0, H3, [ADR-0020](../../docs/adr/0020-subagent-session-scoping.md)): if
 the SessionStart payload carries a positive `agent_id` field — present only inside a subagent
 call — and `SKILL_SUBAGENT_STOP=1` (default), injection is suppressed: a scoped worker that

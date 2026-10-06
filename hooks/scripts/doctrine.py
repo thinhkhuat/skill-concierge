@@ -21,15 +21,20 @@ Design contract (mirrors the sibling enforcer/ledger hooks):
   • FAIL TOWARD INJECTION — a top-level session must NEVER lose the doctrine; any stdin
     parse/detection error falls through to inject (suppression needs a POSITIVE agent_id
     proof). A genuine doctrine-file read error still exits 0 (nothing to inject anyway).
-  • ADDITIVE-ONLY — only ever emits hookSpecificOutput.additionalContext.
-  • STDLIB-ONLY — no heavy imports, no network, no I/O beyond stdin + the one doctrine read.
+  • ADDITIVE-ONLY — only ever emits hookSpecificOutput.additionalContext, plus a top-level
+    systemMessage when the jevd check warns.
+  • STDLIB-ONLY — no heavy imports; I/O is stdin, the one doctrine read, and only when JEVD_URL
+    is unusable, one read of jevd's config plus one loopback GET (0.3 s cap) for the jevd check.
 
 Per ~/.claude docs (working-with-claude-code/hooks.md): SessionStart stdout is added
 to the context; exit 0. We use the structured hookSpecificOutput form for clarity.
 """
 import json
 import os
+import re
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # Doctrine lives two levels up from this script: hooks/scripts/doctrine.py →
@@ -45,6 +50,48 @@ _END = "<!-- DOCTRINE-END -->"
 # H3 subagent-scoping (ADR-0020). Default-ON, one-var revert (mirrors ENFORCER_AUTHORIZED_SKIP /
 # SKILL_BODY_TRIGGERS). `=0` → old unconditional injection, byte-identical.
 SUBAGENT_STOP = os.environ.get("SKILL_SUBAGENT_STOP", "1") != "0"
+
+# jevd environment check (ADR-0080 follow-up). The enforcer reads JEVD_URL from the environment the
+# harness was started with and keeps it only as a loopback http URL; otherwise a running jevd is bypassed
+# and providers are called with the session's own keys, stale after a key rotation (2026-10-07 audit).
+# SessionStart says so (again after a resume, clear or compaction, since the environment is unchanged).
+# `=0` turns the check off.
+JEVD_ENV_CHECK = os.environ.get("SKILL_JEVD_ENV_CHECK", "1") != "0"
+
+
+def _jevd_url_ok() -> bool:
+    """JEVD_URL as the enforcer accepts it (enforcer.py, `_JD` / `JEVD_URL`): http, loopback host."""
+    u = urllib.parse.urlsplit(os.environ.get("JEVD_URL", "").strip())
+    return u.scheme == "http" and (u.hostname or "").lower() in ("127.0.0.1", "localhost", "::1")
+
+
+def _jevd_warning() -> str:
+    """The warning text when jevd answers on loopback but this session's JEVD_URL is unusable, else "".
+    Silent when the Jev router is off, when jevd is not running, and on any error."""
+    if (not JEVD_ENV_CHECK or _jevd_url_ok()
+            or "0" in (os.environ.get("ENFORCER_JEV_ROUTER"), os.environ.get("ENFORCER_JEV_GATE"))):
+        return ""
+    try:
+        # jevd's own path rule (jevd/config.py). A regex, not tomllib (absent on Python 3.9): a port
+        # written as an inline table, a dotted key or with underscores is missed, which only silences
+        # the warning.
+        cfg = Path(os.environ.get("JEVD_CONFIG")
+                   or Path(os.environ.get("JEVD_HOME") or Path.home() / ".config" / "jevd") / "config.toml")
+        port = 4377
+        if cfg.exists():
+            m = re.search(r"(?m)^\s*port\s*=\s*(\d+)\s*(?:#.*)?$", cfg.read_text(encoding="utf-8"))
+            port = int(m[1]) if m else port
+        url = f"http://127.0.0.1:{port}"
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via an env proxy
+        with opener.open(url + "/health", timeout=0.3) as resp:
+            if json.loads(resp.read()).get("status") != "ok":
+                return ""
+    except Exception:  # noqa: BLE001 — any failure means "no running jevd to point at"
+        return ""
+    return (f"jevd is running at {url}, but JEVD_URL in this session's environment is unset or not a "
+            "loopback http URL, so skill-concierge's Jev router bypasses jevd and calls providers "
+            "directly with this session's own keys (stale after a key rotation). Start a new session "
+            f"from a new shell whose startup files export JEVD_URL={url}.")
 
 
 def _body(text: str) -> str:
@@ -253,12 +300,15 @@ def main() -> int:
         if not doctrine:
             return 0
         doctrine = _harness_adapt(doctrine)
-        sys.stdout.write(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": doctrine,
-            }
-        }))
+        # The context copy reaches the agent in every harness (the adapters forward additionalContext
+        # only); systemMessage also shows it to the user in Claude Code.
+        warning = _jevd_warning()
+        if warning:
+            doctrine += "\n\nJEVD-ENV WARNING (tell the user in your first reply): " + warning
+        out: dict = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": doctrine}}
+        if warning:
+            out["systemMessage"] = "skill-concierge: " + warning
+        sys.stdout.write(json.dumps(out))
     except (OSError, UnicodeError):
         return 0  # fail-silent on a genuine doctrine-file read error (nothing to inject anyway)
     return 0

@@ -3,6 +3,18 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.59.1] - 2026-10-07
+
+### Added
+- **SessionStart warns when a session bypasses a running jevd.** `hooks/scripts/doctrine.py` checks, once per
+  session, whether jevd answers `GET /health` on loopback while the session's `JEVD_URL` is unset or not a loopback
+  `http` URL. The enforcer reads `JEVD_URL` from the environment the harness started with and ignores any other
+  shape, so such a session sends every Jev call around jevd with its own keys; on 2026-10-07 a session started from a shell older than `JEVD_URL` did
+  exactly that, with a revoked TypeSafe key, and fell to the gateway on every turn. The warning reaches the user
+  (`systemMessage`, Claude Code) and the agent (a `JEVD-ENV WARNING` line after the doctrine, forwarded by every
+  adapter). Silent when `JEVD_URL` is a loopback `http` URL, the Jev router is off, or jevd is not running; the doctrine is injected
+  either way. `SKILL_JEVD_ENV_CHECK=0` turns it off. Tests: `tests/test_doctrine_jevd_check.py`.
+
 ## [0.59.0] - 2026-10-06
 
 ### Added
