@@ -1623,9 +1623,12 @@ def jev_setup():
     per-case failure."""
     import jev_client
     enf = jev_client.load_enforcer()
-    tiers = [t for t in enf._jev_bench() if t["ep"] == "ts"]
+    # TypeSafe, which this widening was gated on (ADR-0078): the env bench's first ts tier, or the rung of jevd's
+    # ladder that serves the pinned TypeSafe model (ADR-0080)
+    tiers = [t for t in enf._jev_bench()
+             if t["ep"] == "ts" or (t["ep"] == "jevd" and t["model"] == enf.JEV_MODEL)]
     if not tiers or not enf._jev_key(tiers[0]):
-        raise EngineError("Jev: no ts tier or no TYPESAFE_API_KEY")
+        raise EngineError(f"Jev: no {enf.JEV_MODEL} tier or no key for it")
     cat = enf._jev_catalog()
     if not cat:
         raise EngineError("Jev: the installed catalogue is empty")

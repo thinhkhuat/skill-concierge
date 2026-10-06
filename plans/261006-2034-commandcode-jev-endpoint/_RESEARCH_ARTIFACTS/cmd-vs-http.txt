@@ -1,0 +1,6 @@
+turn0 cmd : wide 2.62s + rerank 4.47s = 7.09s, in_tok=27431, lead=ak-fix (cmd-reported durationMs wide 1284, rerank 3731)
+turn0 http: wide 1.55s + rerank 0.88s = 2.43s, in_tok=27431, lead=ak-fix
+turn1 cmd : wide 8.05s + rerank 2.46s = 10.51s, in_tok=27431, lead=officecli-pitch-deck (cmd-reported durationMs wide 7092, rerank 1505)
+turn1 http: wide 1.45s + rerank 0.99s = 2.43s, in_tok=27431, lead=officecli-pitch-deck
+turn2 cmd : wide 5.78s + rerank 1.73s = 7.50s, in_tok=27425, lead=ak-git (cmd-reported durationMs wide 5049, rerank 788)
+turn2 http: wide 1.46s + rerank 1.22s = 2.68s, in_tok=27425, lead=ak-git

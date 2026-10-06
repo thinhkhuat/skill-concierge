@@ -1,0 +1,24 @@
+round0 fresh: wide 1.40 + rerank 0.93 = 2.32s
+round0 kept : wide 1.40 + rerank 0.58 = 1.98s
+  (idle 3s)
+round1 kept : wide 1.26 + rerank 0.66 = 1.91s
+round1 fresh: wide 2.49 + rerank 1.60 = 4.09s
+  (idle 8s)
+round2 fresh: wide 2.81 + rerank 1.65 = 4.46s
+round2 kept : wide 1.11 + rerank 0.73 = 1.84s
+  (idle 3s)
+round3 kept : wide 1.05 + rerank 0.72 = 1.76s
+round3 fresh: wide 1.69 + rerank 1.56 = 3.25s
+  (idle 15s)
+round4 fresh: wide 3.91 + rerank 1.55 = 5.46s
+round4 kept : wide 1.24 + rerank 0.84 = 2.07s
+  (idle 3s)
+round5 kept : wide 1.02 + rerank 0.75 = 1.77s
+round5 fresh: wide 2.32 + rerank 0.82 = 3.14s
+  (idle 8s)
+round6 fresh: wide 2.10 + rerank 5.26 = 7.36s
+round6 kept : wide 1.22 + rerank 0.79 = 2.02s
+  (idle 3s)
+round7 kept : wide 1.16 + rerank 0.60 = 1.76s
+round7 fresh: wide 1.51 + rerank 0.71 = 2.22s
+  (idle 30s)

@@ -1,6 +1,7 @@
 """The owner's relay reports an upstream timeout as HTTP 502 {"error": "TimeoutError"} (index_owner.py).
-The router must read that as a timeout and end the tier chain, as it does for a direct timeout, instead of
-re-sending the turn to the next tier (which double-bills). Offline: `_post_json` is replaced.
+The router must record that as a timeout and never re-send the same request direct to TypeSafe; like any
+failure, the turn then moves to the next tier that fits the budget (ADR-0079, which replaced ADR-0075's
+"a timeout ends the chain"). Offline: `_post_json` is replaced.
 """
 
 import importlib.util
@@ -54,11 +55,12 @@ def _route(tmp_path, monkeypatch, relay_body: bytes):
     return mod._jev_route("please commit my staged changes to git", ""), sent
 
 
-def test_relay_reported_timeout_ends_the_tier_chain(tmp_path, monkeypatch):
+def test_relay_reported_timeout_moves_on_without_a_direct_resend(tmp_path, monkeypatch):
     out, sent = _route(tmp_path, monkeypatch, json.dumps({"error": "TimeoutError"}).encode())
-    assert out["result"] is None
-    assert out["event"]["err"] == "TimeoutError"
-    assert sent == [RELAY]                       # the gateway tier is never called
+    assert out["result"] is not None and out["event"]["tier"] == 1
+    assert out["event"]["fell"] == [["jev-1.13.0", "TimeoutError"]]
+    assert sent[0] == RELAY and all("typesafe" not in u for u in sent)   # TypeSafe is not asked twice
+    assert "gw.example.net" in sent[1]
 
 
 def test_other_relay_502_still_moves_to_the_next_tier(tmp_path, monkeypatch):

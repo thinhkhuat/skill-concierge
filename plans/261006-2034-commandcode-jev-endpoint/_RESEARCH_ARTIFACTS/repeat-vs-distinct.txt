@@ -1,0 +1,10 @@
+run0 same     ms=4343 wide_ms=2714 tier=0 err=None fell=None
+run0 distinct ms=6456 wide_ms=None tier=None err=URLError fell=[['typesafe/jev', 'URLError']]
+run1 same     ms=4572 wide_ms=2956 tier=0 err=None fell=None
+run1 distinct ms=4117 wide_ms=3224 tier=0 err=None fell=None
+run2 same     ms=5664 wide_ms=4247 tier=0 err=None fell=None
+run2 distinct ms=3700 wide_ms=2786 tier=0 err=None fell=None
+run3 same     ms=5704 wide_ms=2581 tier=0 err=None fell=None
+run3 distinct ms=3001 wide_ms=1521 tier=0 err=None fell=None
+run4 same     ms=5597 wide_ms=2654 tier=0 err=None fell=None
+run4 distinct ms=6231 wide_ms=None tier=None err=TimeoutError fell=[['typesafe/jev', 'TimeoutError']]

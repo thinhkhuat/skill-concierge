@@ -1,0 +1,15 @@
+{"prompt": "please fix the failing pytest in the rou", "ok": true, "rmodel": "typesafe/jev", "ms": 3506, "wide_ms": 1735, "err": null, "fell": null, "lead": "ak-fix"}
+{"prompt": "commit my staged changes with a good con", "ok": true, "rmodel": "typesafe/jev", "ms": 3095, "wide_ms": 1861, "err": null, "fell": null, "lead": "ak-git"}
+{"prompt": "write a Vietnamese government report abo", "ok": true, "rmodel": "typesafe/jev", "ms": 3118, "wide_ms": 1439, "err": null, "fell": null, "lead": "vn-author"}
+{"prompt": "research the latest Claude Code hooks fe", "ok": false, "rmodel": null, "ms": 5027, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "review this pull request for security pr", "ok": true, "rmodel": "typesafe/jev", "ms": 3216, "wide_ms": 2300, "err": null, "fell": null, "lead": "ak-review-pr"}
+{"prompt": "make a pitch deck in pptx for our new pr", "ok": true, "rmodel": "typesafe/jev", "ms": 4945, "wide_ms": 2365, "err": null, "fell": null, "lead": "officecli-pptx"}
+{"prompt": "why is my docker container running out o", "ok": true, "rmodel": "typesafe/jev", "ms": 4011, "wide_ms": 2400, "err": null, "fell": null, "lead": "ak-devops"}
+{"prompt": "plan the migration of our postgres schem", "ok": false, "rmodel": null, "ms": 5027, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "generate a progress map html page for th", "ok": false, "rmodel": null, "ms": 5023, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "check whether the skill-concierge index ", "ok": true, "rmodel": "typesafe/jev", "ms": 3474, "wide_ms": 2298, "err": null, "fell": null, "lead": "skill-concierge:doctor"}
+{"prompt": "turn this csv of sales into a dashboard ", "ok": true, "rmodel": "typesafe/jev", "ms": 4004, "wide_ms": 2345, "err": null, "fell": null, "lead": "officecli-data-dashboard"}
+{"prompt": "explain how the enforcer hook decides wh", "ok": true, "rmodel": "typesafe/jev", "ms": 2284, "wide_ms": 1478, "err": null, "fell": null, "lead": "pstack:how"}
+
+SUMMARY n=12: answered 9, missed the 5 s span or errored 3 ([[['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']]])
+answered turn ms: min 2284 median 3474 max 4945; wide call ms: min 1439 median 2298 max 2400

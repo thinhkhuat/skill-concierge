@@ -1,0 +1,6 @@
+conn0: GET /provider/v1/systemone -> 401, Connection: keep-alive, body b'{"success":false,"error":{"code":"UNAUTHORIZED","status":401,"message":"Invalid '
+conn1: GET /provider/v1/systemone -> 401, Connection: keep-alive, body b'{"success":false,"error":{"code":"UNAUTHORIZED","status":401,"message":"Invalid '
+conn2: GET /provider/v1/systemone -> 401, Connection: keep-alive, body b'{"success":false,"error":{"code":"UNAUTHORIZED","status":401,"message":"Invalid '
+after GET +  30s idle: still open, answered 200 in 1.19s
+after GET +  90s idle: still open, answered 200 in 1.43s
+after GET + 180s idle: still open, answered 200 in 0.94s

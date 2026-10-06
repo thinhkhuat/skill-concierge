@@ -286,7 +286,7 @@ def test_relay_is_loopback_only(tmp_path):
 
 
 def test_budget_cannot_exceed_the_ceiling(tmp_path):
-    assert _load(tmp_path, ENFORCER_JEV_BUDGET="9").JEV_BUDGET_S == 3.0
+    assert _load(tmp_path, ENFORCER_JEV_BUDGET="9").JEV_BUDGET_S == 7.8
 
 
 def test_is_english_matches_the_calibration_rule(tmp_path):

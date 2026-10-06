@@ -1,0 +1,61 @@
+== round 1
+curl: (28) Connection timed out after 30003 milliseconds
+A wide   000 v0 up=0B connect=0.000000 tls=0.000000 sent=0.000000 ttfb=0.000000 total=30.003258
+A rerank 200 v2 up=10082B connect=0.069884 tls=0.144443 sent=0.144918 ttfb=2.048240 total=2.048531
+A turn 0.00s
+B wide   200 v2 up=101164B connect=0.064566 tls=0.137353 sent=0.137921 ttfb=1.604733 total=1.610187
+B rerank 200 v2 up=10082B connect=0.000000 tls=0.000000 sent=0.000394 ttfb=0.597536 total=0.597737
+B turn 0.00s
+C w1     200 v2 up=44281B connect=0.075683 tls=0.143814 sent=0.143943 ttfb=1.311007 total=1.312999
+C w2     200 v2 up=13050B connect=0.076455 tls=0.152419 sent=0.152492 ttfb=1.389289 total=1.389587
+C w0     200 v2 up=44215B connect=0.072541 tls=0.141359 sent=0.141516 ttfb=1.504138 total=1.508051
+C rerank 200 v2 up=10082B connect=0.226141 tls=0.461776 sent=0.462132 ttfb=1.709117 total=1.709245
+C turn 0.00s (wide phase 0.00s)
+== round 2
+A wide   200 v2 up=101164B connect=0.063067 tls=0.136702 sent=0.137348 ttfb=1.637391 total=1.638223
+A rerank 200 v2 up=10082B connect=0.066759 tls=0.137892 sent=0.138217 ttfb=0.790966 total=0.791147
+A turn 0.00s
+B wide   200 v2 up=101164B connect=0.070925 tls=0.147417 sent=0.147893 ttfb=2.071836 total=2.076760
+B rerank 200 v2 up=10082B connect=0.000000 tls=0.000000 sent=0.000343 ttfb=0.783798 total=0.784204
+B turn 0.00s
+C w2     200 v2 up=13050B connect=0.068175 tls=0.139209 sent=0.139373 ttfb=1.166093 total=1.166430
+C w1     200 v2 up=44281B connect=0.126752 tls=0.273805 sent=0.274475 ttfb=2.205594 total=2.206278
+C w0     200 v2 up=44215B connect=0.265052 tls=0.867001 sent=0.867465 ttfb=2.711983 total=3.047579
+C rerank 200 v2 up=10082B connect=0.066186 tls=0.139797 sent=0.139928 ttfb=1.128019 total=1.128489
+C turn 0.00s (wide phase 0.00s)
+== round 3
+A wide   200 v2 up=101164B connect=0.064652 tls=0.140577 sent=0.141263 ttfb=1.981193 total=1.985526
+A rerank 200 v2 up=10082B connect=0.064534 tls=0.131517 sent=0.131833 ttfb=0.859169 total=0.859549
+A turn 0.00s
+B wide   200 v2 up=101164B connect=0.064766 tls=0.138682 sent=0.139389 ttfb=1.473090 total=1.477710
+B rerank 200 v2 up=10082B connect=0.000000 tls=0.000000 sent=0.000098 ttfb=0.813237 total=0.813487
+B turn 0.00s
+C w2     200 v2 up=13050B connect=0.070144 tls=0.137707 sent=0.137785 ttfb=0.784499 total=0.784837
+C w1     200 v2 up=44281B connect=0.067897 tls=0.136638 sent=0.136804 ttfb=1.108774 total=1.109338
+C w0     200 v2 up=44215B connect=0.230811 tls=0.470580 sent=0.471177 ttfb=2.249237 total=2.249441
+C rerank 200 v2 up=10082B connect=0.281031 tls=1.667578 sent=1.667942 ttfb=2.933860 total=3.283127
+C turn 0.00s (wide phase 0.00s)
+== round 4
+A wide   200 v2 up=101164B connect=0.504371 tls=0.787205 sent=0.787756 ttfb=3.741316 total=15.082580
+A rerank 200 v2 up=10082B connect=0.069885 tls=0.141096 sent=0.141503 ttfb=0.712112 total=0.712515
+A turn 0.00s
+B wide   200 v2 up=101164B connect=0.225232 tls=0.453665 sent=0.454397 ttfb=2.766037 total=2.781303
+B rerank 200 v2 up=10082B connect=0.000000 tls=0.000000 sent=0.000100 ttfb=1.402412 total=1.402703
+B turn 0.00s
+C w1     200 v2 up=44281B connect=0.066277 tls=0.147891 sent=0.148355 ttfb=1.290810 total=1.291255
+C w2     200 v2 up=13050B connect=0.279603 tls=0.565974 sent=0.566159 ttfb=1.840165 total=1.840418
+C w0     200 v2 up=44215B connect=0.392690 tls=2.077134 sent=2.077742 ttfb=4.272878 total=5.233283
+C rerank 200 v2 up=10082B connect=0.276188 tls=1.592954 sent=1.593174 ttfb=3.652894 total=3.924564
+C turn 0.00s (wide phase 0.00s)
+== round 5
+A wide   200 v2 up=101164B connect=0.060548 tls=0.125776 sent=0.125971 ttfb=2.258939 total=2.264693
+A rerank 200 v2 up=10082B connect=0.068113 tls=0.142245 sent=0.142631 ttfb=0.743054 total=0.743141
+A turn 0.00s
+B wide   200 v2 up=101164B connect=0.070074 tls=0.151989 sent=0.152690 ttfb=1.559700 total=1.566185
+B rerank 200 v2 up=10082B connect=0.000000 tls=0.000000 sent=0.000085 ttfb=0.540330 total=0.540787
+B turn 0.00s
+C w0     200 v2 up=44215B connect=0.068365 tls=0.133756 sent=0.133917 ttfb=1.265398 total=1.265572
+C w2     200 v2 up=13050B connect=0.963718 tls=1.606244 sent=1.606350 ttfb=2.846092 total=2.846309
+C w1     200 v2 up=44281B connect=0.125973 tls=0.360009 sent=0.360173 ttfb=3.158696 total=3.416887
+C rerank 200 v2 up=10082B connect=0.066899 tls=0.141857 sent=0.141953 ttfb=0.770120 total=0.770294
+C turn 0.00s (wide phase 0.00s)

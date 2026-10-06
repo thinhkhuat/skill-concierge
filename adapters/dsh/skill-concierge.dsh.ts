@@ -147,7 +147,9 @@ function runEnforcer(promptText: string, sessionId: string): string | null {
     const payload = JSON.stringify({ prompt: promptText, session_id: sessionId });
     const res = spawnSync("python3", [ENFORCER_SCRIPT], {
       input: payload,
-      env: { ...process.env, SKILL_CONCIERGE_HARNESS: "dsh" },
+      // The Jev router's budget must end before this kill window (ADR-0079): 1.6 s leaves room for the
+      // TypeSafe tier (1.5 s per call); the slower Command Code tier never fits here and is skipped.
+      env: { ...process.env, SKILL_CONCIERGE_HARNESS: "dsh", ENFORCER_JEV_BUDGET: "1.6" },
       timeout: 2500, // 2.5s hard timeout on the user input path (Command Code parity)
       encoding: "utf-8",
     });

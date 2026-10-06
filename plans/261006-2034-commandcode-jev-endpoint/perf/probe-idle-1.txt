@@ -1,0 +1,4 @@
+warm-up wide 1.93s
+after idle  60s: wide 1.69 + rerank 0.90 = 2.60s  socket dropped by server: False
+after idle 120s: wide 1.72 + rerank 0.89 = 2.61s  socket dropped by server: False
+after idle 240s: wide 2.07 + rerank 0.92 = 2.99s  socket dropped by server: False

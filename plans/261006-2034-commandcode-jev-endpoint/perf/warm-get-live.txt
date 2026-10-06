@@ -1,0 +1,7 @@
+--- after 60s idle
+{"model":"typesafe/jev","answers":{"urgent":{"type":"noul","noul":0.87}},"usage":{"input_tokens":278,"output_tokens":20}}
+{"t":1791301265.359,"ms":882,"status":200,"provider":"commandcode","fell":null,"pinned":true,"budget":7.8,"reused":true}
+--- after 150s idle
+{"model":"typesafe/jev","answers":{"urgent":{"type":"noul","noul":0.88}},"usage":{"input_tokens":278,"output_tokens":20}}
+{"t":1791301416.352,"ms":874,"status":200,"provider":"commandcode","fell":null,"pinned":true,"budget":7.8,"reused":true}
+opened: [('commandcode', 1), ('typesafe', 8), ('gateway', 8)]

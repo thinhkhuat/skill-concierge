@@ -102,7 +102,7 @@ def test_live_report(run):
     out = run(LEDGER_ROWS, TURNS)
     assert "router rows since 2026-09-26T10:03+07:00 (claude): 6 (4 routed, 2 errors; 1 unattributed error rows left out)" in out
     assert "W23 latency ms p50 800 p90 2000" in out
-    assert "errors 33.3% {'TimeoutError': 1, 'ValueError': 1}" in out and "via {'relay': 3, 'direct': 1}" in out
+    assert "errors 33.3% {'TimeoutError': 1, 'ValueError': 1}" in out and "via {'relay': 3, 'direct': 1, 'jevd': 0}" in out
     assert "W24 catalogue size on rows: median 494 min 490 max 500; replay catalogue 494" in out
     assert "this cwd now 3; drift from the replay 0.0% (trigger > 5%)" in out
     assert "W22 tail rows on live offers: 6; below p 0.01: 50%" in out

@@ -1,0 +1,181 @@
+{
+ "n_sample": 200,
+ "n_paired": 200,
+ "catalog_n": 567,
+ "variants": {
+  "A": {
+   "recall": 0.79,
+   "hits": 158,
+   "mrr": 0.5036
+  },
+  "A2": {
+   "recall": 0.79,
+   "hits": 158,
+   "mrr": 0.5099
+  },
+  "B": {
+   "recall": 0.78,
+   "hits": 156,
+   "mrr": 0.4959
+  },
+  "C": {
+   "recall": 0.775,
+   "hits": 155,
+   "mrr": 0.5175
+  }
+ },
+ "tests": {
+  "B": {
+   "gains_b": 1,
+   "losses_c": 3,
+   "p_raw": 0.625,
+   "gain_pts": -0.01,
+   "discordance": 0.02,
+   "mde_alpha025": 0.02,
+   "mrr_delta": -0.0077,
+   "p_holm": 1.0,
+   "decision": "not-proven"
+  },
+  "C": {
+   "gains_b": 4,
+   "losses_c": 7,
+   "p_raw": 0.548828125,
+   "gain_pts": -0.015,
+   "discordance": 0.055,
+   "mde_alpha025": 0.0508,
+   "mrr_delta": 0.0139,
+   "p_holm": 1.0,
+   "decision": "not-proven"
+  }
+ },
+ "noise_A_vs_A2": {
+  "gains_b": 1,
+  "losses_c": 1,
+  "p_raw": 1.0,
+  "disagreement": 0.01
+ },
+ "mde_grid_alpha025": {
+  "0.05": 0.0484,
+  "0.1": 0.0685,
+  "0.15": 0.0839,
+  "0.2": 0.0969,
+  "0.3": 0.1186
+ },
+ "mde_grid_alpha05": {
+  "0.05": 0.044,
+  "0.1": 0.0623,
+  "0.15": 0.0763,
+  "0.2": 0.0881,
+  "0.3": 0.1079
+ },
+ "periods": {
+  "pre_jev_live": {
+   "n": 199,
+   "recall": {
+    "A": 0.7889,
+    "A2": 0.7889,
+    "B": 0.7789,
+    "C": 0.7739,
+    "A2_vs_A_gain_loss": [
+     1,
+     1
+    ],
+    "B_vs_A_gain_loss": [
+     1,
+     3
+    ],
+    "C_vs_A_gain_loss": [
+     4,
+     7
+    ]
+   }
+  },
+  "post_jev_live": {
+   "n": 1,
+   "recall": {
+    "A": 1.0,
+    "A2": 1.0,
+    "B": 1.0,
+    "C": 1.0,
+    "A2_vs_A_gain_loss": [
+     0,
+     0
+    ],
+    "B_vs_A_gain_loss": [
+     0,
+     0
+    ],
+    "C_vs_A_gain_loss": [
+     0,
+     0
+    ]
+   }
+  }
+ },
+ "all_offer_independent": true,
+ "failures": {
+  "A": {
+   "failed_calls": 2,
+   "unanswered_turns": 0,
+   "errors": {
+    "TimeoutError": 1,
+    "HTTPError/502": 1
+   }
+  },
+  "A2": {
+   "failed_calls": 1,
+   "unanswered_turns": 0,
+   "errors": {
+    "TimeoutError": 1
+   }
+  },
+  "B": {
+   "failed_calls": 0,
+   "unanswered_turns": 0,
+   "errors": {}
+  },
+  "C": {
+   "failed_calls": 2,
+   "unanswered_turns": 0,
+   "errors": {
+    "TimeoutError": 2
+   }
+  }
+ },
+ "latency_ms_ok": {
+  "A": {
+   "p50": 1319,
+   "p90": 1636
+  },
+  "A2": {
+   "p50": 1311,
+   "p90": 1631
+  },
+  "B": {
+   "p50": 1292,
+   "p90": 1599
+  },
+  "C": {
+   "p50": 1442,
+   "p90": 1721
+  }
+ },
+ "calls_total": 805,
+ "calls_ok": 800,
+ "tok_est_sent_total": 25185833,
+ "tok_est_sent_by_variant": {
+  "A": 5675074,
+  "A2": 5647414,
+  "B": 5601141,
+  "C": 8262204
+ },
+ "returned_models": [
+  "typesafe/jev"
+ ],
+ "vias": [
+  "jevd"
+ ],
+ "paired_gold_named_in_prompt": 51,
+ "first_call_t": 1791302913.982,
+ "last_call_t": 1791303296.179
+}

@@ -162,12 +162,12 @@ def test_fast_failure_moves_to_the_next_tier(jc, monkeypatch):
     assert meta["model"] == ["openrouter/typesafe/jev-1.13"]
 
 
-def test_timeout_ends_the_chain(jc, monkeypatch):
+def test_timeout_moves_to_the_next_tier(jc, monkeypatch):
     enf = jc.load_enforcer()
     seen = _fake(enf, monkeypatch, lambda u, b: (_ for _ in ()).throw(TimeoutError()) if "typesafe" in u else _yes(u, b))
-    with pytest.raises(jc.JevError):
-        jc.ask({}, {"q": {"type": "noul", "instructions": "x"}}, timeout=1.0)
-    assert all("gw.example.net" not in u for u in seen)
+    ans, meta = jc.ask({}, {"q": {"type": "noul", "instructions": "x"}}, timeout=1.0)
+    assert ans["q"]["noul"] == 0.9 and "gw.example.net" in seen[-1]
+    assert sum("typesafe" in u for u in seen) == 1                 # a timed-out tier is not retried
 
 
 def test_deadline_is_never_overrun(jc, monkeypatch):
@@ -289,3 +289,23 @@ def test_typed_text_strips_injected_hook_blocks(jc):
     assert typed(rules) == "https://github.com/x/y.git"
     assert typed("[Assistant Rules]\n# Persona only, never closed") is None
     assert typed("[Relevant skills for this request]\n- a: b") is None
+
+
+def test_a_span_tier_is_never_cut_before_its_span(monkeypatch):
+    """Command Code gets its whole span offline too (ADR-0079): a caller's shorter timeout would bill it and the
+    next tier for one answer."""
+    monkeypatch.setenv("ENFORCER_JEV_BENCH", "cc:typesafe/jev ts:jev-1.13.0")
+    monkeypatch.setenv("CMD_API_KEY", "cc-key")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key")
+    spec = importlib.util.spec_from_file_location(f"jev_client_{time.time_ns()}", CLIENT)
+    jc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(jc)
+    enf = jc.load_enforcer()
+    got = []
+    monkeypatch.setattr(enf, "_jev_call", lambda st, qs, tier, key, to: got.append((tier["ep"], round(to, 1)))
+                        or ({k: {"type": "noul", "noul": 0.5} for k in qs}, "direct", tier["model"]))
+    jc.ask({}, {"q": {"type": "noul", "instructions": "x"}}, timeout=2.0, deadline=time.time() + 60)
+    assert got == [("cc", 5.5)]
+    got.clear()
+    jc.ask({}, {"q": {"type": "noul", "instructions": "x"}}, timeout=2.0, deadline=time.time() + 3.0)
+    assert got[0][0] == "cc" and got[0][1] <= 3.0               # still bounded by the caller's deadline

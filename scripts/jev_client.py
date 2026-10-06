@@ -3,9 +3,10 @@
 
 Every request goes through the enforcer's own `_jev_call`, so host pinning, key routing and model checks
 are the hook's. `ask` splits questions under Jev's two token limits, sends the batches in parallel under a
-process-wide rate cap, and walks the bench tiers per batch: a fast failure moves to the next tier, a
-timeout ends that batch's chain (the hook's rule), a 429 waits for Retry-After once. Offline calls go
-direct, never through the owner's relay, which drops Retry-After and serves the live hook.
+process-wide rate cap, and walks the bench tiers per batch: any failure, a timeout included, moves to the
+next tier while the deadline allows (the hook's rule, ADR-0079), a 429 waits for Retry-After once. Offline calls never
+use the owner's relay, which drops Retry-After and serves the live hook; when jevd answers they go through jevd
+(ADR-0080), pinned to one provider, which passes a provider's 429 and its Retry-After through as they are.
 
   python3 scripts/jev_client.py --selftest   # batch limits, no network
   python3 scripts/jev_client.py --probe      # one live noul; prints meta, never a key
@@ -61,6 +62,7 @@ def load_enforcer():
                 else:
                     os.environ["SKILL_CONCIERGE_LOG"] = prev
             mod.JEV_RELAY_URL = None
+            mod.JEV_CC_RELAY_URL = None
             _ENF = mod
     return _ENF
 
@@ -132,7 +134,10 @@ def _ask_batch(enf, state, qs, tiers, timeout, deadline, retries, stop=None):
             if left < 0.25 or not _RATE.wait(tokens, deadline - 0.25):
                 raise JevError("Deadline")
             try:
-                return enf._jev_call(state, qs, tier, key, min(timeout, deadline - time.time()))
+                # a span tier (Command Code) is never cut before its span (ADR-0079): cutting it early bills
+                # it and the next tier for one answer
+                return enf._jev_call(state, qs, tier, key,
+                                     min(max(timeout, tier.get("span", 0.0)), deadline - time.time()))
             except urllib.error.HTTPError as e:
                 err = type(e).__name__
                 if e.code == 429 and attempt < retries:
@@ -144,8 +149,6 @@ def _ask_batch(enf, state, qs, tiers, timeout, deadline, retries, stop=None):
                 break
             except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as e:
                 err = type(e).__name__
-                if enf._jev_timed_out(e):
-                    raise JevError(err) from None
                 break
     raise JevError(err)
 

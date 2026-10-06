@@ -1,0 +1,39 @@
+{
+ "enforcer_sha256": "8efea3bc39207cbde2c8bc8fe52349041746b1837b4c028528d0196bebee403d",
+ "seed": 20261006,
+ "catalog_n": 567,
+ "catalog_sha16": "117582aa1a051fa0",
+ "chunks": 3,
+ "eligible_n": 356,
+ "eligible_any_offer_n": 546,
+ "sample_post_jev_live_n": 1,
+ "sample_n": 200,
+ "b_changed": 116,
+ "c_changed": 567,
+ "c_examples_hist": {
+  "1": 0,
+  "2": 1,
+  "3": 566
+ },
+ "b_differs_from_a": 116,
+ "question_tokens_est": {
+  "A": 27630,
+  "B": 27540,
+  "C": 40435,
+  "A2": 27630
+ },
+ "longest_question_tokens_est": {
+  "A": 12134,
+  "B": 12171,
+  "C": 17810,
+  "A2": 12134
+ },
+ "state_tokens_est": {
+  "max": 1873,
+  "mean": 455
+ },
+ "jev_wide_desc": 160,
+ "jev_chunk": 250,
+ "jev_per_chunk": 5,
+ "prepared_at": "2026-10-06 23:07:50 +0700"
+}

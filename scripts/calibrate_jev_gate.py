@@ -144,7 +144,7 @@ def ckey(variant, model, state, cands):
 
 def tier_for(enf, a):
     """The bench tier that serves `--model` (ADR-0075): the hook's own tier when the bench lists the model,
-    else one built on `--endpoint` (ts = TypeSafe, gw = the owner's gateway)."""
+    else one built on `--endpoint` (ts = TypeSafe, gw = the owner's gateway, cc = Command Code, ADR-0079)."""
     for t in enf._jev_bench():
         if t["model"] == a.model:
             return t
@@ -152,23 +152,36 @@ def tier_for(enf, a):
         if not enf.JEV_GW_URL:
             sys.exit("--endpoint gw needs FLYWHEEL_LLM_ENDPOINT (https) for the gateway URL")
         return {"ep": "gw", "model": a.model, "url": enf.JEV_GW_URL, "timeout": enf.JEV_GW_TIMEOUT_S}
+    if a.endpoint == "cc":
+        return {"ep": "cc", "model": a.model, "url": enf.JEV_CC_URL, "timeout": enf.JEV_CC_TIMEOUT_S,
+                "span": enf.JEV_CC_TIMEOUT_S}
     return {"ep": "ts", "model": a.model, "url": enf.JEV_URL, "timeout": enf.JEV_TIMEOUT_S}
 
 
 def call(enf, tier, state, qs, timeout):
+    """(answers, ms, usage, error). A jevd tier goes through the hook's own `_jev_call` (pinned to its
+    provider, the call's limit as X-Jevd-Budget, no key); others go direct to their own host. Other errors
+    are retried; a timeout never is: the request may already be billed (a timed-out call re-sent four
+    times bills four times)."""
     body = {"model": tier["model"], "state": state, "questions": qs}
-    url = enf._jev_direct_url(tier["url"], tier["ep"])   # the hook's host pin: each key to its own host
     key = enf._jev_key(tier)
     err = None
     for attempt in range(4):
         t0 = time.time()
         try:
-            ans = enf._post_json(url, body, timeout, {"Authorization": "Bearer " + key})
+            if tier["ep"] == "jevd":
+                answers, _via, _model = enf._jev_call(state, qs, tier, key, timeout)
+                return answers, int((time.time() - t0) * 1000), None, None
+            url = enf._jev_direct_url(tier["url"], tier["ep"])   # the hook's host pin: each key to its own host
+            ans = enf._post_json(url, body, timeout, {"Authorization": "Bearer " + key,
+                                                      "User-Agent": enf.JEV_USER_AGENT})
             if ans.get("model") is not None and enf._jev_model_base(ans["model"]) != enf._jev_model_base(tier["model"]):
                 return None, None, None, "JevModelMismatch"   # never cache another model's answers
             return ans["answers"], int((time.time() - t0) * 1000), ans.get("usage"), None
         except Exception as e:  # noqa: BLE001 — retried, then reported (never cached)
             err = type(e).__name__
+            if isinstance(e, TimeoutError) or "timed out" in str(e) or err == "JevModelMismatch":
+                break
             time.sleep(1.5 * (attempt + 1))
     return None, None, None, err
 
@@ -682,7 +695,7 @@ def cmd_live(a):
     rows, unknown = router_rows(LEDGER, since.timestamp(), a.harness)
     ok = [r for r in rows if "err" not in r["jev"]]
     ms = [r["jev"]["ms"] for r in ok if "ms" in r["jev"]]
-    via = {v: sum(r["jev"].get("via") == v for r in ok) for v in ("relay", "direct")}
+    via = {v: sum(r["jev"].get("via") == v for r in ok) for v in ("relay", "direct", "jevd")}
     errs = {}
     for r in rows:
         if "err" in r["jev"]:
@@ -1167,8 +1180,9 @@ def main():
         if name in ("replay", "wide"):
             s.add_argument("--jobs", type=int, default=6)
             s.add_argument("--timeout", type=float, default=15.0)
-            s.add_argument("--endpoint", default="ts", choices=("ts", "gw"),
-                           help="for a --model the bench does not list: TypeSafe (ts) or the owner's gateway (gw)")
+            s.add_argument("--endpoint", default="ts", choices=("ts", "gw", "cc"),
+                           help="for a --model the bench does not list: TypeSafe (ts), the owner's gateway (gw) "
+                                "or Command Code (cc)")
         if name == "replay":
             s.add_argument("--variants", nargs="+", default=list(DEFAULT_VARIANTS), choices=VARIANTS)
             s.add_argument("--gate", action="store_true",

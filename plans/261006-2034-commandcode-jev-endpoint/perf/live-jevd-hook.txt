@@ -1,0 +1,6 @@
+ 1.00s via=jevd prov=typesafe model=jev-1.13.0 lead=ak-fix fell=[['typesafe/jev', 'NoTime']] err=None
+ 2.02s via=jevd prov=commandcode model=typesafe/jev lead=ak-git fell=None err=None
+ 2.18s via=jevd prov=commandcode model=typesafe/jev lead=superpowers-developing-for-claude-code:working-with-claude-code fell=None err=None
+ 1.53s via=jevd prov=commandcode model=typesafe/jev lead=officecli-pptx fell=None err=None
+ 1.84s via=jevd prov=commandcode model=typesafe/jev lead=ak-devops fell=None err=None
+ 2.08s via=jevd prov=commandcode model=typesafe/jev lead=superpowers-developing-for-claude-code:working-with-claude-code fell=None err=None

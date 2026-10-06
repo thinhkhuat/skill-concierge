@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","model":"typesafe/jev","answers":{"urgent":{"type":"noul","noul":0.87}},"usage":{"input_tokens":278,"output_tokens":20},"durationMs":5693}

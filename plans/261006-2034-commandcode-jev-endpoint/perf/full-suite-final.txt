@@ -1,0 +1,553 @@
+....................................................................FFFF [  7%]
+FFFFFF...FFFFFFFF.F..................................................... [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 36%]
+........................................F............................... [ 43%]
+........................................................................ [ 50%]
+........................................................................ [ 57%]
+........................................................................ [ 64%]
+........................................................................ [ 72%]
+........................................................................ [ 79%]
+........................................................................ [ 86%]
+........................................................................ [ 93%]
+..............................................................           [100%]
+=================================== FAILURES ===================================
+______________ test_fresh_install_reaches_ssot_and_fixes_exec_bit ______________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_fresh_install_reaches_sso0')
+
+    def test_fresh_install_reaches_ssot_and_fixes_exec_bit(tmp_path):
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": False,
+            "remote_version": SSOT_VERSION,
+        })
+        env = _env(home, fakebin)
+        result = _run(env)
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:206: AssertionError
+_____________________ test_second_run_is_a_no_op_fast_path _____________________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_second_run_is_a_no_op_fas0')
+
+    def test_second_run_is_a_no_op_fast_path(tmp_path):
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": False,
+            "remote_version": SSOT_VERSION,
+        })
+        env = _env(home, fakebin)
+        first = _run(env)
+>       assert first.returncode == 0, first.stdout + first.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:229: AssertionError
+_____ test_fast_path_tolerates_lexically_smaller_and_non_version_siblings ______
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_fast_path_tolerates_lexic0')
+
+    def test_fast_path_tolerates_lexically_smaller_and_non_version_siblings(tmp_path):
+        """With cache dirs "0.9.0" and "0.52.3" both present, the real `codex
+        plugin list --json` reports "0.52.3" (semver-aware), while a naive lexical-string
+        sort ranks "0.9.0" higher ('9' > '5' at the first differing character). This
+        installer's _cached_version() must resolve the fast path correctly regardless of a
+        stray lower-digit-width dir, and must never mistake a non-version-named staging dir
+        (Codex keeps its plugin-install-<random>/ one level up; the fixture puts one here to
+        prove the dirname filter) for a version. The
+        fast path makes no mutating CLI call, so every sibling here survives untouched no matter what
+        Codex's own `add` might otherwise do to them."""
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": True,
+            "remote_version": SSOT_VERSION,
+        })
+        cache_root = _cache_root(home)
+    
+        low = cache_root / "0.9.0"
+        (low / ".codex-plugin").mkdir(parents=True)
+        (low / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": "0.9.0"}))
+        (low / "skills").mkdir()
+    
+        staging = cache_root / "plugin-install-XYZ"
+        staging.mkdir(parents=True)
+        (staging / "marker.txt").write_text("codex-owned staging content")
+    
+        current = cache_root / SSOT_VERSION
+        (current / ".codex-plugin").mkdir(parents=True)
+        (current / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": SSOT_VERSION}))
+        (current / "skills").mkdir()
+        (current / "bin").mkdir()
+        (current / "bin" / "skill-search-mcp").write_text("#!/bin/bash\necho fake\n")
+        (current / "bin" / "skill-search-mcp").chmod(0o755)
+        (current / ".codex-plugin" / "mcp.json").write_text("{}")
+        (current / ".codex").mkdir()
+        (current / ".codex" / "hooks.json").write_text("{}")
+        (current / "hooks" / "scripts").mkdir(parents=True)
+        shutil.copy2(ENFORCER_SRC, current / "hooks" / "scripts" / "enforcer.py")
+    
+        env = _env(home, fakebin)
+        result = _run(env)
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:279: AssertionError
+_________ test_fallback_never_deletes_the_version_dir_add_just_created _________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_fallback_never_deletes_th0')
+
+    def test_fallback_never_deletes_the_version_dir_add_just_created(tmp_path):
+        """The fallback runs only AFTER `add` already succeeded (see header step 6-7) — and
+        Codex's own `add` wipes the plugin's entire cache dir before installing its own
+        version dir. So the only thing that can be sitting there when the
+        fallback starts is the dir `add` itself just created; this installer's OWN fallback
+        step (git archive HEAD -> a NEW versioned dir) must never delete that, only add
+        alongside it — no sibling installer deletes anything, and a running Codex session
+        could be using that dir right now."""
+        remote_version = "0.45.0"
+        assert remote_version != SSOT_VERSION
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": False,
+            "remote_version": remote_version,
+        })
+        env = _env(home, fakebin)
+        result = _run(env)
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:305: AssertionError
+_____________ test_add_failure_never_falls_back_and_exits_nonzero ______________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_add_failure_never_falls_b0')
+
+    def test_add_failure_never_falls_back_and_exits_nonzero(tmp_path):
+        """A failed `codex plugin add` must never trigger the manual-checkout fallback: Codex's
+        own `add` never uninstalls the previous copy on failure, so this
+        installer trusts that and reports the failure with restore steps rather than syncing a
+        local checkout over a state it cannot fully verify."""
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": True,
+            "remote_version": "0.45.0",
+            "fail_add": True,
+        })
+        env = _env(home, fakebin)
+        result = _run(env)
+        assert result.returncode != 0, result.stdout + result.stderr
+        combined = result.stdout + result.stderr
+>       assert "does not report" in combined and "installed" in combined
+E       AssertionError: assert ('does not report' in '==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)\n    SSOT version: v0...EAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n')
+
+tests/test_codex_installer.py:338: AssertionError
+_______________ test_disabled_plugin_refuses_before_any_cli_call _______________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_disabled_plugin_refuses_b0')
+
+    def test_disabled_plugin_refuses_before_any_cli_call(tmp_path):
+        """Codex's `add` always re-enables a plugin and has no CLI to keep one disabled (no
+        plugin enable/disable subcommand, and a `-c ...enabled=false` override does not
+        persist). If the plugin is already disabled, the installer must refuse before making
+        any mutating CLI call at all — never refresh it first and complain afterward."""
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": True,
+            "remote_version": "0.1.0",
+            "enabled": False,
+        })
+        config_toml = home / ".codex" / "config.toml"
+        config_toml.parent.mkdir(parents=True, exist_ok=True)
+        config_toml.write_text('[plugins."skill-concierge@skill-concierge"]\nenabled = false\n')
+        before = config_toml.read_bytes()
+    
+        env = _env(home, fakebin)
+        result = _run(env)
+        assert result.returncode != 0, result.stdout + result.stderr
+        combined = result.stdout + result.stderr
+>       assert "is installed but disabled" in combined
+E       AssertionError: assert 'is installed but disabled' in '==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)\n    SSOT version: v0...EAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n'
+
+tests/test_codex_installer.py:370: AssertionError
+______________ test_enabled_plugin_stays_enabled_across_a_refresh ______________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_enabled_plugin_stays_enab0')
+
+    def test_enabled_plugin_stays_enabled_across_a_refresh(tmp_path):
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": True,
+            "remote_version": SSOT_VERSION,
+            "enabled": True,
+        })
+        env = _env(home, fakebin)
+        result = _run(env)
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:393: AssertionError
+_________________ test_downgrade_after_cli_refresh_is_refused __________________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_downgrade_after_cli_refre0')
+
+    def test_downgrade_after_cli_refresh_is_refused(tmp_path):
+        """The one-directional guard must re-apply AFTER the CLI refresh too: the refresh
+        itself could install something newer than this checkout (a teammate pushed ahead)."""
+        newer_version = "99.0.0"
+        assert newer_version != SSOT_VERSION
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": False,
+            "remote_version": newer_version,
+        })
+        env = _env(home, fakebin)
+        result = _run(env)
+        assert result.returncode != 0, result.stdout + result.stderr
+>       assert "refusing to downgrade" in result.stderr
+E       AssertionError: assert 'refusing to downgrade' in '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n'
+E        +  where '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n' = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').stderr
+
+tests/test_codex_installer.py:412: AssertionError
+_______________ test_downgrade_is_refused_before_any_codex_call ________________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_downgrade_is_refused_befo0')
+
+    def test_downgrade_is_refused_before_any_codex_call(tmp_path):
+        newer_version = "9.9.9"
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": True,
+            "plugin_installed": True,
+            "remote_version": newer_version,
+        })
+        dest = _cache_root(home) / newer_version
+        (dest / ".codex-plugin").mkdir(parents=True)
+        (dest / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": newer_version}))
+        (dest / "skills").mkdir()
+    
+        env = _env(home, fakebin)
+        result = _run(env)
+        assert result.returncode != 0, result.stdout + result.stderr
+>       assert "refusing to downgrade" in result.stderr
+E       AssertionError: assert 'refusing to downgrade' in '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n'
+E        +  where '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n' = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').stderr
+
+tests/test_codex_installer.py:434: AssertionError
+________ test_marketplace_not_registered_prints_bootstrap_instructions _________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_marketplace_not_registere0')
+
+    def test_marketplace_not_registered_prints_bootstrap_instructions(tmp_path):
+        home, fakebin = _make_home(tmp_path, {
+            "marketplace_registered": False,
+            "plugin_installed": False,
+            "remote_version": SSOT_VERSION,
+        })
+        env = _env(home, fakebin)
+        result = _run(env)
+        assert result.returncode != 0, result.stdout + result.stderr
+>       assert "codex plugin marketplace add" in result.stderr
+E       AssertionError: assert 'codex plugin marketplace add' in '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n'
+E        +  where '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n' = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').stderr
+
+tests/test_codex_installer.py:448: AssertionError
+___________________ test_an_incomplete_cache_is_not_current ____________________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_an_incomplete_cache_is_no0')
+
+    def test_an_incomplete_cache_is_not_current(tmp_path):
+        """A copy with only its manifest and skills (an interrupted export) must not pass as current:
+        Codex starts ./bin/skill-search-mcp itself and reads the MCP and hooks files."""
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": True,
+                                              "remote_version": SSOT_VERSION})
+        part = _cache_root(home) / SSOT_VERSION
+        (part / ".codex-plugin").mkdir(parents=True)
+        (part / ".codex-plugin" / "plugin.json").write_text(json.dumps({"name": "skill-concierge",
+                                                                         "version": SSOT_VERSION}))
+        (part / "skills").mkdir()
+        result = _run(_env(home, fakebin))
+        assert "Already current" not in result.stdout
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:601: AssertionError
+______ test_fast_path_reports_a_disabled_plugin_without_claiming_it_loads ______
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_fast_path_reports_a_disab0')
+
+    def test_fast_path_reports_a_disabled_plugin_without_claiming_it_loads(tmp_path):
+>       home, env = _installed_once(tmp_path)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_codex_installer.py:606: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_fast_path_reports_a_disab0')
+
+    def _installed_once(tmp_path):
+        """A home whose cache is current and complete after one normal run."""
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                              "remote_version": SSOT_VERSION})
+        env = _env(home, fakebin)
+>       assert _run(env).returncode == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+E        +    where CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n') = _run({'AI_AGENT': 'claude-code_2-1-291_agent', 'API_TIMEOUT_MS': '900000', 'BASH_DEFAULT_TIMEOUT_MS': '600000', 'BASH_MAX_OUTPUT_LENGTH': '150000', ...})
+
+tests/test_codex_installer.py:577: AssertionError
+______________ test_a_complete_cache_codex_does_not_list_is_added ______________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_complete_cache_codex_do0')
+
+    def test_a_complete_cache_codex_does_not_list_is_added(tmp_path):
+        """Files alone do not make the fast path: a cache Codex does not list takes the refresh path,
+        whose `add` registers it, instead of failing the verify on every run."""
+>       home, env = _installed_once(tmp_path)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_codex_installer.py:617: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_complete_cache_codex_do0')
+
+    def _installed_once(tmp_path):
+        """A home whose cache is current and complete after one normal run."""
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                              "remote_version": SSOT_VERSION})
+        env = _env(home, fakebin)
+>       assert _run(env).returncode == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+E        +    where CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n') = _run({'AI_AGENT': 'claude-code_2-1-291_agent', 'API_TIMEOUT_MS': '900000', 'BASH_DEFAULT_TIMEOUT_MS': '600000', 'BASH_MAX_OUTPUT_LENGTH': '150000', ...})
+
+tests/test_codex_installer.py:577: AssertionError
+_ test_a_failed_or_unreadable_listing_is_reported_as_such[fail_list-failed to parse config.toml] _
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_failed_or_unreadable_li0')
+fault = 'fail_list', words = 'failed to parse config.toml'
+
+    @pytest.mark.parametrize("fault, words", [("fail_list", "failed to parse config.toml"),
+                                              ("nonjson_list", "other than the expected JSON")])
+    def test_a_failed_or_unreadable_listing_is_reported_as_such(tmp_path, fault, words):
+>       home, env = _installed_once(tmp_path)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_codex_installer.py:627: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_failed_or_unreadable_li0')
+
+    def _installed_once(tmp_path):
+        """A home whose cache is current and complete after one normal run."""
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                              "remote_version": SSOT_VERSION})
+        env = _env(home, fakebin)
+>       assert _run(env).returncode == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+E        +    where CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n') = _run({'AI_AGENT': 'claude-code_2-1-291_agent', 'API_TIMEOUT_MS': '900000', 'BASH_DEFAULT_TIMEOUT_MS': '600000', 'BASH_MAX_OUTPUT_LENGTH': '150000', ...})
+
+tests/test_codex_installer.py:577: AssertionError
+_ test_a_failed_or_unreadable_listing_is_reported_as_such[nonjson_list-other than the expected JSON] _
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_failed_or_unreadable_li1')
+fault = 'nonjson_list', words = 'other than the expected JSON'
+
+    @pytest.mark.parametrize("fault, words", [("fail_list", "failed to parse config.toml"),
+                                              ("nonjson_list", "other than the expected JSON")])
+    def test_a_failed_or_unreadable_listing_is_reported_as_such(tmp_path, fault, words):
+>       home, env = _installed_once(tmp_path)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_codex_installer.py:627: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_failed_or_unreadable_li1')
+
+    def _installed_once(tmp_path):
+        """A home whose cache is current and complete after one normal run."""
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                              "remote_version": SSOT_VERSION})
+        env = _env(home, fakebin)
+>       assert _run(env).returncode == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+E        +    where CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n') = _run({'AI_AGENT': 'claude-code_2-1-291_agent', 'API_TIMEOUT_MS': '900000', 'BASH_DEFAULT_TIMEOUT_MS': '600000', 'BASH_MAX_OUTPUT_LENGTH': '150000', ...})
+
+tests/test_codex_installer.py:577: AssertionError
+___________ test_a_record_without_an_enabled_field_counts_as_enabled ___________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_record_without_an_enabl0')
+
+    def test_a_record_without_an_enabled_field_counts_as_enabled(tmp_path):
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": True,
+                                              "omit_enabled": True, "remote_version": SSOT_VERSION})
+        result = _run(_env(home, fakebin))
+>       assert result.returncode == 0 and "installed but disabled" not in result.stderr, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert (1 == 0)
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:640: AssertionError
+_____ test_an_incomplete_copy_left_after_the_add_is_replaced_and_set_aside _____
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_an_incomplete_copy_left_a0')
+
+    def test_an_incomplete_copy_left_after_the_add_is_replaced_and_set_aside(tmp_path):
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": True,
+                                              "remote_version": SSOT_VERSION, "add_noop": True})
+        part = _cache_root(home) / SSOT_VERSION
+        (part / ".codex-plugin").mkdir(parents=True)
+        (part / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": SSOT_VERSION}))
+        (part / "skills").mkdir()
+        result = _run(_env(home, fakebin))
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+
+tests/test_codex_installer.py:651: AssertionError
+__________________ test_a_failed_export_leaves_no_staging_dir __________________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_failed_export_leaves_no0')
+
+    def test_a_failed_export_leaves_no_staging_dir(tmp_path):
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                              "remote_version": "0.0.1"})
+        tar = fakebin / "tar"
+        tar.write_text("#!/bin/sh\necho 'tar: simulated failure' >&2\nexit 1\n")
+        tar.chmod(0o755)
+        result = _run(_env(home, fakebin))
+>       assert result.returncode == 1 and "failed (see above)" in result.stderr, result.stdout + result.stderr
+E       AssertionError: ==> skill-concierge → Codex sync (from: /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge)
+E             SSOT version: v0.59.0
+E         !! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer
+E            installs HEAD. Commit the version change (or restore the file), then re-run.
+E         
+E       assert (1 == 1 and 'failed (see above)' in '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n')
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').returncode
+E        +  and   '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n' = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').stderr
+
+tests/test_codex_installer.py:664: AssertionError
+_______________ test_an_add_that_installs_nothing_exits_nonzero ________________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_an_add_that_installs_noth0')
+
+    def test_an_add_that_installs_nothing_exits_nonzero(tmp_path):
+        home, fakebin = _make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                              "remote_version": SSOT_VERSION, "add_noop": True})
+        result = _run(_env(home, fakebin))
+        assert result.returncode == 1, result.stdout + result.stderr
+>       assert "does not report" in result.stderr
+E       AssertionError: assert 'does not report' in '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n'
+E        +  where '!! .claude-plugin/plugin.json says v0.59.0 but HEAD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n' = CompletedProcess(args=['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh'], re...AD carries v0.58.0; this installer\n   installs HEAD. Commit the version change (or restore the file), then re-run.\n').stderr
+
+tests/test_codex_installer.py:690: AssertionError
+________ test_a_signal_killed_codex_export_leaves_no_staging_dir_behind ________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_signal_killed_codex_exp0')
+
+    def test_a_signal_killed_codex_export_leaves_no_staging_dir_behind(tmp_path):
+        # A marketplace remote below SSOT forces the git-archive fallback (the export this
+        # test kills); the fake `codex add` still runs first and needs a real enforcer.py.
+        home, fakebin = cx._make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                                 "remote_version": "0.45.0"})
+        env = installer_env(tmp_path, home, _slow_git_dir(tmp_path), fakebin,
+                            FAKE_CODEX_ENFORCER_SRC=str(cx.ENFORCER_SRC))
+        cache = cx._cache_root(home)
+    
+>       rc = _kill_during_export(["bash", str(cx.INSTALLER)], env, cache)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_installer_staging_cleanup.py:348: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+argv = ['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/adapters/codex/install.sh']
+env = {'AI_AGENT': 'claude-code_2-1-291_agent', 'API_TIMEOUT_MS': '900000', 'BASH_DEFAULT_TIMEOUT_MS': '600000', 'BASH_MAX_OUTPUT_LENGTH': '150000', ...}
+cache_base = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-337/test_a_signal_killed_codex_exp0/home/.codex/plugins/cache/skill-concierge/skill-concierge')
+timeout = 30
+
+    def _kill_during_export(argv, env, cache_base, timeout=30):
+        proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            stage = None
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                hits = list(cache_base.glob(".skill-concierge-staging.*")) if cache_base.exists() else []
+                if hits:
+                    stage = hits[0]
+                    break
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.02)
+>           assert stage is not None and stage.is_dir(), "the export never reached the staging step"
+E           AssertionError: the export never reached the staging step
+E           assert (None is not None)
+
+tests/test_installer_staging_cleanup.py:300: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_codex_installer.py::test_fresh_install_reaches_ssot_and_fixes_exec_bit
+FAILED tests/test_codex_installer.py::test_second_run_is_a_no_op_fast_path - ...
+FAILED tests/test_codex_installer.py::test_fast_path_tolerates_lexically_smaller_and_non_version_siblings
+FAILED tests/test_codex_installer.py::test_fallback_never_deletes_the_version_dir_add_just_created
+FAILED tests/test_codex_installer.py::test_add_failure_never_falls_back_and_exits_nonzero
+FAILED tests/test_codex_installer.py::test_disabled_plugin_refuses_before_any_cli_call
+FAILED tests/test_codex_installer.py::test_enabled_plugin_stays_enabled_across_a_refresh
+FAILED tests/test_codex_installer.py::test_downgrade_after_cli_refresh_is_refused
+FAILED tests/test_codex_installer.py::test_downgrade_is_refused_before_any_codex_call
+FAILED tests/test_codex_installer.py::test_marketplace_not_registered_prints_bootstrap_instructions
+FAILED tests/test_codex_installer.py::test_an_incomplete_cache_is_not_current
+FAILED tests/test_codex_installer.py::test_fast_path_reports_a_disabled_plugin_without_claiming_it_loads
+FAILED tests/test_codex_installer.py::test_a_complete_cache_codex_does_not_list_is_added
+FAILED tests/test_codex_installer.py::test_a_failed_or_unreadable_listing_is_reported_as_such[fail_list-failed to parse config.toml]
+FAILED tests/test_codex_installer.py::test_a_failed_or_unreadable_listing_is_reported_as_such[nonjson_list-other than the expected JSON]
+FAILED tests/test_codex_installer.py::test_a_record_without_an_enabled_field_counts_as_enabled
+FAILED tests/test_codex_installer.py::test_an_incomplete_copy_left_after_the_add_is_replaced_and_set_aside
+FAILED tests/test_codex_installer.py::test_a_failed_export_leaves_no_staging_dir
+FAILED tests/test_codex_installer.py::test_an_add_that_installs_nothing_exits_nonzero
+FAILED tests/test_installer_staging_cleanup.py::test_a_signal_killed_codex_export_leaves_no_staging_dir_behind
+20 failed, 978 passed in 208.65s (0:03:28)

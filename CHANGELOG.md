@@ -3,6 +3,66 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.59.0] - 2026-10-06
+
+### Added
+- **The index owner's warm relay serves Command Code too** ([ADR-0081](docs/adr/0081-owner-relay-serves-command-code.md)).
+  `POST /jev` stays TypeSafe; new `POST /jev/cc` is Command Code, from a fixed two-destination table in
+  `vendor/skill-search/skill_search/index_owner.py` (a path picks the destination, so an older owner answers 404 and
+  the hook calls Command Code directly). One pool per destination with a liveness check, User-Agent
+  `skill-concierge`, a keep-warm GET every 30 s tick for destinations used in the last 30 minutes (keyless, refused
+  401, nothing billed), and a request is re-sent only when WRITING it failed, never after it was sent (the old relay
+  re-sent then: 3 provider POSTs for 2 calls, now 2). Applies when jevd is absent. Logged in
+  `vendor/skill-search/VENDORED.md`. Tests: `tests/test_owner_jev_relay.py`.
+- **jevd as the Jev bench's single source** ([ADR-0080](docs/adr/0080-jevd-as-the-jev-bench.md)). When `JEVD_URL`
+  names a jevd (`http` to loopback only) that answers `GET /ladder` within 0.3 s, its ladder is the bench: order,
+  models, per-call `timeout_s` and `span_s` (Command Code's 5.5 s span is jevd's `span_s`) are configured in
+  `~/.config/jevd/config.toml`. The hook still walks the ladder, because a turn is two linked calls that must reach
+  the same provider; it pins each call with `X-Jevd-Provider` and `X-Jevd-Budget` and sends no key. The router
+  event gains `prov`; `via` reads `jevd`. Unset, or jevd silent: `ENFORCER_JEV_BENCH` applies unchanged, and the
+  index owner's relay stays that path's warm route. `scripts/jev_client.py` takes the same tiers;
+  `tests/conftest.py` strips `JEVD_URL`. Review fixes: consult widening and `sieve_recall` find the TypeSafe rung of
+  jevd's ladder (before, widening went dark when jevd answered); the calibrator sends a jevd tier through the hook's
+  `_jev_call` and never re-sends a timeout; the turn clock starts before the ladder fetch and non-English turns never
+  fetch it; a jevd with no keys leaves `ENFORCER_JEV_BENCH` in charge; every event the router emits carries `bench`
+  (`jevd`/`env`). When jevd answers but every provider fails, the hook does not retry them direct (a judgment
+  call). Revert: unset `JEVD_URL`.
+- **Command Code is a Jev bench tier** ([ADR-0079](docs/adr/0079-command-code-jev-tier-and-timeout-fall-through.md)).
+  `ENFORCER_JEV_BENCH` accepts `cc:typesafe/jev`: Command Code's SystemOne endpoint (`ENFORCER_JEV_CC_URL`, key
+  `CMD_API_KEY`, always a direct call, unpinned model because the endpoint accepts only `typesafe/jev`). Its
+  `ENFORCER_JEV_CC_TIMEOUT` (default 5.5 s) is both the per-call timeout and the tier's span: Command Code gets the whole 5.5 s and TypeSafe is called only on an error or after 5.5 s with no answer (the owner's interim decision, "at least for now", refined from 5.0 s to 5.5 s by his order "refine the threshold to 5.5s now"; `=3.3` restores the first, cut-over design). Every Jev request now
+  sends `User-Agent: skill-concierge`, which clears the Cloudflare 1010 refusal of Python's default.
+
+### Changed
+- **Any Jev failure, a timeout included, falls through to the next tier** (ADR-0079; amends ADR-0075, which ended
+  the chain on a timeout). A tier that cannot fit the remaining budget is skipped and later tiers are still tried.
+  `scripts/jev_client.py` follows the same rule; `_jev_timed_out` is deleted.
+- **`ENFORCER_JEV_BUDGET` default and ceiling 3.0 -> 7.8 s** (amends ADR-0061; 5.5 s Command Code span + 1.5 s TypeSafe call + 0.8 s for the catalogue read and thread start-up), and Claude Code's `UserPromptSubmit`
+  enforcer hook timeout 5 -> 10 s in `hooks/hooks.json`. The Command Code and DSH adapters, which kill the enforcer
+  at 2.5 s, now pass `ENFORCER_JEV_BUDGET=1.6`, so the `cc` tier is skipped there.
+- **Trade-off, stated plainly:** measured 2026-10-06 (10 full turns per endpoint), a router turn takes 2.97-9.39 s
+  on Command Code against 0.87-1.06 s on TypeSafe. A turn Command Code answers inside 5.5 s is one bill; one it misses
+  waits up to about 7.8 s (about 8.9 s of hook time against the 10 s kill), and the late answer is discarded while TypeSafe is
+  billed too. In every valid measurement a Command Code turn took 2.3-9.4 s against TypeSafe's 0.7-1.5 s, and the share past the span
+  was 2, 2, 3 and 6 of 12 in the valid rounds (the last two Command Code only, at 5.0 s and 5.5 s): a longer span did
+  not lower it in that sample, and the ones that missed stall well past it (W38 decides the rate). The owner's DNS change
+  (ControlD off, 1.1.1.1) halved the worst connection setup but left server time unchanged. Every router call is now held to its limit by the
+  clock (`_jev_call_capped`): urllib's timeout bounds each socket operation, not the call, and without the cap 2 of
+  12 live turns lost their Jev verdict after Command Code overran its span. A rerank with under 0.5 s left in its tier is no
+  longer sent. With `ENFORCER_JEV_HISTORY=1` a history-caused skip that cannot be re-asked ends the turn without a
+  Jev verdict (a judgment call: falling through would bill a whole second turn).
+- **Offline callers.** `scripts/jev_client.py` never cuts a span tier (Command Code) before its span, bounded by the
+  caller's deadline. Consequence for `consult --fast` (2.0 s per call, 4.0 s budget): Command Code gets the whole
+  4 s and TypeSafe then cannot fit, so a slow Command Code spell drops consult's Jev evidence and consult falls back to
+  inline analysis, with no double bill. A judgment call pending the owner's confirmation. `scripts/calibrate_jev_gate.py`
+  sends the `User-Agent` too and `--endpoint` accepts `cc`.
+- **Tests.** New `tests/conftest.py` scrubs every `ENFORCER_JEV_*` variable plus `TYPESAFE_API_KEY` and `CMD_API_KEY`
+  before collection; without it 13 router/history tests failed in a shell that had loaded the machine's env. This starts a new epoch for router metrics
+  ([`docs/epoch-watch.md`](docs/epoch-watch.md) W38). Revert: drop `cc:` from `ENFORCER_JEV_BENCH`.
+
+### Measured
+- **Richer wide-pass skill text does not help** ([report](plans/261006-2350-abc-wide-recall/report.md)). A pre-registered paired test on 200 English turns the offer could not have shaped (Command Code only, through jevd): today's 160-character description 79.0 %, with `when_to_use` first 78.0 %, with 3 flywheel example requests 77.5 %; both not proven (Holm p 1.0), Jev run-to-run disagreement 1 %. The text stays as it is.
+
 ## [0.58.0] - 2026-10-04
 
 ### Added

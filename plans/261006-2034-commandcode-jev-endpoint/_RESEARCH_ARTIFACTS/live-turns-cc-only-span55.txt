@@ -1,0 +1,15 @@
+{"prompt": "please fix the failing pytest in the rou", "ok": true, "rmodel": "typesafe/jev", "ms": 3047, "wide_ms": 1922, "err": null, "fell": null, "lead": "ak-fix"}
+{"prompt": "commit my staged changes with a good con", "ok": true, "rmodel": "typesafe/jev", "ms": 2270, "wide_ms": 1378, "err": null, "fell": null, "lead": "ak-git"}
+{"prompt": "write a Vietnamese government report abo", "ok": true, "rmodel": "typesafe/jev", "ms": 3243, "wide_ms": 2085, "err": null, "fell": null, "lead": "vn-author"}
+{"prompt": "research the latest Claude Code hooks fe", "ok": false, "rmodel": null, "ms": 5525, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "review this pull request for security pr", "ok": true, "rmodel": "typesafe/jev", "ms": 3088, "wide_ms": 2152, "err": null, "fell": null, "lead": "ak-review-pr"}
+{"prompt": "make a pitch deck in pptx for our new pr", "ok": false, "rmodel": null, "ms": 5531, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "why is my docker container running out o", "ok": false, "rmodel": null, "ms": 5531, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "plan the migration of our postgres schem", "ok": false, "rmodel": null, "ms": 5532, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "generate a progress map html page for th", "ok": true, "rmodel": "typesafe/jev", "ms": 2315, "wide_ms": 1456, "err": null, "fell": null, "lead": "progress-map"}
+{"prompt": "check whether the skill-concierge index ", "ok": false, "rmodel": null, "ms": 5523, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+{"prompt": "turn this csv of sales into a dashboard ", "ok": true, "rmodel": "typesafe/jev", "ms": 3581, "wide_ms": 1951, "err": null, "fell": null, "lead": "officecli-data-dashboard"}
+{"prompt": "explain how the enforcer hook decides wh", "ok": false, "rmodel": null, "ms": 5534, "wide_ms": null, "err": "TimeoutError", "fell": [["typesafe/jev", "TimeoutError"]], "lead": null}
+
+SUMMARY n=12: answered 6, missed the 5 s span or errored 6 ([[['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']], [['typesafe/jev', 'TimeoutError']]])
+answered turn ms: min 2270 median 3067.5 max 3581; wide call ms: min 1378 median 1936.5 max 2152

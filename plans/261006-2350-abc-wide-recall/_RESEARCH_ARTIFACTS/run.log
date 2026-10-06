@@ -1,0 +1,41 @@
+tier: name=commandcode model=typesafe/jev timeout=5.5s workers=3
+{
+ "per_variant": {
+  "A": {
+   "calls": 5,
+   "ok": 5,
+   "tok_est_mean": 27979,
+   "ms_ok_mean": 1548,
+   "ms_ok_max": 2634
+  },
+  "A2": {
+   "calls": 5,
+   "ok": 5,
+   "tok_est_mean": 27979,
+   "ms_ok_mean": 1596,
+   "ms_ok_max": 2540
+  },
+  "B": {
+   "calls": 5,
+   "ok": 5,
+   "tok_est_mean": 27889,
+   "ms_ok_mean": 1390,
+   "ms_ok_max": 1703
+  },
+  "C": {
+   "calls": 5,
+   "ok": 5,
+   "tok_est_mean": 40784,
+   "ms_ok_mean": 1858,
+   "ms_ok_max": 2502
+  }
+ },
+ "tok_est_pilot": 623163,
+ "projected_tok_est_200": 24926520,
+ "wall_s_pilot": 11.0,
+ "projected_wall_s_200": 441,
+ "cap": 60000000,
+ "continue": true,
+ "at": "2026-10-06 23:08:44 +0700"
+}
+done: 780 tasks in 373s

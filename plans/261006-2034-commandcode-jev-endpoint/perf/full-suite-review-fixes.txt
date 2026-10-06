@@ -1,0 +1,73 @@
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 21%]
+........................................................................ [ 28%]
+........................................................................ [ 36%]
+..................................................................F..... [ 43%]
+........................................................................ [ 50%]
+..................................................................F..... [ 57%]
+........................................................................ [ 64%]
+........................................................................ [ 72%]
+........................................................................ [ 79%]
+........................................................................ [ 86%]
+........................................................................ [ 93%]
+..............................................................           [100%]
+=================================== FAILURES ===================================
+_____________ test_command_code_is_called_direct_with_a_user_agent _____________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-335/test_command_code_is_called_di0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x110780710>
+
+    def test_command_code_is_called_direct_with_a_user_agent(tmp_path, monkeypatch):
+        mod = _cc(tmp_path, monkeypatch)
+        sent = []
+        monkeypatch.setattr(mod, "_post_json", lambda u, b, t, h=None: sent.append((u, b["model"], h)) or
+                            {"answers": {"ok": 1}, "model": "typesafe/jev"})
+>       assert mod._jev_call({}, {}, mod._jev_bench()[0], "cc-key", 1.0) == ({"ok": 1}, "direct", "typesafe/jev")
+E       AssertionError: assert ({'ok': 1}, '...typesafe/jev') == ({'ok': 1}, '...typesafe/jev')
+E         
+E         At index 1 diff: 'relay' != 'direct'
+E         Use -v to get more diff
+
+tests/test_jev_bench.py:217: AssertionError
+_________ test_consult_widening_uses_the_typesafe_rung_of_jevds_ladder _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x110b0a660>
+jevd = <function jevd.<locals>.make at 0x11079f380>
+
+    def test_consult_widening_uses_the_typesafe_rung_of_jevds_ladder(monkeypatch, jevd):
+        j = jevd()
+        monkeypatch.setenv("JEVD_URL", j.url)
+        cf = _script("consult_fit")
+        seen = {}
+    
+        def ask(state, qs, timeout, tiers=None, retries=0):
+            seen["tiers"] = tiers
+            return WIDE, {}
+>       cf.jev_top("commit my staged changes", catalog_fn=lambda: list(CATALOG), ask_fn=ask)
+
+tests/test_jevd_bench.py:241: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+task = 'commit my staged changes'
+catalog_fn = <function test_consult_widening_uses_the_typesafe_rung_of_jevds_ladder.<locals>.<lambda> at 0x1105e6fc0>
+ask_fn = <function test_consult_widening_uses_the_typesafe_rung_of_jevds_ladder.<locals>.ask at 0x110d1f4c0>
+
+    def jev_top(task: str, catalog_fn=None, ask_fn=None) -> list:
+        """[(name, description)] Jev's top WIDEN_JEV_K for the cleaned request. Raises on any failure."""
+        if not task:
+            raise jc.JevError("empty request")
+        enf = jc.load_enforcer()
+        # TypeSafe, which this widening was gated on (ADR-0078): the env bench's first ts tier, or the rung of jevd's
+        # ladder that serves the pinned TypeSafe model (ADR-0080)
+        tiers = [t for t in enf._jev_bench()
+                 if t["ep"] == "ts" or (t["ep"] == "jevd" and t["model"] == enf.JEV_MODEL)]
+        if not tiers or not enf._jev_key(tiers[0]):
+>           raise jc.JevError(f"no {enf.JEV_MODEL} tier or no key for it")
+E           jev_client.JevError: no jev-1.13.0 tier or no key for it
+
+scripts/consult_fit.py:397: JevError
+=========================== short test summary info ============================
+FAILED tests/test_jev_bench.py::test_command_code_is_called_direct_with_a_user_agent
+FAILED tests/test_jevd_bench.py::test_consult_widening_uses_the_typesafe_rung_of_jevds_ladder
+2 failed, 996 passed in 253.50s (0:04:13)

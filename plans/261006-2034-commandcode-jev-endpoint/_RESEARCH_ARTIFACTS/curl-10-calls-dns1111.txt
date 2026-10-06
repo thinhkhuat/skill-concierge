@@ -1,0 +1,10 @@
+call1 http=200 dns=0.038608 connect=0.246209 tls=0.454224 ttfb=1.726056 total=1.726123 ip=172.67.167.23 "noul":0.87
+call2 http=200 dns=0.002881 connect=0.291074 tls=1.703362 ttfb=3.336617 total=3.336695 ip=104.21.49.202 "noul":0.87
+call3 http=200 dns=0.002795 connect=0.217895 tls=0.439508 ttfb=1.672022 total=1.672191 ip=104.21.49.202 "noul":0.87
+call4 http=200 dns=0.002880 connect=0.084464 tls=0.154509 ttfb=1.308530 total=1.308571 ip=104.21.49.202 "noul":0.87
+call5 http=200 dns=0.002432 connect=0.513088 tls=1.194134 ttfb=2.658169 total=2.658338 ip=104.21.49.202 "noul":0.88
+call6 http=200 dns=0.002857 connect=0.067922 tls=0.140630 ttfb=1.133313 total=1.133358 ip=104.21.49.202 "noul":0.87
+call7 http=200 dns=0.001967 connect=0.064532 tls=0.134376 ttfb=1.157740 total=1.157791 ip=104.21.49.202 "noul":0.87
+call8 http=200 dns=0.002349 connect=0.069631 tls=0.141464 ttfb=1.011232 total=1.011365 ip=104.21.49.202 "noul":0.87
+call9 http=200 dns=0.002780 connect=0.531085 tls=0.843167 ttfb=2.038410 total=2.038617 ip=104.21.49.202 "noul":0.87
+call10 http=200 dns=0.037323 connect=0.248713 tls=0.466652 ttfb=1.940123 total=1.940174 ip=104.21.49.202 "noul":0.87

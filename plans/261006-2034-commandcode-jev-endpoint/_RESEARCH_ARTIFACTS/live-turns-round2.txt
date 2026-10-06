@@ -1,0 +1,21 @@
+1 cc-alone: noul=0.88 ms=1179 model=['typesafe/jev']
+2 live-bench turn: served by tier 0 (typesafe/jev) in 3328 ms, fell=None, lead=ak-fix
+3 forced cc timeout: fell=[['typesafe/jev', 'TimeoutError']], served by TypeSafe in 1569 ms (budget 7.3 s)
+CC-LIVE-VERIFIED
+{"prompt": "please fix the failing pytest in the router test", "served": "jev-1.13.0", "tier": 0, "ms": 873, "wide_ms": 615, "fell": null, "err": null, "verdict": "offer", "lead": "ak-fix", "ts_lead": "ak-fix", "ts_ms": 679, "ts_verdict": "offer"}
+{"prompt": "commit my staged changes with a good conventiona", "served": "jev-1.13.0", "tier": 0, "ms": 711, "wide_ms": 456, "fell": null, "err": null, "verdict": "offer", "lead": "ak-git", "ts_lead": "ak-git", "ts_ms": 663, "ts_verdict": "offer"}
+{"prompt": "write a Vietnamese government report about flood", "served": "jev-1.13.0", "tier": 0, "ms": 687, "wide_ms": 432, "fell": null, "err": null, "verdict": "offer", "lead": "vn-author", "ts_lead": "vn-author", "ts_ms": 667, "ts_verdict": "offer"}
+{"prompt": "research the latest Claude Code hooks features a", "served": "jev-1.13.0", "tier": 0, "ms": 698, "wide_ms": 433, "fell": null, "err": null, "verdict": "offer", "lead": "superpowers-developing-for-claude-code:working-with-claude-code", "ts_lead": "superpowers-developing-for-claude-code:working-with-claude-code", "ts_ms": 722, "ts_verdict": "offer"}
+{"prompt": "review this pull request for security problems", "served": "jev-1.13.0", "tier": 0, "ms": 709, "wide_ms": 468, "fell": null, "err": null, "verdict": "offer", "lead": "ak-review-pr", "ts_lead": "ak-review-pr", "ts_ms": 705, "ts_verdict": "offer"}
+{"prompt": "make a pitch deck in pptx for our new product la", "served": "jev-1.13.0", "tier": 0, "ms": 756, "wide_ms": 476, "fell": null, "err": null, "verdict": "offer", "lead": "officecli-pptx", "ts_lead": "officecli-pptx", "ts_ms": 704, "ts_verdict": "offer"}
+{"prompt": "why is my docker container running out of memory", "served": "jev-1.13.0", "tier": 0, "ms": 710, "wide_ms": 432, "fell": null, "err": null, "verdict": "offer", "lead": "diagnose", "ts_lead": "diagnose", "ts_ms": 727, "ts_verdict": "offer"}
+{"prompt": "plan the migration of our postgres schema to add", "served": "jev-1.13.0", "tier": 0, "ms": 766, "wide_ms": 472, "fell": null, "err": null, "verdict": "offer", "lead": "agent-skills:deprecation-and-migration", "ts_lead": "agent-skills:deprecation-and-migration", "ts_ms": 823, "ts_verdict": "offer"}
+{"prompt": "generate a progress map html page for this proje", "served": "jev-1.13.0", "tier": 0, "ms": 689, "wide_ms": 448, "fell": null, "err": null, "verdict": "offer", "lead": "progress-map", "ts_lead": "progress-map", "ts_ms": 700, "ts_verdict": "offer"}
+{"prompt": "check whether the skill-concierge index is healt", "served": "jev-1.13.0", "tier": 0, "ms": 776, "wide_ms": 538, "fell": null, "err": null, "verdict": "offer", "lead": "skill-concierge:doctor", "ts_lead": "skill-concierge:doctor", "ts_ms": 678, "ts_verdict": "offer"}
+{"prompt": "turn this csv of sales into a dashboard with cha", "served": "jev-1.13.0", "tier": 0, "ms": 733, "wide_ms": 472, "fell": null, "err": null, "verdict": "offer", "lead": "officecli-data-dashboard", "ts_lead": "officecli-data-dashboard", "ts_ms": 705, "ts_verdict": "offer"}
+{"prompt": "explain how the enforcer hook decides which skil", "served": "jev-1.13.0", "tier": 0, "ms": 657, "wide_ms": 419, "fell": null, "err": null, "verdict": "offer", "lead": "superpowers-developing-for-claude-code:working-with-claude-code", "ts_lead": "superpowers-developing-for-claude-code:working-with-claude-code", "ts_ms": 655, "ts_verdict": "offer"}
+
+SUMMARY n=12: served by Command Code 12, fell through to TypeSafe 0 ([]), no Jev verdict 0
+Command Code-served turn ms: min 657 median 710.5 max 873
+TypeSafe-only turn ms: min 655 median 702.0 max 823
+same lead skill as TypeSafe-only: 12/12; same verdict (offer/skip): 12/12

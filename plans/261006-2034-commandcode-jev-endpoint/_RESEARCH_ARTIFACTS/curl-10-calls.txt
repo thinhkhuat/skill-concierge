@@ -1,0 +1,10 @@
+call1 http=200 dns=0.036553 connect=0.302236 tls=1.604840 ttfb=2.971053 total=2.971099 "noul":0.87
+call2 http=200 dns=0.001785 connect=0.063223 tls=0.132722 ttfb=1.954052 total=1.954093 "noul":0.87
+call3 http=200 dns=0.001624 connect=0.220508 tls=0.442157 ttfb=1.726588 total=1.726620 "noul":0.86
+call4 http=200 dns=0.001907 connect=1.955924 tls=3.694807 ttfb=4.881759 total=4.881799 "noul":0.87
+call5 http=200 dns=0.002352 connect=0.513012 tls=0.805575 ttfb=2.080353 total=2.080390 "noul":0.88
+call6 http=200 dns=0.002763 connect=0.126113 tls=1.193201 ttfb=4.099326 total=4.099475 "noul":0.86
+call7 http=200 dns=0.002539 connect=0.067080 tls=0.140769 ttfb=0.747675 total=0.747710 "noul":0.87
+call8 http=200 dns=0.002052 connect=0.269662 tls=3.004872 ttfb=5.500103 total=5.500141 "noul":0.86
+call9 http=200 dns=0.002586 connect=0.068051 tls=0.142419 ttfb=0.756843 total=0.756882 "noul":0.87
+call10 http=200 dns=0.002801 connect=0.071432 tls=0.143718 ttfb=1.141736 total=1.141776 "noul":0.86

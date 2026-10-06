@@ -20,8 +20,9 @@ timeout (see EMBED_TIMEOUT_S for the calibration history; live default 500ms sin
 ADR-0054). Every network leg is separately capped, so the worst case is the sum of the
 caps, not an unbounded wait: 500ms embed + 250ms installed query + up to 2x250ms
 actionability gate + 250ms external annex + 250ms cross-harness annex ~= 1.75s, while the
-ADR-0061 Jev router runs IN PARALLEL in a worker thread (catalogue scroll + 2 calls, each
-capped at 1.5s; ~0.7s warm), joined under a hard 3.0s cap — ~3.8s worst case against a 5s timeout.
+ADR-0061 Jev router runs IN PARALLEL in a worker thread (catalogue scroll + 2 calls per bench tier; TypeSafe
+~0.7s warm), joined under a hard 7.8s cap (ADR-0079: Command Code's 5.5s span, then TypeSafe) — ~8.9s worst
+case against Claude Code's 10s hook timeout.
 The happy path is ~100ms; the annex legs run only on turns that actually carry an offer. On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
 embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
 never crashing — and stays within the per-turn budget regardless of shim health.
@@ -1508,13 +1509,42 @@ JEV_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_TIMEOUT", "1.5"))   # per cal
 _FW = urllib.parse.urlsplit(os.environ.get("FLYWHEEL_LLM_ENDPOINT", ""))
 JEV_GW_HOST = (_FW.hostname or "").lower() if _FW.scheme == "https" else ""
 JEV_GW_URL = f"https://{_FW.netloc}/v1/systemone" if JEV_GW_HOST else None
+# Command Code's SystemOne endpoint (ADR-0079), the owner's preferred provider. It serves only the unversioned
+# `typesafe/jev`, and its Cloudflare front refuses Python's default User-Agent (error 1010). A whole turn there
+# took 2.3-9.4 s against TypeSafe's ~1 s (2026-10-06). Owner's decision: Command Code gets the whole span (5 s,
+# refined to 5.5 s the same evening); its timeout is also the tier's SPAN, the most of the turn it may spend. Only
+# an error, or no answer by the end of the span, sends the turn to the next tier.
+JEV_CC_URL = os.environ.get("ENFORCER_JEV_CC_URL", "https://api.commandcode.ai/provider/v1/systemone")
+JEV_CC_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_CC_TIMEOUT", "5.5"))
+# The index owner's warm relay for Command Code (ADR-0081): its own path, /jev/cc, so an owner that predates
+# it answers 404 and the call goes direct, never to TypeSafe's relay. Same loopback rule as JEV_RELAY_URL.
+JEV_CC_RELAY_URL = (f"http://{EMBED_HOST}:{EMBED_PORT}/jev/cc"
+                    if EMBED_HOST in ("127.0.0.1", "localhost", "::1")
+                    and (urllib.parse.urlsplit(JEV_CC_URL).hostname or "").lower() == "api.commandcode.ai" else None)
+JEV_USER_AGENT = "skill-concierge"
+# jevd (ADR-0080; github.com/thinhkhuat/jevd), the optional warm local relay for SystemOne endpoints. When JEVD_URL
+# names a loopback http address and jevd answers GET /ladder, the bench is jevd's ladder: its order, models,
+# per-call limits and spans, configured in jevd alone (the owner's decision of 2026-10-06). jevd holds the keys and
+# the kept-open connections; this hook still walks the ladder itself, because a turn is two linked calls (the wide
+# ranking, then the rerank on the same provider), and pins each call to one provider. Unset, or jevd silent within
+# JEVD_LADDER_TIMEOUT_S: ENFORCER_JEV_BENCH applies, as before.
+_JD = urllib.parse.urlsplit(os.environ.get("JEVD_URL", ""))
+JEVD_URL = (os.environ["JEVD_URL"].rstrip("/").removesuffix("/v1/systemone") if _JD.scheme == "http"
+            and (_JD.hostname or "").lower() in ("127.0.0.1", "localhost", "::1") else None)
+JEVD_LADDER_TIMEOUT_S = 0.3
 # Each key goes only to its own endpoint's host over https (loopback for tests): TypeSafe's key to
-# api.typesafe.ai, the gateway's key to the FLYWHEEL_LLM_* seam's host (ADR-0075).
-JEV_EP_HOSTS = {"ts": {"api.typesafe.ai"}, "gw": {JEV_GW_HOST} if JEV_GW_HOST else set()}
+# api.typesafe.ai, the gateway's key to the FLYWHEEL_LLM_* seam's host (ADR-0075), Command Code's to
+# api.commandcode.ai (ADR-0079).
+JEV_EP_HOSTS = {"ts": {"api.typesafe.ai"}, "gw": {JEV_GW_HOST} if JEV_GW_HOST else set(),
+                "cc": {"api.commandcode.ai"}}
 JEV_GW_TIMEOUT_S = float(os.environ.get("ENFORCER_JEV_GATEWAY_TIMEOUT", "2.0"))
-# Thread start -> join. Capped at 3.0 s whatever the env says: the annex queries run after the join and
-# the hook is killed at 5 s, so a larger budget would trade a slow offer for no offer at all.
-JEV_BUDGET_S = min(float(os.environ.get("ENFORCER_JEV_BUDGET", "3.0")), 3.0)
+# Thread start -> join. Capped at 7.8 s whatever the env says (ADR-0079; was 3.0): Command Code's 5.5 s span,
+# then TypeSafe's 1.5 s call, plus 0.8 s for the catalogue read and thread start-up. Each router call is held to
+# its limit by the clock (`_jev_call_capped`), because urllib's timeout bounds each socket operation, not the call,
+# and live Command Code turns ran a second and more past the span. The annex queries run after the
+# join and Claude Code kills the hook at 10 s (hooks/hooks.json), so a larger budget would trade a slow offer for
+# no offer at all. A harness that kills the enforcer sooner passes a smaller budget.
+JEV_BUDGET_S = min(float(os.environ.get("ENFORCER_JEV_BUDGET", "7.8")), 7.8)
 JEV_FITS_FLOOR = float(os.environ.get("ENFORCER_JEV_FITS_FLOOR", "0.30"))
 JEV_MAX_CHARS = 4000
 JEV_CHUNK = 250          # a Choice holds at most 255 options
@@ -1699,6 +1729,7 @@ JEV_HISTORY_BYTES = _env_int("ENFORCER_JEV_HISTORY_BYTES", 2097152)
 JEV_HISTORY_PINNED = 6      # the last entries are shrunk last
 JEV_HISTORY_JOIN_S = 0.2    # most the rerank waits for a history still being fitted
 JEV_REASK_MIN_S = 0.5       # budget left that still allows the skip guard's second rerank
+JEV_RERANK_MIN_S = 0.5      # time left in a tier below which its rerank is not sent (it could not finish)
 JEV_HISTORY_NOTE = ("Earlier turns of this coding-assistant conversation, oldest first. Only typed text "
                     "and assistant replies are shown; tools are listed by name.")
 _JEV_ABRIDGE_HEAD, _JEV_ABRIDGE_TAIL = 400, 150
@@ -1969,11 +2000,38 @@ class JevModelMismatch(ValueError):
     """Jev answered with a model other than the pinned one: the calibration does not hold for it."""
 
 
+def _jevd_ladder():
+    """jevd's ladder as bench tiers (ADR-0080), or None when JEVD_URL is unset or jevd does not answer in time.
+    A tier is one jevd provider: its name (the pin), model, per-call `timeout`, `span` when jevd sets span_s,
+    and whether jevd holds its key. No key ever reaches this hook."""
+    if JEVD_URL is None:
+        return None
+    try:
+        req = urllib.request.Request(JEVD_URL + "/ladder", headers={"User-Agent": JEV_USER_AGENT})
+        with _OPENER.open(req, timeout=JEVD_LADDER_TIMEOUT_S) as resp:
+            providers = json.loads(resp.read())["providers"]
+        tiers = []
+        for p in providers:
+            tier = {"ep": "jevd", "name": str(p["name"]), "model": str(p["model"]),
+                    "url": JEVD_URL + "/v1/systemone", "timeout": float(p["timeout_s"]), "keyed": bool(p.get("key"))}
+            if p.get("span_s"):
+                tier["span"] = float(p["span_s"])
+            tiers.append(tier)
+        return tiers or None
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+        return None
+
+
 def _jev_bench() -> list:
-    """The ordered SystemOne tiers one turn may try (ADR-0075), from ENFORCER_JEV_BENCH: space-separated
-    `<endpoint>:<model>`, endpoint `ts` (TypeSafe: ENFORCER_JEV_URL, TYPESAFE_API_KEY, the warm relay) or
-    `gw` (the owner's gateway, JEV_GW_URL). Unset = TypeSafe alone with JEV_MODEL, as before. A malformed
-    entry, or a `gw` entry with no gateway configured, is dropped — the hook never fails on config."""
+    """The ordered SystemOne tiers one turn may try: jevd's ladder when jevd answers (ADR-0080), else
+    ENFORCER_JEV_BENCH (ADR-0075): space-separated `<endpoint>:<model>`, endpoint `ts` (TypeSafe:
+    ENFORCER_JEV_URL, TYPESAFE_API_KEY, the warm relay), `gw` (the owner's gateway, JEV_GW_URL) or `cc`
+    (Command Code, CMD_API_KEY, ADR-0079; its tier carries a `span`). Unset = TypeSafe alone with JEV_MODEL, as
+    before. A malformed entry, or a `gw` entry with no gateway configured, is dropped — the hook never fails on
+    config."""
+    jevd = _jevd_ladder()
+    if jevd is not None and any(t["keyed"] for t in jevd):   # a jevd without keys must not switch Jev off
+        return jevd
     tiers = []
     for entry in os.environ.get("ENFORCER_JEV_BENCH", f"ts:{JEV_MODEL}").split():
         ep, _, model = entry.partition(":")
@@ -1983,14 +2041,22 @@ def _jev_bench() -> list:
             tiers.append({"ep": "ts", "model": model, "url": JEV_URL, "timeout": JEV_TIMEOUT_S})
         elif ep == "gw" and JEV_GW_URL:
             tiers.append({"ep": "gw", "model": model, "url": JEV_GW_URL, "timeout": JEV_GW_TIMEOUT_S})
+        elif ep == "cc":
+            tiers.append({"ep": "cc", "model": model, "url": JEV_CC_URL, "timeout": JEV_CC_TIMEOUT_S,
+                          "span": JEV_CC_TIMEOUT_S})
     return tiers
 
 
 def _jev_key(tier: dict) -> str:
-    """Per endpoint, read per call: TypeSafe's own key, or the gateway's (ENFORCER_JEV_KEY, else the
-    FLYWHEEL_LLM_* seam's key)."""
+    """Per endpoint, read per call: TypeSafe's own key, the gateway's (ENFORCER_JEV_KEY, else the
+    FLYWHEEL_LLM_* seam's key), or Command Code's (CMD_API_KEY). A jevd tier has no key here: jevd holds it,
+    and the marker returned only says it does (it is never sent)."""
+    if tier["ep"] == "jevd":
+        return "jevd" if tier.get("keyed") else ""
     if tier["ep"] == "gw":
         return os.environ.get("ENFORCER_JEV_KEY") or os.environ.get("FLYWHEEL_LLM_API_KEY", "")
+    if tier["ep"] == "cc":
+        return os.environ.get("CMD_API_KEY", "")
     return os.environ.get("TYPESAFE_API_KEY", "")
 
 
@@ -2024,20 +2090,27 @@ def _jev_answers(resp: dict, pinned: str = None):
 
 
 def _jev_call(state: dict, questions: dict, tier: dict, key: str, timeout: float):
-    """One System One request on one bench tier -> (answers, via, returned model). A TypeSafe tier goes
-    through the local index owner's warm relay (which forwards to TypeSafe only); a shim without the route
-    (404) or not listening falls back to one direct call. A gateway tier is always direct. A timeout is not
-    retried — the per-turn budget is spent."""
+    """One System One request on one bench tier -> (answers, via, returned model). A TypeSafe or Command Code
+    tier goes through the local index owner's warm relay (/jev, /jev/cc: fixed destinations, ADR-0081); an
+    owner without the route (404) or not listening falls back to one direct call. A gateway tier is always direct.
+    A timeout is not retried on the same tier. A jevd tier is pinned to its provider, sends no key, and gives jevd
+    this call's limit as its budget."""
     body = {"model": tier["model"], "state": state, "questions": questions}
-    auth = {"Authorization": "Bearer " + key}
-    if tier["ep"] == "ts" and JEV_RELAY_URL is not None:
+    if tier["ep"] == "jevd":
+        hdr = {"User-Agent": JEV_USER_AGENT, "X-Jevd-Provider": tier["name"], "X-Jevd-Budget": f"{timeout:.3f}"}
+        answers, model = _jev_answers(_post_json(_jev_direct_url(tier["url"], "jevd"), body, timeout, hdr),
+                                      tier["model"])
+        return answers, "jevd", model
+    auth = {"Authorization": "Bearer " + key, "User-Agent": JEV_USER_AGENT}
+    relay = {"ts": JEV_RELAY_URL, "cc": JEV_CC_RELAY_URL}.get(tier["ep"])
+    if relay is not None:
         try:
-            answers, model = _jev_answers(_post_json(JEV_RELAY_URL, body, timeout,
+            answers, model = _jev_answers(_post_json(relay, body, timeout,
                                                      {**auth, "X-Jev-Timeout": str(timeout)}), tier["model"])
             return answers, "relay", model
         except urllib.error.HTTPError as e:
-            # The relay answers an upstream timeout with 502 {"error": "<exception class>"}: that is a
-            # timeout (the chain ends), not a fast failure to re-send on the next tier.
+            # The relay answers an upstream timeout with 502 {"error": "<exception class>"}: recorded as the
+            # timeout it is, never re-sent direct to the same upstream.
             if e.code == 502 and _jev_relay_timeout(e):
                 raise TimeoutError("relay: upstream timeout") from e
             if e.code != 404:
@@ -2050,6 +2123,27 @@ def _jev_call(state: dict, questions: dict, tier: dict, key: str, timeout: float
     return answers, "direct", model
 
 
+def _jev_call_capped(state: dict, questions: dict, tier: dict, key: str, timeout: float):
+    """`_jev_call` under a wall-clock limit (ADR-0079). urllib's timeout bounds each socket operation, not the
+    call: live Command Code turns ran a second and more past their 5 s span, which left TypeSafe no time and the
+    turn no verdict. Past the limit the call is abandoned (its daemon thread ends with its own socket timeout or
+    with the hook) and reported as a timeout, so the next tier starts on time."""
+    box = {}
+
+    def run():
+        try:
+            box["ok"] = _jev_call(state, questions, tier, key, timeout)
+        except BaseException as e:  # noqa: BLE001 — re-raised in the caller's thread
+            box["err"] = e
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"no answer within {timeout:.2f} s")
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
+
 def _jev_relay_timeout(e: urllib.error.HTTPError) -> bool:
     """True when a relay 502's JSON body names a timeout class."""
     try:
@@ -2059,26 +2153,25 @@ def _jev_relay_timeout(e: urllib.error.HTTPError) -> bool:
     return err in ("TimeoutError", "timeout", "ReadTimeout")
 
 
-def _jev_timed_out(e: BaseException) -> bool:
-    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
-
-
 def _jev_route(prompt: str, transcript_path: str) -> dict:
     """One ADR-0061 routing decision -> {"result": (verdict, rows, best_fit) | None, "event": {...}}.
     Result None = not eligible or failed: the embedding path decides. Runs in a worker thread, so
     it returns its telemetry instead of writing module state."""
-    bench = _jev_bench()
-    if not (JEV_ROUTER and _is_english(prompt) and any(_jev_key(t) for t in bench)):
+    if not (JEV_ROUTER and _is_english(prompt)):
         return {"result": None, "event": None}
-    t0 = time.time()
+    t0 = time.time()   # before the jevd ladder fetch, so the fetch spends this turn's budget
+    bench = _jev_bench()
+    if not any(_jev_key(t) for t in bench):
+        return {"result": None, "event": None}
     deadline = t0 + JEV_BUDGET_S
+    src = {"bench": "jevd" if bench[0]["ep"] == "jevd" else "env"}
     fell, err = [], "NoTier"
     try:
         catalog = _jev_catalog()
         prev, skills = _jev_context(transcript_path)
     except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
             http.client.HTTPException) as e:
-        return {"result": None, "event": _jev_err(type(e).__name__, t0)}
+        return {"result": None, "event": {**_jev_err(type(e).__name__, t0), **src}}
     if JEV_HISTORY:   # the history's redaction rule covers every text this flag lets leave the machine
         prev = _jev_redact(prev)
     state = {"request": prompt[:JEV_MAX_CHARS], "recent_context": prev,
@@ -2088,8 +2181,9 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
     if JEV_HISTORY:   # fitted alongside the wide call, never ahead of it
         hth, hbox = _jev_history_start(transcript_path, prompt, skills)
     hist_ev = None
-    # ADR-0075: tiers in order. A fast failure moves the turn to the next tier when that tier can still
-    # finish inside the budget; a timeout ends the chain (its budget is spent, the call may be billed).
+    # ADR-0075 tiers in order; ADR-0079: any failure, a timeout included, moves the turn to the next tier that
+    # can still finish inside the budget (a timed-out call may still be billed — the owner's accepted cost). A
+    # tier with a `span` (Command Code) may spend only that much of the turn, so the tiers behind it keep theirs.
     for i, tier in enumerate(bench):
         key = _jev_key(tier)
         if not key:
@@ -2097,17 +2191,20 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             continue
         if deadline - time.time() < tier["timeout"]:
             fell.append([tier["model"], "NoTime"])
-            break
+            continue
+        tdl = min(deadline, time.time() + tier.get("span", JEV_BUDGET_S))
         try:
-            wide, via, answered = _jev_call(state, _jev_wide_questions(catalog), tier, key,
-                                  min(tier["timeout"], deadline - time.time()))
+            wide, via, answered = _jev_call_capped(state, _jev_wide_questions(catalog), tier, key,
+                                  min(tier["timeout"], tdl - time.time()))
             t1 = time.time()
             shortlist = [(n, desc[n]) for n in _jev_shortlist(wide) if n in desc]
             if not shortlist:
                 raise ValueError("wide answer names none of the catalogue")
             rstate, hist_ev = state, None
             if hth is not None:
-                hth.join(min(JEV_HISTORY_JOIN_S, max(0.0, deadline - time.time() - tier["timeout"])))
+                # leave the rerank one call's time; a span tier's timeout is its whole span, so reserve TypeSafe's
+                need = JEV_TIMEOUT_S if "span" in tier else tier["timeout"]
+                hth.join(min(JEV_HISTORY_JOIN_S, max(0.0, tdl - time.time() - need)))
                 hist = None if hth.is_alive() else hbox.get("hist")
                 if hist is not None:
                     rstate = _jev_history_state(prompt, skills, hist)
@@ -2116,24 +2213,23 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
                 else:
                     hist_ev = {"err": "Slow" if hth.is_alive() else (hbox.get("err") or "Empty")}
             questions = _jev_rerank_questions(shortlist)
-            rerank, _, _ = _jev_call(rstate, questions, tier, key,
-                                  max(0.05, min(tier["timeout"], deadline - time.time())))
+            if tdl - time.time() < JEV_RERANK_MIN_S:   # a doomed call would still be billed: hand over now
+                raise TimeoutError("tier time spent before the rerank")
+            rerank, _, _ = _jev_call_capped(rstate, questions, tier, key,
+                                  max(0.05, min(tier["timeout"], tdl - time.time())))
             verdict, rows, conf, best = _jev_decide(rerank, shortlist)
             if verdict == "skip" and rstate is not state:
                 # History alone must never cause the authorized skip: a skip needs today's state to agree.
                 hist_ev["reask"] = True
-                if deadline - time.time() < JEV_REASK_MIN_S:
+                if tdl - time.time() < JEV_REASK_MIN_S:
                     return {"result": None, "event": {**_jev_err("HistorySkip", t0), "model": tier["model"],
-                                                      "hist": hist_ev}}
-                rerank, _, _ = _jev_call(state, questions, tier, key,
-                                      max(0.05, min(tier["timeout"], deadline - time.time())))
+                                                      "hist": hist_ev, **src}}
+                rerank, _, _ = _jev_call_capped(state, questions, tier, key,
+                                      max(0.05, min(tier["timeout"], tdl - time.time())))
                 verdict, rows, conf, best = _jev_decide(rerank, shortlist)
         except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
                 http.client.HTTPException) as e:
             err = type(e).__name__
-            if _jev_timed_out(e):
-                return {"result": None, "event": {**_jev_err(err, t0), **({"fell": fell} if fell else {}),
-                                                  "model": tier["model"]}}
             fell.append([tier["model"], err])
             continue
         return {"result": (verdict, rows, best), "event": {
@@ -2143,9 +2239,9 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             # which tier answered (`rmodel` = the exact id Jev returned: a new dated snapshot under the same
             # pin shows here), and the env-tunable settings, which leave no commit for the epoch windows to see
             "model": tier["model"], "rmodel": answered, "tier": i, "floor": JEV_FITS_FLOOR,
-            "to": tier["timeout"],
+            "to": tier["timeout"], **({"prov": tier["name"]} if "name" in tier else {}), **src,
             **({"fell": fell} if fell else {}), **({"hist": hist_ev} if hist_ev else {})}}
-    return {"result": None, "event": {**_jev_err(err, t0), "fell": fell}}
+    return {"result": None, "event": {**_jev_err(err, t0), "fell": fell, **src}}
 
 
 def _jev_err(name: str, t0: float) -> dict:

@@ -607,3 +607,16 @@ plugin-level customization layer and these engine patches.
   `pip install --force-reinstall --no-deps vendor/skill-search`) plus an MCP restart; no reindex.
   Covered by `tests/test_consult_slots.py` and `tests/test_consult_rrf.py`. Not upstream: re-apply
   on re-vendor.
+
+- **`index_owner.py` `/jev` relay serves Command Code too (ADR-0081, 2026-10-06):**
+  the relay is now a small fixed table `JEV_DESTS` (`ts` = `api.typesafe.ai` `/v1/systemone`, `cc` =
+  `api.commandcode.ai` `/provider/v1/systemone`), one URL path each: `POST /jev` stays TypeSafe, `POST /jev/cc` is
+  Command Code. A path, not a header, picks the destination, so an owner that predates this change answers 404
+  on `/jev/cc` and the hook calls Command Code directly; a Command Code key never reaches TypeSafe. One pool
+  per destination; `_jev_alive` checks a pooled connection is still open before reuse; `_JEV_SEND_STALE` limits
+  the single re-send to errors raised while WRITING onto a pooled connection, never after the whole request was
+  sent (the old relay re-sent then and could bill twice); the User-Agent is `skill-concierge` (Command Code's
+  Cloudflare front refuses Python's default, error 1010). `_jev_warm_loop` ticks every 30 s and, for a
+  destination used in the last 30 minutes, keeps one open connection with a keyless GET (refused 401, nothing
+  billed; a TCP+TLS-only connection is dropped within 15 s); a pooled connection idle over 180 s is replaced.
+  Covered by `tests/test_owner_jev_relay.py`. Not upstream: re-apply on re-vendor.

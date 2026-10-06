@@ -1,0 +1,21 @@
+catalogue 571 skills, 3 wide chunks
+run0 cc: 4.63s model=typesafe/jev in_tok=27411
+run0 ts: 0.59s model=jev-1.13.0 in_tok=27411
+run1 cc: 2.96s model=typesafe/jev in_tok=27411
+run1 ts: 0.78s model=jev-1.13.0 in_tok=27411
+run2 cc: 2.61s model=typesafe/jev in_tok=27411
+run2 ts: 0.80s model=jev-1.13.0 in_tok=27411
+run3 cc: 2.24s model=typesafe/jev in_tok=27411
+run3 ts: 0.66s model=jev-1.13.0 in_tok=27411
+run4 cc: 13.08s model=typesafe/jev in_tok=27411
+run4 ts: 0.62s model=jev-1.13.0 in_tok=27411
+run5 cc: 2.61s model=typesafe/jev in_tok=27411
+run5 ts: 0.98s model=jev-1.13.0 in_tok=27411
+run6 cc: 2.56s model=typesafe/jev in_tok=27411
+run6 ts: 0.69s model=jev-1.13.0 in_tok=27411
+run7 cc: 2.39s model=typesafe/jev in_tok=27411
+run7 ts: 0.60s model=jev-1.13.0 in_tok=27411
+run8 cc: 2.26s model=typesafe/jev in_tok=27411
+run8 ts: 0.72s model=jev-1.13.0 in_tok=27411
+run9 cc: 5.00s model=typesafe/jev in_tok=27411
+run9 ts: 0.71s model=jev-1.13.0 in_tok=27411
