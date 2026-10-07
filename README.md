@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.61.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.61.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -309,7 +309,7 @@ python3 scripts/reputation.py list                         # both tiers and the 
 python3 scripts/reputation.py add heart ak-code-review     # house favourite
 python3 scripts/reputation.py add star 'pstack:*'          # trust a whole family
 python3 scripts/reputation.py why ak-git                   # which badge, from which entry
-python3 scripts/reputation.py suggest [--apply]             # tier changes from usage; --apply writes them
+python3 scripts/reputation.py suggest [--apply]             # tier changes from usage; --apply writes ⭐ adds and removals, never a ❤️
 ```
 
 ### External catalogs (search without installing)
@@ -459,6 +459,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.61.1` — **published, ❤️ is owner-only (ADR-0084): `reputation.py suggest --apply` writes only ⭐ additions and removals of uninstalled entries; ❤️ promotions and demotions print as review lines for the owner to run.**
 
 `0.61.0` — **published, owner reputation badges (ADR-0083): ❤️ house favourite and ⭐ trusted from `reputation.json`, plus automatic 🔥 for skills used in 5+ sessions in 30 days, show next to menu rows without moving them; a legend carries the choosing rule; a ranked skill Jev placed 6th-10th with fit ≥ 0.5 joins under the five rows; the `reputation` skill manages the list and `suggest [--apply]` proposes tier changes from usage; epoch-watch W41.**
 

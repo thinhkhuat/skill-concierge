@@ -5,7 +5,7 @@ description: Manage the owner's skill ranking — the ❤️ house-favourite and
 argument-hint: "[list | add heart|star <skill> | remove <skill> | why <skill> | suggest [--apply]]"
 license: MIT
 metadata:
-  version: 0.2.0
+  version: 0.3.0
 ---
 
 # skill-concierge reputation
@@ -60,8 +60,9 @@ then the rest, preferring 🔥 inside each group. A ❤️ or ⭐ skill that Jev
    A ❤️ with no recorded use for 90 days prints as a **review** line only: the log misses
    rule-driven use (an agent writing an intent brief because a rule says so) and direct SKILL.md
    reads, so taking a ❤️ away stays the user's call. Each line prints the command that applies it.
-   Show the list to the user; `--apply` writes the promote, add and remove lines (the file is
-   backed up beside itself first) and never touches a ❤️. Bad input fails closed: no removal when
+   Show the list to the user. ❤️ is the user's own judgement, so ❤️ promotions print as `? ❤️`
+   lines like the reviews; `--apply` writes only the ⭐ add and remove lines (the file is backed up
+   beside itself first) and never adds or removes a ❤️. Bad input fails closed: no removal when
    the installed view is incomplete (and never for another harness's plugin), no review lines when
    the usage log covers less than 90 days; usage under a skill's frontmatter name (`ak:cook`)
    counts for its directory name (`ak-cook`), as on the menu:

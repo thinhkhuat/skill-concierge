@@ -25,8 +25,9 @@ SUGGEST (the owner's maintenance pass; run it monthly)
   ✗  remove   an exact entry no longer installed, or a pattern that matches nothing installed
   ?  review   a ❤️ entry with no recorded use for 90 days. Printed only, never applied: the log
               misses rule-driven use and direct SKILL.md reads, and a ❤️ is the owner's judgement
-A "use" is a Skill-tool load or a get_skill read in the ledger. --apply writes promote, add and
-remove lines and leaves every ❤️ in place (the owner's choice, 2026-10-07).
+A "use" is a Skill-tool load or a get_skill read in the ledger. ❤️ is the owner's judgement, so
+--apply never adds or removes one: it writes the add and remove lines, and promote and review lines
+change only when the owner runs their command (the owner's choice, 2026-10-07, ADR-0084).
 
 NAMES
   An exact entry matches the menu's name exactly (`ak-code-review`, `pstack:architect`).
@@ -283,14 +284,14 @@ def cmd_suggest(args):
     if not sugg:
         print("no suggestions: the ranking matches usage and what is installed")
         return 0
-    labels = {"promote": "❤️ promote", "add": "⭐ add", "review": "? review", "remove": "✗ remove"}
+    labels = {"promote": "? ❤️ promote", "add": "⭐ add", "review": "? ❤️ review", "remove": "✗ remove"}
     for action, tier, n, why in sugg:
         cmd = f"remove {shlex.quote(n)}" if action == "remove" else f"add {tier} {shlex.quote(n)}"
-        print(f"  {labels[action]:10s} {n} — {why}   [reputation.py {cmd}]")
+        print(f"  {labels[action]:12s} {n} — {why}   [reputation.py {cmd}]")
     n_apply = sum(1 for s in sugg if s[0] in APPLIED)
     if not args.apply:
-        print(f"{len(sugg)} suggestion(s). `reputation.py suggest --apply` writes the {n_apply} promote/add/remove "
-              "line(s); review lines change only when you run their command. (Full path: "
+        print(f"{len(sugg)} suggestion(s). `reputation.py suggest --apply` writes the {n_apply} add/remove "
+              "line(s); ❤️ lines (marked ?) change only when you run their command. (Full path: "
               "python3 \"$CLAUDE_PLUGIN_ROOT/scripts/reputation.py\".)")
         return 0
     p = _path()
@@ -300,15 +301,15 @@ def cmd_suggest(args):
         bak.write_bytes(p.read_bytes())
         print(f"backup: {bak}")
     _save(_apply(raw, sugg))
-    print(f"applied {n_apply} suggestion(s) to {p}; {len(sugg) - n_apply} review line(s) left for you")
+    print(f"applied {n_apply} suggestion(s) to {p}; {len(sugg) - n_apply} ❤️ line(s) left for you")
     return 0
 
 
-APPLIED = ("promote", "add", "remove")
+APPLIED = ("add", "remove")   # ADR-0084: ❤️ changes only by the owner's own command
 
 
 def _apply(raw: dict, sugg: list) -> dict:
-    """Pure: the ranking with every promote/add/remove written; review lines never touch a ❤️."""
+    """Pure: the ranking with every add/remove written; a ❤️ is never added or removed here."""
     for action, tier, n, _why in sugg:
         if action not in APPLIED:
             continue
@@ -347,7 +348,7 @@ def cmd_selftest(_):
         ("remove", None, "zz-*"),              # pattern matches nothing installed
     ], got
     applied = _apply({"heart": ["hot", "idle", "gone"], "star": ["ak-*", "zz-*", "warm"]}, got)
-    assert applied == {"heart": ["hot", "idle", "rising"], "star": ["ak-*", "warm", "fresh"]}, applied
+    assert applied == {"heart": ["hot", "idle"], "star": ["ak-*", "warm", "fresh"]}, applied   # no ❤️ change
     # bad input fails closed: no removal from an incomplete view, no review from a short log,
     # and an entry for a plugin Claude Code does not know is left for the harness that owns it
     quiet = _suggestions(raw, inst, {}, {}, proven_min=5, can_remove=False, can_review=False)

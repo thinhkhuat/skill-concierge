@@ -3,6 +3,14 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.61.1] - 2026-10-07
+
+### Changed
+- **`suggest --apply` never adds or removes a ❤️ (ADR-0084).** ❤️ promotions now print as `? ❤️`
+  lines beside the reviews and change only when the owner runs their command; `--apply` writes the ⭐
+  additions and the removals of entries no longer installed. Usage already has its own badge, 🔥, so
+  auto-promotion only made ❤️ grow until it stopped marking the owner's picks.
+
 ## [0.61.0] - 2026-10-07
 
 ### Added
