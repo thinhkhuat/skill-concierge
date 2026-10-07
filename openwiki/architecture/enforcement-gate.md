@@ -37,17 +37,21 @@ The standing order it injects — the **SKILL-FIRST doctrine**:
   `USING: <skill>` | `SEARCH: <query>` | `NO SKILL: <why>` (the skip, its reason on the same line;
   the older `SKIPPING` token before `0.52.0`), written *before* anything else.
 - **Know which offer you hold.** A *whole-shelf ranking* (the router judged every skill you can use
-  for this turn) or a *preview* (the top few of a far larger shelf). A fitting row is a `USING:`;
-  when none fits, **SEARCH the full index** — after a whole-shelf ranking, with terms it may have
-  missed — by intent + domain terms (2–3 phrasings via `extra_queries`), never by the raw user
+  for this turn) or a *preview* (the top few of a far larger shelf). A fitting row is a `USING:`.
+  When no row of a whole-shelf ranking fits, the agent rules out its top row by name
+  (`NO SKILL: whole-shelf — <top row>: <what it does>; <why this task lies outside it>`), or searches
+  with terms the ranking may have missed when it expects a skill the ranking did not show
+  ([ADR-0082](../../docs/adr/0082-whole-shelf-ranking-is-a-skip-source.md)). When no row of
+  a preview fits, it must **SEARCH the full index** — by intent + domain terms (2–3 phrasings via `extra_queries`), never by the raw user
   sentence. A `SEARCH:` token is a promise that the `search_skills` call appears **this reply**;
   narrating an un-run search is a FALSE REPORT. The per-turn offer says which kind it is.
 - **Rule on the hits — the take-bar equals the skip-bar.** A loosely-adaptable fit is a `USING:`;
   `NO SKILL:` after a search states the query and, for the top hit, what it does and why the task
   lies outside it. Naming an unfit skill just to pass the gate is the mirror failure — a FALSE
   REPORT.
-- **A lawful skip has exactly two sources** (rule 4, the single definition every other line points
-  at): a shown search whose hits are not even loosely adaptable, or an enforcer `SKILL-CHECK:` line
+- **A lawful skip has exactly three sources** (rule 4, the single definition every other line points
+  at): a shown search whose hits are not even loosely adaptable; a whole-shelf ranking whose top row
+  the agent rules out by name (ADR-0082); or an enforcer `SKILL-CHECK:` line
   that itself states the turn is non-task / conversational / harness-generated / a self-recap, or
   that no installed skill does what it asks (the router's no-fit leg). The
   line authorizes the ruling it states; when it says the turn may be real work it is an order to

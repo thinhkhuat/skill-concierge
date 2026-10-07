@@ -13,6 +13,16 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.60.0 — whole-shelf ranking as a skip source (ADR-0082)
+
+**Epoch starts.** W40: the go-live of the ADR-0082 doctrine and offer line on each harness. Trail-side only: retrieval, gates, bands and the ledger schema are unchanged, so the router watches (W21-W24, W38, W39) do not restart here. The audit's false-skip, search-backed and `shelf_skip` shares re-baseline from this release.
+
+| # | Watch | How | Trigger | Action |
+|---|-------|-----|---------|--------|
+| W40 | Skills missed after a whole-shelf skip | `python3 skills/skill-usage-audit/scripts/audit_skill_usage.py --since "<go-live>"` for `shelf_skip` and the remaining false skips on enforcer-run work turns; `plans/261007-2024-search-value-after-whole-shelf/search_value.py --since "<go-live>" --list search_new_hit` for searches that still find a missed skill (this goes quiet once agents stop searching, so also replay `search_skills` offline, after a reindex, on a sample of 30 `shelf_skip` prompts and count hits the agent would have taken); Claude Code transcripts only; hand-read a sample of `shelf_skip` rulings for a top row named but the task plainly needing a skill (the owner's correction counts) | a missed skill the agent should have used on more than 2 of 50 `shelf_skip` turns; `shelf_skip` rulings that name the top row without a real reason (copy-paste) on more than 5 of 50; or, once 100 organic whole-shelf work turns exist, the take rate (skill used from the offer, no search) below 45 % or the search-free skip rate above 20 % (pre-change baseline 52.5 % and 11.8 %, `search_value.py`, 305 turns since 0.52.3) | restore the forced search: revert the doctrine and `WHOLE_SHELF_TAIL` (the audit change can stay); if only reasons are hollow, tighten the doctrine's wording, not the source |
+
+---
+
 ## Unreleased — Command Code Jev tier, timeout fall-through, 7.8 s budget (ADR-0079); jevd as the bench source (ADR-0080)
 
 **Epoch starts.** W38: the go-live of the ADR-0079 enforcer on each harness (until then an older enforcer drops the `cc:` bench entry and stays TypeSafe-first). This changes `hooks/scripts/enforcer.py` (budget cap 3.0 -> 7.8 s, timeout fall-through), so router rates (W21-W24) restart here and must be read per `tier`. The Command Code and DSH adapters run with `ENFORCER_JEV_BUDGET=1.6` and never use the `cc` tier.

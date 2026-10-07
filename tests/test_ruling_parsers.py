@@ -81,7 +81,7 @@ def test_audit_ignores_authorization_lines_other_records_quote(tmp_path, monkeyp
         recs += [_user(f"turn {i}"), q, _say("NO SKILL: hook-cleared — quoted line")]
     r = _audit(tmp_path, monkeypatch, recs)
     assert (r["false_skip"], r["authorized_skip"]) == (len(quoted), 0)
-    assert r["enforcer_verdicts"] == (0, 0, 0)
+    assert r["enforcer_verdicts"] == (0, 0, 0, 0)
 
 
 def test_audit_reads_markdown_wrapped_and_any_case_rulings(tmp_path, monkeypatch):
@@ -125,7 +125,7 @@ def test_audit_scopes_a_verdict_to_turns_the_enforcer_ran(tmp_path, monkeypatch)
         _user("Stop hook feedback: finish the task"), _say("NO SKILL: continuing"),
     ])
     assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (2, 0, 0)
-    assert r["enforcer_verdicts"] == (1, 0, 0)
+    assert r["enforcer_verdicts"] == (1, 0, 0, 0)
 
 
 def test_a_consult_route_turn_is_an_enforcer_run_turn(tmp_path, monkeypatch):
@@ -133,7 +133,7 @@ def test_a_consult_route_turn_is_an_enforcer_run_turn(tmp_path, monkeypatch):
         _user("which skills fit this"), _hook("CONSULT-ROUTE · this turn asks for a deliberated skill curation.\nreply line 1 = USING: skill-concierge:consult"),
         _say("NO SKILL: answering directly"),
     ])
-    assert r["enforcer_verdicts"] == (1, 0, 0)
+    assert r["enforcer_verdicts"] == (1, 0, 0, 0)
 
 
 def test_an_authorization_that_arrives_after_the_ruling_does_not_count(tmp_path, monkeypatch):
@@ -142,7 +142,7 @@ def test_an_authorization_that_arrives_after_the_ruling_does_not_count(tmp_path,
         _user("turn one"), _say("NO SKILL: nothing fits"), _hook(AUTH),
     ])
     assert (r["false_skip"], r["authorized_skip"]) == (1, 0)
-    assert r["enforcer_verdicts"] == (0, 0, 0)
+    assert r["enforcer_verdicts"] == (0, 0, 0, 0)
 
 
 def test_the_audit_counts_each_skip_form_and_reads_bold_rulings(tmp_path, monkeypatch):
@@ -192,7 +192,7 @@ def test_the_june_enforcer_head_still_marks_an_enforcer_run_turn(tmp_path, monke
         _user("turn one"), _hook("SKILL-FIRST (standing order) — rule on the preview below"),
         _say("NO SKILL: nothing fits"),
     ])
-    assert r["enforcer_verdicts"] == (1, 0, 0)
+    assert r["enforcer_verdicts"] == (1, 0, 0, 0)
 
 
 def test_prose_is_not_a_ruling_even_when_it_looks_like_one():
@@ -558,7 +558,7 @@ def test_a_programs_string_prompt_opens_an_unscored_turn(tmp_path, monkeypatch):
         _say("NO SKILL: nothing fits"),
     ])
     assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (1, 0, 0)
-    assert r["work_verdicts"] == (0, 0, 0)
+    assert r["work_verdicts"] == (0, 0, 0, 0)
     # Other records in an SDK-launched session are not a program's prompt: a notification there stays scored.
     r = _audit(tmp_path / "sdk-note", monkeypatch, [
         _user("turn one"), _say("USING: study"),
@@ -576,7 +576,7 @@ def test_the_work_opened_subset_is_counted_apart(tmp_path, monkeypatch):
         _say("NO SKILL: no hit fits"),
     ])
     assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (2, 1, 0)
-    assert r["work_verdicts"] == (1, 1, 0)
+    assert r["work_verdicts"] == (1, 1, 0, 0)
 
 
 def test_a_meta_record_in_list_form_does_not_open_a_turn(tmp_path, monkeypatch):
@@ -628,3 +628,51 @@ def test_ranking_ties_break_by_name(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out.split("top skills")[1]
     ranked = [ln.split()[-1] for ln in out.splitlines() if "(tool " in ln]
     assert ranked == sorted(names), ranked
+
+
+SHELF = ("SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | NO SKILL: <why>.\n"
+         "Whole-shelf ranking for this task (every skill you can use judged):\n"
+         "  • tui-fundamentals (40%) — terminal UIs\n  • prime-frontend (20%) — frontend primer\n")
+PREVIEW = SHELF.replace("Whole-shelf ranking for this task (every skill you can use judged)",
+                        "Preview for this task (the top few of a shelf of hundreds, not the shelf)")
+
+
+def test_whole_shelf_skip_is_lawful_only_when_it_names_the_top_row(tmp_path, monkeypatch):
+    """Rule 4's third source (ADR-0082): under the enforcer's own whole-shelf ranking, a skip that
+    rules out row 1 by name. Naming another row, skipping under a preview, or quoting the ranking
+    in the agent's own text does not count."""
+    line = "NO SKILL: whole-shelf — tui-fundamentals: builds terminal UIs; this is a web page default"
+    r = _audit(tmp_path, monkeypatch, [
+        _user("turn one"), _hook(SHELF), _say(line),
+        _user("turn two"), _hook(SHELF), _say("NO SKILL: whole-shelf — prime-frontend: primer; not that"),
+        _user("turn three"), _hook(PREVIEW), _say(line),
+        _user("turn four"), _say(SHELF + "\n" + line),
+        _user("turn five"), _hook(SHELF), _say("**NO SKILL: whole-shelf — `tui-fundamentals`: TUIs; web page**"),
+    ])
+    assert r["shelf_skip"] == 2
+    assert (r["false_skip"], r["lawful_skip"], r["authorized_skip"]) == (3, 0, 0)
+    assert r["enforcer_verdicts"] == (2, 0, 0, 2)
+
+
+def test_whole_shelf_head_matches_the_enforcer():
+    import re as _re
+    src = (ROOT / "hooks" / "scripts" / "enforcer.py").read_text()
+    head = _re.search(r'^WHOLE_SHELF_HEAD = "([^"\\]+)', src, _re.M).group(1)
+    assert head.startswith(A.WHOLE_SHELF_HEAD)
+
+
+def test_whole_shelf_skip_rejects_near_names_bare_names_and_later_previews(tmp_path, monkeypatch):
+    """Review findings on the first draft: a row whose name contains the top row's (`ak-git` vs
+    `git`), the top row mentioned only in the reason, a name with no reason, and a preview that
+    arrives after the ranking in the same turn are all false skips; a prefixed top row may be
+    named bare."""
+    git_top = SHELF.replace("tui-fundamentals", "git").replace("prime-frontend", "ak-git")
+    pref_top = SHELF.replace("tui-fundamentals", "pstack:recall")
+    r = _audit(tmp_path, monkeypatch, [
+        _user("one"), _hook(git_top), _say("NO SKILL: whole-shelf — ak-git: commits; not git work"),
+        _user("two"), _hook(SHELF), _say("NO SKILL: whole-shelf — prime-frontend: tui-fundamentals is TUIs"),
+        _user("three"), _hook(SHELF), _say("NO SKILL: whole-shelf — tui-fundamentals"),
+        _user("four"), _hook(SHELF), _hook(PREVIEW), _say("NO SKILL: whole-shelf — tui-fundamentals: TUIs; web page"),
+        _user("five"), _hook(pref_top), _say("NO SKILL: whole-shelf — recall: recaps work; this edits a file"),
+    ])
+    assert (r["false_skip"], r["shelf_skip"]) == (4, 1)

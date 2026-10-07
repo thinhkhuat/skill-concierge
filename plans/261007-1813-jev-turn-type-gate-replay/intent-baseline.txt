@@ -1,0 +1,8 @@
+pos: intent gate skips 37/313 = 11.8% (UCB95 15.9%)
+neg: intent gate skips 28/85 = 32.9%
+unl: intent gate skips 67/300 = 22.3%
+probe conv: skip=False | "jev should, first and foremost - decice this: is the user's "
+probe conv: skip=False | 'yes, your refined words made it much clearer and closer to m'
+probe conv: skip=False | 'both, had you forced to use the SEARCH protocol while in my '
+probe work: skip=False | "great. i've got a little more time for you to work on the an"
+probe work: skip=False | 'have the default UI to be set in VI please'

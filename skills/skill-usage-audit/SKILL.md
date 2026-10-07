@@ -40,12 +40,17 @@ python3 scripts/audit_skill_usage.py --since "<ship/commit time, e.g. 2026-06-29
 
 Outputs the scoped post-change counts (Skill-tool, `/slash`, and the `USING`/`SEARCH`/skip-ruling
 trail, skips split into `NO SKILL:` and the old `SKIPPING`), self/meta sessions flagged, plus a **false-SKIPPING** rate — per turn, a skip ruling (`NO SKILL:`, or the older `SKIPPING`)
-declared with NO same-turn `search_skills` call (the doctrine's hardest rule). A turn carrying the
+declared with none of the doctrine's three lawful sources (rule 4): a same-turn `search_skills` call
+before the ruling, the enforcer's `SKILL-CHECK:` line, or a whole-shelf ranking whose top row the
+ruling names (below). A turn carrying the
 enforcer's `SKILL-CHECK:` marker (`AUTHORIZED_SKIP_MARKER`, injected on the enforcer's five
 authorized-skip legs — getaway, intent_skip, selfref, the harness-message lane (ADR-0054) and the
 router's no-fit leg (ADR-0061) — see `hooks/scripts/enforcer.py`) is a **lawful, hook-pre-authorized
 skip**: it is excluded from the false-skip count and tallied separately as `authorized_skip`, reported
-alongside the false-skip figure so "false-SKIPPING" stays honestly defined. Since `0.52.0` the marker counts only from the enforcer's own output (`_enforcer_output`: a
+alongside the false-skip figure so "false-SKIPPING" stays honestly defined. The third lawful source
+(ADR-0082) is a whole-shelf ranking: a `NO SKILL: whole-shelf — <top row>: …` ruling counts as
+`shelf_skip` only when the enforcer's own output that turn carried the "Whole-shelf ranking" head and
+the ruling names that ranking's first row. Since `0.52.0` the marker counts only from the enforcer's own output (`_enforcer_output`: a
 UserPromptSubmit `hook_additional_context` attachment whose text starts with `SKILL-FIRST`,
 `SKILL-CHECK:` or `CONSULT-ROUTE`) — never from the agent's own text, a tool result, a file echo, a
 memory or instructions attachment, another hook or the session-start standing order, so a copied line

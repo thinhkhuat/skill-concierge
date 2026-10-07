@@ -1,0 +1,4 @@
+313 real skill turns with cached wide answers; families of the used skill: {'other': 261, 'ak': 46, 'matt': 7}
+jev   : used skill ranked 1st 100/313 (31.9%), in the 5-row offer 177/313 (56.5%); vs jev: gained 0, lost 0
+soft  : used skill ranked 1st 100/313 (31.9%), in the 5-row offer 170/313 (54.3%); vs jev: gained 2, lost 9
+strict: used skill ranked 1st 37/313 (11.8%), in the 5-row offer 151/313 (48.2%); vs jev: gained 2, lost 28

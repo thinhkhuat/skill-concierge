@@ -15,6 +15,8 @@
 > order governs *which / whether a skill* only.
 > The skip ruling is `NO SKILL: <why>` since v0.52.0 (ADR-0062); it replaced the older `SKIPPING` token.
 > The audit and the label extractor read both forms, so older transcripts stay comparable.
+> A whole-shelf ranking is the third skip source since ADR-0082: `NO SKILL: whole-shelf —`
+> naming the ranking's top row. The audit counts it lawful only when that name matches row 1.
 
 <!-- DOCTRINE-START -->
 
@@ -29,9 +31,12 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
 ```
 
 1. **Know which offer you hold.** A *whole-shelf ranking* judged every skill you can use for this turn;
-   a *preview* is the top few of a far larger shelf. A row that fits is a `USING:` now. When none
-   fits, rule `SEARCH:` — after a whole-shelf ranking, with terms it may have missed (a tool, a file
-   type, a domain name).
+   a *preview* is the top few of a far larger shelf. A row that fits, even loosely adapted (3), is a
+   `USING:` now. When no row of a whole-shelf ranking fits even loosely, rule out its top row by name
+   and the rows below it in the same reason:
+   `NO SKILL: whole-shelf — <top row>: <what it does>; <why this task lies outside it and the rows below>` — or rule
+   `SEARCH:` with terms the ranking may have missed (a tool, a file type, a domain name) when you
+   expect a skill it did not show. When no row of a preview fits, rule `SEARCH:`.
 
 2. **SEARCH in THIS reply, before you rule:**
    - tool: `mcp__plugin_skill-concierge_skill-search__search_skills`
@@ -50,8 +55,9 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
 
    **Continuing a skill.** To keep following a skill you invoked earlier this session when this turn's offer does not list it and the new work is the same task: line 1 `USING: <name> (continuing)`, then re-read its body in this reply with `get_skill` (rule 5) — your harness's skill tool only when that call is unavailable or cannot find the skill — before other work. The re-read stands in for the search; a body that excludes the new work is re-ruled as above.
 
-4. **A lawful skip has exactly two sources**, and `NO SKILL:` names which one: a search shown in this
-   reply whose hits fail the rule-3 bar; or a `SKILL-CHECK:` line from the enforcer saying this turn
+4. **A lawful skip has exactly three sources**, and `NO SKILL:` names which one: a search shown in this
+   reply whose hits fail the rule-3 bar; a whole-shelf ranking whose top row you rule out by name (1);
+   or a `SKILL-CHECK:` line from the enforcer saying this turn
    is non-task, conversational, harness-generated, a recap of your last message, or that no
    installed skill does what it asks. That line
    authorizes only the ruling it states (write `NO SKILL: hook-cleared — <its reason>`); when it
@@ -63,7 +69,8 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
    `USING: <name>` then means `get_skill("<name>")` and following that SKILL.md inline. Same
    take-bar as installed skills.
 
-6. **Red flags — a thought that skips without a source (4). Rule instead:**
+6. **Red flags — a thought that skips without a source (4). Rule instead** (under a whole-shelf
+   ranking, ruling out its top row by name (1) also answers each):
 
    | The thought | The ruling |
    |---|---|
@@ -75,7 +82,9 @@ NO SKILL: <why>       a lawful skip (4), its reason on the same line
 
    Naming an unfit skill to pass the gate is the mirror failure — a FALSE REPORT.
 
-Worked example: no row fits → `SEARCH: postgres schema migration` → `<hit>` → `USING: <hit>`.
+Worked examples. Preview, no row fits → `SEARCH: postgres schema migration` → `<hit>` → `USING: <hit>`.
+Whole-shelf ranking led by `tui-fundamentals`, task edits a web page's default language →
+`NO SKILL: whole-shelf — tui-fundamentals: builds terminal UIs; this task edits one web page setting, and no row below covers that`.
 
 This order binds every task turn for the whole session; unsure → it binds.
 

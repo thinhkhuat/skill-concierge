@@ -13,7 +13,7 @@ is separable:
                                 the usage-tracker both miss this.
   4. FALSE-SKIPPING verdict    : per turn, did a 'SKIPPING' declaration fire WITHOUT a real
                                 search_skills call in the same turn? (the doctrine's hardest
-                                rule — 'no search, no skip'). The ledger can't see this; it
+                                rule — 'a skip needs a source'). The ledger can't see this; it
                                 needs the transcript declaration trail joined per turn.
 
 Names are canonicalized (strip '/', drop args, ':'->'-', lowercase) so 'ck:journal'
@@ -258,6 +258,13 @@ def _note_used(rec, last_used, turn_no):
 # How every enforcer output string begins (hooks/scripts/enforcer.py: MANDATE / _ranked_mandate,
 # the *_SKIP_MSG legs, CONSULT_MANDATE). Keep in sync with those constants.
 _ENFORCER_HEADS = ("SKILL-FIRST", AUTHORIZED_SKIP_MARKER, "CONSULT-ROUTE")
+# Cross-file contract with hooks/scripts/enforcer.py WHOLE_SHELF_HEAD. Under a whole-shelf ranking a
+# skip that rules out the ranking's top row by name is lawful (doctrine rules 1 and 4; ADR-0082).
+WHOLE_SHELF_HEAD = "Whole-shelf ranking for this task"
+_OFFER_ROW = re.compile(r'^\s*•\s+([^\s(]+)', re.M)
+# `NO SKILL: whole-shelf — <name>: <reason>`: the one name after the dash, then a non-empty reason.
+_SHELF_RULING = re.compile(r'(?i)NO SKILL:[*`\s]*whole-shelf[*`\s]*[—–:-]+[*`\s]*'
+                           r'([^\s:*`]+(?::[^\s:*`]+)?)[*`\s]*:\s*(\S.*)')
 
 
 def _enforcer_output(rec):
@@ -275,6 +282,27 @@ def _enforcer_output(rec):
     c = a.get("content")
     return [x for x in (c if isinstance(c, list) else [c])
             if isinstance(x, str) and x.lstrip().startswith(_ENFORCER_HEADS)]
+
+def _shelf_top(outputs):
+    """The top row of a whole-shelf ranking among the enforcer's own outputs, or None."""
+    for x in outputs:
+        i = x.find(WHOLE_SHELF_HEAD)
+        if i != -1:
+            m = _OFFER_ROW.search(x, i)
+            return m.group(1) if m else None
+    return None
+
+
+def _shelf_skip_ok(line, top):
+    """A `NO SKILL: whole-shelf — <name>: <reason>` ruling whose one named skill IS the ranking's
+    top row, with a reason after it. The name may carry the row's plugin prefix or drop it
+    (`pstack:recall`, `pstack-recall`, `recall`); another row's name never matches, even when it
+    contains the top row's (`ak-git` is not `git`)."""
+    m = _SHELF_RULING.search(line or "") if top else None
+    if not m or len(m.group(2).strip(" *`.")) < 3:
+        return False
+    named, t = norm(m.group(1)), norm(top)
+    return named in {t, norm(top.split(":")[-1])}
 
 # ── H3 subagent/dispatch scoping (ADR-0020) ───────────────────────────────────
 # Default-ON, one-var revert (mirrors ENFORCER_AUTHORIZED_SKIP / SKILL_BODY_TRIGGERS).
@@ -410,16 +438,16 @@ def parse_since(s):
 
 
 def _skip_verdicts(turns):
-    """Pure verdict over per-turn flags [{'saw_search':bool,'saw_skip':bool,'saw_marker':bool}, ...].
+    """Pure verdict over per-turn flags [{'saw_search':bool,'saw_skip':bool,'saw_marker':bool,
+    'saw_shelf':bool}, ...].
 
-    Returns (false_skip, lawful_skip, authorized_skip). The doctrine's hardest rule is 'no
-    search, no skip': a turn that DECLARED `SKIPPING` with NO `search_skills` call in the
-    SAME turn is a false skip; one with a search is lawful. A turn carrying the enforcer's
-    AUTHORIZED_SKIP_MARKER is a lawful, hook-pre-authorized skip — tallied separately as
-    `authorized_skip` so it never inflates the false-skip count, even without a search.
-    Turns without a SKIPPING are ignored. Kept pure so --selftest pins the branching without
+    Returns (false_skip, lawful_skip, authorized_skip, shelf_skip). A skip ruling is lawful from
+    three sources (doctrine rule 4): a `search_skills` call in the SAME turn before the ruling
+    (`lawful_skip`); the enforcer's AUTHORIZED_SKIP_MARKER (`authorized_skip`); or a whole-shelf
+    ranking whose top row the ruling names (`shelf_skip`, ADR-0082). Any other skip is false.
+    Turns without a skip ruling are ignored. Kept pure so --selftest pins the branching without
     touching the filesystem."""
-    false_skip = lawful_skip = authorized_skip = 0
+    false_skip = lawful_skip = authorized_skip = shelf_skip = 0
     for t in turns:
         if not t.get("saw_skip"):
             continue
@@ -427,9 +455,11 @@ def _skip_verdicts(turns):
             authorized_skip += 1
         elif t.get("saw_search"):
             lawful_skip += 1
+        elif t.get("saw_shelf"):
+            shelf_skip += 1
         else:
             false_skip += 1
-    return false_skip, lawful_skip, authorized_skip
+    return false_skip, lawful_skip, authorized_skip, shelf_skip
 
 
 def _scrub(text):
@@ -450,7 +480,7 @@ def _false_skip_turns(turns):
     """Pure: turns that declared SKIPPING with NO same-turn search and NO authorized marker — the
     false skips whose rationalizations H1 harvests."""
     return [t for t in turns
-            if t.get("saw_skip") and not t.get("saw_search") and not t.get("saw_marker")]
+            if t.get("saw_skip") and not (t.get("saw_search") or t.get("saw_marker") or t.get("saw_shelf"))]
 
 
 def _harvest_corpus(turns, meta_sessions=None, subagent_stop=True):
@@ -517,6 +547,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
     def _new_turn(active, work=False):
         return {"saw_search": False, "saw_skip": False, "saw_marker": False, "saw_hook": False,
                 "marker_at_skip": False, "hook_at_skip": False, "search_at_skip": False,
+                "shelf_top": None, "shelf_at_skip": False,
                 "cont": {}, "loads": set(), "used_before": {}, "work": work,
                 "active": active, "skip_text": "", "sid": None, "skip_uid": None, "skip_own": False}
 
@@ -527,7 +558,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             return
         t = {"saw_search": turn["search_at_skip"], "saw_skip": True, "saw_marker": turn["marker_at_skip"],
              "saw_hook": turn["hook_at_skip"], "skip_text": turn["skip_text"], "sid": turn["sid"],
-             "sub": is_sub, "work": turn["work"]}
+             "sub": is_sub, "work": turn["work"], "saw_shelf": turn["shelf_at_skip"]}
         uid = turn["skip_uid"]
         if uid and uid in turn_at:
             # A resumed session's file copies the ruling; the copy in the session's own file wins.
@@ -619,6 +650,9 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
             # agent. Turns without it (Stop-hook feedback, subagent prompts) measure other hooks.
             if own:
                 cur["saw_hook"] = True
+                # The latest enforcer output governs: a preview or SKILL-CHECK line after a
+                # whole-shelf ranking (a queued prompt's) withdraws the ranking's skip source.
+                cur["shelf_top"] = _shelf_top(own)
             if since is not None:
                 e = ts_epoch(rec)
                 if e is None or e < since:
@@ -708,13 +742,14 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
                                 ls = txt.rfind("\n", 0, m.start()) + 1
                                 le = txt.find("\n", m.start())
                                 cur["skip_text"] = txt[ls: le if le != -1 else len(txt)].strip()
+                                cur["shelf_at_skip"] = _shelf_skip_ok(cur["skip_text"], cur["shelf_top"])
                             cur["saw_skip"] = True
         _close_continuations(cur)
         _flush_turn(cur, is_sub)   # the file's last turn
         if file_dispatch and file_sid:
             dispatch_sessions.add(file_sid)
 
-    false_skip, lawful_skip, authorized_skip = _skip_verdicts(turns)
+    false_skip, lawful_skip, authorized_skip, shelf_skip = _skip_verdicts(turns)
     enforcer_verdicts = _skip_verdicts([t for t in turns if t.get("saw_hook")])
     work_verdicts = _skip_verdicts([t for t in turns if t.get("work")])
 
@@ -734,6 +769,7 @@ def audit(since=None, meta_keywords=None, subagent_stop=None):
         "continuations_organic": _continuation_counts([u for u in cont_units if u[0] not in meta_sessions]),
         "continuation_units": sorted(((u, u[0] in meta_sessions) for u in cont_units), key=lambda x: x[0][1]),
         "false_skip": false_skip, "lawful_skip": lawful_skip, "authorized_skip": authorized_skip,
+        "shelf_skip": shelf_skip,
         "enforcer_verdicts": enforcer_verdicts, "work_verdicts": work_verdicts,
         "sess_skill": sess_skill, "sess_using": sess_using,
         "meta_sessions": meta_sessions, "dispatch_sessions": dispatch_sessions,
@@ -761,9 +797,20 @@ def main():
         t = [{"saw_skip": True, "saw_search": False, "saw_marker": False},  # SKIPPING, no search -> false
              {"saw_skip": True, "saw_search": True, "saw_marker": False},   # SKIPPING after a search -> lawful
              {"saw_skip": False, "saw_search": True, "saw_marker": False},  # no SKIPPING -> ignored
-             {"saw_skip": True, "saw_search": False, "saw_marker": True}]   # SKILL-CHECK: then SKIPPING -> authorized
-        fs, ls, az = _skip_verdicts(t)
-        verdict_ok = (fs == 1 and ls == 1 and az == 1)
+             {"saw_skip": True, "saw_search": False, "saw_marker": True},   # SKILL-CHECK: then SKIPPING -> authorized
+             {"saw_skip": True, "saw_search": False, "saw_marker": False, "saw_shelf": True}]  # top row ruled out -> shelf
+        fs, ls, az, sh = _skip_verdicts(t)
+        top = _shelf_top(["SKILL-FIRST · …\n" + WHOLE_SHELF_HEAD + " (every skill you can use judged):\n"
+                          "  • pstack:recall (40%) — …\n  • ak-git (20%) — …"])
+        verdict_ok = (fs == 1 and ls == 1 and az == 1 and sh == 1 and top == "pstack:recall"
+                      and _shelf_skip_ok("NO SKILL: whole-shelf — pstack-recall: recaps; this is an edit", top)
+                      and not _shelf_skip_ok("NO SKILL: whole-shelf — ak-git: commits; not that", top)
+                      and not _shelf_skip_ok("NO SKILL: pstack:recall does not fit", top)
+                      and _shelf_skip_ok("NO SKILL: whole-shelf — `recall`: recaps; this is an edit", top)
+                      and not _shelf_skip_ok("NO SKILL: whole-shelf — pstack:recall", top)
+                      and not _shelf_skip_ok("NO SKILL: whole-shelf — ak-git: commits; pstack:recall too", top)
+                      and not _shelf_skip_ok("NO SKILL: whole-shelf — ak-git: not git work", "git")
+                      and _shelf_top(["Preview for this task …\n  • pstack:recall (40%)"]) is None)
         # H1 harvest filter: capture rationalizations for false-skip turns ONLY, excluding
         # meta/self/dispatch (by sid) + subagent (by `sub`) turns + authorized-signature clauses.
         ht = [{"saw_skip": True, "saw_search": False, "saw_marker": False, "sid": "s1", "sub": False,
@@ -905,13 +952,12 @@ def main():
           "rule 3 — excluded from USING above)")
     print(f"  -> total skill-aware actions (USING + counters): {sum(us.values()) + tot_counter}")
 
-    fs, ls, az = r["false_skip"], r["lawful_skip"], r["authorized_skip"]
-    skip_turns = fs + ls + az
-    print("\nFALSE-SKIPPING (doctrine's hardest rule — 'no search, no skip'):")
+    fs, ls, az, sh = r["false_skip"], r["lawful_skip"], r["authorized_skip"], r["shelf_skip"]
+    skip_turns = fs + ls + az + sh
+    print("\nFALSE-SKIPPING (doctrine rule 4 — a skip needs one of its three sources):")
     if skip_turns:
-        print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  ruled a skip with NO search_skills "
-              f"call in the same turn   (lawful, search-backed skips: {ls}; "
-              f"hook-authorized skips: {az})")
+        print(f"  {fs}/{skip_turns}  {100*fs/skip_turns:.0f}%  ruled a skip with no source   "
+              f"(search-backed: {ls}; hook-authorized: {az}; whole-shelf top row ruled out: {sh})")
     else:
         print("  no skip-ruling turns in window")
     ct, cr, cn, cs = r["continuations"]
@@ -926,14 +972,17 @@ def main():
                 print(f"    {str(sid_)[:8]} {when} {name} re-read={'yes' if reread else 'no'} "
                       f"work-turns-since-last-use={gap if gap is not None else 'never'}"
                       f"{' [self/meta]' if meta else ''}")
-    wfs, wls, waz = r["work_verdicts"]
+    wfs, wls, waz, wsh = r["work_verdicts"]
+    wn = wfs + wls + waz + wsh
     if skip_turns:
-        print(f"  opened by a work prompt: {wfs}/{wfs + wls + waz} false (lawful {wls}; hook-authorized {waz}) — "
-              f"the other {skip_turns - wfs - wls - waz} answer a notification, a message or another harness record")
-    efs, els, eaz = r["enforcer_verdicts"]
-    if efs + els + eaz:
-        print(f"  enforcer-run turns only: {efs}/{efs + els + eaz}  {100*efs/(efs + els + eaz):.0f}% false "
-              f"(lawful {els}; hook-authorized {eaz}) — turns where the enforcer injected")
+        print(f"  opened by a work prompt: {wfs}/{wn} false (search-backed {wls}; hook-authorized {waz}; "
+              f"whole-shelf {wsh}) — the other {skip_turns - wn} answer a notification, a message or another "
+              "harness record")
+    efs, els, eaz, esh = r["enforcer_verdicts"]
+    en = efs + els + eaz + esh
+    if en:
+        print(f"  enforcer-run turns only: {efs}/{en}  {100*efs/en:.0f}% false "
+              f"(search-backed {els}; hook-authorized {eaz}; whole-shelf {esh}) — turns where the enforcer injected")
     print("  [turn = user-prompt boundary; self/meta NOT excluded here — see organic note above]")
 
     meta = r["meta_sessions"]

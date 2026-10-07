@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.59.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.60.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -442,6 +442,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.60.0` — **published, a whole-shelf ranking is a lawful skip source (ADR-0082): when no row of the router's whole-shelf offer fits even loosely adapted, the agent may rule `NO SKILL: whole-shelf — <top row>: <what it does>; <why this task lies outside it and the rows below>` instead of a forced `search_skills` call; previews keep the forced search; the usage audit tallies `shelf_skip`; epoch-watch W40.**
 
 `0.59.1` — **published, SessionStart warns when a session bypasses a running jevd: when jevd answers on loopback but the session's `JEVD_URL` is unset or not a loopback `http` URL (the enforcer then ignores it), the doctrine hook tells the user (`systemMessage`) and the agent (a context line every adapter forwards); `SKILL_JEVD_ENV_CHECK=0` turns it off.**
 

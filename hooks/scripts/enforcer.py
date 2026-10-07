@@ -2748,8 +2748,10 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
 PREVIEW_HEAD = "Preview for this task (the top few of a shelf of hundreds, not the shelf):\n"
 PREVIEW_TAIL = "None fit → run search_skills THIS reply before any NO SKILL; show the query. "
 WHOLE_SHELF_HEAD = "Whole-shelf ranking for this task (every skill you can use judged):\n"
-WHOLE_SHELF_TAIL = ("None fit → run search_skills THIS reply with terms this ranking may have missed "
-                    "(a tool, a file type, a domain name) before any NO SKILL; show the query. ")
+WHOLE_SHELF_TAIL = ("None fit, even loosely adapted → rule out the top row by name: NO SKILL: whole-shelf — "
+                    "<top row>: <what it does>; <why this task lies outside it and the rows below>. Expect a "
+                    "skill this ranking missed → run search_skills THIS reply with terms it may have missed "
+                    "(a tool, a file type, a domain name). ")
 
 
 def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None,

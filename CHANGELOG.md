@@ -3,6 +3,20 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.60.0] - 2026-10-07
+
+### Changed
+- **A whole-shelf ranking is a lawful skip source (ADR-0082).** Under the router's
+  "Whole-shelf ranking" offer the agent may rule `NO SKILL: whole-shelf — <top row>: <what it does>;
+  <why this task lies outside it>` instead of running a search; a search stays available when it
+  expects a skill the ranking missed. Previews keep the forced search. Doctrine rules 1 and 4 and
+  red-flag row 1 say so; the offer's closing line (`WHOLE_SHELF_TAIL`) says so. Evidence: on 305
+  organic whole-shelf work turns since 0.52.3, the 22 searches never returned a skill, absent from
+  the ranking, that the agent then used (a thin sample; epoch-watch W40 watches it live) (`plans/reports/analysis-261007-2024-forced-search-value-after-whole-shelf.md`).
+- **Usage audit counts the third source.** `audit_skill_usage.py` tallies `shelf_skip` when the
+  enforcer's own output carried the whole-shelf head and the ruling names that ranking's first row;
+  `_skip_verdicts` returns four counts, and the false-skip report names all three sources.
+
 ## [0.59.1] - 2026-10-07
 
 ### Added
