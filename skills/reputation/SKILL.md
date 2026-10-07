@@ -5,7 +5,7 @@ description: Manage the owner's skill ranking — the ❤️ house-favourite and
 argument-hint: "[list | add heart|star <skill> | remove <skill> | why <skill> | suggest [--apply]]"
 license: MIT
 metadata:
-  version: 0.3.0
+  version: 0.4.0
 ---
 
 # skill-concierge reputation
@@ -22,6 +22,12 @@ A badge never moves a row; Jev's order stays as it is. The menu's legend line te
 to choose: among rows that do the task's job as their main purpose, take ❤️ first, then ⭐,
 then the rest, preferring 🔥 inside each group. A ❤️ or ⭐ skill that Jev ranked 6th to
 10th and judged a fit joins the menu under its five rows (at most two).
+
+## Presenting results
+
+Relay the script's output as printed, in a code block. Its first line is the next command; keep
+it first. Add nothing: no recap, no rule explanations, no per-name commentary. Answer a follow-up
+question when the user asks one.
 
 ## Steps
 

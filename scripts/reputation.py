@@ -119,20 +119,45 @@ def _resolve(name: str, raw: dict):
     return None, None
 
 
+def _family(name: str) -> str:
+    """Display group: patterns, the plugin of `plugin:skill`, the `ak`/`vn`/`tk` prefix, else own."""
+    if _is_pattern(name):
+        return "patterns"
+    if ":" in name:
+        return name.split(":", 1)[0]
+    head = name.split("-", 1)[0]
+    return head if head in ("ak", "vn", "tk") else "other"
+
+
+def _grouped(names: list) -> list:
+    """Lines `  <family> (n): a, b, c`, largest family first; every name shown."""
+    fam = {}
+    for n in sorted(names):
+        fam.setdefault(_family(n), []).append(n)
+    order = sorted(fam, key=lambda f: (f != "patterns", -len(fam[f]), f))
+    return [f"  {f} ({len(fam[f])}): {', '.join(fam[f])}" for f in order]
+
+
+def _bucketed(counts: dict) -> list:
+    """Lines `  20+: a 41, b 29` by session count, busiest first."""
+    out = []
+    for label, lo, hi in (("20+", 20, 10**9), ("10-19", 10, 19), ("6-9", 6, 9), ("≤5", 0, 5)):
+        row = sorted(((c, n) for n, c in counts.items() if lo <= c <= hi), key=lambda x: (-x[0], x[1]))
+        if row:
+            out.append(f"  {label}: {', '.join(f'{n} {c}' for c, n in row)}")
+    return out
+
+
 def cmd_list(_):
     raw = _load()
-    print(f"owner ranking — {_path()}")
-    for tier, mark in TIERS:
-        names = raw[tier]
-        print(f"  {mark} {tier} ({len(names)}): {', '.join(names) if names else '(none)'}")
     pv = _proven()
-    names = pv.get("proven", [])
-    if names:
-        counts = pv.get("counts", {})
-        print(f"  🔥 proven ({len(names)}; ≥{pv.get('min_sessions')} sessions in {pv.get('window_days')} days): "
-              + ", ".join(f"{n} {counts.get(n, '')}".strip() for n in names))
-    else:
-        print("  🔥 proven: (no digest yet — written at session start)")
+    counts = pv.get("counts") or {}
+    print(f"❤️ {len(raw['heart'])} · ⭐ {len(raw['star'])} · 🔥 {len(counts)}   ({_path()})")
+    for tier, mark in TIERS:
+        print(f"{mark} {tier}")
+        print("\n".join(_grouped(raw[tier])) or "  (none)")
+    print(f"🔥 proven (sessions in {pv.get('window_days', 30)} days)")
+    print("\n".join(_bucketed(counts)) or "  (no digest yet: written at session start)")
     return 0
 
 
@@ -282,17 +307,11 @@ def cmd_suggest(args):
         days = 0 if start is None else int((time.time() - start) / 86400)
         print(f"note: the usage log covers {days} days, not {SUGGEST_WINDOW_DAYS}, so no ❤️ is reviewed")
     if not sugg:
-        print("no suggestions: the ranking matches usage and what is installed")
+        print("No suggestions.")
         return 0
-    labels = {"promote": "? ❤️ promote", "add": "⭐ add", "review": "? ❤️ review", "remove": "✗ remove"}
-    for action, tier, n, why in sugg:
-        cmd = f"remove {shlex.quote(n)}" if action == "remove" else f"add {tier} {shlex.quote(n)}"
-        print(f"  {labels[action]:12s} {n} — {why}   [reputation.py {cmd}]")
     n_apply = sum(1 for s in sugg if s[0] in APPLIED)
     if not args.apply:
-        print(f"{len(sugg)} suggestion(s). `reputation.py suggest --apply` writes the {n_apply} add/remove "
-              "line(s); ❤️ lines (marked ?) change only when you run their command. (Full path: "
-              "python3 \"$CLAUDE_PLUGIN_ROOT/scripts/reputation.py\".)")
+        print("\n".join(_fmt_suggest(sugg, used_short, used90)))
         return 0
     p = _path()
     if p.exists():
@@ -305,7 +324,36 @@ def cmd_suggest(args):
     return 0
 
 
-APPLIED = ("add", "remove")   # ADR-0084: ❤️ changes only by the owner's own command
+APPLIED = ("add", "remove")
+
+
+def _fmt_suggest(sugg: list, used_short: dict, used90: dict) -> list:
+    """Pure: the suggest report. Line 1 is the next command; then one group per action, every
+    name shown once with its session count, busiest first."""
+    import shlex
+    by = {}
+    for action, _tier, n, _why in sugg:
+        by.setdefault(action, []).append(n)
+    n_apply = sum(len(by.get(a, [])) for a in APPLIED)
+    if n_apply:
+        out = [f"Next: reputation.py suggest --apply   (writes {n_apply} ⭐/✗ lines; never touches ❤️)"]
+    else:
+        out = ["Next: reputation.py add heart <name>   (for each ❤️ pick you accept)"]
+    heads = (("add", "⭐ add", used90, "90d"), ("remove", "✗ remove", None, ""),
+             ("promote", "? ❤️ promote — your call", used_short, "30d"),
+             ("review", "? ❤️ review — no logged use in 90d; demote: add star <name>", None, ""))
+    for action, head, counts, win in heads:
+        names = by.get(action)
+        if not names:
+            continue
+        if counts is not None:
+            names = sorted(names, key=lambda n: (-counts.get(n, 0), n))
+            items = [f"{n} {counts.get(n, 0)}" for n in names]
+            head += f" (sessions, {win})"
+        else:
+            items = [shlex.quote(n) if action == "remove" else n for n in names]
+        out += [f"{head} [{len(names)}]", "  " + ", ".join(items)]
+    return out   # ADR-0084: ❤️ changes only by the owner's own command
 
 
 def _apply(raw: dict, sugg: list) -> dict:
@@ -356,6 +404,13 @@ def cmd_selftest(_):
     other = _suggestions({"heart": [], "star": ["omp-only:thing", "known:gone"]}, {"x"}, {}, {}, 5,
                          prefixes={"known"})
     assert [(a, n) for a, _t, n, _w in other] == [("remove", "known:gone")], other
+    rep_lines = _fmt_suggest(got, {"rising": 6}, {"fresh": 2})
+    assert rep_lines[0].startswith("Next: reputation.py suggest --apply"), rep_lines
+    body = "\n".join(rep_lines[1:])
+    for _a, _t, n, _w in got:
+        assert body.count(n) == 1, (n, body)      # every name shown exactly once, none capped
+    assert len(rep_lines) == 1 + 2 * 4, rep_lines  # four groups present: add, remove, promote, review
+    assert _grouped(["ak-x", "ak-y", "*:*", "pstack:z", "solo"])[0].startswith("  patterns (1)")
     for k in ("SKILL_CONCIERGE_REPUTATION", "SKILL_CONCIERGE_PROVEN"):
         os.environ.pop(k, None)
     print("reputation selftest ok")

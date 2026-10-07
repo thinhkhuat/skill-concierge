@@ -3,6 +3,15 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.61.4] - 2026-10-08
+
+### Changed
+- **`reputation.py list` and `suggest` print grouped, terse reports.** `list` opens with one count
+  line, then each tier grouped by family (patterns, `ak`, `vn`, `tk`, each plugin, other) and 🔥 by
+  session bucket. `suggest` opens with the next command, then one line of names per action, busiest
+  first, with session counts; every name is shown. The skill now tells the agent to relay that
+  output as printed, with no recap.
+
 ## [0.61.3] - 2026-10-08
 
 ### Fixed
