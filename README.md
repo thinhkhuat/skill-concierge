@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.61.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.61.2-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -459,6 +459,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.61.2` — **published, 🔥 lands on the menu's name: a typed `/bro` is logged and counted as `pstack:bro` when exactly one plugin owns that name.**
 
 `0.61.1` — **published, ❤️ is owner-only (ADR-0084): `reputation.py suggest --apply` writes only ⭐ additions and removals of uninstalled entries; ❤️ promotions and demotions print as review lines for the owner to run.**
 

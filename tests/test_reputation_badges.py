@@ -226,3 +226,13 @@ def test_reputation_script_selftest_covers_every_suggestion_rule():
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "reputation.py"), "selftest"],
                        capture_output=True, text=True, check=False)
     assert r.returncode == 0 and "reputation selftest ok" in r.stdout, r.stdout + r.stderr
+
+
+def test_bare_plugin_names_count_toward_the_menu_name():
+    """The ledger records `/bro` as `pstack:bro` and the 🔥 counter folds old bare rows the same way;
+    an ambiguous bare name stays as typed. Both scripts' selftests pin it on a throwaway registry."""
+    import subprocess, sys
+    for script in ("ledger.py", "auto_promote.py"):
+        r = subprocess.run([sys.executable, str(ROOT / "hooks" / "scripts" / script), "--selftest"],
+                           capture_output=True, text=True, check=False)
+        assert r.returncode == 0 and "OK" in r.stdout, script + r.stdout + r.stderr

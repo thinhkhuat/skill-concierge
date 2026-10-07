@@ -3,6 +3,18 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.61.2] - 2026-10-07
+
+### Fixed
+- **🔥 lands on the menu's name for a bare plugin-skill name.** Typing `/bro` (Claude Code resolves it to
+  `pstack:bro`) was logged as `bro`, a name the menu never shows, so `pstack:bro` never got its 🔥. The
+  usage log now records the menu's name (`pstack:bro`, with the typed form kept as `typed`) for slash
+  commands and Skill-tool calls on Claude Code, and the 🔥 counter folds older bare rows the same way.
+  A bare name is folded only when exactly one installed plugin has a skill by that name and no personal
+  skill does; ambiguous names (`tdd`, `setup`, `teach`, `architect`) stay as typed. One shared resolver,
+  `hooks/scripts/skill_names.py`. On this machine: `pstack:bro` 9 sessions, `skill-concierge:doctor` 8,
+  `skill-concierge:consult` 5.
+
 ## [0.61.1] - 2026-10-07
 
 ### Changed

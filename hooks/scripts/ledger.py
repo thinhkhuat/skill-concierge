@@ -25,6 +25,23 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+def _menu_name(name: str, harness: str) -> tuple:
+    """(name as the menu shows it, typed form or None). A bare `/bro` or Skill-tool `bro` that
+    Claude Code resolves to the one plugin skill of that name is recorded as `pstack:bro`, with
+    the typed form kept beside it, so the 🔥 count lands on the menu's row (ADR-0083, 0.61.2).
+    Claude Code's plugin registry only: other harnesses keep the name as given. Fail-open."""
+    if (harness or "claude") != "claude":
+        return name, None
+    try:
+        from skill_names import canonical
+        full = canonical(name)
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        return name, None
+    return (full, name) if full != name else (name, None)
+
 LOG_DIR = Path(os.environ.get(
     "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs"))
 LEDGER = LOG_DIR / "skill-invocation-ledger.log"
@@ -126,7 +143,10 @@ def main() -> int:
             if s.startswith("/"):
                 # user-typed slash = manual /skill (or a built-in command)
                 name = s[1:].split()[0] if len(s) > 1 else ""
+                name, typed = _menu_name(name, harness)
                 ev = {"t": t, "sid": sid, "ev": "manual", "name": name}
+                if typed:
+                    ev["typed"] = typed
                 if sub:
                     ev["sub"] = True
                 if harness:
@@ -154,8 +174,11 @@ def main() -> int:
                         if isinstance(ti.get(k), str):
                             name = ti[k]
                             break
+                name, typed = _menu_name(name, harness)
                 ev = {"t": t, "sid": sid, "ev": "auto",
                       "name": name, "input_keys": keys}
+                if typed:
+                    ev["typed"] = typed
                 if sub:
                     ev["sub"] = True
                 if harness:
@@ -217,6 +240,18 @@ def _selftest() -> int:
         with tempfile.TemporaryDirectory() as td:
             LOG_DIR = Path(td)
             LEDGER = LOG_DIR / "ledger.log"
+            # a throwaway plugin registry: `bro` is one plugin's skill, `tdd` two plugins' (ambiguous),
+            # `doctor` and `keep-on` none — so only `bro` may be recorded under its plugin name
+            import skill_names
+            for plugin, skill in (("pstack", "bro"), ("pstack", "tdd"), ("matt", "tdd")):
+                d = Path(td) / plugin / "skills" / skill
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text("---\nname: x\n---\n")
+            (Path(td) / "reg.json").write_text(json.dumps({"plugins": {
+                "pstack@m": [{"installPath": str(Path(td) / "pstack")}],
+                "matt@m": [{"installPath": str(Path(td) / "matt")}]}}))
+            _seams = (skill_names.REGISTRY, skill_names.SKILLS_ROOT)
+            skill_names.REGISTRY, skill_names.SKILLS_ROOT = Path(td) / "reg.json", Path(td) / "personal"
 
             def feed(payload):
                 sys.stdin = io.StringIO(json.dumps(payload))
@@ -252,7 +287,13 @@ def _selftest() -> int:
                   "tool_name": "read", "tool_input": {"path": "skill://memsearch/extra"}})
             feed({"hook_event_name": "UserPromptSubmit", "session_id": "t",
                   "prompt": "/keep-on list"})
+            feed({"hook_event_name": "UserPromptSubmit", "session_id": "t", "prompt": "/bro say it plainly"})
+            feed({"hook_event_name": "PostToolUse", "session_id": "t",
+                  "tool_name": "Skill", "tool_input": {"skill": "tdd"}})
+            feed({"hook_event_name": "UserPromptSubmit", "session_id": "t", "prompt": "/bro x",
+                  "harness": "codex"})
             rows = [json.loads(l) for l in LEDGER.read_text().splitlines()]
+            skill_names.REGISTRY, skill_names.SKILLS_ROOT = _seams
     finally:
         sys.stdin = sys.__stdin__
         LEDGER, LOG_DIR = saved
@@ -262,12 +303,18 @@ def _selftest() -> int:
             ("get_skill", "mattpocock-skills:tdd"),
             ("search", None), ("get_skill", "claude-hud:theme"),
             ("auto", "doctor"), ("auto", "memsearch"),
-            ("manual", "keep-on")]
+            ("manual", "keep-on"),
+            ("manual", "pstack:bro"),        # unique plugin skill -> the menu's name
+            ("auto", "tdd"),                 # two plugins own it -> left as typed
+            ("manual", "bro")]               # another harness -> Claude's registry does not apply
+    if [r.get("typed") for r in rows[-3:]] != ["bro", None, None]:
+        print(f"ledger --selftest FAIL: typed form not kept: {rows[-3:]!r}")
+        return 1
     if evs != want:
         print(f"ledger --selftest FAIL: {evs!r} != {want!r}")
         return 1
     print("ledger --selftest OK: get_skill/auto/search/manual classification"
-          " + omp namespaced tools + skill:// read activation")
+          " + omp namespaced tools + skill:// read activation + bare plugin names recorded as the menu shows them")
 
 
 if __name__ == "__main__":

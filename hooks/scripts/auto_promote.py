@@ -232,7 +232,13 @@ def _proven_counts(now=None, evs=("auto", "manual"), window_days=None, aliases=N
                     sids[e["name"]].add(e["sid"])
     except OSError:
         return {}
-    aliases = _personal_aliases() if aliases is None else aliases
+    if aliases is None:
+        try:   # a bare plugin-skill name (`bro`) folds onto the menu's `pstack:bro`
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from skill_names import plugin_bare_aliases
+            aliases = {**plugin_bare_aliases(), **_personal_aliases()}
+        except Exception:  # noqa: BLE001 — the 🔥 digest is advisory, never fatal
+            aliases = _personal_aliases()
     folded = defaultdict(set)
     for n, s in sids.items():
         folded[aliases.get(n, n)] |= s
@@ -347,6 +353,20 @@ def _selftest() -> int:
                 ok &= counts == {"hot": 2, "warm": 1}
                 # a frontmatter-name use folds onto the directory name the menu shows
                 ok &= _proven_counts(now, aliases={"warm": "hot"}) == {"hot": 3}
+                # the default aliases include unique bare plugin names (`bro` -> `pstack:bro`)
+                import skill_names
+                d = tdp / "pl" / "skills" / "hot"
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text("x")
+                (tdp / "reg.json").write_text(json.dumps({"plugins": {"pl@m": [{"installPath": str(tdp / "pl")}]}}))
+                _seams = (skill_names.REGISTRY, skill_names.SKILLS_ROOT, SKILLS_ROOT)
+                skill_names.REGISTRY, skill_names.SKILLS_ROOT = tdp / "reg.json", tdp / "none"
+                globals()["SKILLS_ROOT"] = tdp / "none"
+                try:
+                    ok &= _proven_counts(now) == {"pl:hot": 2, "warm": 1}
+                finally:
+                    skill_names.REGISTRY, skill_names.SKILLS_ROOT, _r = _seams
+                    globals()["SKILLS_ROOT"] = _r
                 ok &= _ledger_start() is not None
                 _write_proven(counts)
                 got = json.loads(PROVEN_DIGEST.read_text(encoding="utf-8"))
