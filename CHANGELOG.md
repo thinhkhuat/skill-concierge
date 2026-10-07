@@ -3,6 +3,16 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.61.3] - 2026-10-08
+
+### Fixed
+- **The OMP installer refreshes a stale marketplace catalog on every run.** When a release was
+  installed locally before its push landed, OMP's own marketplace clone stayed on the previous
+  version, and later runs took the "Already current" path, which never refreshed it (doctor WARN
+  "marketplace catalog stale" on 0.61.2). `adapters/omp/install.sh` now compares the clone's
+  version with the checkout's on every marketplace path and runs `omp plugin marketplace update`
+  when it lags; if the remote does not carry the version yet, it says to push and re-run.
+
 ## [0.61.2] - 2026-10-07
 
 ### Fixed

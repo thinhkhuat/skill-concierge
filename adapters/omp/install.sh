@@ -55,6 +55,7 @@ echo "==> skill-concierge → OMP sync (from: $ROOT)"
 OMP_PLUGINS_JSON="$HOME/.omp/plugins/installed_plugins.json"
 OMP_CONFIG="$HOME/.omp/agent/config.yml"
 OMP_PLUGIN_CACHE="$HOME/.omp/plugins/cache/plugins"
+OMP_MARKETPLACE_CLONE="$HOME/.omp/plugins/cache/marketplaces/skill-concierge"
 # Marker comment (must match the python edit below) so a re-run is idempotent.
 EXT_MARKER="# skill-concierge extension entry (ADR-0039)"
 EXT_ENTRY="$ROOT/adapters/omp/skill-concierge.ext.ts"
@@ -348,6 +349,29 @@ text = "\n".join(out) + "\n"
 safe_write.write_text(p, text)
 print("  [✓] Appended extension entry to", config_path)
 PYEOF
+fi
+
+# ── Catalog freshness (every marketplace path). The deploy can be current while OMP's own
+# marketplace clone is not: a release installed locally before its push landed leaves the clone
+# on the previous version, and the "Already current" path never refreshes it (found 0.61.2,
+# doctor WARN "marketplace catalog stale"). Refresh it whenever it lags SSOT; a failure is
+# reported, never fatal — the deploy above already serves this version.
+if [ "$MARKETPLACE" = "1" ]; then
+  _catalog_ver() {
+    python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['plugins'][0]['version'])" \
+      "$OMP_MARKETPLACE_CLONE/.claude-plugin/marketplace.json" 2>/dev/null
+  }
+  CATALOG="$(_catalog_ver || true)"
+  if [ "$CATALOG" != "$VERSION" ]; then
+    echo "  [•] OMP marketplace catalog v${CATALOG:-none} != SSOT v$VERSION -> omp plugin marketplace update"
+    omp plugin marketplace update skill-concierge >/dev/null 2>&1 || true
+    CATALOG="$(_catalog_ver || true)"
+    if [ "$CATALOG" = "$VERSION" ]; then
+      echo "    catalog now v$CATALOG"
+    else
+      echo "    [!] catalog still v${CATALOG:-none}: the remote does not carry v$VERSION yet (push it, then re-run)" >&2
+    fi
+  fi
 fi
 
 # ── Exec bits (self-heal on every path: a CLI-installed copy can ship without them) ──
