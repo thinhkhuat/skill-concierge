@@ -14,7 +14,7 @@ assert all(t.get("name", "cc") == "commandcode" or t["ep"] == "cc" for t in enf.
 PROMPTS = ["fix the failing pytest in tests/test_api.py", "commit my staged changes with a good message",
            "research how Claude Code hooks work", "make a pitch deck pptx for the launch",
            "why does docker run out of memory on my mac", "explain how the enforcer hook works"]
-for p in PROMPTS[: (2 if sys.argv[1:] == ["down"] else 6)]:
+for p in PROMPTS[: (3 if sys.argv[1:] == ["down"] else 6)]:
     t0 = time.time()
     out = enf._jev_route(p, "")
     ev = out["event"] or {}
