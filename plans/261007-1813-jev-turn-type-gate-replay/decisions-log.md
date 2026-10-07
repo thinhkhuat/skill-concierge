@@ -14,3 +14,9 @@
 5. Baseline measured alongside: the embedding actionability gate (`_intent_conversational`) on the same
    populations, to show what ADR-0061 removed and why.
 6. No code in hooks/ or the doctrine is changed by this analysis.
+
+## 2026-10-07 22:28 — reputation tier mapping (default applied, owner's question unanswered)
+- Owner order: "every plugin:skill should be added to the reputation list, along with ak-* family, matt-pocock's skills too, and those in the keep-on list".
+- Asked which badge per group (AskUserQuestion); no answer in 600 s. Applied the recommended option: keep-on (54) as heart; `*:*`, `ak-*` and Matt Pocock's personal skills (34; `writing-for-agents` stays heart via keep-on) as star.
+- Written to ~/.claude/skill-concierge/reputation.json (heart 54, star 35). Reversible with scripts/reputation.py add/remove.
+- To make `*:*` mean "every plugin skill" without marking external-catalogue and other-harness rows, owner badges now render on installed and pulled rows only (ADR-0083 updated).

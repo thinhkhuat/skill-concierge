@@ -150,19 +150,127 @@ def _write_takes_digest(takes: dict) -> None:
         return
 
 
+# ADR-0083 🔥 proven: an installed skill invoked (Skill tool, auto or manual; subagent rows
+# excluded) in at least PROVEN_MIN_SESSIONS distinct sessions within PROVEN_WINDOW_DAYS. The
+# enforcer reads the digest live and badges those rows; the badge never moves a row. 5 sessions
+# in 30 days was the owner's pick (2026-10-07): 28 of the 169 skills used in that window.
+REPUTATION_ON = os.environ.get("SKILL_REPUTATION", "1") != "0"
+PROVEN_DIGEST = Path(os.environ.get(
+    "SKILL_CONCIERGE_PROVEN",
+    Path.home() / ".claude" / "skill-concierge" / "proven.json"))
+def _env_int(name, default):
+    """A malformed tunable falls back to its default: a session-start hook never dies over an env typo."""
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+PROVEN_MIN_SESSIONS = _env_int("SKILL_PROVEN_MIN_SESSIONS", 5)
+PROVEN_WINDOW_DAYS = _env_int("SKILL_PROVEN_WINDOW_DAYS", 30)
+
+
+SKILLS_ROOT = Path(os.environ.get("SKILL_CONCIERGE_SKILLS_ROOT", Path.home() / ".claude" / "skills"))
+
+
+def _personal_aliases() -> dict:
+    """{frontmatter name: directory name} for personal skills whose two names differ. The menu
+    names a personal skill by its directory; the ledger records whatever name the Skill tool got
+    (both `ak-cook` and `ak:cook` arrive), so usage is folded onto the directory name."""
+    out = {}
+    for p in SKILLS_ROOT.glob("*/SKILL.md"):
+        try:
+            with p.open(encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if i > 30:
+                        break
+                    if line.startswith("name:"):
+                        fm = line.split(":", 1)[1].strip().strip("\"'")
+                        if fm and fm != p.parent.name:
+                            out[fm] = p.parent.name
+                        break
+        except OSError:
+            continue
+    return out
+
+
+def _ledger_start(evs=("auto", "manual")):
+    """Epoch time of the oldest counted event (the ledger is append-only, so the first one), or None."""
+    try:
+        with LEDGER.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("ev") in evs and isinstance(e.get("t"), (int, float)):
+                    return float(e["t"])
+    except OSError:
+        return None
+    return None
+
+
+def _proven_counts(now=None, evs=("auto", "manual"), window_days=None, aliases=None) -> dict:
+    """{skill: distinct-session count} over the window, from the whole ledger (fail-open: {}).
+    `evs`: the ledger events that count as a use (🔥 counts Skill-tool loads only). Frontmatter
+    names fold onto the directory name the menu shows (`aliases`, default read from disk)."""
+    days = PROVEN_WINDOW_DAYS if window_days is None else window_days
+    since = (now or time.time()) - days * 86400
+    sids = defaultdict(set)
+    try:
+        with LEDGER.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not any(f'"{ev}"' in line for ev in evs):
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                t = e.get("t")
+                if (e.get("ev") in evs and not e.get("sub") and isinstance(t, (int, float))
+                        and t >= since and isinstance(e.get("name"), str) and e.get("sid")):
+                    sids[e["name"]].add(e["sid"])
+    except OSError:
+        return {}
+    aliases = _personal_aliases() if aliases is None else aliases
+    folded = defaultdict(set)
+    for n, s in sids.items():
+        folded[aliases.get(n, n)] |= s
+    return {n: len(s) for n, s in folded.items()}
+
+
+def _write_proven(counts: dict) -> None:
+    """Atomic digest write; a failed write leaves the previous digest (the badge is advisory)."""
+    keep = {n: c for n, c in sorted(counts.items()) if c >= PROVEN_MIN_SESSIONS}
+    data = {"_note": "Written by auto_promote.py (ADR-0083). Skills invoked in at least "
+                     f"{PROVEN_MIN_SESSIONS} distinct sessions in the last {PROVEN_WINDOW_DAYS} days; "
+                     "the enforcer badges them 🔥.",
+            "window_days": PROVEN_WINDOW_DAYS, "min_sessions": PROVEN_MIN_SESSIONS,
+            "proven": sorted(keep), "counts": keep}
+    try:
+        PROVEN_DIGEST.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PROVEN_DIGEST.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, PROVEN_DIGEST)
+    except (OSError, UnicodeError, ValueError):
+        return
+
+
 def main() -> int:
     try:
-        if not ENABLED:
-            return 0
-        if not (CATALOGS_PY.exists() and CATALOG_ROOTS.exists()):
-            return 0                                  # feature off / not installed
+        promote = ENABLED and CATALOGS_PY.exists() and CATALOG_ROOTS.exists()
+        if not (promote or REPUTATION_ON):
+            return 0                                  # both features off / not installed
         if _recent(STAMP, THROTTLE_S):
             return 0                                  # throttled
         LOGDIR.mkdir(parents=True, exist_ok=True)
         STAMP.write_text(str(int(time.time())), encoding="utf-8")   # stamp before work
-        n = run_once()
-        if n:
-            _log(f"pass complete: {n} promoted")
+        if REPUTATION_ON:
+            _write_proven(_proven_counts())
+        if promote:
+            n = run_once()
+            if n:
+                _log(f"pass complete: {n} promoted")
     except OSError:
         return 0                                      # fail-silent — never block session start
     return 0
@@ -219,6 +327,32 @@ def _selftest() -> int:
                 ok &= got == {"anti:x": 3, "anti:y": 2}   # counts, not sid sets; sub/non-external absent
             finally:
                 TAKES_DIGEST = _saved_digest
+            # ADR-0083 🔥: distinct sessions per installed skill inside the window, subagents and
+            # stale rows excluded; the digest lists only skills at/over PROVEN_MIN_SESSIONS.
+            global PROVEN_DIGEST, PROVEN_MIN_SESSIONS
+            _saved_proven = (PROVEN_DIGEST, PROVEN_MIN_SESSIONS)
+            PROVEN_DIGEST, PROVEN_MIN_SESSIONS = tdp / "proven.json", 2
+            try:
+                now = time.time()
+                LEDGER.write_text("\n".join(json.dumps(r) for r in [
+                    {"ev": "auto", "sid": "a", "name": "hot", "t": now},
+                    {"ev": "manual", "sid": "b", "name": "hot", "t": now},
+                    {"ev": "auto", "sid": "a", "name": "hot", "t": now},            # same sid
+                    {"ev": "auto", "sid": "c", "name": "warm", "t": now},
+                    {"ev": "auto", "sid": "d", "name": "warm", "t": now, "sub": True},  # subagent
+                    {"ev": "auto", "sid": "e", "name": "warm", "t": now - 400 * 86400},  # stale
+                    {"ev": "get_skill", "sid": "f", "name": "warm", "t": now},     # not an invocation
+                ]) + "\n")
+                counts = _proven_counts(now, aliases={})
+                ok &= counts == {"hot": 2, "warm": 1}
+                # a frontmatter-name use folds onto the directory name the menu shows
+                ok &= _proven_counts(now, aliases={"warm": "hot"}) == {"hot": 3}
+                ok &= _ledger_start() is not None
+                _write_proven(counts)
+                got = json.loads(PROVEN_DIGEST.read_text(encoding="utf-8"))
+                ok &= got["proven"] == ["hot"] and got["counts"] == {"hot": 2}
+            finally:
+                PROVEN_DIGEST, PROVEN_MIN_SESSIONS = _saved_proven
     finally:
         LEDGER, CATALOG_ROOTS, CATALOGS_PY, MIN_TAKES = saved
     print("auto-promote --selftest " + ("OK" if ok else "FAIL"))

@@ -267,7 +267,7 @@ def skip_on_history(state, questions):
 def test_history_alone_never_skips(mod, monkeypatch, tmp_path):
     t = write(tmp_path / "t.jsonl", [user("earlier"), asst("No skill is needed for this; answer directly.")])
     res, calls = route(mod, monkeypatch, t, fake=skip_on_history)
-    verdict, rows, best = res["result"]
+    verdict, rows, best = res["result"][:3]
     assert verdict == "offer" and best == pytest.approx(0.8) and rows[0][0] == "update-config"
     assert res["event"]["hist"]["reask"] is True and len(calls) == 3
     assert "conversation" in calls[1][0] and three_key(calls[2][0])

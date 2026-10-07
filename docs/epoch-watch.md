@@ -13,6 +13,18 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.61.0 — owner reputation badges (ADR-0083)
+
+**Epoch starts.** W41: the go-live of badges, the legend and pull-in on each harness. The offer text
+changes on badged turns only; Jev's order, the gates and the doctrine are unchanged, so W40 and the
+router watches keep running. Offer events gain `badges` and `pulled`.
+
+| # | Watch | How | Trigger | Action |
+|---|-------|-----|---------|--------|
+| W41 | Badged rows winning over a better fit | From the ledger, offer events with `badges` or `pulled` since go-live, joined to the same session's next Skill invocation: count takes of a badged row below row 1 and takes of a pulled row; hand-read a sample of 30 such takes against the task (did the badged row do the task's job as its main purpose?). Also count pulled rows per whole-shelf turn. | more than 3 of 30 hand-read takes where the badged row did not do the job and row 1 did; or more than 0.5 pulled rows per whole-shelf turn once 100 turns exist | `SKILL_REPUTATION_PULL_FIT=0.7` and `SKILL_REPUTATION_PULL_MAX=1` (the narrow form) for pull-in noise; for wrong badged takes, tighten the legend's first pass; `SKILL_REPUTATION=0` as the last resort |
+
+---
+
 ## v0.60.0 — whole-shelf ranking as a skip source (ADR-0082)
 
 **Epoch starts.** W40: the go-live of the ADR-0082 doctrine and offer line on each harness. Trail-side only: retrieval, gates, bands and the ledger schema are unchanged, so the router watches (W21-W24, W38, W39) do not restart here. The audit's false-skip, search-backed and `shelf_skip` shares re-baseline from this release.

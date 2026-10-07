@@ -3,6 +3,33 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.61.0] - 2026-10-07
+
+### Added
+- **Owner reputation badges on the menu (ADR-0083).** ❤️ house favourite and ⭐ trusted come from
+  `~/.claude/skill-concierge/reputation.json` (exact names or patterns such as `pstack:*`; an exact
+  entry beats every pattern); 🔥 proven marks a skill invoked in at least 5 distinct sessions in the
+  last 30 days, from a digest `auto_promote.py` writes at session start. Badges sit next to the name
+  and never move a row. A legend line, shown only when a badge is on the menu, gives the choosing
+  rule: among rows that do the task's job as their main purpose, ❤️ first, then ⭐, then the rest,
+  preferring 🔥 inside each group. When only 🔥 is on the menu, a one-line 🔥 legend replaces it.
+  Badges show on installed and pulled rows only, not on external-catalogue or other-harness rows.
+- **Pull-in.** On a whole-shelf turn, a ❤️ or ⭐ skill Jev ranked 6th-10th with `fits` ≥ 0.5 is
+  shown under the five rows in an "On the owner's list" block, at most two; the five rows never move.
+- **`skill-concierge:reputation` skill and `scripts/reputation.py`** (`list`, `add heart|star`,
+  `remove`, `why`, `suggest [--apply]`). `suggest` proposes ❤️ for a 🔥 skill that is unranked or
+  only ⭐, ⭐ for an unranked skill used in 2+ sessions in 90 days, and removal of entries no longer
+  installed (a use = a Skill-tool load or a `get_skill` read); a ❤️ with no recorded use for 90 days
+  prints as a review line only, because the log misses rule-driven use. `--apply` backs the file up
+  and writes the promote, add and remove lines, never removing a ❤️. Bad input fails closed (no
+  removal from an incomplete installed view or for another harness's plugin, no review from a usage
+  log shorter than 90 days).
+- **Usage folds onto the menu's name.** The ledger records a personal skill under its frontmatter name
+  (`ak:cook`) as well as its directory name (`ak-cook`); 🔥 and `suggest` now count both for the
+  directory name the menu shows. Plugin skills in category folders are seen by `suggest`. Offer events record `badges` and `pulled`.
+- Switches: `SKILL_REPUTATION=0` (all off), `SKILL_REPUTATION_PULL_MAX` (2), `SKILL_REPUTATION_PULL_FIT`
+  (0.5), `SKILL_REPUTATION_PULL_DEPTH` (10), `SKILL_PROVEN_MIN_SESSIONS` (5), `SKILL_PROVEN_WINDOW_DAYS` (30).
+
 ## [0.60.0] - 2026-10-07
 
 ### Changed

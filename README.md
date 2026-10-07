@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.60.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.61.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -246,6 +246,7 @@ Behavior-changing kill-switches, all **default ON** except `SKILL_LLM_TRIGGERS` 
 | `SKILL_BODY_TRIGGERS` | `1` (ON) | Vendored engine mines each skill body's labeled decision sections into extra MAX-pool trigger points, on top of the existing description-derived ones. `=0` + a reindex reverts to description-only (byte-identical to before). [ADR-0016](docs/adr/0016-body-derived-trigger-points.md). |
 | `SKILL_LLM_TRIGGERS` | `0` (OFF) | Layers offline flywheel-generated natural-utterance phrases (canonical corpus `~/.claude/skill-concierge/triggers.json`, EN+VN) FIRST in the MAX-pool trigger layer, ahead of description/body. `=1` + a reindex enables; needs `SKILL_TRIGGERS` pointed at the corpus (machine-local, not in this public repo). Live deploy sets this ON via `.mcp.json`. [ADR-0026](docs/adr/0026-llm-utterance-trigger-layer.md). |
 | `TRIGGERS_MAX` | `12` | Per-skill COMBINED cap on trigger points across all sources. Raise (live deploy uses `16`) so LLM-utterance phrases add slots rather than evict description/body ones. |
+| `SKILL_REPUTATION` | `1` (ON) | Owner reputation badges ([ADR-0083](docs/adr/0083-owner-reputation-badges.md)): ❤️/⭐ from `~/.claude/skill-concierge/reputation.json`, 🔥 from usage, shown next to menu rows without moving them, plus a pull-in of ranked skills Jev placed 6th-10th. Read live. `=0` turns badges, legend, pull-in and the 🔥 digest off; `SKILL_REPUTATION_PULL_MAX=0` keeps badges and drops pull-in. |
 | `SKILL_BLOCKLIST` | `1` (ON) | The user-ordered disable tier ([ADR-0046](docs/adr/0046-blocklist-disable-tier.md)): `~/.claude/skill-concierge/blocklist.json` entries are denied at invocation (PreToolUse(Skill) guard — catches command-files surfaced as skills too), dropped from enforcer offers/hints/routes, filtered from `search_skills`, refused by `get_skill`, and forced name-only if keep-on'd. Read live — no reindex, no restart. `=0` turns the whole feature off everywhere. |
 | `SKILL_ROW_ORIGIN` | `1` (ON) | `search_skills`/`consult_candidates` rows carry `origin` + `disabled_in` (per-call, read live — not an index-shaping flag) instead of a slash `command`. `=0` restores the pre-`0.48.0` row shape exactly. [ADR-0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md). |
 | `SKILL_CONSULT_JEV_WIDEN` | `1` (ON) | Consult's step 2 pipes the request and the `consult_candidates` response (`top_n` 40) into `scripts/consult_fit.py widen`: Jev's whole-catalogue top 10 first, the sieve rows after, deduped, cut to 20 (rows tagged `source`; a `jev` row has no `path`, read it with `get_skill`). Any Jev failure returns the sieve rows (`sieve: not widened` on the card). `=0` returns the sieve rows with no Jev I/O. Script-side — not an engine or index-shaping flag. Shipped on a pre-registered held-out gate (recall@20 24.1 -> 48.3, n=29, 7 gained / 0 lost, Holm p 0.0469 — a narrow margin; proxy cases, so the real-consult effect is unmeasured; [raw](plans/261003-1907-consult-sieve-recall-fixes/reports/iter2-gate-raw.txt)). [ADR-0078](docs/adr/0078-consult-sieve-jev-widening.md). |
@@ -294,6 +295,22 @@ python3 scripts/blocklist.py remove <skill-name>…  # re-enable
 
 Kill-switch: `SKILL_BLOCKLIST=0` turns the whole feature off everywhere (guard, enforcer,
 engine, overrides). Doctor reports the list and fails if the deny guard is missing.
+
+### Reputation (rank skills with badges)
+
+The owner's own ranking, shown next to a skill on the menu ([ADR-0083](docs/adr/0083-owner-reputation-badges.md)):
+❤️ house favourite and ⭐ trusted from `~/.claude/skill-concierge/reputation.json`, and 🔥 for a
+skill used in at least 5 separate sessions in the last 30 days. A badge never moves a row; the
+menu's legend tells the agent to choose among rows that do the job, ❤️ first, then ⭐. A ranked
+skill Jev placed 6th-10th but judged a fit joins the menu under its five rows.
+
+```bash
+python3 scripts/reputation.py list                         # both tiers and the 🔥 list
+python3 scripts/reputation.py add heart ak-code-review     # house favourite
+python3 scripts/reputation.py add star 'pstack:*'          # trust a whole family
+python3 scripts/reputation.py why ak-git                   # which badge, from which entry
+python3 scripts/reputation.py suggest [--apply]             # tier changes from usage; --apply writes them
+```
 
 ### External catalogs (search without installing)
 
@@ -442,6 +459,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.61.0` — **published, owner reputation badges (ADR-0083): ❤️ house favourite and ⭐ trusted from `reputation.json`, plus automatic 🔥 for skills used in 5+ sessions in 30 days, show next to menu rows without moving them; a legend carries the choosing rule; a ranked skill Jev placed 6th-10th with fit ≥ 0.5 joins under the five rows; the `reputation` skill manages the list and `suggest [--apply]` proposes tier changes from usage; epoch-watch W41.**
 
 `0.60.0` — **published, a whole-shelf ranking is a lawful skip source (ADR-0082): when no row of the router's whole-shelf offer fits even loosely adapted, the agent may rule `NO SKILL: whole-shelf — <top row>: <what it does>; <why this task lies outside it and the rows below>` instead of a forced `search_skills` call; previews keep the forced search; the usage audit tallies `shelf_skip`; epoch-watch W40.**
 

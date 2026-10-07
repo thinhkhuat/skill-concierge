@@ -982,6 +982,98 @@ def _drop_blocklisted(cands: list):
     return survivors, dropped
 
 
+# ── ADR-0083: owner reputation badges ─────────────────────────────────────────
+# The owner's own ranking, rendered NEXT TO a menu row and never reordering it: the
+# 2026-10-07 replay put tier-first ordering at 37 of 313 "used skill ranked first" against
+# 100 for Jev's order. ❤️ house favourite / ⭐ trusted come from reputation.json
+# ({"heart": [...], "star": [...]}; exact names or fnmatch family patterns such as
+# `pstack:*`). An exact entry beats every pattern; between two matches of one kind, ❤️ wins.
+# 🔥 proven = invoked in enough distinct sessions lately, digest written by auto_promote.py.
+# Badges render on installed and pulled rows only: an external-catalogue or other-harness row is not
+# the owner's installed skill (and `*:*` would otherwise match `antigravity:` and `vercel:` rows).
+# The menu's legend line tells the agent how to choose with them. Read per turn (one hook process per
+# turn), fail-open: an absent or malformed file shows no badge. SKILL_REPUTATION=0 turns every
+# badge off; SKILL_CONCIERGE_REPUTATION / SKILL_CONCIERGE_PROVEN are the exact-file seams.
+REPUTATION_ON = os.environ.get("SKILL_REPUTATION", "1") != "0"
+_REPUTATION_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_REPUTATION",
+    Path.home() / ".claude" / "skill-concierge" / "reputation.json"))
+_PROVEN_PATH = Path(os.environ.get(
+    "SKILL_CONCIERGE_PROVEN",
+    Path.home() / ".claude" / "skill-concierge" / "proven.json"))
+_TIERS = (("heart", "❤️"), ("star", "⭐"))
+BADGE_LEGEND = ("Badges are the owner's ranking: ❤️ house favourite, ⭐ trusted, 🔥 used often here. "
+                "Choose in two passes: mark every row (owner's list included) that does this task's job as "
+                "its main purpose; among those take ❤️ first, then ⭐, then the rest, and inside each group "
+                "prefer 🔥, then the higher row. The job qualifies a row; the badge picks among rows that "
+                "qualify.\n")
+# Only 🔥 on the menu (it is automatic, so this is the common case): the short form, not the owner rule.
+PROVEN_LEGEND = ("🔥 = used often here: among rows that do this task's job as their main purpose, prefer 🔥, "
+                 "then the higher row.\n")
+
+
+def _load_reputation() -> dict:
+    """{"heart": (...), "star": (...)} of non-empty string entries; fail-open to empty."""
+    empty = {"heart": (), "star": ()}
+    if not REPUTATION_ON:
+        return empty
+    try:
+        data = json.loads(_REPUTATION_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    out = {}
+    for tier, _mark in _TIERS:
+        lst = data.get(tier, [])
+        out[tier] = tuple(n.strip() for n in lst if isinstance(n, str) and n.strip()) \
+            if isinstance(lst, list) else ()
+    return out
+
+
+def _load_proven() -> frozenset:
+    if not REPUTATION_ON:
+        return frozenset()
+    try:
+        data = json.loads(_PROVEN_PATH.read_text(encoding="utf-8"))
+        names = data.get("proven", []) if isinstance(data, dict) else []
+        return frozenset(n for n in names if isinstance(n, str)) if isinstance(names, list) else frozenset()
+    except (OSError, UnicodeError, ValueError):
+        return frozenset()
+
+
+REPUTATION = _load_reputation()
+PROVEN = _load_proven()
+
+
+def _is_pattern(entry: str) -> bool:
+    return any(ch in entry for ch in "*?[")
+
+
+def _owner_tier(name: str, rep: dict | None = None) -> str | None:
+    """'heart' | 'star' | None. Exact entries first (either tier), then patterns."""
+    import fnmatch
+    rep = REPUTATION if rep is None else rep
+    for tier, _mark in _TIERS:
+        if name in rep.get(tier, ()):
+            return tier
+    for tier, _mark in _TIERS:
+        for p in rep.get(tier, ()):
+            try:
+                if _is_pattern(p) and fnmatch.fnmatchcase(name, p):
+                    return tier
+            except re.error:
+                continue      # a malformed pattern (`[z-a]*`) matches nothing, never breaks the turn
+    return None
+
+
+def _badge(name: str) -> str:
+    """The marks rendered after a row's name: ' ❤️', ' ⭐🔥', ' 🔥', or ''."""
+    tier = _owner_tier(name)
+    mark = (dict(_TIERS).get(tier, "") if tier else "") + ("🔥" if name in PROVEN else "")
+    return f" {mark}" if mark else ""
+
+
 # ── ADR-0029: next-skill chain hint ─────────────────────────────────────────
 # Soft chaining: when this session used skill A (auto OR manual — the ledger records
 # both) within the TTL and A declares `next-skills:`, append ONE candidate line to
@@ -1373,7 +1465,7 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None, hint=None) -> None:
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None, hint=None, pulled=None) -> None:
     """Append the offer event. Fail-silent: telemetry must never surface.
     ADR-0032: `ext` records the external annex names offered this turn (external offer→take
     is measured against the ADR-0031 get_skill takes); absent when no external annexed.
@@ -1400,6 +1492,15 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
             ev["route"] = route
         if hint and len(hint) >= 2:
             ev["hint"] = hint    # ADR-0041 L4: [seed] + successors named by the CHAIN-HINT line
+        if pulled:
+            ev["pulled"] = pulled    # ADR-0083: owner-badged rows appended under Jev's rows
+        # ADR-0083: the badges this turn showed, so a take of a badged row below row 1 is countable
+        if band == "offer":    # a skip leg shows no menu, so it shows no badge
+            _names = [r[0] if isinstance(r, (list, tuple)) else r
+                      for grp in (offered, pulled) if isinstance(grp, list) for r in grp]
+            badges = {n: b.strip() for n in _names if isinstance(n, str) and (b := _badge(n))}
+            if badges:
+                ev["badges"] = badges
         if embed_ms is not None:
             ev["embed_ms"] = int(embed_ms)
         if qdrant_ms is not None:
@@ -1724,6 +1825,15 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    """_env_int's float twin: a malformed or non-finite value falls back to the default."""
+    try:
+        v = float(os.environ.get(name, default))
+        return v if math.isfinite(v) else default
+    except ValueError:
+        return default
+
+
 JEV_HISTORY_TOKENS = _env_int("ENFORCER_JEV_HISTORY_TOKENS", 10000)
 JEV_HISTORY_BYTES = _env_int("ENFORCER_JEV_HISTORY_BYTES", 2097152)
 JEV_HISTORY_PINNED = 6      # the last entries are shrunk last
@@ -1996,6 +2106,37 @@ def _jev_decide(answers: dict, shortlist: list):
     return "offer", rows, conf, best
 
 
+# ADR-0083 pull-in: a ❤️/⭐ skill Jev judged but ranked below its JEV_OFFER_ROWS is appended
+# under them — never displacing one — when its own `fits` clears REPUTATION_PULL_FIT; at most
+# REPUTATION_PULL_MAX, looked for only down to Choice rank REPUTATION_PULL_DEPTH. The owner's pick
+# (2026-10-07) over the replay's narrower recommendation: on 313 real skill turns the used skill sat
+# in ranks 6-10 on 13; with ak-*/pstack/Matt Pocock standing in for the list, bar 0.5 added 0.44
+# rows a turn. SKILL_REPUTATION_PULL_MAX=0 turns pull-in off and keeps the badges.
+REPUTATION_PULL_FIT = min(1.0, max(0.0, _env_float("SKILL_REPUTATION_PULL_FIT", 0.5)))
+REPUTATION_PULL_MAX = max(0, _env_int("SKILL_REPUTATION_PULL_MAX", 2))
+REPUTATION_PULL_DEPTH = max(0, _env_int("SKILL_REPUTATION_PULL_DEPTH", 10))
+
+
+def _jev_pull_ins(answers: dict, shortlist: list, rows: list) -> list:
+    """Pure: [(name, desc, probability)] of owner-badged shortlist rows to append under `rows`."""
+    if REPUTATION_PULL_MAX <= 0 or not rows:
+        return []
+    probs = answers["which"]["probabilities"]
+    idx = {n: i for i, (n, _d) in enumerate(shortlist)}
+    desc = dict(shortlist)
+    shown = {n for (n, _d, _p) in rows}
+    order = sorted((n for n in probs if n in idx), key=lambda n: -float(probs[n]))
+    out = []
+    for n in order[len(rows):REPUTATION_PULL_DEPTH]:
+        if n in shown or not _owner_tier(n):
+            continue
+        if float(answers[f"fits::{idx[n]}"]["noul"]) >= REPUTATION_PULL_FIT:
+            out.append((n, desc[n], float(probs[n])))
+            if len(out) >= REPUTATION_PULL_MAX:
+                break
+    return out
+
+
 class JevModelMismatch(ValueError):
     """Jev answered with a model other than the pinned one: the calibration does not hold for it."""
 
@@ -2154,7 +2295,7 @@ def _jev_relay_timeout(e: urllib.error.HTTPError) -> bool:
 
 
 def _jev_route(prompt: str, transcript_path: str) -> dict:
-    """One ADR-0061 routing decision -> {"result": (verdict, rows, best_fit) | None, "event": {...}}.
+    """One ADR-0061 routing decision -> {"result": (verdict, rows, best_fit, pulled) | None, "event": {...}}.
     Result None = not eligible or failed: the embedding path decides. Runs in a worker thread, so
     it returns its telemetry instead of writing module state."""
     if not (JEV_ROUTER and _is_english(prompt)):
@@ -2232,7 +2373,11 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             err = type(e).__name__
             fell.append([tier["model"], err])
             continue
-        return {"result": (verdict, rows, best), "event": {
+        try:   # advisory: a pull-in failure never costs the turn its Jev verdict
+            pulled = _jev_pull_ins(rerank, shortlist, rows) if verdict == "offer" else []
+        except (KeyError, TypeError, ValueError):
+            pulled = []
+        return {"result": (verdict, rows, best, pulled), "event": {
             "ms": int((time.time() - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
             "conf": round(conf, 3), "fit": round(best, 3), "via": via, "n": len(catalog),
             "ctx": bool(prev), "lead": rows[0][0] if rows else None,
@@ -2240,7 +2385,8 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             # pin shows here), and the env-tunable settings, which leave no commit for the epoch windows to see
             "model": tier["model"], "rmodel": answered, "tier": i, "floor": JEV_FITS_FLOOR,
             "to": tier["timeout"], **({"prov": tier["name"]} if "name" in tier else {}), **src,
-            **({"fell": fell} if fell else {}), **({"hist": hist_ev} if hist_ev else {})}}
+            **({"fell": fell} if fell else {}), **({"hist": hist_ev} if hist_ev else {}),
+            **({"pulled": [n for (n, _d, _p) in pulled]} if pulled else {})}}
     return {"result": None, "event": {**_jev_err(err, t0), "fell": fell, **src}}
 
 
@@ -2266,7 +2412,8 @@ def _jev_start(prompt: str, transcript_path: str):
 
 
 def _jev_join(job):
-    """-> (verdict, rows, best_fit) or None (the embedding path decides). Records this turn's Jev
+    """-> (verdict, rows, best_fit, pulled) or None (the embedding path decides); `pulled` (ADR-0083)
+    is a list of owner-badged rows to show under `rows`, empty when none. Records this turn's Jev
     telemetry for the ledger row; a route still running at the deadline is abandoned."""
     global _JEV_EVENT
     if job is None:
@@ -2288,13 +2435,15 @@ def _jev_serve(sid: str, prompt: str, jev, offered: list, outage: str, **ledger)
         return False
     if _JEV_EVENT is not None:
         _JEV_EVENT["outage"] = outage
-    verdict, rows, best = jev
+    verdict, rows, best = jev[:3]
+    pulled = jev[3] if len(jev) > 3 else []
     if verdict == "skip":
         _append_offer(sid, "jev_skip", offered, "jev_no_fit", prompt, **ledger)
         _authorized_skip_inject("jev", sid, fit=best, floor=JEV_FITS_FLOOR)
         return True
-    _inject(_ranked_mandate(rows, whole_shelf=True) + _chain_hint(sid))
-    _append_offer(sid, "offer", [[n, round(p, 4)] for (n, _d, p) in rows], outage, prompt, **ledger)
+    _inject(_ranked_mandate(rows, whole_shelf=True, pulled=pulled) + _chain_hint(sid))
+    _append_offer(sid, "offer", [[n, round(p, 4)] for (n, _d, p) in rows], outage, prompt,
+                  pulled=[[n, round(p, 4)] for (n, _d, p) in pulled] or None, **ledger)
     return True
 
 
@@ -2755,7 +2904,8 @@ WHOLE_SHELF_TAIL = ("None fit, even loosely adapted → rule out the top row by 
 
 
 def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None = None,
-                    takes: dict | None = None, whole_shelf: bool = False) -> str:
+                    takes: dict | None = None, whole_shelf: bool = False,
+                    pulled: list | None = None) -> str:
     # %-SHARE is RELATIVE rank among the shown few, NOT absolute confidence — raw mpnet cosines
     # (~0.18-0.40) read as noise; share disambiguates WHICH fits. Shown only with 2+ candidates
     # (a lone candidate is always 100% → meaningless). Raw scores still logged to the ledger.
@@ -2792,7 +2942,7 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
             # promises. Intra-cluster score order preserved within each group.
             ordered = ([c[0] for c in _clusters]
                        + [m for c in _clusters for m in c[1:]] + _extras)
-    lines = [f"  • {name}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
+    lines = [f"  • {name}{_badge(name)}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
              for name, desc, score in ordered]
     if multi and n_intents > 1:
         note = (f"\nReads as {n_intents} distinct intents — the first {n_intents} rows are the "
@@ -2834,10 +2984,17 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
     # saying "the top few, not the shelf" there would misinform the agent. Its no-fit advice is to
     # search with terms the ranking could have missed, not to repeat its question.
     head, tail = ((WHOLE_SHELF_HEAD, WHOLE_SHELF_TAIL) if whole_shelf else (PREVIEW_HEAD, PREVIEW_TAIL))
+    # ADR-0083: owner-badged rows Jev ranked below its cut, shown under the ranking, never in it.
+    pulled_block = ""
+    if pulled:
+        pulled_block = ("\nOn the owner's list, ranked lower by Jev but judged a fit for this task:\n"
+                        + "\n".join(f"  • {n}{_badge(n)} — {_blurb(d)}" for (n, d, _p) in pulled))
+    marks = "".join(_badge(n) for n in [c[0] for c in cands] + [r[0] for r in (pulled or [])])
+    legend = BADGE_LEGEND if ("❤️" in marks or "⭐" in marks) else (PROVEN_LEGEND if "🔥" in marks else "")
     return (
         "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | NO SKILL: <why>.\n"
-        + head + "\n".join(lines) + note + route_line + annex_block + foreign_block + "\n"
-        + tail + "A loosely-adaptable fit is a USING. [full order: session start]"
+        + head + "\n".join(lines) + note + pulled_block + route_line + annex_block + foreign_block + "\n"
+        + legend + tail + "A loosely-adaptable fit is a USING. [full order: session start]"
     )
 
 
@@ -3083,6 +3240,7 @@ def main() -> int:
             _authorized_skip_inject("jev", sid, fit=_jev[2], floor=JEV_FITS_FLOOR)
             return 0
         _jev_rows = _jev[1] if _jev is not None else None
+        _jev_pulled = (_jev[3] if _jev is not None and len(_jev) > 3 else []) or []
 
         # Getaway: top candidate below its floor (per-skill tau when armed+`ok`, else the
         # global floor). A deterministic hit always clears — it IS the intent. ADR-0061 (owner-
@@ -3130,7 +3288,8 @@ def main() -> int:
             _external = []
         try:
             _foreign = _retrieve_foreign(
-                vector, _atop, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in (_jev_rows or []) + cands))
+                vector, _atop, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in
+                          (_jev_rows or []) + (_jev_pulled if _jev_rows else []) + cands))
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _foreign = []
 
@@ -3140,8 +3299,9 @@ def main() -> int:
             shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
             shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
         _ext_takes = _external_takes() if (ANNEX_COMPLEMENT and _external) else None
+        _pulled = _jev_pulled if _jev_rows else []
         _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes,
-                                whole_shelf=bool(_jev_rows)) + _chain_hint(sid))
+                                whole_shelf=bool(_jev_rows), pulled=_pulled) + _chain_hint(sid))
         # ADR-0041 telemetry — computed from the same pure helpers the renderer used, so
         # the ledger row and the injected text can never disagree.
         _ni = 1
@@ -3155,7 +3315,8 @@ def main() -> int:
                       ext=[[n, round(s, 4)] for (n, _d, s, _a) in _external] or None,
                       xh=[[n, round(s, 4)] for (n, _d, s, _h) in _foreign] or None,
                       n_intents=_ni, route=_route_of(shown[0][0]) if shown else None,
-                      hint=_chain_hint_data(sid))
+                      hint=_chain_hint_data(sid),
+                      pulled=[[n, round(s, 4)] for (n, _d, s) in _pulled] or None)
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError,
             OverflowError):
         return 0  # fail-silent, never block
