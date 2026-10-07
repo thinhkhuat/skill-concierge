@@ -129,11 +129,12 @@ def _family(name: str) -> str:
     return head if head in ("ak", "vn", "tk") else "other"
 
 
-def _grouped(names: list) -> list:
-    """Lines `  <family> (n): a, b, c`, largest family first; every name shown."""
+def _grouped(names: list, off=frozenset()) -> list:
+    """Lines `  <family> (n): a, b, c`, largest family first; every name shown, `(off here)` marking
+    an entry the menu cannot show on this harness."""
     fam = {}
     for n in sorted(names):
-        fam.setdefault(_family(n), []).append(n)
+        fam.setdefault(_family(n), []).append(n + (" (off here)" if n in off else ""))
     order = sorted(fam, key=lambda f: (f != "patterns", -len(fam[f]), f))
     return [f"  {f} ({len(fam[f])}): {', '.join(fam[f])}" for f in order]
 
@@ -152,10 +153,12 @@ def cmd_list(_):
     raw = _load()
     pv = _proven()
     counts = pv.get("counts") or {}
+    names, complete, _p = _installed()
+    off = _off_here(raw, names, complete, _disabled_plugins())
     print(f"❤️ {len(raw['heart'])} · ⭐ {len(raw['star'])} · 🔥 {len(counts)}   ({_path()})")
     for tier, mark in TIERS:
         print(f"{mark} {tier}")
-        print("\n".join(_grouped(raw[tier])) or "  (none)")
+        print("\n".join(_grouped(raw[tier], off)) or "  (none)")
     print(f"🔥 proven (sessions in {pv.get('window_days', 30)} days)")
     print("\n".join(_bucketed(counts)) or "  (no digest yet: written at session start)")
     return 0
@@ -242,6 +245,41 @@ def _installed():
     return names, complete, prefixes
 
 
+def _disabled_plugins() -> set:
+    """Plugins Claude Code has switched off: every installed `<plugin>@<marketplace>` key is false in
+    the merged enabledPlugins layers (user, then <cwd>/.claude/settings.json, then settings.local.json;
+    an absent key counts as on). The menu hook drops their rows, so a ranked entry shows nothing here."""
+    merged = {}
+    for f in (HOME / ".claude" / "settings.json", Path.cwd() / ".claude" / "settings.json",
+              Path.cwd() / ".claude" / "settings.local.json"):
+        try:
+            merged.update(json.loads(f.read_text(encoding="utf-8")).get("enabledPlugins") or {})
+        except (OSError, ValueError, AttributeError):
+            continue
+    try:
+        keys = (json.loads((HOME / ".claude" / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
+                .get("plugins") or {})
+    except (OSError, ValueError, AttributeError):
+        return set()
+    by = {}
+    for k in keys:
+        by.setdefault(k.split("@")[0], []).append(merged.get(k, True) is not False)
+    return {plugin for plugin, on in by.items() if not any(on)}
+
+
+def _off_here(raw: dict, installed: set, complete: bool, disabled: set) -> set:
+    """Exact entries that cannot show on this harness's menu: a disabled plugin's skill, or (with a
+    complete installed view) a name not installed here. Patterns are never marked."""
+    off = set()
+    for tier, _m in TIERS:
+        for n in raw[tier]:
+            if _is_pattern(n):
+                continue
+            if (":" in n and n.split(":", 1)[0] in disabled) or (complete and n not in installed):
+                off.add(n)
+    return off
+
+
 def _ap():
     """auto_promote.py as a module: its ledger counter (alias folding included) and its env-checked
     🔥 bar, so `suggest` and the menu's 🔥 can never disagree."""
@@ -306,12 +344,17 @@ def cmd_suggest(args):
     if not covered:
         days = 0 if start is None else int((time.time() - start) / 86400)
         print(f"note: the usage log covers {days} days, not {SUGGEST_WINDOW_DAYS}, so no ❤️ is reviewed")
+    off = sorted(_off_here(raw, installed, complete, _disabled_plugins()))
     if not sugg:
         print("No suggestions.")
-        return 0
     n_apply = sum(1 for s in sugg if s[0] in APPLIED)
     if not args.apply:
-        print("\n".join(_fmt_suggest(sugg, used_short, used90)))
+        if sugg:
+            print("\n".join(_fmt_suggest(sugg, used_short, used90)))
+        if off:
+            print(f"(off here) ranked but disabled or not installed in Claude Code, kept [{len(off)}]\n  " + ", ".join(off))
+        return 0
+    if not sugg:
         return 0
     p = _path()
     if p.exists():
@@ -411,6 +454,11 @@ def cmd_selftest(_):
         assert body.count(n) == 1, (n, body)      # every name shown exactly once, none capped
     assert len(rep_lines) == 1 + 2 * 4, rep_lines  # four groups present: add, remove, promote, review
     assert _grouped(["ak-x", "ak-y", "*:*", "pstack:z", "solo"])[0].startswith("  patterns (1)")
+    off = _off_here({"heart": ["palate:palate", "solo", "gone", "*:*"], "star": []}, {"solo", "palate:palate"},
+                    True, {"palate"})
+    assert off == {"palate:palate", "gone"}, off          # disabled plugin skill + not installed; pattern never
+    assert "palate:palate (off here)" in "".join(_grouped(["palate:palate"], off))
+    assert _off_here({"heart": ["gone"], "star": []}, set(), False, set()) == set()   # incomplete view: mark nothing
     for k in ("SKILL_CONCIERGE_REPUTATION", "SKILL_CONCIERGE_PROVEN"):
         os.environ.pop(k, None)
     print("reputation selftest ok")

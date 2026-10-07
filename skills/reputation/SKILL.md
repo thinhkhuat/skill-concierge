@@ -5,7 +5,7 @@ description: Manage the owner's skill ranking — the ❤️ house-favourite and
 argument-hint: "[list | add heart|star <skill> | remove <skill> | why <skill> | suggest [--apply]]"
 license: MIT
 metadata:
-  version: 0.4.0
+  version: 0.5.0
 ---
 
 # skill-concierge reputation

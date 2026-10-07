@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.61.4-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.61.5-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -459,6 +459,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.61.5` — **published, `reputation.py` marks ranked entries the menu cannot show here (a disabled or uninstalled plugin's skill) as `(off here)`.**
 
 `0.61.4` — **published, `reputation.py list` and `suggest` print grouped, terse reports that open with the next command.**
 

@@ -3,6 +3,14 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.61.5] - 2026-10-08
+
+### Changed
+- **`reputation.py` marks ranked entries the menu cannot show here.** An exact entry whose plugin is
+  switched off in Claude Code, or that is not installed, prints as `(off here)` in `list`, and
+  `suggest` lists them in one line. The ranking keeps them, so the badge returns when the plugin is
+  re-enabled.
+
 ## [0.61.4] - 2026-10-08
 
 ### Changed
