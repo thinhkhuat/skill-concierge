@@ -189,3 +189,5 @@ def test_plugin_package_shape():
                     'hook("evaluate"', 'hook("execute.after"'):
         assert surface in src, surface
     assert "SKILL_CONCIERGE_HARNESS: HARNESS" in src or "SKILL_CONCIERGE_HARNESS" in src
+    # v2 local-server env key is `environment` (an `env` field is silently ignored)
+    assert "environment: row.env" in src

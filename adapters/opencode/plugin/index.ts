@@ -90,9 +90,12 @@ function mcpServerConfig(): Record<string, unknown> | null {
     const args = row.args.map((a: unknown) =>
       typeof a === "string" ? a.replaceAll("${CLAUDE_PLUGIN_ROOT}", PLUGIN_ROOT) : a,
     );
-    // OpenCode local-server shape: command as an argv array, env merged verbatim. The
+    // OpenCode v2 local-server shape (opencode.ai/v2/docs/mcp-servers): command as an
+    // argv array, env under `environment` (NOT `env` — v2 silently ignores an `env`
+    // field and the server then runs on the inherited process environment alone; found
+    // live when the registered server fell back to the default 384-dim embedder). The
     // SKILL_OPENCODE_ROOTS pin rides .mcp.json like every other harness-root flag.
-    return { type: "local", command: ["/bin/bash", ...args], env: row.env ?? {} };
+    return { type: "local", command: ["/bin/bash", ...args], environment: row.env ?? {} };
   } catch {
     return null;
   }
