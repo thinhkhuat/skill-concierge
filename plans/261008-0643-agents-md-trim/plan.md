@@ -44,7 +44,7 @@ Cut skill-concierge's `AGENTS.md` so every Codex session that loads it pays far 
 - L2: the `SKILL_SYNCED_ROOTS` precondition is in its row. L4: the machine's Jev bench facts are back. The pointer now fires when a flag is set in any env or reasoned about, not only on a code edit.
 - CLAUDE.md's last line now also points at `docs/repository-layout.md`.
 
-Not fixed (pre-existing, outside the trim): P1, the `ENFORCER_JEV_ROUTER` text may name a stale `TYPESAFE_API_KEY` precondition (UNVERIFIED); P2, `vendor/skill-search/skill_search/ports.py:23` points at "AGENTS.md's Runtime flags" for a port-caller list that never existed there.
+Pre-existing, fixed in a follow-up commit on Thinh's "fix both": P1, the `ENFORCER_JEV_ROUTER` text named `TYPESAFE_API_KEY` as the router's key precondition; `enforcer.py:2304-2306` needs any bench tier with its own key (`_jev_key`), now stated in `docs/runtime-flags.md`. P2, `vendor/skill-search/skill_search/ports.py` pointed at "AGENTS.md's Runtime flags" for a port-caller list that was never there; it now points at `tests/test_port_agreement.py`, which names every caller.
 
 ## Step ledger — re-claude
 

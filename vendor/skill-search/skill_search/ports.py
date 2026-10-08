@@ -20,8 +20,8 @@ stay import-free of the rest of this repo to remain portable on its own. `index_
 `server.py`, in the same package, import it directly (`from skill_search import ports`).
 Every OTHER caller in this repo (doctor.py, the enforcer hook, and any script that derives a
 port from one of the four env vars above) puts `vendor/skill-search` on `sys.path` first, then
-does the same import — see AGENTS.md's "Runtime flags" / the port-agreement test suite for the
-full caller list. `tests/test_port_env_guard.py` statically enforces that no OTHER file reads
+does the same import — `tests/test_port_agreement.py` names each caller and checks it lands on
+the same port. `tests/test_port_env_guard.py` statically enforces that no OTHER file reads
 one of those four names from an environment mapping — every reader goes through a function
 here instead, so the grammar can never fork into a second copy again.
 """
