@@ -35,6 +35,9 @@ READS_NATIVELY = {
     "omp": {"personal", "plugin", "codex-personal"},
     "dsh": {"personal"},
     "cline": {"personal"},
+    # OpenCode v2 reads ~/.claude/skills as a DOCUMENTED compatibility source (ADR-0085) —
+    # by construction, not by symlink.
+    "opencode": {"personal"},
 }
 OWN_HEAD = {"claude": ("personal", "plugin", "claude-synced")}
 
@@ -43,7 +46,8 @@ OWN_HEAD = {"claude": ("personal", "plugin", "claude-synced")}
 def mods(tmp_path_factory):
     saved = dict(os.environ)
     for flag in ("SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS", "SKILL_OMP_ROOTS",
-                 "SKILL_ZCODE_ROOTS", "SKILL_DSH_ROOTS", "SKILL_CLINE_ROOTS", "SKILL_SYNCED_ROOTS"):
+                 "SKILL_ZCODE_ROOTS", "SKILL_DSH_ROOTS", "SKILL_CLINE_ROOTS",
+                 "SKILL_OPENCODE_ROOTS", "SKILL_SYNCED_ROOTS"):
         os.environ[flag] = "1"
     tmp = tmp_path_factory.mktemp("engine")
     os.environ.update({"SKILL_CONCIERGE_HARNESS": "claude",
@@ -147,7 +151,7 @@ def test_retrieve_itself_drops_every_foreign_row(harness, mods, monkeypatch):
     _sd, enf = mods
     monkeypatch.setattr(enf, "RUNNING_HARNESS", harness)
     monkeypatch.setattr(enf, "FOREIGN_SCOPES", enf._foreign_scopes())
-    monkeypatch.setattr(enf, "INVOCABLE_PLUGIN_IDS", None if harness in ("dsh", "cline") else set())
+    monkeypatch.setattr(enf, "INVOCABLE_PLUGIN_IDS", None if harness in ("dsh", "cline", "opencode") else set())
     monkeypatch.setattr(enf, "_invocable_twin", lambda name: False)
     rows = [(f"only-{sc}", 0.9 - i / 100, sc) for i, sc in enumerate(
         ("omp-managed", "zcode-plugin", "codex-plugin", "dsh-personal", "cline-personal"))]
@@ -212,10 +216,11 @@ def test_a_shared_kit_copy_in_a_parent_dir_keeps_the_row(mods, tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("harness,foreign", [("claude", True), ("omp", False), ("codex", False),
-                                             ("zcode", False), ("dsh", False), ("cline", False)])
+                                             ("zcode", False), ("dsh", False), ("cline", False),
+                                             ("opencode", False)])
 def test_project_agents_rows_follow_the_agents_convention(harness, foreign, mods, monkeypatch):
-    """<project>/.agents/skills is indexed under zcode-project but read by ZCode, OMP, Codex, DSH
-    and Cline — only Claude Code ignores it."""
+    """<project>/.agents/skills is indexed under zcode-project but read by ZCode, OMP, Codex, DSH,
+    Cline and OpenCode (a documented compatibility source there) — only Claude Code ignores it."""
     _sd, enf = mods
     monkeypatch.setattr(enf, "RUNNING_HARNESS", harness)
     monkeypatch.setattr(enf, "FOREIGN_SCOPES", enf._foreign_scopes())

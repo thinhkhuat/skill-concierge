@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Agent-contributor instructions for **skill-concierge** — a skill-governance layer for
-Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), and Cline: semantic retrieval (*which* skill) +
+Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, and OpenCode v2: semantic retrieval (*which* skill) +
 use-enforcement (*whether* a skill is used at all) + a compounding invocation ledger
 (*what* actually got used).
 
@@ -28,7 +28,7 @@ The full tree is in the README's *Architecture* section. One line per area here;
 - `scripts/` — maintenance CLIs: `doctor.py` (health), `analyze.py` (ledger; window with `--since`/`--until`, never split the ledger by hand), the list managers (`keep-on.py`, `blocklist.py`, `reputation.py`, `catalogs.py`), the Jev tools, and `engine_env.py` (the one `ENGINE_ENV_KEYS` list, see *Runtime flags*).
 - `hooks/` — the in-generation governance layer: `enforcer.py` (the per-turn SKILL-FIRST gate), `skill_guard.py` (blocklist deny), `skill_exclusions.py` ("not for" echo), `ledger.py` (invocation capture), `doctrine.py` + `doctrine/skill-first.md` (the standing order), and the SessionStart self-heal hooks.
 - `vendor/skill-search/` — vendored MCP engine (MIT · sowhan/skill-search). **Do not diverge silently**: record every patch in [`VENDORED.md`](vendor/skill-search/VENDORED.md).
-- `adapters/` — one module per harness: `codex/`, `claude-code/`, `commandcode/`, `omp/`, `zcode/`, `dsh/`, `cline/`. The `codex/` and `claude-code/` installers refuse to downgrade a newer cache; ZCode needs no adapter vehicle (its `install.sh` only verifies and repairs).
+- `adapters/` — one module per harness: `codex/`, `claude-code/`, `commandcode/`, `omp/`, `zcode/`, `dsh/`, `cline/`, `opencode/` (a native v2 plugin package + installer, ADR-0085). The `codex/` and `claude-code/` installers refuse to downgrade a newer cache; ZCode needs no adapter vehicle (its `install.sh` only verifies and repairs).
 - Manifests: `.claude-plugin/{plugin,marketplace}.json`, `.codex-plugin/plugin.json` + `.codex/hooks.json`, and root `package.json` (carries the OMP extension hook `omp.extensions`).
 - `config/keep-on.json` — the shipped seed for the always-on allowlist; the runtime copy lives in `~/.claude/skill-concierge/keep-on.json` (ADR-0025).
 
@@ -122,6 +122,7 @@ The keep-off map (`~/.claude/skill-concierge/keep-off.json`) is consent-only and
 | `SKILL_ZCODE_ROOTS` | ON | ZCode skills, scopes `zcode-*` | [0042](docs/adr/0042-zcode-quintuple-harness-parity.md) |
 | `SKILL_DSH_ROOTS` | ON | DeepSeek Harness skills, scopes `dsh-*` | [0050](docs/adr/0050-dsh-hexa-harness-parity.md) |
 | `SKILL_CLINE_ROOTS` | ON | Cline skills, scopes `cline-*` | [0051](docs/adr/0051-cline-hepta-harness-parity.md) |
+| `SKILL_OPENCODE_ROOTS` | ON | OpenCode v2 skills, scopes `opencode-*` | [0085](docs/adr/0085-opencode-octa-harness-parity.md) |
 | `SKILL_SYNCED_ROOTS` | OFF | Claude account-synced skills as `anthropic-skills:<name>`, scope `claude-synced`. Stays OFF until `doctor` shows every harness cache at `0.48.0` or later. | [0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
 
 **Scripts** (offline tools, never per turn)

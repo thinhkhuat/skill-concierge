@@ -2190,6 +2190,59 @@ def check_cline():
             "fix": None}
 
 
+# OpenCode v2 surface (ADR-0085) — skill-concierge integrates as a NATIVE OpenCode
+# plugin: the package at adapters/opencode/plugin registered in the global
+# ~/.config/opencode/opencode.json `plugins` array (the plugin itself registers the
+# skill-search MCP server via ctx.mcp.transform — nothing on disk to check for MCP),
+# plus the re-rooted plugin skills under ~/.config/opencode/skills/. WARN-only — no
+# OpenCode install is one 'opencode: not installed' row, never a failure.
+OPENCODE_HOME = Path(os.environ.get(
+    "SKILL_OPENCODE_HOME",
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "opencode"))
+OPENCODE_JSON = OPENCODE_HOME / "opencode.json"
+OPENCODE_SKILLS = OPENCODE_HOME / "skills"
+
+
+def check_opencode():
+    """OpenCode v2 install state — plugin entry, plugin package, re-rooted skills (ADR-0085).
+
+    WARN-only — no OpenCode install is one 'opencode: not installed' row, never a failure.
+    """
+    if not OPENCODE_HOME.exists():
+        return {"id": "opencode", "label": "OpenCode integration", "status": WARN,
+                "detail": "opencode: not installed (no ~/.config/opencode) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    # 1. Plugin package in the repo
+    for f in ("index.ts", "package.json"):
+        if not (ROOT / "adapters" / "opencode" / "plugin" / f).exists():
+            findings.append(f"plugin package incomplete (missing adapters/opencode/plugin/{f})")
+    # 2. Global config carries the plugin entry
+    try:
+        cfg = json.loads(OPENCODE_JSON.read_text(encoding="utf-8"))
+        entries = cfg.get("plugins", [])
+        if not isinstance(entries, list):
+            findings.append("opencode.json plugins is not a list")
+        elif not any(isinstance(e, (str, dict)) and (
+                e == str(ROOT / "adapters" / "opencode" / "plugin")
+                or (isinstance(e, dict) and e.get("package") == str(ROOT / "adapters" / "opencode" / "plugin")))
+                for e in entries):
+            findings.append("opencode.json missing the skill-concierge plugin entry (run adapters/opencode/install.sh)")
+    except FileNotFoundError:
+        findings.append("opencode.json missing (no global config yet — run adapters/opencode/install.sh)")
+    except (OSError, UnicodeError, ValueError):
+        findings.append("opencode.json unreadable/invalid JSON (JSONC comments must be removed)")
+    # 3. Re-rooted plugin skills (the opencode-personal discovery root)
+    if not OPENCODE_SKILLS.is_dir():
+        findings.append("skills root missing (~/.config/opencode/skills — run adapters/opencode/install.sh)")
+    if findings:
+        return {"id": "opencode", "label": "OpenCode integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "opencode", "label": "OpenCode integration", "status": OK,
+            "detail": "plugin package + opencode.json entry + skills root all present",
+            "fix": None}
+
+
 KEEPOFF_DURABLE = Path(os.environ.get(
     "SKILL_CONCIERGE_KEEPOFF", Path.home() / ".claude" / "skill-concierge" / "keep-off.json"))
 
@@ -2269,7 +2322,7 @@ CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_blocklist, check_keepoff, check_findability,
           check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
-          check_claude_code, check_dsh, check_cline,
+          check_claude_code, check_dsh, check_cline, check_opencode,
           check_ledger, check_dup_mcp, check_mcp_enabled]
 
 

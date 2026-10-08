@@ -242,7 +242,8 @@ def _running_harness() -> str:
        and the OMP adapter; OMP also maps `oh-my-pi` so the natural name resolves).
        `dsh` / `deepseek-harness` / `oh-dsh` map to 'dsh'. `cline` / `cline-cli` map to
        'cline' (ADR-0051 — the Cline file-hook bridge sets it; Cline has no native env
-       identity signal).
+       identity signal). `opencode` / `open-code` map to 'opencode' (ADR-0085 — the OpenCode
+       v2 plugin adapter sets it; OpenCode sets no harness-identifying env of its own).
     2. Native harness detection BEFORE path markers: `OMPCODE=1` -> 'omp'. OMP sets BOTH
        `OMPCODE` and `CLAUDE`'s own markers (`CLAUDE_PLUGIN_ROOT`, `CLAUDE.md` presence, etc.),
        so `OMPCODE=1` alone is proof of OMP; `CLAUDE`-only markers never are (OMP's provider
@@ -257,6 +258,8 @@ def _running_harness() -> str:
        `.zcode` in path -> 'zcode', `.ohdsh` or `.dsh` in path -> 'dsh', `.cline` in path ->
        'cline' (ADR-0051 fallback; the Cline adapter's shim lives under ~/.cline/hooks only if
        someone copies the enforcer there — the bridge's explicit env is the primary signal),
+       `.opencode` in path -> 'opencode' (ADR-0085 fallback; the plugin adapter runs the
+       enforcer from the repo checkout, where the explicit env is the primary signal),
        `.claude` in path -> 'claude'.
     4. Fallback: 'claude' (the pre-ADR-0038 default; commandcode runs through its mod
        adapter, which sets SKILL_CONCIERGE_HARNESS explicitly).
@@ -272,6 +275,8 @@ def _running_harness() -> str:
         return "dsh"
     if explicit in ("cline", "cline-cli"):
         return "cline"
+    if explicit in ("opencode", "open-code"):
+        return "opencode"
 
     if os.environ.get("OMPCODE", "").strip() == "1":
         return "omp"
@@ -289,6 +294,7 @@ def _running_harness() -> str:
     marker_dsh = f"{os.sep}.dsh{os.sep}"
     marker_ohdsh = f"{os.sep}.ohdsh{os.sep}"
     marker_cline = f"{os.sep}.cline{os.sep}"
+    marker_opencode = f"{os.sep}.opencode{os.sep}"
     marker_claude = f"{os.sep}.claude{os.sep}"
     for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
         if not cand or not os.path.isabs(cand):
@@ -307,6 +313,8 @@ def _running_harness() -> str:
             return "dsh"
         if marker_cline in resolved:
             return "cline"
+        if marker_opencode in resolved:
+            return "opencode"
         if marker_claude in resolved:
             return "claude"
     return "claude"
@@ -319,6 +327,7 @@ UNDER_OMP = (RUNNING_HARNESS == "omp")
 UNDER_ZCODE = (RUNNING_HARNESS == "zcode")
 UNDER_DSH = (RUNNING_HARNESS == "dsh")
 UNDER_CLINE = (RUNNING_HARNESS == "cline")
+UNDER_OPENCODE = (RUNNING_HARNESS == "opencode")
 
 # Cline skill roots (ADR-0051) — the twin test's filesystem rescue set. Mirrors
 # skills_discovery.CLINE_PERSONAL_ROOT / CLINE_PROJECT_ROOT; stdlib-only duplicate
@@ -326,8 +335,17 @@ UNDER_CLINE = (RUNNING_HARNESS == "cline")
 _CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"
 _CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"
 
+# OpenCode skill roots (ADR-0085) — the twin test's filesystem rescue set. Mirrors
+# skills_discovery.OPENCODE_PERSONAL_ROOT / OPENCODE_PROJECT_ROOT plus OpenCode's documented
+# compatibility reads (~/.claude/skills, ~/.agents/skills); stdlib-only duplicate, same rule.
+_OPENCODE_PERSONAL_ROOT = Path(
+    os.environ.get("SKILL_OPENCODE_HOME",
+                   str(Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "opencode"))
+) / "skills"
+_OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"
 
-_HARNESS_ORDER = ("claude", "codex", "commandcode", "omp", "zcode", "dsh", "cline")
+
+_HARNESS_ORDER = ("claude", "codex", "commandcode", "omp", "zcode", "dsh", "cline", "opencode")
 
 
 def _scope_harness(scope: str) -> str:
@@ -406,6 +424,11 @@ def _foreign_scopes() -> tuple:
     Claude's personal root — the shared-shelf symlink is positive knowledge the whole
     scope is ZCode-invocable; on a divergent machine per-row survival moves to the
     `_invocable_twin` filesystem check instead.
+    From Cline (ADR-0051): every other harness's exclusive roots; `personal` is foreign unless
+    ~/.agents/skills IS Claude's personal shelf.
+    From OpenCode v2 (ADR-0085): every other harness's exclusive root plus the plugin cache and
+    claude-synced; `personal` is invocable BY CONSTRUCTION (OpenCode's documented compatibility
+    read of ~/.claude/skills — no shared-shelf symlink condition applies).
 
     `project:` scopes are cwd-derived and shared by construction. Never foreign.
 
@@ -424,20 +447,20 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-plugin", "codex-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
         return base if _commandcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "codex":
         return ("plugin", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
     if RUNNING_HARNESS == "omp":
         return ("codex-plugin", "commandcode-personal", "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
     if RUNNING_HARNESS == "zcode":
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "dsh-personal", "cline-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
         return base if _zcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "dsh":
         # DSH reads its own roots (DSH_HOME/skills, <project>/.dsh/skills) plus the
@@ -447,7 +470,8 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin", "cline-personal", "claude-synced")
+                "zcode-personal", "zcode-plugin", "cline-personal",
+                "opencode-personal", "claude-synced")
         return base if _agents_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "cline":
         # Cline (ADR-0051) reads ~/.cline/data/settings/skills and <cwd>/.cline/skills, and —
@@ -457,12 +481,25 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-personal", "codex-plugin",
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "zcode-personal", "zcode-plugin", "dsh-personal", "claude-synced")
+                "zcode-personal", "zcode-plugin", "dsh-personal",
+                "opencode-personal", "claude-synced")
         return base if _agents_shares_personal_shelf() else base + ("personal",)
+    if RUNNING_HARNESS == "opencode":
+        # OpenCode v2 (ADR-0085) reads ~/.config/opencode/skills, <cwd>/.opencode/skills, and —
+        # documented compatibility sources — ~/.claude/skills, ~/.agents/skills and their
+        # project twins, so `personal` is invocable by CONSTRUCTION here (the docs table, not a
+        # symlink guess: no shared-shelf condition applies). It reads NO plugin cache and no
+        # other harness's exclusive roots; claude-synced stays Claude-Code-only (the nested
+        # bucket is invisible to OpenCode's one-level compat scan too).
+        return ("plugin", "codex-personal", "codex-plugin",
+                "commandcode-personal",
+                "omp-personal", "omp-managed", "omp-plugin",
+                "zcode-personal", "zcode-plugin", "dsh-personal", "cline-personal",
+                "claude-synced")
     return ("codex-plugin", "codex-personal", "commandcode-personal",
             "omp-personal", "omp-managed", "omp-plugin",
             "zcode-personal", "zcode-plugin",
-            "dsh-personal", "cline-personal")
+            "dsh-personal", "cline-personal", "opencode-personal")
 
 FOREIGN_SCOPES = _foreign_scopes()
 
@@ -730,6 +767,18 @@ def _invocable_twin(name: str) -> bool:
                         Path.home() / ".agents" / "skills"))
         except (OSError, ValueError):
             return True
+    if RUNNING_HARNESS == "opencode":
+        # OpenCode v2 (ADR-0085) has no plugin registry; a foreign-scoped row survives only
+        # through a filesystem twin in OpenCode's own roots or one of its documented
+        # compatibility roots (~/.claude/skills, ~/.agents/skills). OSError -> UNKNOWN ->
+        # keep (fail-to-non-blocking), the Cline rule.
+        try:
+            return any((root / name / "SKILL.md").exists() for root in
+                       (_OPENCODE_PERSONAL_ROOT, _OPENCODE_PROJECT_ROOT,
+                        Path.home() / ".claude" / "skills",
+                        Path.home() / ".agents" / "skills"))
+        except (OSError, ValueError):
+            return True
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
@@ -763,7 +812,7 @@ def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
     rows — under OMP that set already unions the claude registry (settings-layer
     merged) with the OMP registry (per-entry `enabled`), mirroring what OMP's own
     provider loads, so the offer can never claim invocability the harness refuses.
-    DSH and Cline have NO skill-plugin registry (ADR-0050/ADR-0051): a namespaced
+    DSH, Cline and OpenCode have NO skill-plugin registry (ADR-0050/0051/0085): a namespaced
     plugin row is never invocable there and drops; plain rows pass. Codex, Command
     Code and ZCode keep their lane semantics — the foreign-scope/twin filter in
     _retrieve already settles their rows, and ZCode's twin resolves from its own
@@ -784,7 +833,7 @@ def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
         if INVOCABLE_PLUGIN_IDS is None or ":" not in name:
             return True
         return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
-    if RUNNING_HARNESS in ("dsh", "cline"):
+    if RUNNING_HARNESS in ("dsh", "cline", "opencode"):
         return ":" not in name
     return True
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
@@ -2013,13 +2062,14 @@ def _row_invocable(name: str, scope) -> bool:
 
     INVOCABLE_PLUGIN_IDS None means the manifest was unreadable, i.e. the twin test cannot be
     made: drop ONLY on positive knowledge — an unknown must filter nothing, or an unreadable
-    settings file silently reinstates the very mislabelling this replaced. The exception is DSH
-    and Cline, which have NO skill-plugin registry by design: their verdict is the scope +
+    settings file silently reinstates the very mislabelling this replaced. The exception is DSH,
+    Cline and OpenCode, which have NO skill-plugin registry by design: their verdict is the scope +
     filesystem twin, so a None there must not switch the whole filter off (it did before
     v0.49.0). The last test is ADR-0052's: a plugin disabled in THIS session's merged layers."""
     if CROSS_HARNESS and PROJECT_ISOLATION and _project_row_verdict(scope, name) == "other":
         return False
-    if (CROSS_HARNESS and (INVOCABLE_PLUGIN_IDS is not None or RUNNING_HARNESS in ("dsh", "cline"))
+    if (CROSS_HARNESS and (INVOCABLE_PLUGIN_IDS is not None
+                           or RUNNING_HARNESS in ("dsh", "cline", "opencode"))
             and _scope_is_foreign(scope) and not _invocable_twin(name)):
         return False
     return _plugin_gate_ok(name, scope)
@@ -2587,7 +2637,8 @@ def _scope_is_foreign(scope: str) -> bool:
         return False
     if path.rstrip("/").endswith("/.agents/skills"):
         # The .agents convention root (indexed under zcode-project) is read by ZCode, OMP, Codex,
-        # DSH and Cline; Claude Code reads only .claude/skills. Command Code: unverified -> keep.
+        # DSH, Cline and OpenCode (a documented compatibility source there); Claude Code reads
+        # only .claude/skills. Command Code: unverified -> keep.
         return RUNNING_HARNESS == "claude"
     return fam.rsplit("-", 1)[0] + "-personal" in FOREIGN_SCOPES
 

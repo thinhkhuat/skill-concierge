@@ -55,10 +55,14 @@ LEDGER = LOG_DIR / "skill-invocation-ledger.log"
 # server/tool separator all become `_`), so neither the slash form nor the double-underscore
 # form matches; the single-underscore suffixes below are the ones that actually catch it.
 SEARCH_TOOLS = ("skill-search__search_skills", "skill_search__search_skills",
-                "skill-search/search_skills", "skill_search_search_skills")
+                "skill-search/search_skills", "skill_search_search_skills",
+                "skill-search_search_skills")
 GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
-             "skill-search/get_skill", "skill_search_get_skill")
-_NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type")
+             "skill-search/get_skill", "skill_search_get_skill",
+             "skill-search_get_skill")
+# `id` is OpenCode's native skill-tool input key ({"id": "<skill>"}) — the others are the
+# Claude Code Skill tool / command / subagent shapes seen live.
+_NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type", "id")
 
 
 def _zcode_harness() -> str | None:
@@ -165,7 +169,9 @@ def main() -> int:
 
         elif evt == "PostToolUse":
             tool = d.get("tool_name", "")
-            if tool in ("Skill", "activate_skill"):
+            # "skill" (lowercase) is OpenCode's native skill tool (ADR-0085); the
+            # others are the Claude Code / harness shapes seen live.
+            if tool in ("Skill", "activate_skill", "skill"):
                 ti = d.get("tool_input", {})
                 name, keys = "", []
                 if isinstance(ti, dict):

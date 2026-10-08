@@ -3,6 +3,38 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.62.0] - 2026-10-08
+
+### Added
+
+- **OpenCode v2 as the eighth harness (ADR-0085, octa-harness parity).** A native OpenCode v2
+  plugin (`adapters/opencode/plugin/` — zero-build `{ id, setup(ctx) }` local-plugin form) with
+  full Claude Code feature parity: the skill-search MCP server registered from the shared
+  `.mcp.json` via `ctx.mcp.transform` (no manual MCP config anywhere); the SKILL-FIRST doctrine
+  injected once per session and the per-turn enforcer block on the first agent-loop model call
+  after each admitted prompt (`session.hook("prompt")` + `context` system parts — the prompt
+  text itself is never edited); the user-ordered blocklist denied through the `skill`
+  permission action by delegating to `skill_guard.py` (`permission.hook("evaluate")`, fail-open
+  — the PreToolUse(Skill) gate parity); skill activations and retriever usage logged to the
+  shared ledger plus the ADR-0059 "not for" exclusion echo (`tool.hook("execute.after")`); and
+  the detached SessionStart self-heal batch fired at plugin setup. New engine roots behind
+  `SKILL_OPENCODE_ROOTS` (default ON, one-var revert, in `ENGINE_ENV_KEYS` and pinned in
+  `.mcp.json`): `~/.config/opencode/skills` (`opencode-personal`) and `<cwd>/.opencode/skills`
+  (`opencode-project:`), with `personal` invocable from OpenCode by construction (its documented
+  compatibility read of `~/.claude/skills`) and namespaced plugin rows never invocable (no
+  plugin registry — the DSH/Cline lane). The enforcer's `_running_harness()` resolves
+  `SKILL_CONCIERGE_HARNESS=opencode` (set by the adapter) → `.opencode` path marker; every other
+  harness's foreign-scope tuple gained `opencode-personal` (the completeness test caught the
+  class before it shipped). `ledger.py` classifies OpenCode's native `skill` tool (input key
+  `id`) and the transform-registered MCP tool ids (`skill-search_search_skills`). The installer
+  (`adapters/opencode/install.sh`) registers the plugin path in the global `opencode.json`
+  `plugins` array (safe_write, backed up, preserves everything else), re-roots the plugin's ten
+  skills into `~/.config/opencode/skills/` with a managed-names marker (the DSH/Cline
+  precedent; operator skills there are never touched), and reindexes. `doctor` grows a WARN-only
+  "OpenCode integration" row. Tests: `tests/test_opencode_adapter.py` + the foreign-scope
+  completeness matrix. EPOCH v0.62.0 (ledger metrics for the new harness start fresh — never
+  pool across this config change).
+
 ## [0.61.5] - 2026-10-08
 
 ### Changed

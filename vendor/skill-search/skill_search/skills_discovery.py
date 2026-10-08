@@ -130,6 +130,21 @@ CLINE_ROOTS = os.environ.get("SKILL_CLINE_ROOTS", "1") != "0"
 CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"  # Cline personal
 CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"            # Cline project-scoped, CWD-relative
 
+# OpenCode v2 skill roots (octa-harness parity, ADR-0085): OpenCode stores global skills at
+# ~/.config/opencode/skills and project skills at <cwd>/.opencode/skills (walked to the project
+# root by OpenCode itself; discovery indexes the CWD level like every other harness root).
+# OpenCode ALSO natively reads ~/.claude/skills + ~/.agents/skills and their project twins as
+# compatibility sources — `personal` therefore stays invocable from OpenCode (enforcer lane),
+# and the ~/.agents/skills non-indexing rule (ADR-0042) keeps applying unchanged.
+# Same one-var revert as every other harness: SKILL_OPENCODE_ROOTS=0 drops both paths + scope
+# (byte-identical to the pre-OpenCode engine; a reindex prunes the opencode-* points).
+OPENCODE_ROOTS = os.environ.get("SKILL_OPENCODE_ROOTS", "1") != "0"
+# Home resolution mirrors OpenCode itself: XDG_CONFIG_HOME when set, else ~/.config.
+_OPENCODE_HOME = Path(os.environ.get(
+    "SKILL_OPENCODE_HOME", str(Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "opencode")))
+OPENCODE_PERSONAL_ROOT = _OPENCODE_HOME / "skills"                # OpenCode personal (global)
+OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"       # OpenCode project, CWD-relative
+
 # Claude account-synced skills: Claude Code downloads skills from the user's claude.ai account
 # into ~/.claude/skills/synced/<bucket>/<name>/SKILL.md and lists them as
 # `anthropic-skills:<name>` (a namespace Claude Code reserves for them). Only Claude Code
@@ -154,6 +169,8 @@ SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [DSH_PERSONAL_ROOT, DSH_PROJECT_ROOT] if DSH_ROOTS else []
 ) + (
     [CLINE_PERSONAL_ROOT, CLINE_PROJECT_ROOT] if CLINE_ROOTS else []
+) + (
+    [OPENCODE_PERSONAL_ROOT, OPENCODE_PROJECT_ROOT] if OPENCODE_ROOTS else []
 )
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
@@ -1007,6 +1024,8 @@ def _scope_for(path: Path) -> str:
         return "dsh-personal"
     if p.startswith(str(CLINE_PERSONAL_ROOT) + os.sep):
         return "cline-personal"
+    if p.startswith(str(OPENCODE_PERSONAL_ROOT) + os.sep):
+        return "opencode-personal"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:
             return "codex-plugin"
@@ -1035,6 +1054,8 @@ def _scope_for(path: Path) -> str:
         return f"dsh-project:{DSH_PROJECT_ROOT}"
     if p.startswith(str(CLINE_PROJECT_ROOT) + os.sep):
         return f"cline-project:{CLINE_PROJECT_ROOT}"
+    if p.startswith(str(OPENCODE_PROJECT_ROOT) + os.sep):
+        return f"opencode-project:{OPENCODE_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -1060,6 +1081,8 @@ def visible_scopes() -> set[str]:
         scopes |= {"dsh-personal", f"dsh-project:{DSH_PROJECT_ROOT}"}
     if CLINE_ROOTS:
         scopes |= {"cline-personal", f"cline-project:{CLINE_PROJECT_ROOT}"}
+    if OPENCODE_ROOTS:
+        scopes |= {"opencode-personal", f"opencode-project:{OPENCODE_PROJECT_ROOT}"}
     if SYNCED_ROOTS:
         scopes.add("claude-synced")
     return scopes | {f"catalog:{a}" for a in catalog_roots()}

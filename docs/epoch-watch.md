@@ -13,6 +13,25 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.62.0 — OpenCode v2 harness (ADR-0085)
+
+**Epoch starts.** W42: the OpenCode plugin's first live turns. A NEW harness's rows (stamped
+`harness: "opencode"`) join the ledger — every rate that names a harness population changes
+denominator, and opencode turns are subagent-free by construction until proven otherwise.
+
+**Watch items.**
+
+| # | What | Trigger | Action |
+|---|------|---------|--------|
+| W42 | OpenCode row capture — turn/auto/search events with `harness: "opencode"` | 24 h after the first opencode session: zero opencode rows | check the plugin loaded (`opencode service restart`, then a session's tools list `skill-search_search_skills`); check `SKILL_CONCIERGE_HARNESS=opencode` reaches the spawns (plugin logs); doctor's "OpenCode integration" row |
+| W43 | OpenCode enforcer latency on the prompt path | median prompt-admission overhead > ~1 s (the bounded spawn is 10 s hard) | raise with the owner; consider caching doctrine text in-process (it is re-spawned per session today) |
+| W44 | The blocklist deny actually denies on OpenCode | a blocklisted skill id loads in an opencode session | verify `permission.hook("evaluate")` fires for the `skill` action (event.action === "skill") and skill_guard.py's stdout parses; fail-open means a silent miss, so test with one blocked name |
+
+Measurement note: opencode is a new population, not a design change to the seven existing
+harnesses — compare per-harness, never pooled.
+
+---
+
 ## v0.61.0 — owner reputation badges (ADR-0083)
 
 **Epoch starts.** W41: the go-live of badges, the legend and pull-in on each harness. The offer text

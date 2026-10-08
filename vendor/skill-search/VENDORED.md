@@ -620,3 +620,15 @@ plugin-level customization layer and these engine patches.
   destination used in the last 30 minutes, keeps one open connection with a keyless GET (refused 401, nothing
   billed; a TCP+TLS-only connection is dropped within 15 s); a pooled connection idle over 180 s is replaced.
   Covered by `tests/test_owner_jev_relay.py`. Not upstream: re-apply on re-vendor.
+
+- **`skills_discovery.py` + `server.py` OpenCode v2 roots (ADR-0085, 2026-10-08):**
+  adds the eighth harness's discovery roots behind `SKILL_OPENCODE_ROOTS` (default ON,
+  one-var revert): `~/.config/opencode/skills` (XDG_CONFIG_HOME-aware, `SKILL_OPENCODE_HOME`
+  override) → scope `opencode-personal`, and `<cwd>/.opencode/skills` →
+  `opencode-project:<dir>` — the exact ADR-0051 Cline pattern. `SKILL_DIRS`, `_scope_for_path`,
+  `visible_scopes`, and `server.py` `_ORIGIN_HEADS` (`"opencode": "opencode"`) all grew the pair.
+  OpenCode's compatibility reads of `~/.claude/skills` / `~/.agents/skills` change nothing on the
+  index side (`personal` stays the Claude-root scope; the ADR-0042 `.agents` non-indexing rule
+  holds) — invocability is decided session-side by the enforcer's `opencode` branch. The flag
+  joins `scripts/engine_env.py`'s `ENGINE_ENV_KEYS` and is pinned in the plugin `.mcp.json`.
+  Covered by `tests/test_opencode_adapter.py`. Not upstream: re-apply on re-vendor.
