@@ -30,6 +30,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# The helpers every installer shares (adapters/lib/sync.sh), found from this file's own location.
+SYNC_LIB="$(cd "$SCRIPT_DIR/.." && pwd)/lib/sync.sh"
+if [ ! -f "$SYNC_LIB" ]; then
+  echo "!! $SYNC_LIB is missing: this installer needs the shared helpers in adapters/lib/." >&2
+  echo "   Run it from a complete checkout; nothing was changed." >&2
+  exit 1
+fi
+. "$SYNC_LIB"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,11 +65,6 @@ VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["versi
 echo "    SSOT version: v$VERSION"
 
 # ── 2. Git-checkout discipline (ADR-0069/0072: fail-closed) ─────────────────
-_is_own_checkout() {
-  local top
-  top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
-}
 if _is_own_checkout; then
   HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
     | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])' 2>/dev/null || true)"

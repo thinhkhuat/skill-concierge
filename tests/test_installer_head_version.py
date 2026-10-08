@@ -21,6 +21,8 @@ def _repo(tmp_path, harness, committed, working, stage=False):
     repo = tmp_path / "repo"
     (repo / "adapters" / harness).mkdir(parents=True)
     shutil.copy2(ROOT / "adapters" / harness / "install.sh", repo / "adapters" / harness / "install.sh")
+    shutil.copytree(ROOT / "adapters" / "lib", repo / "adapters" / "lib",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     manifests = []
     for d in (".claude-plugin", ".codex-plugin"):
         (repo / d).mkdir()

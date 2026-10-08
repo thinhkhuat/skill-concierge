@@ -75,6 +75,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# The helpers every installer shares (adapters/lib/sync.sh), found from this file's own location.
+SYNC_LIB="$(cd "$SCRIPT_DIR/.." && pwd)/lib/sync.sh"
+if [ ! -f "$SYNC_LIB" ]; then
+  echo "!! $SYNC_LIB is missing: this installer needs the shared helpers in adapters/lib/." >&2
+  echo "   Run it from a complete checkout; nothing was changed." >&2
+  exit 1
+fi
+. "$SYNC_LIB"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -95,18 +103,6 @@ echo "==> skill-concierge → Codex sync (from: $ROOT)"
 MARKETPLACE_NAME="skill-concierge"
 PLUGIN_SELECTOR="skill-concierge@skill-concierge"
 CODEX_PLUGIN_CACHE="$HOME/.codex/plugins/cache/skill-concierge/skill-concierge"
-
-# ver_ge A B — true iff dotted-integer version A >= B. Same one-directional
-# doctrine and idiom as OMP/ZCode/Claude Code's comparator: a stale checkout
-# must never downgrade a newer deployed copy.
-_ver_ge() {
-  [ "$1" = "$2" ] && return 0
-  awk -v a="$1" -v b="$2" 'BEGIN{
-    na=split(a,A,"."); nb=split(b,B,"."); n=(na>nb)?na:nb
-    for(i=1;i<=n;i++){x=(i<=na)?A[i]+0:0; y=(i<=nb)?B[i]+0:0
-      if(x>y) exit 0; if(x<y) exit 1}
-    exit 0}'
-}
 
 # _cached_version — the version the newest Codex-cached content dir declares
 # in its own .codex-plugin/plugin.json, or "" when the cache is absent/
@@ -141,59 +137,6 @@ PY
 
 VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: v$VERSION"
-
-# _is_own_checkout — true when $ROOT is its own git top level. Compared by file identity (-ef), so a
-# symlinked or case-variant path to a real checkout still counts; a plain directory inside some other
-# repo does not.
-_is_own_checkout() {
-  local top
-  top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
-}
-
-# _export_to DIR — stage this checkout's content beside DIR, then swap it in, so an interrupted
-# copy never leaves a half-filled DIR. The staging dir is trapped (EXIT/INT/TERM); one older than
-# 60 minutes from a killed run is pruned. An old DIR is kept once, as hidden .DIR.replaced-<time>,
-# which neither the version scan nor skill discovery reads.
-_export_to() {
-  local dest="$1" parent base stage old
-  parent="$(dirname "$dest")"; base="$(basename "$dest")"
-  mkdir -p "$parent"
-  find "$parent" -maxdepth 1 -name '.skill-concierge-staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-  # $parent here sits under $CODEX_PLUGIN_CACHE ($HOME/.codex/plugins/cache/skill-concierge/
-  # skill-concierge) — this plugin's OWN cache dir, never shared with another plugin — so a
-  # bare '.staging.*' found here is provably ours too: a leftover from a run killed under a
-  # version before the prefix above was renamed to be skill-concierge-specific. Safe to prune
-  # the same way.
-  find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
-  stage="$(mktemp -d "$parent/.skill-concierge-staging.XXXXXX")"
-  trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
-  if _is_own_checkout; then
-    if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
-      echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
-    fi
-    echo "    exported HEAD → $dest"
-  else
-    # A tree with no git metadata at all: copy everything except scratch dirs.
-    if ! tar -C "$ROOT" -cf - \
-        --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
-        --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
-        --exclude='.zcode' --exclude='.unlazy' \
-        --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
-        --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-        . | tar -xf - -C "$stage"; then
-      echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
-    fi
-    echo "    copied the working tree (not a git checkout) → $dest"
-  fi
-  chmod 755 "$stage"   # mktemp makes it 0700; the swapped-in tree must read like the CLI's
-  if [ -e "$dest" ]; then
-    for old in "$parent/.$base.replaced-"*; do [ -e "$old" ] && rm -rf "$old"; done
-    mv "$dest" "$parent/.$base.replaced-$(date +%Y%m%d-%H%M%S)-$$"
-  fi
-  mv "$stage" "$dest"
-  trap - EXIT INT TERM
-}
 
 # A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install; Codex
 # names and scans the cache by .codex-plugin/plugin.json, so HEAD's copy of that manifest must agree
