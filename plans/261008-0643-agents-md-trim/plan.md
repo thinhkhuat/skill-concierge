@@ -4,7 +4,7 @@ Status: PROMOTED 2026-10-08 on Thinh's approval ("Promote + commit"). AGENTS.md 
 
 ## Goal
 
-Cut skill-concierge's `AGENTS.md` so every Codex session that loads it pays far less, without losing any content. Codex 0.160.1 caps the instruction chain at 32 KiB by default; the cap was raised to 128 KiB in `~/.codex/config.toml`, and this trim removes the need to rely on that alone.
+Cut skill-concierge's `AGENTS.md` so every Codex session that loads it pays far less, without losing any content. Codex 0.160.1 caps the instruction chain at 32 KiB by default; the cap was raised to 128 KiB in `~/.codex/config.toml`. The trim does not make that raise unnecessary: the chain inside this repo is about 76.6 KB after it (compiled global file 38,754 B + MY-WORKBENCH AGENTS.md 12,279 B + this AGENTS.md 25,608 B), still above 32 KiB, so the raised cap stays required. It cuts what every Codex session here loads by about 37 KB.
 
 ## Result (from `build_draft.py`, 2026-10-08)
 
