@@ -35,6 +35,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# The helpers every installer shares (adapters/lib/sync.sh), found from this file's own location.
+SYNC_LIB="$(cd "$SCRIPT_DIR/.." && pwd)/lib/sync.sh"
+if [ ! -f "$SYNC_LIB" ]; then
+  echo "!! $SYNC_LIB is missing: this installer needs the shared helpers in adapters/lib/." >&2
+  echo "   Run it from a complete checkout; nothing was changed." >&2
+  exit 1
+fi
+. "$SYNC_LIB"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,17 +67,6 @@ OMP_MARKETPLACE_CLONE="$HOME/.omp/plugins/cache/marketplaces/skill-concierge"
 # Marker comment (must match the python edit below) so a re-run is idempotent.
 EXT_MARKER="# skill-concierge extension entry (ADR-0039)"
 EXT_ENTRY="$ROOT/adapters/omp/skill-concierge.ext.ts"
-
-# ver_ge A B — true iff dotted-integer version A >= B ("0.43.10" >= "0.43.9").
-# Same comparator as bin/skill-search-mcp (the one-directional doctrine).
-_ver_ge() {
-  [ "$1" = "$2" ] && return 0
-  awk -v a="$1" -v b="$2" 'BEGIN{
-    na=split(a,A,"."); nb=split(b,B,"."); n=(na>nb)?na:nb
-    for(i=1;i<=n;i++){x=(i<=na)?A[i]+0:0; y=(i<=nb)?B[i]+0:0
-      if(x>y) exit 0; if(x<y) exit 1}
-    exit 0}'
-}
 
 # Version + installPath + scope OMP's registry records for skill-concierge@skill-concierge.
 # The registry keys plugins by '<name>@<marketplace>' and stores a LIST (one
@@ -107,43 +104,13 @@ fi
 VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
 echo "    SSOT version: v$VERSION"
 
-# _is_own_checkout — true when $ROOT is its own git top level. Compared by file identity (-ef), so a
-# symlinked or case-variant path to a real checkout still counts; a plain directory inside some other
-# repo does not.
-_is_own_checkout() {
-  local top
-  top="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
-}
+_refuse_unexportable_checkout   # HEAD version / git-dir refusals (adapters/lib/sync.sh)
 
-# A git checkout installs HEAD (`git archive HEAD`), so HEAD's version is the one to install. An
-# uncommitted version change (staged or not) would put HEAD's content in a dir named for the new
-# version: refuse before any CLI call or write. A checkout git cannot read (git missing, a
-# safe.directory refusal, a damaged repo) and one whose git dir is renamed to `git/` (the
-# workbench's no-dot toggle) are refused too: copying either as a plain tree would ship its
-# untracked files.
-if _is_own_checkout; then
-  HEAD_VERSION="$(git -C "$ROOT" show HEAD:.claude-plugin/plugin.json 2>/dev/null \
-    | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])" 2>/dev/null || true)"
-  if [ "$HEAD_VERSION" != "$VERSION" ]; then
-    echo "!! .claude-plugin/plugin.json says v$VERSION but HEAD carries v${HEAD_VERSION:-none}; this installer" >&2
-    echo "   installs HEAD. Commit the version change (or restore the file), then re-run." >&2
-    exit 1
-  fi
-elif [ -f "$ROOT/git/HEAD" ]; then
-  echo "!! $ROOT keeps its git database in git/ (renamed from .git). Copying it as a plain tree" >&2
-  echo "   would ship that database and every untracked file. Rename git/ back to .git, then re-run." >&2
-  exit 1
-elif [ -e "$ROOT/.git" ]; then
-  echo "!! $ROOT is a git checkout, but git cannot read it (git missing, a safe.directory refusal, or a" >&2
-  echo "   damaged repo). Copying it as a plain tree would ship every untracked file. Fix git, then re-run." >&2
-  exit 1
-fi
-
-# _export_to DIR — stage this checkout's content beside DIR, then swap it in, so an interrupted
-# copy never leaves a half-filled DIR. The staging dir is trapped (EXIT/INT/TERM); one older than
+# _omp_export_to DIR — adapters/lib/sync.sh's _export_to, minus its legacy bare '.staging.*' prune
+# (see below): stage this checkout's content beside DIR, then swap it in, so an interrupted copy
+# never leaves a half-filled DIR. The staging dir is trapped (EXIT/INT/TERM); one older than
 # 60 minutes from a killed run is pruned. An old DIR is kept once, as hidden .DIR.replaced-<time>.
-_export_to() {
+_omp_export_to() {
   local dest="$1" parent base stage old
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
   mkdir -p "$parent"
@@ -225,7 +192,7 @@ if [ "$MARKETPLACE" = "1" ]; then
       fi
       echo "  [•] CLI did not reach SSOT -> syncing this checkout into the OMP cache"
       DEST="$PINNED"
-      _export_to "$DEST"   # staged, then swapped in: no stale files from an older tree survive
+      _omp_export_to "$DEST"   # staged, then swapped in: no stale files from an older tree survive
       chmod +x "$DEST/bin/"* "$DEST/setup.sh" \
                "$DEST/adapters/omp/install.sh" "$DEST/adapters/zcode/install.sh" \
                "$DEST/adapters/commandcode/install.sh" 2>/dev/null || true

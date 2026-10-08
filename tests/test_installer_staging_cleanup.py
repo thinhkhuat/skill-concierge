@@ -1,4 +1,5 @@
-"""adapters/{claude-code,codex,omp,zcode}/install.sh share one `_export_to` helper that
+"""adapters/{claude-code,codex,zcode}/install.sh share one `_export_to` helper (adapters/lib/sync.sh;
+OMP keeps its own `_omp_export_to`, which skips the legacy-prefix prune) that
 stages an export beside its destination (`mktemp -d "$parent/.skill-concierge-staging.XXXXXX"`) before
 swapping it in. A run killed between the `mktemp` and the final `mv` used to leave that
 staging dir behind forever — nothing removed it. `_export_to` must now remove its own
@@ -26,6 +27,14 @@ INSTALL_SH = {
     "omp": ROOT / "adapters" / "omp" / "install.sh",
     "zcode": ROOT / "adapters" / "zcode" / "install.sh",
 }
+LIB = ROOT / "adapters" / "lib"
+# Where each installer's export function lives: the shared lib, or OMP's own variant.
+EXPORT_FN = {
+    "claude-code": (LIB / "sync.sh", "_export_to"),
+    "codex": (LIB / "sync.sh", "_export_to"),
+    "omp": (INSTALL_SH["omp"], "_omp_export_to"),
+    "zcode": (LIB / "sync.sh", "_export_to"),
+}
 
 
 def _func_body(text, name):
@@ -43,8 +52,9 @@ def _func_body(text, name):
     return "".join(lines[start:end + 1])
 
 
-def _export_to_body(text):
-    return _func_body(text, "_export_to")
+def _export_to_body(name):
+    path, fn = EXPORT_FN[name]
+    return _func_body(path.read_text(), fn)
 
 
 # The staging-cleanup fix itself, not the whole function (the per-harness comments and OMP's
@@ -60,10 +70,10 @@ _CLEANUP_LINES = (
 def test_export_to_cleanup_is_identical_across_the_four_installers():
     """Sibling parity: fixing the staging-dir cleanup in one installer without syncing the
     other three would leave three of them still leaking staging dirs."""
-    bodies = {name: _export_to_body(path.read_text()) for name, path in INSTALL_SH.items()}
+    bodies = {name: _export_to_body(name) for name in INSTALL_SH}
     for name, body in bodies.items():
         for line in _CLEANUP_LINES:
-            assert line in body, f"_export_to in adapters/{name}/install.sh is missing: {line!r}"
+            assert line in body, f"the export function adapters/{name}/install.sh uses is missing: {line!r}"
 
 
 def _make_repo(tmp_path, version):
@@ -316,6 +326,7 @@ def test_a_signal_killed_zcode_export_leaves_no_staging_dir_behind(tmp_path):
     dest_dir = repo / "adapters" / "zcode"
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(INSTALL_SH["zcode"], dest_dir / "install.sh")
+    shutil.copytree(LIB, repo / "adapters" / "lib")
     env = installer_env(tmp_path, home, _slow_git_dir(tmp_path))
     cache = home / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
 
@@ -382,23 +393,23 @@ def test_legacy_bare_staging_prefix_is_pruned_in_claude_code(tmp_path):
     assert (cache_base / "2.0.0" / "bin" / "skill-search-mcp").exists()
 
 
-def _run_export_to_direct(install_path, dest):
-    """Runs ONLY `_export_to` (plus the `_is_own_checkout` it calls), extracted verbatim
-    from `install_path`, against a throwaway non-git $ROOT — never the full installer.
+def _run_export_to_direct(name, dest):
+    """Runs ONLY the export function installer `name` uses (plus the `_is_own_checkout` it
+    calls), extracted verbatim from where it is defined, against a throwaway non-git $ROOT —
+    never the full installer.
     Codex's `_export_to` is only reached AFTER a successful `codex plugin add`, and this
     repo's own fake `codex` CLI test double faithfully wipes the ENTIRE cache dir on a
     successful `add` (matching real Codex's observed behavior) — so a full end-to-end run
     would remove a pre-seeded legacy dir via THAT wipe regardless of whether `_export_to`'s
     own prune line exists, and could never tell the two apart. Isolating `_export_to` itself
     is the only way to prove this specific fix, not an unrelated side effect upstream of it."""
-    text = install_path.read_text()
-    export_body = _export_to_body(text)
-    is_own_checkout_body = _func_body(text, "_is_own_checkout")
+    export_body = _export_to_body(name)
+    is_own_checkout_body = _func_body((LIB / "sync.sh").read_text(), "_is_own_checkout")
     fake_root = dest.parent.parent / "fake-root"
     fake_root.mkdir(parents=True, exist_ok=True)
     (fake_root / "marker.txt").write_text("throwaway non-git root for a direct _export_to call\n")
     script = (f'set -euo pipefail\nROOT="{fake_root}"\n{is_own_checkout_body}\n{export_body}\n'
-              f'_export_to "$1"\n')
+              f'{EXPORT_FN[name][1]} "$1"\n')
     return subprocess.run(["bash", "-c", script, "_", str(dest)],
                           capture_output=True, text=True, timeout=30)
 
@@ -411,7 +422,7 @@ def test_legacy_bare_staging_prefix_is_pruned_in_codex(tmp_path):
     old_time = time.time() - 3700
     os.utime(legacy, (old_time, old_time))
 
-    r = _run_export_to_direct(INSTALL_SH["codex"], cache / "2.0.0")
+    r = _run_export_to_direct("codex", cache / "2.0.0")
     assert r.returncode == 0, r.stdout + r.stderr
     assert not legacy.exists(), "a legacy bare .staging.* dir older than 60 minutes must be pruned too"
     assert (cache / "2.0.0").exists()
@@ -443,8 +454,7 @@ _SCRATCH_DIRS = (".ijfw", "ijfw", ".handoff", "logs", "graphify-out", ".claude",
 
 
 def test_non_git_exclude_list_is_identical_across_the_four_installers():
-    lists = {name: re.findall(r"--exclude='([^']+)'", _export_to_body(path.read_text()))
-             for name, path in INSTALL_SH.items()}
+    lists = {name: re.findall(r"--exclude='([^']+)'", _export_to_body(name)) for name in INSTALL_SH}
     assert len({tuple(v) for v in lists.values()}) == 1, lists
 
 
@@ -456,7 +466,7 @@ def test_non_git_export_ships_no_scratch_dir(tmp_path, name):
         (cache.parent / "fake-root" / d).mkdir(parents=True)
         (cache.parent / "fake-root" / d / "f.txt").write_text("scratch\n")
 
-    r = _run_export_to_direct(INSTALL_SH[name], cache / "2.0.0")
+    r = _run_export_to_direct(name, cache / "2.0.0")
     assert r.returncode == 0, r.stdout + r.stderr
     shipped = {p.name for p in (cache / "2.0.0").iterdir()}
     assert "marker.txt" in shipped

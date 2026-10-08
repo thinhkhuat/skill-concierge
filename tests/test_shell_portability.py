@@ -13,7 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 STOCK_BASH = Path("/bin/bash")
 SCRIPTS = [ROOT / "setup.sh", ROOT / "bin" / "skill-search-mcp",
-           *sorted((ROOT / "adapters").glob("*/install.sh"))]
+           *sorted((ROOT / "adapters").glob("*/install.sh")), *sorted((ROOT / "adapters" / "lib").glob("*.sh"))]
 
 
 @pytest.mark.skipif(not STOCK_BASH.exists(), reason="no /bin/bash on this host")
