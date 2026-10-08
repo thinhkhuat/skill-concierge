@@ -45,8 +45,11 @@ only with that proof in hand.
 
 **Doc/version drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced). It
 checks the version across the mirror set (`plugin.json` ↔ `marketplace.json` ↔ `.codex-plugin/plugin.json` ↔ latest `CHANGELOG.md` heading ↔ `README.md` ↔ `openwiki/quickstart.md`), that
-every doc-referenced path exists, and that this file and `CLAUDE.md` name the same scratch dirs. Run it
-after a version bump or after editing a fact shared between these docs.
+every doc-referenced path exists, and it runs every `command_checks` script listed in `driftcheck.json`
+(each script's docstring says what it guards; among them, this file and `CLAUDE.md` name the same scratch
+dirs, and the *Runtime flags* table, `docs/runtime-flags.md` and the code agree on every flag and its
+default). Run it after a version bump, after editing a fact shared between these docs, or after changing a
+flag or its default.
 
 ## Conventions
 

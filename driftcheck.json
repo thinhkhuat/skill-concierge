@@ -97,6 +97,10 @@
     {
       "name": "mcp-env-parity",
       "command": "python3 scripts/check_mcp_env_parity.py"
+    },
+    {
+      "name": "flag-docs-parity",
+      "command": "python3 scripts/check_flag_docs_parity.py"
     }
   ]
 }
