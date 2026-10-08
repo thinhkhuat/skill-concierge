@@ -17,7 +17,7 @@ only the files a kept finding names, plus CHANGELOG.md and the four manifests fo
 - [x] G2: The full test suite passes on the committed fix branch.
   CHECK: python3 -m pytest -q -p no:cacheprovider tests/ && echo SUITE_OK
   EXPECT: SUITE_OK
-  EVIDENCE: automatic-evidence=v1; definition-sha256=5fe53c32dc5523b69cc1d8914c3e2764411d86328fa5a07d2c1c03bf51dc0b0e; exit=0; EXPECT=matched; output-sha256=a579ee488472b039d03c0aaa906c25ee8a6e53134e87e32f3ddc8726457568a2; output-bytes=1322; shell=/bin/sh; cwd=/Users/thinhkhuat/.worktrees/skill-concierge/chisle-cuts; path=1eab24f392dd/82 entries
+  EVIDENCE: automatic-evidence=v1; definition-sha256=5fe53c32dc5523b69cc1d8914c3e2764411d86328fa5a07d2c1c03bf51dc0b0e; exit=0; EXPECT=matched; output-sha256=5997cf40f11f1feb65f13d7a51821bee0424ccda7ef9694e2b1cb2e884269cdd; output-bytes=1322; shell=/bin/sh; cwd=/Users/thinhkhuat/.worktrees/skill-concierge/chisle-cuts; path=1eab24f392dd/82 entries
 
 - [x] G3: Docs, versions and flag tables agree with the code.
   CHECK: python3 scripts/driftcheck.py driftcheck.json && echo DRIFT_OK
@@ -29,9 +29,17 @@ only the files a kept finding names, plus CHANGELOG.md and the four manifests fo
   EXPECT: SELFTEST_OK
   EVIDENCE: automatic-evidence=v1; definition-sha256=0f6fe0b4ebec24ae6d5d23aa8a8d7dd5dd668b2fc4699ef0789e62efec7b8adc; exit=0; EXPECT=matched; output-sha256=bf42a3b843193f58c78dcb5eac7b86a72c48ac2ecca9b03ccbd4c6908e84bb1d; output-bytes=570; shell=/bin/sh; cwd=/Users/thinhkhuat/.worktrees/skill-concierge/chisle-cuts; path=1eab24f392dd/82 entries
 
-- [ ] G5: An independent reviewer, who did not make the cuts, finds no behaviour change in the fix diff
+- [x] G5: An independent reviewer, who did not make the cuts, finds no behaviour change in the fix diff
   (or every finding it raises is fixed and re-checked).
-  EVIDENCE: pending
+  EVIDENCE: 2026-10-09 ~01:47, code-reviewer (did not make the cuts), report
+  `plans/reports/code-reviewer-261009-0102-chisle-cuts-review.md`: no Critical/High; old-vs-new runs of the enforcer
+  (15 prompts x 14 configurations incl. outages, multi-intent, all 7 non-Claude harnesses, Jev failure) gave identical
+  injected text, ledger rows and exit codes; ledger.py rows byte-identical; doctrine.py differs only in the declared
+  OpenCode/.cline/.opencode cases; Python 3.9 fix confirmed. Its findings, fixed in 505e649 and re-checked
+  (G2-G4 re-verified after it): M1 versioning docs now name five manifests; L1 audit records committed; L2 CHANGELOG
+  self-test history corrected; L3 caveats outage chain corrected; L5 self-heal hooks exit 0 when selfheal.py is
+  missing (probe: copied hook alone, exit 0); L6 calibrate lazy load and flywheel status wording declared, run_batch
+  docstring fixed. L4 accepted: `_zcode_installed_path` in doctor.py is a 1-line helper the tests still call.
 
 - [ ] G6: The fixes are on origin/main and every harness runs them (doctor status OK, all integration rows green).
   EVIDENCE: pending
