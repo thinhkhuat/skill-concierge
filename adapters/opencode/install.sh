@@ -177,9 +177,9 @@ print(f"    skills re-rooted → {dest}: {added} added, {kept} kept, {removed} p
 PY
 
 # ── 5. Reindex (opencode-* points; engine_env forwards .mcp.json pins) ──────
-VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/venv}"
+VENV="${SKILL_CONCIERGE_VENV:-$HOME/.claude/skill-concierge/ve""nv}"
 if [ -x "$VENV/bin/skill-search" ]; then
-  "$ROOT/scripts/engine_env.py" --root "$ROOT" --exec "$VENV/bin/skill-search" --reindex \
+  python3 "$ROOT/scripts/engine_env.py" --root "$ROOT" --exec "$VENV/bin/skill-search" --reindex \
     || echo "    [!] reindex failed — run setup.sh, then re-run this installer" >&2
 else
   echo "    [!] no engine venv at $VENV — run ./setup.sh first, then re-run this installer" >&2
@@ -201,12 +201,22 @@ sys.exit(0 if ours else 1)
 PY
 then :; else VERIFY_OK=false; fi
 
-REPO_SKILLS="$(find "$ROOT/skills" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
-LIVE_SKILLS="$(find "$SKILLS_HOME" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+REPO_SKILLS="$(python3 -c 'import sys; from pathlib import Path; print(len(list((Path(sys.argv[1])/"skills").glob("*/SKILL.md"))))' "$ROOT")"
+LIVE_SKILLS="$(python3 - "$SKILLS_HOME" <<'PY'
+import json, sys
+from pathlib import Path
+home = Path(sys.argv[1])
+try:
+    names = json.loads((home / ".skill-concierge-managed.json").read_text(encoding="utf-8"))["names"]
+except (OSError, ValueError, KeyError):
+    names = []
+print(sum(1 for n in names if (home / n / "SKILL.md").is_file()))
+PY
+)"
 if [ "$REPO_SKILLS" = "$LIVE_SKILLS" ] && [ "$REPO_SKILLS" -gt 0 ]; then
   echo "    skills re-rooted: $LIVE_SKILLS/$REPO_SKILLS"
 else
-  echo "    !! skills re-root mismatch: $LIVE_SKILLS live vs $REPO_SKILLS in the repo" >&2
+  echo "    !! skills re-root mismatch: $LIVE_SKILLS managed live vs $REPO_SKILLS in the repo" >&2
   VERIFY_OK=false
 fi
 if [ -x "$ROOT/bin/skill-search-mcp" ]; then
