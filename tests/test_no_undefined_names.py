@@ -6,14 +6,17 @@ dead. pyflakes finds every such name statically.
 """
 from pathlib import Path
 
-import pytest
 
-pyflakes_api = pytest.importorskip("pyflakes.api")
-from pyflakes.reporter import Reporter  # noqa: E402
+try:  # a hard requirement, not a skip: a skipped guard is a missing guard
+    import pyflakes.api as pyflakes_api
+    from pyflakes.reporter import Reporter
+except ImportError:  # pragma: no cover
+    raise ImportError("tests need pyflakes: python3 -m pip install pyflakes") from None
 
 ROOT = Path(__file__).resolve().parent.parent
 SHIPPED = sorted([*(ROOT / "hooks" / "scripts").glob("*.py"), *(ROOT / "scripts").glob("*.py"),
-                  *(ROOT / "adapters").glob("*/*.py"), *(ROOT / "skills").glob("*/scripts/*.py")])
+                  *(ROOT / "adapters").glob("*/*.py"), *(ROOT / "skills").glob("*/scripts/*.py"),
+                  *(ROOT / "vendor" / "skill-search" / "skill_search").glob("*.py")])
 
 
 class _Collect(Reporter):

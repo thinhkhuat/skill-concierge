@@ -31,9 +31,9 @@ The four owner decisions left by the 0.64.1 audit, Thinh: "do 1, 2, 3, 4" (ADR-0
   `commandcode` only when a `/.commandcode/` path is in play with `SKILL_CONCIERGE_HARNESS` unset (the Command Code
   mod always sets it). A symlink loop in `CLAUDE_PLUGIN_ROOT` no longer crashes the enforcer at import.
   If `harness.py` cannot be imported, a hook run exits 0 with no output, and a process that imports the module
-  (doctor, the findability sweep) gets an ImportError it already handles.
+  (the findability sweep, `skill_exclusions.py`) gets an ImportError it already handles.
 - **Installers called through a symlink** find `adapters/lib/sync.sh` beside the real file.
-- **`tests/test_no_undefined_names.py`** fails on any undefined name in shipped Python (pyflakes), and
+- **`tests/test_no_undefined_names.py`** fails on any undefined name in shipped Python, vendored engine included (pyflakes, now required to run the tests), and
   `tests/test_getaway_leg.py` drives the enforcer's low-fit authorized skip end to end: during this release the
   lever removal left that leg reading a deleted name, and no test reached it. Caught by the pre-release review.
 

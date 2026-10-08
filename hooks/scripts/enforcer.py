@@ -71,7 +71,7 @@ try:
 except Exception:  # noqa: BLE001
     if __name__ == "__main__":
         sys.exit(0)  # a hook run stays silent on a broken install
-    raise  # an importer (doctor, findability, skill_exclusions) handles the ImportError
+    raise  # an importer (the findability sweep, skill_exclusions) handles the ImportError
 
 # ── endpoints ────────────────────────────────────────────────────────────────
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")

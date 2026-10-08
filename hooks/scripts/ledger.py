@@ -36,7 +36,7 @@ try:
 except Exception:  # noqa: BLE001 - fail-silent: no detector, no row
     if __name__ == "__main__":
         sys.exit(0)  # a hook run stays silent on a broken install
-    raise  # an importer (doctor, findability, skill_exclusions) handles the ImportError
+    raise  # an importer (the findability sweep, skill_exclusions) handles the ImportError
 
 
 def _menu_name(name: str, harness: str) -> tuple:
