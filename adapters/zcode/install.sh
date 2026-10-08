@@ -12,7 +12,7 @@
 #
 # What sync does (idempotent, every step verified or aborted):
 #   1. Read the SSOT version from $ROOT/.claude-plugin/plugin.json
-#   2. Export the release tree (git archive HEAD; cp fallback for non-git checkouts)
+#   2. Export the release tree (git archive HEAD; a tar copy for non-git checkouts)
 #      into ~/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/<version>/
 #   3. chmod +x the bins and installers (ZCode's marketplace cache has shipped without
 #      the exec bit — cosmetic under the interpreter-form .mcp.json, repaired anyway)
@@ -92,15 +92,9 @@ elif [ -e "$ROOT/.git" ]; then
   exit 1
 fi
 
-# _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
-# interrupted copy never leaves a half-filled DIR that a later run reads as current. The staging
-# dir is trapped (EXIT/INT/TERM) so a killed run removes it instead of leaking it forever
-# (bash defers running that trap until the current foreground step — the git archive/tar
-# pipeline — actually exits, so cleanup lands once that step ends, not the instant the signal
-# arrives), and any
-# staging dir older than 60 minutes left over from an earlier killed run is pruned before a fresh
-# one is made. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which skill
-# discovery skips, and only the newest such copy is kept.
+# _export_to DIR — stage this checkout's content beside DIR, then swap it in, so an interrupted
+# copy never leaves a half-filled DIR. The staging dir is trapped (EXIT/INT/TERM); one older than
+# 60 minutes from a killed run is pruned. An old DIR is kept once, as hidden .DIR.replaced-<time>.
 _export_to() {
   local dest="$1" parent base stage old
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
@@ -119,10 +113,11 @@ _export_to() {
     fi
     echo "    exported HEAD → $dest"
   else
-    # Non-git checkout: copy everything except VCS/scratch dirs.
+    # A tree with no git metadata at all: copy everything except scratch dirs.
     if ! tar -C "$ROOT" -cf - \
         --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
         --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
+        --exclude='.zcode' --exclude='.unlazy' \
         --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
         --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
         . | tar -xf - -C "$stage"; then

@@ -36,10 +36,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from ledger import GET_TOOLS, _NAME_KEYS  # the one place load shapes are decided
-except Exception:  # sibling missing, or ledger's annotations break a 3.9 system python
-    _NAME_KEYS = ("skill", "command", "name", "skill_name")
-    GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
-                 "skill-search/get_skill", "skill_search_get_skill")
+except Exception:  # sibling missing: match no load and stay silent, never a drifting copy
+    _NAME_KEYS, GET_TOOLS = (), ()
 
 # skill_search.ports is the one home for the SKILL_QDRANT_URL port grammar (owner, doctor,
 # the enforcer, this hook). A hook must never crash on an import it doesn't strictly need to

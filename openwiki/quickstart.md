@@ -1,7 +1,7 @@
 # skill-concierge — OpenWiki quickstart
 
-**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), and Cline that governs how the agent
-picks and uses *skills*. It is a thin **governance layer** over all seven harnesses' default skill
+**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, and OpenCode v2 that governs how the agent
+picks and uses *skills*. It is a thin **governance layer** over all eight harnesses' default skill
 mechanisms: where
 the default injects **every** installed skill's description into the context window on **every**
 turn and hopes the model notices the right one, skill-concierge replaces *hope* with
@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.64.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md)) · OpenCode v2: native plugin ([`adapters/opencode/plugin/index.ts`](../adapters/opencode/plugin/index.ts); [ADR-0085](../docs/adr/0085-opencode-octa-harness-parity.md))
+- **Version:** `0.64.1` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md)) · OpenCode v2: native plugin ([`adapters/opencode/plugin/index.ts`](../adapters/opencode/plugin/index.ts); [ADR-0085](../docs/adr/0085-opencode-octa-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -58,7 +58,7 @@ These have bitten before; the ADRs and [`docs/caveats.md`](../docs/caveats.md) e
 
 | Requirement | Notes |
 |-------------|-------|
-| Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), or Cline | host for the plugin (or its adapter), hooks, and MCP server |
+| Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, or OpenCode v2 | host for the plugin (or its adapter), hooks, and MCP server |
 | Python 3.10–3.12 | `snake_case`; set `SKILL_PYTHON` to pin an interpreter |
 
 No Docker: the vector store and the warm embedder are one local process, the index owner
@@ -89,26 +89,17 @@ Or run the **`skill-concierge:setup`** skill (same bootstrap, self-verifying). I
 (`codex plugin marketplace add https://github.com/thinhkhuat/skill-concierge.git`), install
 with `codex plugin add skill-concierge@skill-concierge`, then verify the MCP with
 `codex mcp list` (should list `skill-search`). The local index owner,
-index, and ledger are SHARED with the Claude Code install — one concierge, four harnesses.
-Once registered, [`adapters/codex/install.sh`](../adapters/codex/install.sh) keeps the cached
-copy in sync with this checkout's SSOT version via `codex plugin marketplace upgrade` then
-`codex plugin add` (there is no `codex plugin upgrade` verb, and this installer never calls
-`remove` — a failed `add` right after would leave nothing installed) — installs whatever is
-pushed to the git remote, and a successful `add` was verified live to wipe the plugin's
-entire cache dir first. A remaining version gap falls back to a `git archive HEAD` export
-into a NEW version-named cache dir instead — this fallback step itself never deletes
-anything — with a loud unpushed-content notice; a live session actually loading it is
-unverified.
+index, and ledger are SHARED with the Claude Code install — one concierge, every harness.
+How [`adapters/codex/install.sh`](../adapters/codex/install.sh) keeps the cached copy current, and
+what it refuses to do, is explained in [operations.md](operations.md#versioning--deploy-discipline)
+and the installer's header.
 
-**In OMP** (v0.28.0+, ADR-0039): install via the plugin marketplace — `adapters/omp/install.sh`
-detects an installed `skill-concierge@skill-concierge` marketplace plugin and refreshes it with
-`omp plugin marketplace update skill-concierge` + `omp plugin upgrade skill-concierge@skill-concierge --scope user`;
-in a dev checkout with no marketplace plugin it appends the extension path to
-`~/.omp/agent/config.yml`. OMP ignores Claude-format hooks — enforcement runs from the
-`skill-concierge.ext.ts` extension module (`package.json` `omp.extensions`) — and it expands the
-plugin `.mcp.json`'s `${CLAUDE_PLUGIN_ROOT}` natively, so no per-harness MCP descriptor is
-written (a duplicate `skill-search` at user scope is a known hazard). The local index owner,
-index, and ledger are SHARED with every other harness install.
+**In OMP** (v0.28.0+, ADR-0039): install via the plugin marketplace; OMP ignores Claude-format
+hooks, so enforcement runs from the `skill-concierge.ext.ts` extension module (`package.json`
+`omp.extensions`), and it expands the plugin `.mcp.json` natively, so no per-harness MCP descriptor
+is written (a duplicate `skill-search` at user scope is a known hazard). What
+[`adapters/omp/install.sh`](../adapters/omp/install.sh) does on each path is in its header. The
+local index owner, index, and ledger are SHARED with every other harness install.
 
 ## The MCP tools
 
@@ -151,42 +142,23 @@ installed ([ADR-0031](../docs/adr/0031-external-catalog-roots.md)). They rank ma
 `get_skill` (the Skill tool cannot invoke them). Manage roots with
 [`scripts/catalogs.py`](../scripts/catalogs.py) / the `skill-concierge:catalogs` skill.
 
-Since `0.23.0` externals are **first-class in the per-turn offer** too, not just explicit
-search ([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)): an **additive
-annex** below the installed offer — the installed ranking is untouched (zero displacement),
-and a separate query appends up to 4 externals clearing the annex floor, marked
-`[external:<alias>]` with the `get_skill` consumption instruction. The one-day `0.38.x`
-merged-pool parity experiment (ADR-0045) was reverted by
-[ADR-0047](../docs/adr/0047-revert-tier-parity-restore-annex.md) with the annex defaults
-tuned friendlier: `ENFORCER_EXTERNAL_FLOOR` 0.32 (was 0.40), `ENFORCER_ANNEX_MARGIN` 0.08
-(was 0.05). Chain hints and `flywheel --generate` are installed-only. An external used
-across enough distinct sessions still auto-graduates to a real installed skill.
-Since `0.41.0` ([ADR-0048](../docs/adr/0048-complement-annex.md)) the annex is the
-builtin's **complement**: installed top ≥ `GETAWAY_FLOOR` (0.45) → an external must BEAT
-it by `ENFORCER_ANNEX_BEAT` (0.04); thin intents widen at the plain floor; externals with
-demonstrated usage rank first and render `used N×`; `ENFORCER_ANNEX_COMPLEMENT=0`
-restores the 0.40.0 margin rule. `ENFORCER_EXTERNAL_ANNEX=0` (parity-era
-`ENFORCER_EXTERNAL_OFFER=0` honored as an alias) restores the ADR-0031 search-only tier.
+Externals are **first-class in the per-turn offer** too
+([ADR-0032](../docs/adr/0032-external-catalogs-first-class-annex.md)): an additive annex below the
+installed offer (zero displacement), where an external must clear `ENFORCER_EXTERNAL_FLOOR` (0.32)
+and, once the installed top reaches `GETAWAY_FLOOR` (0.45), beat it by `ENFORCER_ANNEX_BEAT` (0.04)
+([ADR-0048](../docs/adr/0048-complement-annex.md)). The one-day merged-pool parity experiment was
+reverted ([ADR-0047](../docs/adr/0047-revert-tier-parity-restore-annex.md)); an external used across
+enough distinct sessions auto-graduates to an installed skill. Kill-switches:
+`ENFORCER_EXTERNAL_ANNEX=0`, `ENFORCER_ANNEX_COMPLEMENT=0`.
 
-Since `0.26.0` the cross-harness annex is **dynamically sized**
-([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)): a foreign row earns its slot by
-scoring within `ENFORCER_ANNEX_MARGIN` (0.08) of the installed top, capped at 2 —
-a well-served intent shrinks it toward 0, a thin-inventory intent widens it to the cap.
-`ENFORCER_ANNEX_DYNAMIC=0` restores the old fixed 2.
-
-Since `0.25.0` the same annex shape covers the **other harness**
-([ADR-0034](../docs/adr/0034-cross-harness-offer-isolation.md)): with both harnesses indexed into
-one collection, Codex's plugin skills were competing for Claude's installed offer slots (measured:
-18 of 48 rows over six prompts) while the Skill tool could not invoke them. The installed offer now
-holds only what the running harness can invoke, and the rest appear read inline via `get_skill`, each
-row marked with the harness whose roots actually hold it (`[omp]`, `[zcode]`, …) rather than a
-hand-typed two-way label. `search_skills` still spans the union. Since `0.49.0`
-([ADR-0059](../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) that isolation is
-harness-complete: every harness's own foreign-scope tuple is filled out (a before/after probe across
-all seven harnesses found 96 non-invocable rows in offers on the prior build, 0 on this one), DSH and
-Cline get a real filter for the first time (they have no skill-plugin registry, so "unknown" used to
-mean "drop nothing" for them), and a project-scoped row from a different project is dropped too
-(`ENFORCER_PROJECT_ISOLATION`, with an exception for a same-named copy shared across projects).
+The same annex shape covers **other harnesses' skills**
+([ADR-0034](../docs/adr/0034-cross-harness-offer-isolation.md)): the installed offer holds only what
+the running harness can invoke, and the rest appear read inline via `get_skill`, each row marked
+with the harness whose roots hold it (`[omp]`, `[zcode]`, …); the annex is sized by score margin
+([ADR-0036](../docs/adr/0036-dynamic-annex-sizing.md)). The isolation is harness-complete, with a
+project-scope test on top ([ADR-0059](../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md),
+`ENFORCER_PROJECT_ISOLATION`). `search_skills` still spans the union. The flags and their defaults are
+in [`AGENTS.md` → Runtime flags](../AGENTS.md).
 
 ## Where to go next
 

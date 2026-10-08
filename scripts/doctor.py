@@ -56,9 +56,8 @@ LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill
 # marketplace system (recorded in installed_plugins.json, catalog cloned under
 # cache/marketplaces/, content pinned under cache/plugins/<name>___<name>___<ver>/),
 # so the plugin's version inside OMP can silently lag the .claude-plugin/plugin.json
-# SSOT — exactly the 0.26.2-cache vs 0.27.0-SSOT gap live today. These are read-only
-# facts about a DIFFERENT product's state; deliberately no env seams (the doctor's
-# seams mirror setup.sh, which has no OMP counterpart).
+# SSOT. These are read-only facts about a DIFFERENT product's state; deliberately no
+# env seams (the doctor's seams mirror setup.sh, which has no OMP counterpart).
 OMP_DIR = Path.home() / ".omp"
 OMP_PLUGINS_FILE = OMP_DIR / "plugins" / "installed_plugins.json"
 OMP_MARKETPLACE = OMP_DIR / "plugins" / "cache" / "marketplaces" / "skill-concierge"
@@ -446,8 +445,6 @@ def _tree_digest(root: Path):
         try:
             data = p.read_bytes()
         except OSError:
-            data = None
-        if data is None:
             continue
         seen = True
         h.update(p.relative_to(root).as_posix().encode())
@@ -1159,7 +1156,7 @@ def check_mcp_enabled():
     this script exists to catch, so it gets its own check rather than riding on `Duplicate MCP`,
     which counts installs and says nothing about their state.
 
-    The enforcer offer is NOT affected (it queries Qdrant directly over REST), so this is a WARN,
+    The enforcer offer is NOT affected (it queries the index owner directly over REST), so this is a WARN,
     not a FAIL: retrieval still works, the pull tool does not. Fail-open to N/A whenever the CLI
     is missing or the call fails — an unreadable status is not evidence of a problem.
     """
@@ -1174,8 +1171,8 @@ def check_mcp_enabled():
         return {"id": "mcpenabled", "label": "MCP reachable", "status": WARN,
                     "detail": "no skill-search MCP install found in `claude mcp list` — the "
                            "search_skills / get_skill tools are unavailable in this project "
-                           "(the enforcer's per-turn offer is unaffected; it queries Qdrant "
-                           "directly). Install or re-enable the plugin.", "fix": None}
+                           "(the enforcer's per-turn offer is unaffected; it queries the "
+                           "index owner directly). Install or re-enable the plugin.", "fix": None}
     live = [n for n, st in statuses.items() if "Connected" in st]
     if live:
         return {"id": "mcpenabled", "label": "MCP reachable", "status": OK,
@@ -1185,7 +1182,7 @@ def check_mcp_enabled():
                 "detail": f"skill-search is installed but NOT connected here — {worst}. "
                        "search_skills / get_skill are unavailable in this project even though "
                        "the index is healthy; re-enable via /mcp. The enforcer's per-turn offer "
-                       "is unaffected (it queries Qdrant over REST).", "fix": None}
+                       "is unaffected (it queries the index owner over REST).", "fix": None}
 
 
 def check_dup_mcp():
@@ -1568,23 +1565,11 @@ def _registry_entry_state(path, plugin_key):
     return "ok", head
 
 
-def _omp_installed_version():
-    """(version, enabled) of skill-concierge@skill-concierge in OMP's install record,
-    or (None, None) when OMP has no record for it or the registry is unreadable. The
-    record keys plugins by '<name>@<marketplace>' and stores a LIST (one entry per
-    install scope), so both list and bare-dict shapes are tolerated."""
-    _state, head = _registry_entry_state(OMP_PLUGINS_FILE, "skill-concierge@skill-concierge")
-    if head is None:
-        return None, None
-    return head.get("version"), head.get("enabled")
-
-
-def _omp_record_state():
-    """"missing" | "unreadable" | "present" for OMP's install record — see
-    `_registry_entry_state`. Existence, not the parsed field, proves an install
-    happened; an unreadable registry proves nothing either way, so it is reported
-    and treated as installed-with-unknown-version rather than never-installed."""
-    state, head = _registry_entry_state(OMP_PLUGINS_FILE, "skill-concierge@skill-concierge")
+def _record_state(state, head):
+    """"missing" | "unreadable" | "present" from `_registry_entry_state`'s result.
+    Existence, not the parsed field, proves an install happened; an unreadable registry
+    proves nothing either way, so it is reported and treated as installed-with-unknown-
+    version rather than never-installed."""
     if state == "unreadable":
         return "unreadable"
     return "present" if isinstance(head, dict) else "missing"
@@ -1609,14 +1594,13 @@ def check_omp():
     install record lives in ~/.omp/plugins/installed_plugins.json, the catalog clone
     under cache/marketplaces/skill-concierge/, and the version-pinned plugin content
     under cache/plugins/skill-concierge___skill-concierge___<ver>/. None of it is
-    required for the plugin to work in the other three harnesses, so every absence or
+    required for the plugin to work in the other harnesses, so every absence or
     drift here is WARN — never FAIL — and an OMP-less machine is one 'omp: not
     installed' warn row, not a failed run (exit status unchanged).
 
     Three signals, weakest to strongest:
       1. install record — the version OMP believes it installed vs the plugin.json SSOT
-         (live today: 0.26.2 in the OMP cache vs 0.27.0 SSOT — a silent lag until the
-         next /plugin marketplace update).
+         (a silent lag until the next /plugin marketplace update).
       2. marketplace clone — the version the catalog advertises; stale means the clone
          was not refreshed since the SSOT bump.
       3. cache surface — the version-pinned plugin dir plus adapters/omp/skill-concierge.ext.ts,
@@ -1628,8 +1612,11 @@ def check_omp():
                 "fix": None}
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
-    ver, enabled = _omp_installed_version()
-    record_state = _omp_record_state()
+    # The record keys plugins by '<name>@<marketplace>' and stores a LIST (one entry per
+    # install scope); `_registry_entry_state` tolerates both list and bare-dict shapes.
+    state, head = _registry_entry_state(OMP_PLUGINS_FILE, "skill-concierge@skill-concierge")
+    ver, enabled = (None, None) if head is None else (head.get("version"), head.get("enabled"))
+    record_state = _record_state(state, head)
     # A missing registry proves no install ever happened (existing WARN-only, cutover-skips
     # behavior). An unreadable one proves nothing either way, so it is NOT collapsed into
     # "missing": install state is unknown, and --cutover must fail that, not skip it.
@@ -1801,8 +1788,8 @@ def check_commandcode():
                                 "(a stale copy) — re-run adapters/commandcode/install.sh")
         except OSError:
             pass
-    # 2. SessionStart hooks referencing skill-concierge
-    #    Check by looking for our marker string inside SettingsStart hook commands
+    # 2. SessionStart hooks referencing skill-concierge: our marker string inside a hook command
+    settings = None
     hook_found = False
     try:
         settings = json.loads(CCMD_SETTINGS.read_text(encoding="utf-8"))
@@ -1824,7 +1811,7 @@ def check_commandcode():
     try:
         mcp = json.loads(CCMD_MCP.read_text(encoding="utf-8"))
         for name in mcp.get("mcpServers", {}):
-            if "skill-search" in name or "skill" in name:
+            if "skill" in name:
                 mcp_found = True
                 break
     except JSON_READ_ERRORS:
@@ -1833,18 +1820,15 @@ def check_commandcode():
         findings.append("no skill-search MCP entry in Command Code mcp.json")
     # 4. Hook events outside CC's supported four. Claude's set (which adds UserPromptSubmit
     #    and PreCompact) copied verbatim here is skipped as "unknown event" — a silent no-op.
-    try:
-        settings = json.loads(CCMD_SETTINGS.read_text(encoding="utf-8"))
-        hooks = settings.get("hooks", {})
-        if isinstance(hooks, dict):
-            unknown = sorted(set(hooks) - CCMD_HOOK_EVENTS)
-            if unknown:
-                findings.append(
-                    "settings.json has hook event(s) Command Code does not support: "
-                    + ", ".join(f'"{e}"' for e in unknown)
-                    + " — it accepts only PreToolUse, PostToolUse, Stop, SessionStart")
-    except JSON_READ_ERRORS:
-        pass  # already reported as unreadable settings.json above
+    #    An unreadable settings.json was already reported above.
+    hooks = settings.get("hooks", {}) if isinstance(settings, dict) else None
+    if isinstance(hooks, dict):
+        unknown = sorted(set(hooks) - CCMD_HOOK_EVENTS)
+        if unknown:
+            findings.append(
+                "settings.json has hook event(s) Command Code does not support: "
+                + ", ".join(f'"{e}"' for e in unknown)
+                + " — it accepts only PreToolUse, PostToolUse, Stop, SessionStart")
     # 5. Stray root-level SKILL.md — a FILE at the root of a Command Code skills dir.
     #    It carries a name that cannot match the directory, and CC responds by discarding
     #    the whole root: every skill under it disappears from `commandcode skills list`.
@@ -1866,32 +1850,24 @@ def check_commandcode():
             "fix": None}
 
 
-def _zcode_installed_path():
-    """installPath of skill-concierge@skill-concierge from ZCode's own install registry
-    (~/.zcode/cli/plugins/installed_plugins.json), or None when there is no record. Unlike
-    Codex — proven live to always load the semver-newest cache dir regardless of any
+def _zcode_record():
+    """skill-concierge@skill-concierge's entry in ZCode's own install registry
+    (~/.zcode/cli/plugins/installed_plugins.json), or None when there is no record or the
+    registry is unreadable. Existence, not the resolved version, proves an install happened.
+    Unlike Codex — proven live to always load the semver-newest cache dir regardless of any
     registry — ZCode's registry is the one signal that names which cache copy is actually
-    active, so it is preferred over the newest-by-name heuristic."""
+    active (`installPath`), so it is preferred over the newest-by-name heuristic."""
     try:
         data = json.loads(ZCODE_PLUGINS_FILE.read_text(encoding="utf-8"))
     except JSON_READ_ERRORS:
         return None
-    for p in data.get("plugins", []):
-        if isinstance(p, dict) and p.get("id") == "skill-concierge@skill-concierge":
-            return p.get("installPath") or None
-    return None
+    return next((p for p in data.get("plugins", [])
+                 if isinstance(p, dict) and p.get("id") == "skill-concierge@skill-concierge"), None)
 
 
-def _zcode_record_exists():
-    """True when ZCode's install registry has an entry for skill-concierge@skill-concierge,
-    regardless of whether that entry carries a usable installPath — existence, not the
-    resolved version, proves an install happened."""
-    try:
-        data = json.loads(ZCODE_PLUGINS_FILE.read_text(encoding="utf-8"))
-    except JSON_READ_ERRORS:
-        return False
-    return any(isinstance(p, dict) and p.get("id") == "skill-concierge@skill-concierge"
-               for p in data.get("plugins", []))
+def _zcode_installed_path():
+    """installPath of the ZCode install record, or None."""
+    return (_zcode_record() or {}).get("installPath") or None
 
 
 def check_zcode():
@@ -1915,7 +1891,7 @@ def check_zcode():
     trusting "newest dir by name" could report a version ZCode isn't actually running (a
     manually-dropped or half-synced newer dir would outrank the active one). Fall back to
     the newest-cache-dir heuristic only when the registry has no usable record — the
-    the earlier newest-by-name behavior, kept as a safety net rather than reporting nothing.
+    earlier newest-by-name behavior, kept as a safety net rather than reporting nothing.
     """
     if not ZCODE_DIR.exists():
         return {"id": "zcode", "label": "ZCode integration", "status": WARN,
@@ -1923,14 +1899,15 @@ def check_zcode():
                 "fix": None}
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
-    record_present = _zcode_record_exists()
-    install_path = _zcode_installed_path()
+    record = _zcode_record()
+    record_present = record is not None
+    install_path = (record or {}).get("installPath") or None
     cached_ver = None
     if install_path:
         cached_ver = _descriptor_version(Path(install_path) / ".claude-plugin" / "plugin.json")
     if not record_present and cached_ver is None:
         # No registry entry at all — fall back to the newest-cache-dir heuristic (the
-        # the earlier safety net) rather than reporting nothing. Never used when a registry
+        # earlier safety net) rather than reporting nothing. Never used when a registry
         # record IS present: a record with an unreadable manifest must stay version=None,
         # not silently resolve to whichever dir happens to sort newest by name.
         try:
@@ -1976,28 +1953,6 @@ def check_zcode():
             "fix": None, "version": cached_ver, "plugin_installed": plugin_installed}
 
 
-def _claude_code_installed():
-    """(version, installPath) of skill-concierge@skill-concierge in Claude Code's own
-    install record, or (None, None) when there is no record or the registry is
-    unreadable. Same map-of-lists shape as OMP's (one entry per install scope); the
-    head entry is the active scope."""
-    _state, head = _registry_entry_state(CLAUDE_PLUGINS_FILE, "skill-concierge@skill-concierge")
-    if head is None:
-        return None, None
-    return head.get("version"), head.get("installPath")
-
-
-def _claude_code_record_state():
-    """"missing" | "unreadable" | "present" for Claude Code's install record — see
-    `_registry_entry_state`. Existence, not the parsed field, proves an install
-    happened; an unreadable registry proves nothing either way, so it is reported
-    and treated as installed-with-unknown-version rather than never-installed."""
-    state, head = _registry_entry_state(CLAUDE_PLUGINS_FILE, "skill-concierge@skill-concierge")
-    if state == "unreadable":
-        return "unreadable"
-    return "present" if isinstance(head, dict) else "missing"
-
-
 def check_claude_code():
     """Claude Code harness install state — install record vs deployed content vs SSOT.
 
@@ -2020,8 +1975,12 @@ def check_claude_code():
                 "fix": None, "version": None}
     findings = []
     ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
-    installed_ver, install_path = _claude_code_installed()
-    record_state = _claude_code_record_state()
+    # Same map-of-lists shape as OMP's (one entry per install scope); the head entry is the
+    # active scope.
+    state, head = _registry_entry_state(CLAUDE_PLUGINS_FILE, "skill-concierge@skill-concierge")
+    installed_ver, install_path = ((None, None) if head is None
+                                   else (head.get("version"), head.get("installPath")))
+    record_state = _record_state(state, head)
     deployed_ver = None
     # A missing registry proves no install ever happened (existing WARN-only, cutover-skips
     # behavior). An unreadable one proves nothing either way, so it is NOT collapsed into
@@ -2643,13 +2602,6 @@ def _selftest():
     # write a record, so excluding it would hide a real server behind a green check.
     assert [p for p, _ in parsed] == ["501", "506"], parsed
     assert parsed[0][1] == 10_000.0 - 120                   # etime resolved to a start epoch
-    # Pruning is keyed on "does this pid still exist", NOT on "did I see it in ps". The
-    # records dir is shared by every install on the machine, but `ps` here only matches THIS
-    # venv's binary — so pruning by the ps result would delete another install's LIVE record
-    # and make its doctor report an unknown build. That is the very false alarm being fixed.
-    # The --health memo must NOT survive a run_all() boundary. `doctor --fix` re-runs every
-    # check AFTER repairing something; reusing the pre-fix report there makes the re-check
-    # reprint the failure it just fixed and exit 1 on a system that is now healthy.
     # An unexpanded ${HOME} would silently point the reader at a directory no server writes
     # to, making every live server "unproven" forever — the failure this seam exists to avoid.
     assert "$" not in str(SERVER_RECORDS), f"unexpanded variable in {SERVER_RECORDS}"
@@ -2722,6 +2674,10 @@ def _selftest():
         assert row["fix"] is None and "11" in row["detail"], row
     finally:
         _g.update(_saved)
+    # Pruning is keyed on "does this pid still exist", NOT on "did I see it in ps". The
+    # records dir is shared by every install on the machine, but `ps` here only matches THIS
+    # venv's binary — so pruning by the ps result would delete another install's LIVE record
+    # and make its doctor report an unknown build. That is the very false alarm being fixed.
     assert _pid_alive(str(os.getpid())) is True
     assert _pid_alive("2147483646") is False                # far above any live pid
     assert _pid_alive("not-a-pid") is False

@@ -5,10 +5,10 @@ flywheel_lock.py — cross-process mutual exclusion for the retrieval flywheel.
 Both the detached auto-flywheel (hooks/scripts/auto_flywheel.py, SessionStart)
 and a manual `scripts/flywheel.py --generate` touch the SAME durable state:
 
-  • eval/triggers.json   (read-modify-write)
+  • ~/.claude/skill-concierge/triggers.json   (read-modify-write)
   • ~/.claude/skill-concierge/.flywheel-cache.json
   • ~/.claude/skill-concierge/flywheel-manifest.json
-  • Qdrant points via the final reindex
+  • the index owner's points via the final reindex
 
 With no lock they overlap freely. Live overlap was observed 2026-08-27:
 two manifest runs 13 s apart (`03:29:12Z` and `03:29:25Z`) while a capped run
@@ -29,23 +29,8 @@ Design:
     Readers that only need the held/not-held answer do not parse it.
   • Stdlib only.
 
-Usage:
-
-  from flywheel_lock import acquire, release, is_locked, holder
-
-  if not acquire(block=False):          # manual run — bail with a clear message
-      info = holder()
-      print(f"another run holds lock {info}", file=sys.stderr)
-      sys.exit(4)
-
-  try:
-      ... generate ...
-  finally:
-      release()
-
-  # Hook (auto): fail-open — if locked, skip spawning.
-  if is_locked():
-      return 0
+Usage: a manual run exits 4 when acquire(block=False) fails and calls release() in a
+finally block; the auto hook skips spawning while is_locked() (fail-open).
 
 Stale window: a normal capped run is ~5 min; the fallback stale timeout is
 2 h (7200 s) so only a truly orphaned file is reclaimed and a slow run is

@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import flywheel_llm
+from llm_triggers import user_prompt, vn_count  # same prompt shape; non-ASCII = Vietnamese proxy
 
 DEFAULT_OUT = ROOT / "eval" / "scenarios-shadow"
-CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_triggers.py
 
 SYSTEM_PROMPT = (
     "You generate a retrieval eval set for a developer-tool skill. Output STRICT "
@@ -47,16 +47,6 @@ SCHEMA = {
     },
     "required": ["positive", "negative"],
 }
-
-
-def user_prompt(name, description):
-    return f"Skill: {name}\nDescription: {description}"
-
-
-def vn_count(strings):
-    """Count strings containing any non-ASCII char (a reliable proxy for Vietnamese —
-    English utterances are pure ASCII, Vietnamese carries diacritics)."""
-    return sum(1 for s in strings if any(ord(c) > 127 for c in s))
 
 
 VN_RETRY = (
@@ -98,17 +88,6 @@ def write_scenario(name, reply, out_dir):
     return True
 
 
-def load_cache():
-    if CACHE_FILE.exists():
-        return json.loads(CACHE_FILE.read_text())
-    return {}
-
-
-def save_cache(cache):
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps(cache, indent=2))
-
-
 def run(out_dir, limit=None, only=None, rate=6.0, catalog=None, workers=1):
     """Returns a list of {"name", "status": "generated"|"error", "detail"} records —
     one per skill actually attempted this call (cache-hit/unchanged skills are skipped
@@ -119,17 +98,10 @@ def run(out_dir, limit=None, only=None, rate=6.0, catalog=None, workers=1):
 
     workers > 1 fans the network phase out over a ThreadPoolExecutor while
     scenario files and the cache stay single-writer — see llm_triggers.run()."""
-    if catalog is None:
-        skills = flywheel_llm.live_skills()
-    else:
-        import build_triggers
-        skills = {}
-        for name, desc in build_triggers.scroll_all_points(catalog=catalog):
-            if name and name not in skills:
-                skills[name] = desc or ""
+    skills = flywheel_llm.live_skills(catalog)
     names = sorted(skills) if only is None else [only]
 
-    cache = load_cache()
+    cache = flywheel_llm.load_cache()
     out_dir = Path(out_dir)
 
     def _needs_work(name):
@@ -143,8 +115,6 @@ def run(out_dir, limit=None, only=None, rate=6.0, catalog=None, workers=1):
         names = [n for n in names if _needs_work(n)]
     if limit:
         names = names[:limit]
-
-    results = []
 
     def _net(name):
         """Network phase only — safe to run concurrently (see llm_triggers.run)."""
@@ -168,31 +138,11 @@ def run(out_dir, limit=None, only=None, rate=6.0, catalog=None, workers=1):
         """Single-writer phase — scenario files + cache stay in the main thread."""
         if write_scenario(name, reply, out_dir):
             cache[name] = flywheel_llm.body_hash(skills.get(name, ""))
-            save_cache(cache)
+            flywheel_llm.save_cache(cache)
             return {"name": name, "status": "generated", "detail": None}
         return {"name": name, "status": "error", "detail": "malformed reply"}
 
-    def _collect(name, out):
-        if isinstance(out, BaseException):
-            print(f"WARN: skipping {name}: chat failed ({out})")
-            return {"name": name, "status": "error", "detail": f"chat failed: {out}"}
-        return _merge(name, out)
-
-    if workers <= 1 or len(names) <= 1:
-        for name in names:
-            if not _needs_work(name):
-                continue  # unchanged + already generated
-            name2, out = _net(name)
-            results.append(_collect(name2, out))
-    else:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        batch = [n for n in names if _needs_work(n)]
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_net, n) for n in batch]
-            for fut in as_completed(futs):
-                name, out = fut.result()
-                results.append(_collect(name, out))
-    return results
+    return flywheel_llm.run_batch(names, _needs_work, _net, _merge, workers)
 
 
 def _selftest():

@@ -327,7 +327,6 @@ def _suggestions(raw: dict, installed: set, used_short: dict, used90: dict, prov
 
 
 def cmd_suggest(args):
-    import shlex
     import time
     raw = _load()
     ap = _ap()
@@ -480,7 +479,7 @@ def main():
     pw.add_argument("names", nargs="+")
     pw.set_defaults(fn=cmd_why)
     ps = sub.add_parser("suggest", help="propose tier changes from usage and what is installed")
-    ps.add_argument("--apply", action="store_true", help="back the file up, then write every suggestion")
+    ps.add_argument("--apply", action="store_true", help="back the file up, then write the ⭐ add / ✗ remove lines")
     ps.set_defaults(fn=cmd_suggest)
     sub.add_parser("selftest", help=argparse.SUPPRESS).set_defaults(fn=cmd_selftest)
     args = ap.parse_args()

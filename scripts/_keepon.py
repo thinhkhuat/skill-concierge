@@ -49,6 +49,26 @@ def blocklist_path() -> Path:
     return HOME / "blocklist.json"
 
 
+def reconcile(venv, applier, missing_msg, prefixes=("applied", "NOTE", "wrote", "backup")):
+    """Re-run apply-overrides.py so a keep-on or blocklist edit takes effect now, echoing its relevant
+    output. Needs the engine venv python (the applier imports the vendored discovery); prints
+    `missing_msg` and returns when that venv is missing."""
+    import subprocess
+    py = Path(venv) / "bin" / "python"
+    if not py.exists():
+        print(missing_msg)
+        return
+    r = subprocess.run([str(py), str(applier)], capture_output=True, text=True, check=False)
+    for ln in (r.stdout or "").splitlines():
+        if ln.startswith(prefixes):
+            print(f"  {ln}")
+    for ln in (r.stderr or "").splitlines():          # surface the router-name WARN etc.
+        if ln.strip():
+            print(f"  ! {ln.strip()}")
+    if r.returncode != 0:
+        print(f"  ! reconcile exit {r.returncode}")
+
+
 def _selftest():
     import json
     import tempfile

@@ -3,6 +3,70 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.64.1] - 2026-10-09
+
+A whole-repo bloat audit (six areas: enforcer; other hooks, bin and skills; the large scripts; the other
+scripts; adapters and setup; docs), then the cuts that keep behaviour the same, plus the real defects it found.
+Findings and one disposition line per finding: `plans/261009-0102-chisle-audit/`.
+
+### Fixed
+- **The hooks run on macOS's system Python 3.9.** `hooks/hooks.json` runs plain `python3`; with a PATH that
+  lacks Homebrew that is `/usr/bin/python3` (3.9), where `enforcer.py` and `ledger.py` died at import on a
+  `str | None` annotation, so the turn got no menu and no ledger row. Both now load (`from __future__ import
+  annotations`); `tests/test_python39_hooks.py` imports every hook module and runs the enforcer self-test
+  under 3.9 when that interpreter exists.
+- **The built-in self-tests run under pytest.** `tests/test_builtin_selftests.py` runs `enforcer.py
+  --selftest` and `doctor.py --selftest`; nothing ran them before, which is how the enforcer self-test sat
+  failing on main.
+- **`doctrine.py` recognises OpenCode** and names OpenCode's `skill-search_search_skills` tool instead of
+  Claude Code's; it also detects the `.opencode` and `.cline` path markers the enforcer already used.
+- **`skill_exclusions.py`** drops its drifted fallback copy of the ledger's tool names (missing
+  `skill-search_get_skill`); it existed only because `ledger.py` failed on 3.9.
+- **The ZCode installer** excludes `.zcode` and `.unlazy` from a non-git export, like its siblings; a new
+  test checks the four installers' exclude lists match.
+- **The DSH unlazy stop bridge** reads the session id and working folder from the pre-step event's
+  `agent.session.header` first (where DSH puts them, as `skill-concierge.dsh.ts` reads them), keeping the
+  old lookups as fallbacks.
+- **driftcheck mirrors the root and OpenCode `package.json` versions.** The OpenCode one had drifted to
+  0.62.0; both now move with every release.
+- **README:** the Codex uninstall step `rm -f ~/.codex/hooks.json` could delete the user's own Codex hooks
+  (nothing here writes that file); it is now `codex plugin remove` / `codex plugin marketplace remove`.
+
+### Removed
+- **Retired migration tooling, archived** (copies in `~/_ARCHIVE/skill-concierge-retired-scripts-20261009/`
+  on the machine that ran this): `scripts/migrate_qdrant_to_local.py`, `scripts/embed_server.py`,
+  `bin/embed-shim`, `scripts/archive_qdrant_collection.py`, and the tests that only tested them. The index
+  owner (ADR-0070) replaced all of them.
+- **Four docs nothing linked to**, archived the same way: `docs/always-on-skill-set-proposal.md`,
+  `docs/skill-search-deployment-readme.md`, `docs/skill-search-trial-setup-260625-2233-report.md`,
+  `docs/multivector-retrieval-arc.md`.
+- **`precision_eval.py`:** the comparison branch against the deleted shadow index, and its inline
+  `--selftest` (its checks moved into `tests/test_precision_eval_sets.py`). The LIVE-only report stays.
+- **README release history:** the per-release lines duplicated this file; the README keeps the current
+  release line and links here. The 0.22.0 entry, which only the README held, is now above.
+
+### Changed (no behaviour change unless noted)
+- **enforcer.py** (4,761 → 4,592 lines): dead harness constants and unused parameters gone; one helper each
+  for the skill-file check, the transcript tail read, probability validation, multi-intent clustering and
+  the three outage fallbacks; stale docstrings fixed; long history comments cut to the ADR reference, one
+  line of why and the revert path. Noted change: `_jev_direct_url` no longer falls back to the TypeSafe URL
+  when `ENFORCER_JEV_CC_URL` is set to an empty string; it raises like any other wrong host.
+- **Hooks:** the SessionStart self-heal hooks share their helpers through `hooks/scripts/selfheal.py`;
+  `ledger.py` writes through one `_log` helper (rows byte-identical).
+- **Scripts:** the three LLM generators share one cache loader/saver and batch driver in `flywheel_llm.py`;
+  `check_mcp_env_parity.py` compares in one table-driven loop; keep-on and blocklist share `_reconcile`;
+  doctor reads each install record and Command Code's settings once; `mined-chains.json` no longer records
+  `max_gap_s`, a setting the code never applied.
+- **Docs:** stale statements fixed against the code (harness counts, tool and skill counts, `SKILL_TOP_K`,
+  the keep-on seed size, the guard count, four manifests); four flags documented only in README copies
+  (`ENFORCER_SELFREF_SKIP`, `SKILL_SUBAGENT_STOP`, `SKILL_TRIGGER_PURITY`, `SKILL_PLUGIN_FILTER`) moved into
+  AGENTS.md and `docs/runtime-flags.md`; the README and openwiki flag tables are now links; repeated rule text
+  points at one canonical copy.
+
+### Not done (owner decisions, recorded in the audit report)
+Moving the enforcer's and doctor's built-in self-tests into tests/, deleting the dominance-collapse and
+per-skill-tau features, one shared installer helper library, and one shared harness detector.
+
 ## [0.64.0] - 2026-10-08
 
 ### Added
@@ -643,7 +707,8 @@ All notable changes to **skill-concierge**. Format loosely follows
   `unknown: command not found`; it checks every JSON file it rewrites before writing anything and
   refuses (exit 1, nothing changed) when one does not parse, instead of resetting it to `{}`; and it
   exits 1 when its own verify fails. The ZCode installer refuses to downgrade a newer registered copy,
-  and checks its registry before exporting anything into the cache. Every shipped shell script is
+  refuses when its registry has no matching entry, and checks its registry before exporting anything
+  into the cache. Every shipped shell script is
   tested to parse under macOS's stock `/bin/bash` 3.2.
 - **Doctor:** the Codex row requires `.codex/hooks.json`; a row whose deployed manifest cannot be read
   reports version None instead of the registry's claim.
@@ -2385,6 +2450,18 @@ machine-global index should express per-root freshness; tracked for the next rel
     externals is an explicitly deferred phase, not dropped.
   - SKILL-FIRST doctrine: external hits are `USING:`-eligible via the get_skill read-inline
     path (same take-bar; alias marks provenance, not a lower obligation).
+
+## [0.22.0] — 2026-08-23
+
+### Added — ADR-0031: external catalog roots
+- Third-party skill collections are indexed for retrieval without being installed. The operator owns
+  `~/.claude/skill-concierge/catalog-roots.json`; each skill is minted `<alias>:<name>` under scope
+  `catalog:<alias>`, with `tier: external` on every point.
+- Search-only tier: never in the per-turn offer preview; `search_skills` marks hits `external: <alias>`
+  with a `get_skill` consumption note. Promotion is a symlink, refused on a name collision.
+  skillOverrides, the sidecar and the flywheel exclude catalogs by design.
+- New `scripts/catalogs.py`, the `skill-concierge:catalogs` skill and doctor's `check_catalogs`. The first
+  catalog, `antigravity` (1,603 skills), is registered and indexed.
 
 ## [0.21.3] — 2026-08-20
 

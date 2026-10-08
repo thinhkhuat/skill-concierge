@@ -15,7 +15,9 @@
 #   3. Ensure each profile loads the skill-concierge enforcement plugin
 #      (adapters/dsh/skill-concierge.dsh.ts: doctrine + per-turn enforcer +
 #      the ADR-0059 exclusion echo) through the same patch layer (ADR-0059)
-#   4. Verify wiring: MCP server reachable, enforcer script present
+#   4. Verify wiring: MCP launcher present and executable, enforcer script present,
+#      each profile's patch names skill-search and loads under DSH's parse rules,
+#      doctor's DSH row
 #
 # DSH surfaces:
 #   - Desktop: ~/.ohdsh/profiles/desktop/ (Oh-DSH Desktop, Electron)
@@ -102,7 +104,7 @@ for PROFILE in $PROFILES; do
   echo "==> Configuring: $PROFILE"
 
   python3 - "$PROFILE" "$ROOT" "$VERSION" <<'PYEOF'
-import json, os, sys
+import sys
 from pathlib import Path
 
 profile_dir, root, version = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
@@ -200,23 +202,14 @@ def _append_block(existing_text: str, new_block: str) -> str:
             if not existing_text.endswith("\n")
             else existing_text.rstrip("\n") + "\n" + new_block.rstrip())
 
-# Handle MCP entry
-if MCP_MARKER in existing:
-    patch_text = _replace_block(existing, MCP_MARKER, MCP_SERVER_ENTRY)
-else:
-    patch_text = _append_block(existing, MCP_SERVER_ENTRY)
-
-# Handle unlazy entry (on the result of the MCP step)
-if UNLAZY_MARKER in patch_text:
-    patch_text = _replace_block(patch_text, UNLAZY_MARKER, UNLAZY_ENTRY)
-else:
-    patch_text = _append_block(patch_text, UNLAZY_ENTRY)
-
-# Handle the enforcement plugin entry
-if ENFORCER_MARKER in patch_text:
-    patch_text = _replace_block(patch_text, ENFORCER_MARKER, ENFORCER_ENTRY)
-else:
-    patch_text = _append_block(patch_text, ENFORCER_ENTRY)
+# Each step works on the previous step's result, in this order.
+patch_text = existing
+for marker, entry in ((MCP_MARKER, MCP_SERVER_ENTRY), (UNLAZY_MARKER, UNLAZY_ENTRY),
+                      (ENFORCER_MARKER, ENFORCER_ENTRY)):
+    if marker in patch_text:
+        patch_text = _replace_block(patch_text, marker, entry)
+    else:
+        patch_text = _append_block(patch_text, entry)
 
 (patch_file.parent / (patch_file.name + ".new")).write_text(patch_text + "\n", encoding="utf-8")
 PYEOF

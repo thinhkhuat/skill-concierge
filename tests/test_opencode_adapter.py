@@ -102,7 +102,6 @@ def enforcer():
 
 def test_harness_detection(enforcer):
     assert enforcer.RUNNING_HARNESS == "opencode"
-    assert enforcer.UNDER_OPENCODE is True
     assert "opencode" in enforcer._HARNESS_ORDER
     # scope-head rule (the stdlib twin of server._ORIGIN_HEADS)
     assert enforcer._scope_harness("opencode-personal") == "opencode"
@@ -168,6 +167,26 @@ def test_ledger_opencode_lanes(tmp_path):
     finally:
         os.environ.clear()
         os.environ.update(saved)
+
+
+@pytest.mark.parametrize("harness_env", [{"SKILL_CONCIERGE_HARNESS": "opencode"},
+                                         {"SKILL_CONCIERGE_HARNESS": "open-code"},
+                                         {"CLAUDE_PLUGIN_ROOT": "/x/.opencode/plugins/skill-concierge"}])
+def test_doctrine_names_opencodes_search_tool(harness_env):
+    """The adapter runs doctrine.py with SKILL_CONCIERGE_HARNESS=opencode; the standing order must
+    name the tool id OpenCode exposes, not Claude Code's plugin-namespaced id or slash form."""
+    import subprocess
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("SKILL_CONCIERGE_HARNESS", "OMPCODE", "ZCODE_PLUGIN_ROOT", "DSH_SHELL",
+                        "CLAUDE_PLUGIN_ROOT")}
+    env.update(harness_env, SKILL_JEVD_ENV_CHECK="0")
+    r = subprocess.run([sys.executable, str(ROOT / "hooks" / "scripts" / "doctrine.py")],
+                       input='{"hook_event_name":"SessionStart","session_id":"s"}',
+                       capture_output=True, text=True, env=env)
+    ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert ctx.count("skill-search_search_skills") == 1
+    assert "mcp__plugin_skill-concierge" not in ctx and "/skill-concierge:skill-search" not in ctx
+    assert 'get_skill("<name>")' in ctx
 
 
 def test_engine_env_and_mcp_pin_the_flag():

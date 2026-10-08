@@ -17,14 +17,12 @@ REGISTRY = Path(os.environ.get(
 SKILLS_ROOT = Path(os.environ.get("SKILL_CONCIERGE_SKILLS_ROOT", Path.home() / ".claude" / "skills"))
 
 
-def plugin_bare_aliases(registry=None, skills_root=None) -> dict:
+def plugin_bare_aliases() -> dict:
     """{bare: "plugin:bare"} for every bare name exactly one installed plugin owns. Plugin skills
     are read at both depths under <installPath>/skills, a skill directory owning everything below
     it (the discovery engine's rule)."""
-    registry = REGISTRY if registry is None else Path(registry)
-    skills_root = SKILLS_ROOT if skills_root is None else Path(skills_root)
     try:
-        plugins = json.loads(registry.read_text(encoding="utf-8")).get("plugins") or {}
+        plugins = json.loads(REGISTRY.read_text(encoding="utf-8")).get("plugins") or {}
     except (OSError, ValueError, AttributeError):
         return {}
     owners = {}
@@ -39,13 +37,12 @@ def plugin_bare_aliases(registry=None, skills_root=None) -> dict:
             for hit in flat + nested:
                 bare = os.path.basename(os.path.dirname(hit))
                 owners.setdefault(bare, set()).add(f"{plugin}:{bare}")
-    personal = {p.parent.name for p in skills_root.glob("*/SKILL.md")} if skills_root.is_dir() else set()
+    personal = {p.parent.name for p in SKILLS_ROOT.glob("*/SKILL.md")} if SKILLS_ROOT.is_dir() else set()
     return {b: next(iter(full)) for b, full in owners.items() if len(full) == 1 and b not in personal}
 
 
-def canonical(name: str, aliases=None) -> str:
+def canonical(name: str) -> str:
     """The menu's name for `name`: unchanged when it is already qualified, personal or ambiguous."""
     if not isinstance(name, str) or not name or ":" in name:
         return name
-    aliases = plugin_bare_aliases() if aliases is None else aliases
-    return aliases.get(name, name)
+    return plugin_bare_aliases().get(name, name)

@@ -77,6 +77,7 @@ Machine-local settings: `ENFORCER_MULTI_INTENT=0` is set in `~/.claude/settings.
 | Flag | Default | Effect | ADR |
 |---|---|---|---|
 | `ENFORCER_AUTHORIZED_SKIP` | ON | A `SKILL-CHECK:` line on the skip verdicts that used to be silent. | [0015](docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
+| `ENFORCER_SELFREF_SKIP` | ON | The self-referential recap lane: a turn that only asks to explain or rephrase the agent's own prior message is an authorized skip. | [0019](docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
 | `ENFORCER_HARNESS_SKIP` | ON | A harness-generated prompt (task notification, system reminder, teammate message, resume banner, `omp-msum`) skips before any embed or Qdrant I/O; band `harness_skip`. | [0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
 | `ENFORCER_DETERMINISTIC` | ON | Whole-word phrases in `config/deterministic-routes.json` pin a skill at 1.0 before the embed step. | [0054](docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
 | `ENFORCER_JEV_ROUTER` | ON | English prompts: Jev ranks the whole catalogue; the top 5 become the "Whole-shelf ranking". Best fit under 0.30 is an authorized skip (`jev_skip`). A failed, late or budget-cut rerank keeps the wide pass's own menu (rows ordered by lift) before any fallback to the embedding path; the event records `stage` `full` or `wide`. Any other failure falls back to the embedding path. `ENFORCER_JEV_GATE=0` is an alias. | [0061](docs/adr/0061-jev-skill-router.md), [0062](docs/adr/0062-no-skill-ruling-and-whole-shelf-label.md), [0087](docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md) |
@@ -96,6 +97,7 @@ Machine-local settings: `ENFORCER_MULTI_INTENT=0` is set in `~/.claude/settings.
 | `SKILL_REPUTATION` | ON | The owner's ❤️/⭐ and the computed 🔥 render as badges; up to 2 ranked skills are pulled under Jev's five rows. Also `hooks/scripts/auto_promote.py`. Manage with `scripts/reputation.py` or the `skill-concierge:reputation` skill. | [0083](docs/adr/0083-owner-reputation-badges.md) |
 | `SKILL_BLOCKLIST` | ON | The user-ordered disable tier, enforced by `skill_guard.py`, the hook, the engine and `apply-overrides.py`. | [0046](docs/adr/0046-blocklist-disable-tier.md) |
 | `SKILL_OWNER_AUTOSTART` | ON | Hook-side autostart of the local index owner. `=0` stops only the autostart; there is no earlier behavior to restore. Also `bin/skill-search-mcp`. | [0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md) |
+| `SKILL_SUBAGENT_STOP` | ON | `hooks/scripts/doctrine.py`: no SessionStart doctrine injection inside a subagent session (needs a positive `agent_id`; `=0` injects unconditionally). | [0020](docs/adr/0020-subagent-session-scoping.md) |
 | `SKILL_JEVD_ENV_CHECK` | ON | `hooks/scripts/doctrine.py`: a SessionStart warning when jevd runs but this session's `JEVD_URL` would bypass it. | — |
 
 The keep-off map (`~/.claude/skill-concierge/keep-off.json`) is consent-only and belongs to no flag: only `scripts/build_keep_off.py --apply` saves it, after Thinh says yes, and it hides nothing unless it carries `"approved_by_user": true` ([ADR-0077](docs/adr/0077-keep-off-map-is-consent-only.md)).
@@ -106,6 +108,8 @@ The keep-off map (`~/.claude/skill-concierge/keep-off.json`) is consent-only and
 |---|---|---|---|
 | `SKILL_BODY_TRIGGERS` | ON | Phrases from a skill body's decision sections join the trigger layer. Index-shaping. | [0016](docs/adr/0016-body-derived-trigger-points.md) |
 | `SKILL_LLM_TRIGGERS` | OFF in code, ON in the shipped `.mcp.json` (`TRIGGERS_MAX` 16) | Flywheel utterances from `triggers.json` join the trigger layer after the operator-curated `triggers-curated.json` phrases, which apply whatever this flag is set to. Index-shaping. | [0026](docs/adr/0026-llm-utterance-trigger-layer.md), [0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
+| `SKILL_TRIGGER_PURITY` | unset = `shadow` | Not on/off: `shadow` logs body-derived workflow-summary triggers it would drop and keeps them; `active` drops them (needs a full reindex); `off` skips the check. Index-shaping. | [0023](docs/adr/0023-trigger-purity-lint.md) |
+| `SKILL_PLUGIN_FILTER` | ON | Indexes only the installed and enabled plugin version rather than every cached one. Index-shaping. | [0028](docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md) |
 | `SKILL_DECLARED_TRIGGERS` | OFF | Drops "Not for" sentences from triggers and splits list-form `when_to_use`. Index-shaping. | [0074](docs/adr/0074-findability-is-a-ratcheted-invariant.md) |
 | `SKILL_SEARCH_COMPLEMENT` | OFF | `search_skills` ranks an installed row ahead of an external one within 0.08. | [0074](docs/adr/0074-findability-is-a-ratcheted-invariant.md) |
 | `SKILL_FINDABILITY` | ON | A detached findability sweep after an index-changing reindex feeds doctor's "Findability" row. | [0074](docs/adr/0074-findability-is-a-ratcheted-invariant.md) |
@@ -161,8 +165,8 @@ The keep-off map (`~/.claude/skill-concierge/keep-off.json`) is consent-only and
   to measure, that doc governs WHAT to watch. Before citing ANY ledger rate (fallback / conversion / dodge / hit@k):
   1. **Find the current epoch start** — the last commit touching `hooks/scripts/enforcer.py` (thresholds/gates),
      `hooks/doctrine/skill-first.md`, `vendor/skill-search/skill_search/server.py` (retrieval), or
-     `vendor/skill-search/skill_search/index_owner.py` (the local index owner, ADR-0070; `scripts/embed_server.py`
-     is retired): `git log --date=format:'%Y-%m-%d %H:%M' --pretty='%cd %h %s' -- <those paths>`.
+     `vendor/skill-search/skill_search/index_owner.py` (the local index owner, ADR-0070; the old `scripts/embed_server.py` shim
+     is retired, archived in v0.64.1): `git log --date=format:'%Y-%m-%d %H:%M' --pretty='%cd %h %s' -- <those paths>`.
      A ledger event `{"ev": "corpus_epoch"}` (written by `scripts/trigger_filter.py backfill` and `reindex`) also starts
      an epoch for retrieval metrics: the trigger corpus changed without a code commit (ADR-0076).
   2. **Window to it:** `python3 scripts/analyze.py --since "<that datetime>"`. Never quote the all-time number.

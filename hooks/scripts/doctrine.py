@@ -182,11 +182,12 @@ def _harness_adapt(doctrine: str) -> str:
         harness = "dsh"
     if harness in ("cline", "cline-cli"):
         harness = "cline"
+    if harness in ("opencode", "open-code"):
+        harness = "opencode"
     if not harness and os.environ.get("OMPCODE", "").strip() == "1":
         harness = "omp"
     _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
     if not harness and _zpr and os.path.isabs(_zpr):
-        harness = "zcode"
         return doctrine
     if not harness and os.environ.get("DSH_SHELL", "").strip() == "1":
         harness = "dsh"
@@ -197,6 +198,8 @@ def _harness_adapt(doctrine: str) -> str:
         marker_cmd = f"{os.sep}.commandcode{os.sep}"
         marker_dsh = f"{os.sep}.dsh{os.sep}"
         marker_ohdsh = f"{os.sep}.ohdsh{os.sep}"
+        marker_cline = f"{os.sep}.cline{os.sep}"
+        marker_opencode = f"{os.sep}.opencode{os.sep}"
         marker_claude = f"{os.sep}.claude{os.sep}"
         for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
             if not cand or not os.path.isabs(cand):
@@ -212,13 +215,18 @@ def _harness_adapt(doctrine: str) -> str:
                 harness = "codex"
                 break
             if marker_zcode in resolved:
-                harness = "zcode"
                 return doctrine
             if marker_cmd in resolved:
                 harness = "commandcode"
                 break
             if marker_dsh in resolved or marker_ohdsh in resolved:
                 harness = "dsh"
+                break
+            if marker_cline in resolved:
+                harness = "cline"
+                break
+            if marker_opencode in resolved:
+                harness = "opencode"
                 break
             if marker_claude in resolved:
                 harness = "claude"
@@ -256,6 +264,18 @@ def _harness_adapt(doctrine: str) -> str:
             "/skill-search",
             _cline_tool
         ))
+    if harness == "opencode":
+        # OpenCode v2 (ADR-0085): the transform-registered MCP server's effective tool id is
+        # `skill-search_search_skills` (the id the adapter and the ledger's SEARCH_TOOLS log).
+        # The plugin's skills are re-rooted to plain names and run through the native `skill`
+        # tool, so no `plugin:skill` slash form exists: both hints name the search tool.
+        return _drop_duplicate_or_line(doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            "skill-search_search_skills"
+        ).replace(
+            "/skill-concierge:skill-search",
+            "skill-search_search_skills"
+        ))
     if harness == "omp":
         return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
@@ -264,7 +284,7 @@ def _harness_adapt(doctrine: str) -> str:
             "/skill-concierge:skill-search",
             "mcp__skill_concierge_skill_search_search_skills"
         ))
-    if harness in ("commandcode", "cmd", "command-code"):
+    if harness == "commandcode":
         return doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
             "mcp__skill-search__search_skills"
@@ -394,10 +414,7 @@ def _selftest() -> int:
     _saved_cc = os.environ.get("SKILL_CONCIERGE_HARNESS")
     for _env_val in ("commandcode", "cmd"):
         os.environ["SKILL_CONCIERGE_HARNESS"] = _env_val
-        try:
-            _adapted = _harness_adapt(_sample)
-        finally:
-            pass
+        _adapted = _harness_adapt(_sample)
         if "mcp__skill-search__search_skills" not in _adapted:
             bad.append(f"commandcode adapt ({_env_val}): tool must be mcp__skill-search__search_skills")
         if "/skill-search" not in _adapted or "/skill-concierge:skill-search" in _adapted:
@@ -411,7 +428,6 @@ def _selftest() -> int:
     # Path-marker fallback: a script under .commandcode/ without the env var must
     # still resolve to commandcode (ADR-0038 SessionStart hooks run without the
     # mod's env). Monkey-patch __file__ to a fake .commandcode path.
-    import types as _types  # local import so selftest stays stdlib
     _orig_file = __file__
     try:
         globals()["__file__"] = "/tmp/.commandcode/hooks/scripts/doctrine.py"

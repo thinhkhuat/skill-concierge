@@ -47,7 +47,8 @@ atomic, backs up, refuses empty keep-on — ADR-0005). Guard/avoid the upstream 
 
 ## §3 — The index owner must be up
 
-**Symptom:** search/health errors; MCP returns nothing useful.
+**Symptom:** search/health errors; MCP returns nothing useful; per-turn latency spikes over budget
+and `offer` events show a high `fallback: true` rate.
 
 **Cause:** the engine needs the local index owner — one process
 (`python -m skill_search.index_owner`, from the shared venv) that answers Qdrant's REST
@@ -60,7 +61,12 @@ answer, the enforcer hook starts it on a refused connection, and `setup.sh` star
 it after (re)install. `skill-concierge:doctor --fix` starts a stopped owner, and also stops
 and disables a revived `skill-search-qdrant`/`skill-concierge-embed-shim` container if an old
 harness copy brought Docker back onto these ports. In the live fusion, an owner outage
-degrades to mandate-only fallback (ADR-0002), not a crash.
+degrades to mandate-only fallback (ADR-0002), not a crash: if the owner is down, still loading, or
+the model fails, the enforcer hits `ENFORCER_EMBED_TIMEOUT` (0.5 s default) and falls back to
+mandate-only, so enforcement degrades. A sustained high `fallback: true` rate in
+`~/.claude/skill-concierge/logs/skill-invocation-ledger.log` signals an owner health problem. The old
+embed shim (`scripts/embed_server.py`, `bin/embed-shim`) is retired, archived in v0.64.1; there is no
+`skill-concierge-embed-shim` container to restart.
 
 ---
 
@@ -112,10 +118,10 @@ Throttle: `AUTO_REINDEX_THROTTLE_S` (default 1800s).
 
 **Symptom:** a `/plugin marketplace update` does nothing.
 
-**Cause:** downstream update keys on the version — if `plugin.json` and `marketplace.json`
-versions aren't bumped **together**, the update is a silent no-op.
+**Cause:** downstream update keys on the version — if the manifests' versions aren't bumped
+**together**, the update is a silent no-op.
 
-**Do:** bump **both** manifests' versions on any shippable change.
+**Do:** bump every manifest listed in [`AGENTS.md`](../AGENTS.md) → *Conventions* on any shippable change.
 
 > **The old cache/source keep-on drift is gone (v0.15.0, [ADR-0025](adr/0025-autonomous-override-freshness-and-keep-on-management.md)).**
 > The live allowlist no longer lives in the wipe-on-update plugin cache — it is seeded once into
@@ -138,37 +144,16 @@ The ledger code itself never rotates/caps/deletes — the risk is entirely in lo
 
 ---
 
-## §9 — The warm embed port is served by the same index owner, not a Docker sidecar
+## §9 — (folded into §3)
 
-**Symptom:** per-turn latency spikes over budget; enforcer telemetry shows
-high `fallback: true` rate in `offer` events.
-
-**Cause:** the warm embedding endpoint on `127.0.0.1:6363` is the same local index owner
-§3 covers (ADR-0070) — not a separate `skill-concierge-embed-shim` Docker container. The
-old shim process (`scripts/embed_server.py`, `bin/embed-shim`) is retired from the live
-deployment path; if the owner is down, still loading, or the model fails, the enforcer hook
-hits `ENFORCER_EMBED_TIMEOUT` (0.5s default, `enforcer.py`) and falls back to mandate-only.
-The fallback works (never crashes), but enforcement degrades.
-
-**Do:** `curl -s http://127.0.0.1:6363/health` → expect `{"status":"ok",...}`. There is no
-container to restart; `skill-concierge:doctor --fix` (or a plain prompt, via the enforcer's
-own connection-refused autostart) starts the owner if it is down. Monitor fallback rate
-in `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` (`offer` events with
-`fallback: true`); sustained high rate signals an owner health problem.
+The warm embed port is the same index owner §3 covers; its symptom and fix now live there.
 
 ---
 
-## §10 — This repo is workbench-write-guarded
+## §10 — (removed)
 
-**Symptom:** an agent's `Write` into `skill-concierge/` is blocked
-(`Root-anchoring: artifacts are inert data`).
-
-**Cause:** MY-WORKBENCH treats any dir with its own `.git/` as an inert **artifact** and
-blocks writes; the `.ckignore` also blocks Bash commands containing the literal `.git`.
-
-**Do:** the owner's bypass is to rename `.git` → `git` (no-dot) while editing, then back to
-`.git` before committing. (Context for agents operating from the workbench root; irrelevant
-once the repo is cloned standalone elsewhere.)
+The workbench write-guard bypass this section described no longer applies: the workbench now lets
+through any repo whose git remote is the owner's own. The section was also machine-specific.
 
 ---
 
@@ -197,12 +182,12 @@ diff -rq \
 
 Empty output = fresh; any difference = stale.
 
-**Do:** rerun **`setup.sh`** (the `skill-concierge:setup` skill) — it rebuilds/refreshes the
-stable venv from the deployed source — then **restart Claude Code**. Rule of thumb: a
-`/plugin update` that changed engine code under `vendor/skill-search/` requires a `setup.sh`
-rerun; a change that only touched hooks/doctrine/scripts (cache-run) does not. (Hooks read
-their code straight from the cache, so they update with the plugin; only the venv-resident
-engine needs the rerun.)
+**Do:** restart Claude Code. The launcher `bin/skill-search-mcp` re-syncs the venv engine itself in
+the background when its stamp (`$VENV/.engine-plugin-version`) is older than the plugin version
+(ADR-0018): the first spawn after an update still serves the previous engine, the next one the new
+build. Engine-code updates therefore need no `setup.sh` rerun. Rerun **`setup.sh`** (the `skill-concierge:setup`
+skill) only for a dependency change or when `doctor` still reports `Engine freshness` after a
+restart. Hooks read their code straight from the cache, so they update with the plugin.
 
 ---
 
@@ -268,25 +253,13 @@ wins over `.mcp.json` regardless of the whitelist. The machine-local `SKILL_TRIG
 gitignored ~733K `eval/triggers.json`) lives in settings.json env for exactly this reason —
 absent elsewhere it degrades gracefully to description+body. [ADR-0026](adr/0026-llm-utterance-trigger-layer.md), CHANGELOG [0.16.1].
 
-## §15 — Plugin skill argument-hints need the SELF-NAMESPACED `name:` (the ClaudeKit pattern)
+## §15 — Plugin skill `name:` fields are bare
 
-**Symptom:** you add `argument-hint:` to a plugin skill's `SKILL.md`, but the muted hint never shows
-when you type the `/skill-concierge:<skill>` form the menu displays.
-
-**Cause + fix (proven against ClaudeKit, which does this right):** CC uses the frontmatter `name:`
-field *directly* as the slash command (issue #22063). A **bare** `name: flywheel` therefore registers
-`/flywheel` (with the hint) plus a separate auto-namespaced `/skill-concierge:flywheel` **without** the
-hint — so the hint is invisible on the form users actually see. The fix is NOT to omit `name:` (that
-risks losing the hint entirely per #43401). It is to put the FULL namespaced name in the field, exactly
-like ck: `name: skill-concierge:<skill>` + `user-invocable: true` + `argument-hint: "…"`. Then the slash
-command *is* `/skill-concierge:<skill>` and the hint rides on it. skill-concierge's own engine already
-supports this — `skills_discovery._namespaced_name` skips re-prefixing when `name:` already starts with
-the plugin id (v0.10.2 guard), so the indexed name stays `skill-concierge:<skill>` (no double-prefix).
-
-**Do:** all six skill-concierge skills use `name: skill-concierge:<dir>` (v0.18.0). The ENFORCED
-`~/.claude/docs/claude-code-component-building.md` entry on #22063 recommends *omitting* `name:` — that
-is the weaker branch; prefer the self-namespaced-name pattern (verified live to surface the hint). Note:
-personal/project skills (not plugin-installed) keep their bare `name:` — this applies to plugin skills.
+All ten skill-concierge skills carry a bare `name:` (the directory name, for example `name: doctor`)
+plus `user-invocable: true`, and `argument-hint` where they take arguments; Claude Code shows them
+as `/skill-concierge:<skill>`. A self-namespaced `name: skill-concierge:<skill>` was used at one
+point and is no longer in any `SKILL.md`; do not reintroduce it without testing the argument hint
+live. Personal and project skills keep a bare `name:` as well.
 
 ---
 
@@ -521,7 +494,7 @@ bash -lc/-ic, bash-under-zsh, python child) on 2026-08-24.
 
 ## §21 — Triple-harness: Command Code uses mods for per-turn enforcement, not settings hooks
 
-Command Code (`cmd`) supports four settings hook events (`PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`),
+Command Code (`cmd`) limits its settings hook events (the exact set is in §23 item 6),
 with tool matchers restricted to built-in commands (`SHELL`, `READ`, `WRITE`, `EDIT`).
 
 Consequences:
@@ -593,7 +566,7 @@ Covers the Command Code parity gaps found against the ZCode reference (`adapters
 2. **Foreign-scope isolation must include `personal` unless the shelf is shared** (ADR-0057). Command Code reads `~/.commandcode/skills`, not `~/.claude/skills` — so `hooks/scripts/enforcer.py` `commandcode` foreign scopes include `("plugin", "codex-plugin", "codex-personal", "omp-*", "zcode-*", …)` plus `personal`, not just Claude/Codex caches. Without `personal`, Claude personal skills leak into the Command Code top-k as if invocable. The exception: when `~/.commandcode/skills` resolves to `~/.claude/skills` (a symlink, as on the reference machine), every `personal` skill IS invocable and `personal` must NOT be foreign — `_commandcode_shares_personal_shelf()` decides this per session, the same rule ZCode uses for `~/.agents/skills`.
 3. **Chain-hint scope mirror must include `commandcode-*` + `omp-*`.** `hooks/scripts/enforcer.py:_visible_sidecar_names()` unions `zcode-*` scopes for chain hints; parity requires `SKILL_COMMANDCODE_ROOTS`/`SKILL_OMP_ROOTS` mirrors too — otherwise `commandcode-personal` skills never surface as hints.
 4. **Session id must be threaded.** `adapters/commandcode/skill-concierge.mod.ts` captures `sessionIdOf(cmd, ctx)` (ModContext `ctx.session.leafId()` / `cmd.sessions.leafId()` / `COMMANDCODE_SESSION_ID` env) and threads `session_id` into ledger + enforcer payloads — restores `offer↔turn` join and chain-hint/ROUTE linkage that ZCode gets natively from hook payloads.
-5. **Installer verify to ZCode standard.** `adapters/commandcode/install.sh` now mirrors `adapters/zcode/install.sh` §6: mod byte-identical to repo HEAD, SessionStart hook presence, MCP launcher resolvable, plus `scripts/doctor.py` `Command Code integration` row.
+5. **Installer verify to ZCode standard.** `adapters/commandcode/install.sh` now mirrors `adapters/zcode/install.sh` §6: mod byte-identical to this checkout's file, SessionStart hook presence, MCP launcher resolvable, plus `scripts/doctor.py` `Command Code integration` row.
 6. **Command Code accepts exactly four hook events** — `PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`. Any other key in `~/.commandcode/settings.json` (Claude's `UserPromptSubmit` or `PreCompact`, typically copied in by a cross-harness hook writer) is skipped as `unknown hook event` and shows up in the TUI as a config issue. `adapters/commandcode/install.sh` strips those two; `doctor.py` warns on any unknown event.
 7. **A stray `SKILL.md` at the ROOT of a Command Code skills dir hides every skill in it.** A file at `~/.commandcode/skills/SKILL.md` (or `~/.agents/skills/SKILL.md`, the same shelf here) makes Command Code discard the whole root — observed: 0 skills listed, 647 after moving the file out. `doctor.py` warns and names the path.
 
@@ -616,21 +589,9 @@ integration row at ≥`0.48.0`. Flipping it on is a separate, reviewed step, not
 should do on its own initiative. **To turn it back off after a flip-on**, set the flag to `0`, then
 remove the points with a Qdrant filter delete on `scope=claude-synced` and drop the `claude-synced` key from `~/.claude/skill-concierge/next-skills.json` — a plain reindex with the flag at `0` only hides them from `search_skills` (the prune step skips scopes the session cannot see), while a stale harness enforcer querying Qdrant directly would still offer them.
 
-**Second, unrelated caveat in the same release — RESOLVED by
-[ADR-0059](adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §6, kept as is:**
-`disabled_in` on a search row is computed by reading Claude Code's own merged `enabledPlugins`
-settings layers from the **MCP server's own cwd**. ADR-0058's framing — "the server cannot tell
-which harness launched it" — is corrected to the precise claim: the shared `.mcp.json` carries no
-harness key. Claude Code *does* pass `CLAUDECODE=1` into the server's environment (observed on
-five live servers), but that cannot distinguish Claude from a harness started inside a Claude
-shell; OMP's MCP spawn passes no OMP marker (its `OMPCODE` is set only for the bash tool's shell);
-DSH's row sets `SKILL_CONCIERGE_HARNESS=dsh` explicitly. So a Codex/OMP/ZCode session still sees
-`disabled_in: ["claude"]` on a plugin Claude has switched off, even though that fact is about
-Claude's settings, not the querying harness's own. This is not wrong — the label always says
-`claude`, never implying the querying harness disabled it — and none of the above is needed for a
-row that names its own harness: a per-harness verdict would only duplicate the enforcer's own gate
-for no new truth. `disabled_in` stays a Claude-settings lens on every row, regardless of who asked
-— this is the accepted, final answer, not an open question.
+**Second caveat, resolved by [ADR-0059](adr/0059-harness-complete-offer-isolation-echo-everywhere.md) §6:**
+`disabled_in` on a search row always reflects Claude Code's merged `enabledPlugins` settings, whichever
+harness asked, by design; the label always says `claude`.
 
 ## §25 — A project skill from another project never reaches the offer — and the hook cannot see `--add-dir`
 
@@ -683,9 +644,9 @@ skill it should see, that is the recorded gap above, not a misconfiguration to c
 
 The first model call carries the full menu when it is ready within the 2 s, else the preview; later calls in the run carry the full menu once it lands. The ledger's one offer row names the menu the model saw (`seen`: `full`, `preview`, or `late` when none was ready); a full row that lands after the preview was sent is `offer_late` and is not counted as an offer.
 
-- **Live (Cline 3.0.70, 22:57-22:59 on 2026-10-08, fact):** 3 task turns carried the full TypeSafe menu on the first call at 751 / 673 / 822 ms, with no Command Code call and no `offer_late`. A fourth turn, at 22:58:11, fell to the embedding fallback because the index owner was restarting (the shared engine venv stamp moved 0.63.0 to 0.64.0 at 22:57:40; the owner was ready at 22:58:11). That is a side effect of testing the worktree against the live install, not a design fault; a turn during an owner restart gets the embedding path by design.
+- **Live (fact):** three task turns carried the full TypeSafe menu on the first call with no Command Code call and no `offer_late`; a turn during an index-owner restart gets the embedding path by design. Numbers: [ADR-0087](adr/0087-staged-jev-menu-and-honest-cline-offer-row.md).
 - **Billing consequence:** Cline's Jev calls (two per routed turn) go to TypeSafe only. Command Code, the owner's preferred provider, is never called for a Cline turn; it serves the other harnesses' full routes. The owner chose this on 2026-10-08 over keeping both providers (about 4 calls per turn) and over Command Code only. There is no Command Code fallback, so a TypeSafe outage sends the first call to the preview. With jevd down, `ENFORCER_JEV_TIER=typesafe` still finds the TypeSafe tier of `ENFORCER_JEV_BENCH` (`ts`); a route that fails after its wide pass keeps the wide menu, so the first call still carries a Jev menu, marked `stage: wide` in the telemetry (ADR-0087).
-- **Retracted claim:** an early replay report said the Jev wide pass fits the 2 s wait on 96 % of turns. That timed the Jev request alone in one 17-minute window. Over 90 live Command Code turns the wide pass took p50 1,786 ms and p90 2,498 ms, so only 36-52 % of turns would fit. Do not cite 96 %. (TypeSafe's full route is a different, faster path; the figures above are its own.)
+- **Retracted claim:** an early replay report said the Jev wide pass fits the 2 s wait on 96 % of turns; it timed the Jev request alone in one short window. Do not cite 96 %; the live Command Code figures are in ADR-0087.
 - **Unmeasured:** TypeSafe's full-route latency across many Cline turns (3 measured); the replay behind the wide-menu order used Claude Code turns and shelf, not Cline's.
 - **Epoch:** Cline offer rows before and after 0.64.0 mean different things. See `docs/epoch-watch.md`, v0.64.0.
 

@@ -23,8 +23,11 @@ import os
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import selfheal  # noqa: E402
+from selfheal import qdrant_up as _qdrant_up, recent as _recent  # noqa: E402
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 SS_BIN = VENV / "bin" / "skill-search"
@@ -37,52 +40,11 @@ PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve()
 
 
 def _mcp_env():
-    """The query server's engine settings (scripts/engine_env.py); fail-silent to the process
-    env. The store URL comes from skill_search.ports (the one place that reads
-    SKILL_QDRANT_URL and applies the shared port grammar); fail-silent to the fixed
-    well-known default if the vendored package can't be imported."""
-    try:
-        sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
-        import engine_env
-        merged = engine_env.engine_env(PLUGIN_ROOT)
-    except Exception:
-        merged = dict(os.environ)
-    try:
-        sys.path.insert(0, str(PLUGIN_ROOT / "vendor" / "skill-search"))
-        from skill_search import ports
-        url = ports.qdrant_url(env=merged, default_port=6333)
-    except Exception:
-        url = "http://localhost:6333"
-    return merged, url
+    return selfheal.mcp_env(PLUGIN_ROOT)
 
 
 def _flywheel_locked() -> bool:
-    """True while a flywheel run or a trigger backfill holds the lock (scripts/flywheel_lock.py): a
-    reindex would embed a triggers.json that is mid-rewrite. Fail-open (False) if the module can't load."""
-    try:
-        sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
-        import flywheel_lock
-        return flywheel_lock.is_locked()
-    except Exception:
-        return False
-
-def _recent(path, within):
-    try:
-        return (time.time() - path.stat().st_mtime) < within
-    except FileNotFoundError:
-        return False
-
-
-def _qdrant_up(url, timeout=0.8):
-    for u in (url.rstrip("/") + "/healthz", url):
-        try:
-            with urllib.request.urlopen(u, timeout=timeout) as response:
-                status = response.status
-        except (OSError, ValueError):
-            status = None
-        if status == 200:
-            return True
-    return False
+    return selfheal.flywheel_locked(PLUGIN_ROOT)
 
 
 def main() -> int:

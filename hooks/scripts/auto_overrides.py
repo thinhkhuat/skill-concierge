@@ -30,6 +30,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from selfheal import recent as _recent  # noqa: E402
+
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 PY_BIN = VENV / "bin" / "python"
 LOGDIR = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude/skill-concierge/logs"))
@@ -40,12 +43,6 @@ THROTTLE_S = int(os.environ.get("AUTO_OVERRIDES_THROTTLE_S", "1800"))
 PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT", Path(__file__).resolve().parent.parent.parent))
 APPLIER = PLUGIN_ROOT / "scripts" / "apply-overrides.py"
 
-
-def _recent(path, within):
-    try:
-        return (time.time() - path.stat().st_mtime) < within
-    except FileNotFoundError:
-        return False
 
 
 def main() -> int:

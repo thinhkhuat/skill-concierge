@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
 """
-build_triggers.py — derive per-skill trigger phrases for vector enrichment (Phase 1 step 2).
+build_triggers.py — derive per-skill prose-phrase triggers from the live index.
 
-Source strategy (v1, uniform): PROSE-PHRASE. Each skill's indexed `description`
-(which already includes `when_to_use`, appended by skills_discovery.parse_skill) is
-split into intent-bearing phrases. Step-0 proved that splitting the description into
-phrases, embedding each, and centroiding them (done in the retired enrich_index.py) flips inverted
-skills positive — it is the phrase-split-centroid MECHANISM, not new text, that extracts
-intent. Uniform prose-phrase for ALL 495 is deliberate: it removes the source-strength
-confound from precision_eval (a mixed utterance/prose shadow makes the 14 fire harder on
-cross-domain negatives purely because their source is stronger, misread as cannibalization).
-Utterances (the ceiling) are layered separately later to isolate the delta.
-
-The authoritative skill set is the LIVE INDEX (claude_skills payloads), not disk — so the
-names here match exactly what precision_eval.py (and the retired enrich_index.py) key on.
+Each skill's indexed `description` (which already includes `when_to_use`, appended by
+skills_discovery.parse_skill) is split into intent-bearing phrases; LLM utterances are layered
+on separately by llm_triggers.py. The skill set is the LIVE INDEX (claude_skills payloads), not
+disk, so the names match what precision_eval.py keys on.
 
 Output: ~/.claude/skill-concierge/triggers.json  { name: {source, triggers:[...], n} }
 
@@ -64,7 +56,7 @@ def _post(url, payload, timeout=30.0):
 
 # SYNC NOTE (v0.16.0): this function is the hand-mirrored twin of server.py `_split_phrases`
 # (keep them identical). The engine's `_trigger_phrases` additionally layers LLM-utterance
-# phrases (eval/triggers.json `llm_triggers`, written by scripts/llm_triggers.py) FIRST, behind
+# phrases (triggers.json `llm_triggers`, written by scripts/llm_triggers.py) FIRST, behind
 # SKILL_LLM_TRIGGERS — that is an engine-CONSUMER concern with no twin here (this script only
 # PRODUCES the base prose-phrase block). Do not mirror it into build_triggers. See VENDORED.md v0.16.0.
 def split_phrases(description: str) -> list[str]:
@@ -158,7 +150,7 @@ def run(dry_run):
         print(f"  triggers/skill: min {ns[0]}  median {ns[len(ns)//2]}  max {ns[-1]}  "
               f"mean {sum(ns)/len(ns):.1f}")
     if empty:
-        print(f"  empty (no usable phrase, will fall back to bare description in enrich): "
+        print(f"  empty (no usable phrase, no trigger entry written): "
               f"{', '.join(empty[:8])}{' …' if len(empty) > 8 else ''}")
     if dry_run:
         print("[dry-run] no file written.")

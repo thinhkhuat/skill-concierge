@@ -22,8 +22,8 @@ Usage:
 """
 import argparse
 import json
+import os
 import sys
-import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,9 +35,7 @@ import build_triggers
 # Canonical capsule corpus lives in the OPERATOR home (same doctrine as triggers.json,
 # ADR-0025/0044: the versioned plugin cache dir is wiped on every /plugin update).
 _CAPSULES_DURABLE = Path.home() / ".claude" / "skill-concierge" / "capsules.json"
-CAPSULES_FILE = Path(__import__("os").environ.get(
-    "SKILL_CAPSULES", str(_CAPSULES_DURABLE)))
-CACHE_FILE = flywheel_llm.CACHE_FILE  # shared durable cache (ADR-0025)
+CAPSULES_FILE = Path(os.environ.get("SKILL_CAPSULES", str(_CAPSULES_DURABLE)))
 
 # Bump when SYSTEM_PROMPT changes — the cache key hashes only the skill CONTENT,
 # so without a version in the prefix a prompt rewrite regenerates nothing.
@@ -179,17 +177,6 @@ def save_capsules(capsules):
         json.dumps(capsules, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def load_cache():
-    if CACHE_FILE.exists():
-        return json.loads(CACHE_FILE.read_text())
-    return {}
-
-
-def save_cache(cache):
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps(cache, indent=2))
-
-
 def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     """Returns [{"name", "status": "generated"|"error", "detail"}] — one per skill
     actually attempted (unchanged skills are skipped silently). Same threading
@@ -199,7 +186,7 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     names = sorted(skills) if only is None else [only]
 
     capsules = load_capsules()
-    cache = load_cache()
+    cache = flywheel_llm.load_cache()
     bodies = {n: read_body(skills[n][1]) for n in names}
 
     def _needs_work(name):
@@ -215,19 +202,13 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     if limit:
         names = names[:limit]
 
-    results = []
-
     def _net(name):
         desc, _path = skills[name]
         try:
             reply = flywheel_llm.chat(
                 SYSTEM_PROMPT, user_prompt(name, desc, bodies[name]),
                 rate_s=rate, schema=SCHEMA)
-        except (
-            AttributeError, IndexError, KeyError, OSError, TypeError,
-            json.JSONDecodeError, flywheel_llm.TruncatedCompletion,
-            urllib.error.URLError,
-        ) as e:
+        except flywheel_llm.CHAT_ERRORS as e:
             return name, e
         return name, reply
 
@@ -240,30 +221,10 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
         store_capsule(capsules, name, reply)
         cache[CACHE_PREFIX + name] = h
         save_capsules(capsules)
-        save_cache(cache)
+        flywheel_llm.save_cache(cache)
         return {"name": name, "status": "generated", "detail": None}
 
-    def _collect(name, out):
-        if isinstance(out, BaseException):
-            print(f"WARN: skipping {name}: chat failed ({out})")
-            return {"name": name, "status": "error", "detail": f"chat failed: {out}"}
-        return _merge(name, out)
-
-    if workers <= 1 or len(names) <= 1:
-        for name in names:
-            if not _needs_work(name):
-                continue
-            name2, out = _net(name)
-            results.append(_collect(name2, out))
-    else:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        batch = [n for n in names if _needs_work(n)]
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_net, n) for n in batch]
-            for fut in as_completed(futs):
-                name, out = fut.result()
-                results.append(_collect(name, out))
-    return results
+    return flywheel_llm.run_batch(names, _needs_work, _net, _merge, workers)
 
 
 def _selftest():

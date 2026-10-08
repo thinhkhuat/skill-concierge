@@ -157,6 +157,11 @@ def _offer_conversion(windows):
     return len(offered_turns), took_any, off_by, took_by
 
 
+def _window(sid, kind, q="", name=""):
+    return {"sid": sid, "kind": kind, "q": q, "name": name,
+            "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
+
+
 def _segment_windows(events):
     """Segment time-sorted events into per-session turn windows, pairing each enforcer
     `offer` back to its turn. A `turn`/`manual` opens a window; subsequent `auto`/`search`
@@ -171,28 +176,21 @@ def _segment_windows(events):
     for e in events:
         sid, ev = e.get("sid", ""), e.get("ev")
         if ev in ("turn", "manual"):
-            w = {"sid": sid, "kind": ev, "q": e.get("q", ""), "name": e.get("name", ""),
-                 "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
+            w = _window(sid, ev, e.get("q", ""), e.get("name", ""))
             turns.append(w)
             cur[sid] = w
             if ev == "turn":
                 by_sid_q[(sid, w["q"])].append(w)
-        elif ev == "auto":
+        elif ev in ("auto", "search"):
             w = cur.get(sid)
             if w is None:
-                w = {"sid": sid, "kind": "orphan-auto", "q": "", "name": "",
-                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
+                w = _window(sid, "orphan-" + ev)
                 turns.append(w)
                 cur[sid] = w
-            w["autos"].append(e.get("name") or "?")
-        elif ev == "search":
-            w = cur.get(sid)
-            if w is None:
-                w = {"sid": sid, "kind": "orphan-search", "q": "", "name": "",
-                     "autos": [], "searches": 0, "offered": None, "band": None, "fallback": None}
-                turns.append(w)
-                cur[sid] = w
-            w["searches"] += 1
+            if ev == "auto":
+                w["autos"].append(e.get("name") or "?")
+            else:
+                w["searches"] += 1
         elif ev == "offer":
             offers.append(e)
 
@@ -456,7 +454,6 @@ def _run_selftest():
         lines = _continuation_report(cont_events)
     finally:
         MIN_SAMPLE = _floor_saved
-    joined = "\n".join(lines)
     # control rows = every offer lacking a >=2 n_intents annotation (r1, r2, h1, h2, s1)
     for label, value, why in [("route-follow (projection taken)", "1/2  50%", "route follow miscounted"),
                               ("hint-follow (chain-hint taken)", "1/2  50%", "hint follow miscounted (sub-lane or window)"),
@@ -476,8 +473,7 @@ def _run_selftest():
         for b in bad:
             print("  " + b)
         return 1
-    print("analyze --selftest OK: offer->take join (turn conversion + per-skill) + chain report "
-          "+ external annex offer->take (ADR-0032) + cross-harness annex offer->take (ADR-0034)")
+    print("analyze --selftest OK")
     return 0
 
 
@@ -520,6 +516,12 @@ def main():
                   and (until is None or e["t"] < until)]
     events.sort(key=lambda e: e.get("t", 0))
 
+    def header():
+        print(f"ledger        : {path}")
+        if since is not None or until is not None:
+            print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
+                  f"{len(events)}/{n_total} events in window")
+
     if args.continuation:
         print(f"ledger        : {path}")
         if since is not None or until is not None:
@@ -543,18 +545,14 @@ def main():
         embed_vals = [e["embed_ms"] for e in offers if isinstance(e.get("embed_ms"), (int, float))]
         qdr_vals = [e["qdrant_ms"] for e in offers if isinstance(e.get("qdrant_ms"), (int, float))]
         fb = sum(1 for e in offers if e.get("fallback") in OUTAGE_FALLBACKS)
-        print(f"ledger        : {path}")
-        if since is not None or until is not None:
-            print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
-                  f"{len(events)}/{n_total} events in window")
+        header()
         print(f"offers        : {len(offers)} (fallback {fb})   embed_ms: {_hist(embed_vals)}")
         print(f"                qdrant_ms: {_hist(qdr_vals)}")
         # band breakdown with latency
-        from collections import Counter as _C
-        bands = _C(e.get("band") for e in offers)
+        bands = Counter(e.get("band") for e in offers)
         print(f"bands         : {dict(bands)}")
         if embed_vals:
-            buck = _C()
+            buck = Counter()
             for v in embed_vals:
                 k = f"{int(v//50)*50}-{(int(v//50)+1)*50}ms"
                 buck[k] += 1
@@ -569,10 +567,7 @@ def main():
         # commit, never pool across epochs (AGENTS.md guardrail).
         catalogue, cat_src = known_skill_ids()
         n_sess, bigrams, lengths, longest = _chain_report(events, catalogue or None)
-        print(f"ledger        : {path}")
-        if since is not None or until is not None:
-            print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
-                  f"{len(events)}/{n_total} events in window")
+        header()
         n_chained = sum(c for l, c in lengths.items() if l >= 2)
         print(f"sessions      : {n_sess} with skill use; {n_chained} with a chain (len >= 2)"
               + (f"   [catalogue via {cat_src}]" if catalogue else "   [catalogue unavailable — built-in manuals unfiltered]"))
@@ -622,10 +617,7 @@ def main():
     def pct(x):
         return f"{(100 * x / n):.0f}%" if n else "n/a"
 
-    print(f"ledger        : {path}")
-    if since is not None or until is not None:
-        print(f"window        : [{_fmt_when(since)} .. {_fmt_when(until)})   "
-              f"{len(events)}/{n_total} events in window")
+    header()
     print(f"events        : {len(events)}   turn-windows: {n}   manual: {len(manual)}")
     print(f"uptake        : {used}/{n}  {pct(used)}   (turn used a skill)")
     print(f"search called : {searched}/{n}  {pct(searched)}")

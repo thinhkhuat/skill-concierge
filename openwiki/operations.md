@@ -86,25 +86,13 @@ windowed run** — only a full-ledger run counts them.
 ### Reading the ledger: the epoch-scoped trap
 
 **Never cite a ledger rate pooled across config changes.** This repo changes the very things the
-ledger measures — gate floors, the retrieval engine, the doctrine, the index owner — *almost
-daily*, so the ledger is a **sequence of short config epochs, not one dataset**. An all-time rate
-describes *no real configuration*. Before quoting any rate:
+ledger measures almost daily, so the ledger is a sequence of short config epochs, not one dataset.
+Window every rate with `analyze.py --since "<epoch start>"`, exclude subagent and self-session
+traffic, and say **"insufficient data"** rather than pool backward. The full five-step checklist
+(finding the epoch start included) is in [`AGENTS.md` → Guardrails](../AGENTS.md), the canonical
+copy.
 
-1. Find the current epoch start — the last commit touching `hooks/scripts/enforcer.py`,
-   `hooks/doctrine/skill-first.md`, `vendor/skill-search/skill_search/server.py`, or
-   `vendor/skill-search/skill_search/index_owner.py` (the local index owner, ADR-0070;
-   `scripts/embed_server.py` is retired).
-2. Window `analyze.py --since "<that datetime>"`. Never quote the all-time number.
-3. Exclude contamination — subagent / harness / `<task-notification>` traffic and your own
-   meta/self-session turns are not representative.
-4. Respect sample size — a fresh epoch may be too small; say **"insufficient data"** rather than
-   pool backward.
-5. Design vs environment — a shift not aligned to a config commit is environmental (owner
-   load/contention), not a property of the code.
-
-An epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured". This exact mistake once
-invalidated a whole multi-agent analysis. Full rule: [`AGENTS.md` → Guardrails](../AGENTS.md). And
-remember the ledger measures **gate compliance only** — for real *usage* use the
+An epoch-pooled or tiny-sample rate is **UNMEASURED**, never "measured". Remember the ledger measures **gate compliance only** — for real *usage* use the
 **`skill-usage-audit`** skill against the transcript SKILL-FIRST trail, not this ledger
 ([enforcement-gate.md](architecture/enforcement-gate.md#ledger--usage-a-hard-line)). Its script
 (`skills/skill-usage-audit/scripts/audit_skill_usage.py`) also takes `--harvest [PATH]` (v0.14.0,
@@ -136,19 +124,19 @@ zero config changes anywhere ([ADR-0070](../docs/adr/0070-local-index-owner-repl
   (never on a timeout or a 503, which mean busy or loading); `setup.sh` stops and restarts it
   after (re)install. A duplicate start is harmless — the loser of the owner's file lock exits in
   milliseconds. `SKILL_OWNER_AUTOSTART=0` disables both hook-side autostarts.
-- **`scripts/embed_server.py`/`bin/embed-shim`** (the old shim) are retired from the live
-  deployment path — nothing starts them anymore; their code lives on only as the historical
-  starting point `index_owner.py` was grown from (`VENDORED.md`).
+- **`scripts/embed_server.py`/`bin/embed-shim`** (the old shim) are retired, archived in v0.64.1 —
+  nothing starts them; their code lives on only as the historical starting point `index_owner.py`
+  was grown from (`VENDORED.md`).
 
 Verify health with `curl -s http://127.0.0.1:6363/health` — there is no container to check. A
 stopped/slow owner shows up as a sustained `fallback: true` rate in the ledger's `offer` events;
 `doctor --fix` starts it (and stops/disables a revived legacy container first, if one is found on
-the owner's ports). See [caveats §3, §9](../docs/caveats.md).
+the owner's ports). See [caveats §3](../docs/caveats.md).
 
 ## The stale-engine trap (post-update)
 
 Historically the most dangerous silent failure — **self-healing since v0.13.1, and the settled
-behavior on every release since (current: v0.20.0).** The v0.13.1 tags below mark where each fix
+behavior on every release since.** The v0.13.1 tags below mark where each fix
 *shipped*, not the deployed version — confirm the live state with `doctor` (`Engine freshness`),
 never by reading a version out of this section. The MCP
 launcher ([`bin/skill-search-mcp`](../bin/skill-search-mcp)) execs `skill-search` from the **stable
@@ -174,56 +162,14 @@ a plain `pip install` "already satisfied"-skip the changed copy.
 
 ## Runtime governance flags
 
-All are one-var reverts. Most default ON, with three exceptions: `SKILL_LLM_TRIGGERS` is **off in
-code** (but shipped **on** via `.mcp.json` — see the deploy caveat below), `TRIGGERS_MAX` is a
-number rather than a boolean, and `SKILL_TRIGGER_PURITY` defaults to a non-boolean `shadow` mode
-(log-only, ships inert).
+Every flag, with its default, code owner and ADR, is indexed in [`AGENTS.md` → Runtime flags](../AGENTS.md);
+each flag's full text, tuning knobs and deploy preconditions (the utterance-layer caveat for
+`SKILL_LLM_TRIGGERS` and `TRIGGERS_MAX` included) are in
+[`docs/runtime-flags.md`](../docs/runtime-flags.md). The one list every reindex path forwards from
+`.mcp.json` is `ENGINE_ENV_KEYS` in [`scripts/engine_env.py`](../scripts/engine_env.py). Two enforcer
+levers (`ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) are default-inert; see
+[enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-five-legs).
 
-| Variable | Default | Effect | ADR |
-|----------|---------|--------|-----|
-| `ENFORCER_AUTHORIZED_SKIP` | `1` | enforcer injects a `SKILL-CHECK:` authorization on its silent verdict legs (four since ADR-0054: score-floor miss, conversational, self-recap, harness message) instead of nothing; `=0` restores the old silence | [0015](../docs/adr/0015-authorized-skip-tier-and-library-doctrine.md) |
-| `SKILL_BODY_TRIGGERS` | `1` | engine mines each skill body's labeled decision-sections into extra MAX-pool trigger points; `=0` **+ a reindex** reverts to description-only | [0016](../docs/adr/0016-body-derived-trigger-points.md) |
-| `SKILL_LLM_TRIGGERS` | `0` | layers offline flywheel-generated natural-utterance phrases (EN+VN) FIRST in the MAX-pool trigger layer; `=1` **+ a reindex** enables (needs `SKILL_TRIGGERS` → the canonical `~/.claude/skill-concierge/triggers.json`) | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
-| `TRIGGERS_MAX` | `12` | per-skill COMBINED cap across all trigger sources; live deploy uses `16` so utterances add slots rather than evict desc/body | [0026](../docs/adr/0026-llm-utterance-trigger-layer.md) |
-| `ENFORCER_SELFREF_SKIP` | `1` | enforcer pre-authorizes a 3rd AUTHORIZED-SKIP leg for pure self-referential recap turns ("explain your last answer"); `=0` restores the old 2-leg behavior | [0019](../docs/adr/0019-over-fire-lane-and-gate-legibility.md) |
-| `ENFORCER_HARNESS_SKIP` | `1` | enforcer pre-authorizes a 4th AUTHORIZED-SKIP leg for harness-generated prompts (`<task-notification>`, `<system-reminder>`, cross-session/teammate messages, interrupted/continued banners, OMP `omp-msum` wrappers) BEFORE any I/O — ledger band `harness_skip`, no chain hint; `=0` routes them like any prompt | [0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
-| `ENFORCER_JEV_ROUTER` | `1` | Jev skill router for English prompts (`TYPESAFE_API_KEY`): whole-catalogue Jev ranking + per-candidate `fits` re-check → top-5 offer; best fit < `ENFORCER_JEV_FITS_FLOOR` (0.30) → 5th AUTHORIZED-SKIP leg (band `jev_skip`); per call `ENFORCER_JEV_TIMEOUT` 1.5 s, whole route `ENFORCER_JEV_BUDGET` 7.8 s (ADR-0079; was 3.0 s); goes through the local index owner's warm `/jev` relay (ADR-0070; ported from the retired Docker embed shim), or through jevd when `JEVD_URL` names one, whose `/ladder` is then the tier list (ADR-0080); the owner's relay also serves Command Code on `/jev/cc` (ADR-0081); a failed or late rerank keeps the wide pass's own menu (rows ordered by lift, event `stage` = `wide`) before any other failure → embedding path (ADR-0087, every harness); `=0` (or `ENFORCER_JEV_GATE=0`) restores the 4-leg ladder | [0061](../docs/adr/0061-jev-skill-router.md), [0087](../docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md) |
-| `ENFORCER_LEDGER` | `1` | `0` writes no offer row; `defer` writes none and returns the row in the hook output as `skillConciergeOffer` (the Cline plugin's setting on every pass, so it logs the menu its first model call carried, tagged `seen`: `full` or `preview`; a later full row is `offer_late`) | [0086](../docs/adr/0086-cline-native-plugin-and-agent-plugin.md), [0087](../docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md) |
-| `ENFORCER_JEV_TIER` | unset = (empty) | a value, not a toggle: limits the Jev route to one jevd provider name or model id (the Cline plugin pins its full pass to `typesafe`); unset = all tiers | [0087](../docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md) |
-| `ENFORCER_DETERMINISTIC` | `1` | `config/deterministic-routes.json` phrases, matched as whole words, pin the named skill to the top of the offer (score 1.0, retrieved twin dropped), computed before embed so a timeout cannot lose it; `=0` disables (was default-inert before v0.47.0) | [0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
-| `ENFORCER_EMBED_TIMEOUT` / `ENFORCER_QDRANT_TIMEOUT` | `0.5` / `0.25` | per-leg hard caps in seconds (0.35 / 0.1 before v0.47.0 — every epoch "outage" was censoring at the old caps) | [0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md) |
-| `SKILL_SUBAGENT_STOP` | `1` | doctrine hook suppresses SessionStart injection inside subagent sessions (positive `agent_id` proof); `=0` injects unconditionally | [0020](../docs/adr/0020-subagent-session-scoping.md) |
-| `SKILL_TRIGGER_PURITY` | `shadow` | engine flags workflow-summary body triggers; `shadow` only logs would-drops (index unchanged), `active` drops them (**needs a full reindex**), `off` skips the check | [0023](../docs/adr/0023-trigger-purity-lint.md) |
-| `SKILL_PLUGIN_FILTER` | `1` | index **only** the installed + enabled plugin version (read from Claude Code's own `installed_plugins.json` / `enabledPlugins`) instead of every cached version — 548 → 427 skills, nothing invocable lost; `=0` reverts to the unfiltered cache. Fails open on an unreadable manifest | [0028](../docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md) |
-| `SKILL_ROW_ORIGIN` | `1` | `search_skills`/`consult_candidates` rows drop `command` and gain `origin` (which harness's roots hold the copy — 8 families incl. `claude-synced`) + `disabled_in` (when an installed Claude Code plugin has every installed copy switched off in its merged `enabledPlugins` layers — the per-turn hook's own rule, so a plugin Claude can run is never marked; account-synced rows list every non-Claude harness) + one response `note`; read per call (query-time, not index-shaping — NOT in the `ENGINE_ENV_KEYS` forward list); `=0` restores the pre-`0.48.0` row shape | [0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
-| `SKILL_CONSULT_JEV_WIDEN` | `1` | the consult skill adds Jev's whole-catalogue top 10 for the user's request ahead of the `consult_candidates` rows (top_n 40), deduped, cut to 20 (`scripts/consult_fit.py widen`); script-side, read per call, NOT in `ENGINE_ENV_KEYS`; any Jev failure falls back to the sieve rows; `=0` = sieve rows only, no Jev I/O | [0078](../docs/adr/0078-consult-sieve-jev-widening.md) |
-| `SKILL_SYNCED_ROOTS` | `0` | indexes Claude account-synced skills (`~/.claude/skills/synced/<bucket>/<name>/SKILL.md`, exact depth, manifest-listed only) as `anthropic-skills:<name>`, scope `claude-synced`; gated on scope, never the spoofable name; foreign to every harness but Claude, excluded from the cross-harness annex; `=1` **+ a reindex** enables — ships OFF until every harness cache is ≥`0.48.0` (a separate, reviewed step) | [0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
-
-Two enforcer levers are additionally **default-inert** and env-gated (`ENFORCER_PER_SKILL_TAU`,
-`ENFORCER_DOMINANCE_RATIO`); `ENFORCER_DETERMINISTIC` is default ON since v0.47.0 (ADR-0054,
-config-driven, `=0` disables) and `ENFORCER_HARNESS_SKIP` (default ON) is the harness-message
-lane — see
-[enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-three-legs-two-formerly-silent).
-
-> **Utterance-layer deploy caveat.** [`.mcp.json`](../.mcp.json) ships `SKILL_LLM_TRIGGERS=1` +
-> `TRIGGERS_MAX=16`, but the utterance **corpus** (`~/.claude/skill-concierge/triggers.json`,
-> machine-local, **not in the repo** — the repo is public and the corpus is personal data,
-> 0.37.0) regenerates only via the flywheel scripts. Its path is pinned in `.mcp.json`
-> `SKILL_TRIGGERS` (also the env-less default in every generator and in the vendored engine),
-> so a fresh clone enables the flag but degrades gracefully to desc/body triggers until a
-> flywheel run generates the corpus. **v0.16.1 fix, unified in v0.48.0:** every index-shaping engine
-> setting `.mcp.json` can pin now lives in ONE list (query-time ones such as `SKILL_TOP_K` stay out), `ENGINE_ENV_KEYS` in
-> [`scripts/engine_env.py`](../scripts/engine_env.py) — `SKILL_LLM_TRIGGERS`/`TRIGGERS_MAX`/
-> `SKILL_TRIGGERS`/`SKILL_BODY_TRIGGERS` plus every other index-shaping setting (store and embedder,
-> every harness-root flag, `SKILL_CONCIERGE_CATALOG_ROOTS`, `SKILL_SYNCED_ROOTS`, the plugin-enablement
-> seams, the sidecar path) — and all five reindex paths (the detached SessionStart
-> [`hooks/scripts/auto_reindex.py`](../hooks/scripts/auto_reindex.py), `auto_flywheel.py`,
-> `flywheel.py`, `doctor.py`'s repairs, and `setup.sh`'s `env_run()`) call through it instead of
-> each keeping its own copy of the key tuple. Before v0.16.1 the detached reindex rebuilt at engine
-> defaults and **pruned the utterance points on every session**
-> ([ADR-0026](../docs/adr/0026-llm-utterance-trigger-layer.md), CHANGELOG [0.16.1]); before v0.48.0
-> the five copies of that key list had already begun to drift
-> ([ADR-0058](../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md)).
 ## The retrieval flywheel (v0.17.0+, ADR-0027)
 
 The flywheel generates **natural-utterance trigger phrases** (EN+VN) for each skill offline via a
@@ -275,8 +221,8 @@ that the catch-loop silently swallowed, costing that skill its triggers. See
 
 | File | Purpose |
 |------|---------|
-| [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, the local index owner's Qdrant-compatible URL, `SKILL_TOP_K=10` |
-| [`config/keep-on.json`](../config/keep-on.json) | the **shipped SEED** for the curated always-on allowlist (**32 entries** in `keep_on`); on first run it is seeded once into the canonical durable home `~/.claude/skill-concierge/keep-on.json` (survives `/plugin update`, [ADR-0025](../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) writes the policy to `~/.claude/settings.json` (atomic, backs up, refuses empty). Curate it with the `keep-on` skill / `scripts/keep-on.py`. **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
+| [`.mcp.json`](../.mcp.json) | registers the MCP; single source of truth for embed backend/model, the local index owner's Qdrant-compatible URL, `SKILL_TOP_K=6` |
+| [`config/keep-on.json`](../config/keep-on.json) | the **shipped SEED** for the curated always-on allowlist (**31 entries** in `keep_on`); on first run it is seeded once into the canonical durable home `~/.claude/skill-concierge/keep-on.json` (survives `/plugin update`, [ADR-0025](../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). [`scripts/apply-overrides.py`](../scripts/apply-overrides.py) writes the policy to `~/.claude/settings.json` (atomic, backs up, refuses empty). Curate it with the `keep-on` skill / `scripts/keep-on.py`. **Do not** run the upstream `generate_overrides.py` — [caveats §2](../docs/caveats.md), [ADR-0005](../docs/adr/0005-overrides-target-and-applier.md) |
 | [`config/keep-off.json`](../config/keep-off.json) | the **empty seed** for ledger-derived offer-suppression — chronic never-take skills dropped from the enforcer menu ([ADR-0011](../docs/adr/0011-ledger-derived-offer-suppression.md)); since v0.47.0 the generated map lives in `~/.claude/skill-concierge/keep-off.json` (durable home; consent-only — saved by `build_keep_off.py --apply` after Thinh's yes, honoured only with `"approved_by_user": true`, never regenerated by `doctor --fix` or `setup.sh`; harness-shaped offers excluded, keep-on members exempt — [ADR-0077](../docs/adr/0077-keep-off-map-is-consent-only.md), [ADR-0054](../docs/adr/0054-harness-message-lane-and-audit-fixes.md)) |
 | `~/.claude/skill-concierge/blocklist.json` | the **user-ordered disable tier** ([ADR-0046](../docs/adr/0046-blocklist-disable-tier.md)) — flat `{"blocked": [...]}`, absent = no-op, **never seeded**. Enforced at four layers: PreToolUse(Skill) **deny** (`hooks/scripts/skill_guard.py`, the plugin-level gate), enforcer offers/hints/routes, engine search-filter + `get_skill` refusal (live-read, index-neutral), and an apply-overrides strip of blocked keep-on names. Bare entry blocks every qualified twin; qualified entry is exact-only. Manage with the `blocklist` skill / `scripts/blocklist.py`; kill-switch `SKILL_BLOCKLIST=0` |
 | `~/.claude/skill-concierge/reputation.json` | the **owner's ranking** ([ADR-0083](../docs/adr/0083-owner-reputation-badges.md)) — `{"heart": [...], "star": [...]}`, exact names or patterns, never seeded. Renders ❤️/⭐ next to menu rows without moving them and pulls a ranked skill Jev placed 6th-10th (`fits` ≥ 0.5) under the five rows. Manage with the `reputation` skill / `scripts/reputation.py`; kill-switch `SKILL_REPUTATION=0` |
@@ -300,55 +246,17 @@ deliberately excludes (ADR-0001) — only the invocation guard can catch those. 
 live (read at call time; no reindex, no restart) and the list is index-neutral, so unblocking
 is instant.
 
-## Commit guardrails — two `PreToolUse(Bash)` hooks
+## Commit guardrails
 
-(A third denying gate exists at the PLUGIN level, not project scope: the ADR-0046
-`skill_guard.py` `PreToolUse(Skill)` blocklist guard in `hooks/hooks.json` — covered in
-*Configuration files* above.)
-
-Both are wired in [`.claude/settings.json`](../.claude/settings.json) (project scope, **not** the
-plugin's `hooks/hooks.json` — a plugin hook would fire in every project the plugin is enabled in,
-where these paths don't exist). `.claude/settings.json` is un-ignored on purpose (`.gitignore`:
-`.claude/*` + `!.claude/settings.json`) so the wiring exists on every clone.
-
-They intercept the **agent's own `git commit` tool call**, not the shell — a `PreToolUse` verdict
-lands in the agent's context with the reason and the fix, so it corrects course. Both match on
-`Bash` (not `Bash(git commit*)`, which would miss the compound `git add . && git commit`), let
-non-commit calls pass silently, and **fail open** on any internal error.
-
-| Hook | Verdict | Checks | Override |
-|------|---------|--------|----------|
-| [`scripts/openwiki_parity_guard.py`](../scripts/openwiki_parity_guard.py) | **DENY** | version parity (delegated to `driftcheck.py` — the wiki's `**Version:**` line is registered as one more mirror, so there is no second version checker to drift) + every relative link under `openwiki/` resolves on disk | `OPENWIKI_GUARD=0` |
-| [`scripts/graph_staleness_notice.py`](../scripts/graph_staleness_notice.py) | **WARN — never blocks** | which **git-tracked** files are new/modified since `graphify-out/manifest.json`, via graphify's own `detect_incremental()` | `GRAPH_NOTICE=0` |
-
-**Why one denies and the other only warns.** `openwiki/` is *committed*: a stale wiki ships to
-every clone and gets read as authoritative, and the fix is a sub-second text edit — blocking is
-proportionate. `graphify-out/` is *gitignored*: it never ships, so a stale graph harms only the
-local session, and the fix is asymmetric — code drift rebuilds via AST for free, but doc drift
-costs LLM calls. This repo is doc-heavy and writes plans/reports constantly, so a deny there would
-tax every commit and buy nothing the post-commit rebuild already gives. **A gate must be
-proportionate to the harm and the cost of the fix.**
-
-Two further design notes, both load-bearing:
-
-- The notice never emits `permissionDecision`. An `"allow"` there would auto-approve *every*
-  `git commit` and silently disable the permission prompt — a far worse bug than a stale graph.
-  It uses `additionalContext` (reaches the agent) + `systemMessage` (reaches the user).
-- It is scoped to **git-tracked files only**. graphify indexes scratch dirs (`.remember/`,
-  `.memsearch/`, `.gjc/`) that churn every turn; unscoped, it would fire on *every* commit forever,
-  and a warning that always fires is one you train yourself to ignore.
-
-Neither guard judges whether prose is *semantically* current — nothing cheap can, and a guard
-pretending to would be theater. They enforce what is mechanically decidable; refreshing the
-content is what `/openwiki:wiki update` and `/graphify . --update` are for.
-
-**Graph freshness** is otherwise maintained by graphify's own git hooks (`graphify hook install`
-→ post-commit + post-checkout): after each commit it re-runs AST on changed **code** files and
-rebuilds the graph — free, no LLM. It deliberately ignores doc changes, which is exactly the gap
-the notice covers. Check with `graphify hook status`.
-
-This section reconciles with the repo's fail-silent hook doctrine: the notice is telemetry and
-never blocks; the openwiki guard is the **sole deliberate exception** that denies.
+Three `PreToolUse(Bash)` hooks are wired in [`.claude/settings.json`](../.claude/settings.json)
+(project scope, not the plugin's `hooks/hooks.json`, whose hooks would fire in every project the
+plugin is enabled in): `scripts/openwiki_parity_guard.py` (denies `git commit` on version drift or a
+broken `openwiki/` link), `scripts/graph_staleness_notice.py` (warns, never blocks), and
+`scripts/git_stash_guard.py` (denies state-changing `git stash`). One more denying gate sits at
+plugin level, not project scope: the ADR-0046 `skill_guard.py` `PreToolUse(Skill)` blocklist guard. What each checks,
+its override variable, and why one warns while the others deny are in
+[`AGENTS.md` → Guardrails](../AGENTS.md), the canonical copy. None of them judges whether prose is
+semantically current; that is what `/openwiki:wiki update` and `/graphify . --update` are for.
 
 ## Versioning & deploy discipline
 
@@ -382,12 +290,9 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
   ([ADR-0086](../docs/adr/0086-cline-native-plugin-and-agent-plugin.md)). Plugins do not run when the
   CLI attaches to a running hub (the VS Code extension's sidecar), so run Cline with
   `CLINE_SESSION_BACKEND_MODE=local` to make the CLI host the session itself (ADR-0086, Consequences).
-  Each Cline run starts two enforcer passes, both with `ENFORCER_LEDGER=defer`: one full Jev pass pinned to
-  TypeSafe (`ENFORCER_JEV_TIER=typesafe`, 0.67 to 0.82 s live) and an embedding preview. The first model call
-  (2 s wait) carries the full menu when ready, else the preview. The ledger's one offer row names the menu
-  seen (`seen`); a later full row is `offer_late`. Cline never calls Command Code; its Jev calls are billed
-  to TypeSafe
-  ([ADR-0087](../docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md); `docs/caveats.md` §26).
+  How a Cline turn gets its menu (two enforcer passes, the 2 s wait, the billing consequence) is in
+  [`docs/caveats.md` §26](../docs/caveats.md) and
+  [ADR-0087](../docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md).
   OMP loads the adapter from its plugin cache, so it
   needs that cache refreshed. **DSH** loads everything through its profile patch layer:
   [`adapters/dsh/install.sh`](../adapters/dsh/install.sh) writes the skill-search MCP server, the unlazy
@@ -396,31 +301,12 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
   YAML parser; `doctor`'s DSH row flags a patch file DSH cannot load. Re-run the installer after
   changing it; DSH picks the plugin up at its next start
   ([ADR-0050](../docs/adr/0050-dsh-hexa-harness-parity.md) §5, ADR-0059 §4).
-- **Codex and Claude Code plugin caches are also copies, refreshed only by their own installer.**
-  [`adapters/codex/install.sh`](../adapters/codex/install.sh) refreshes the Codex marketplace
-  clone under `~/.codex/plugins/cache/skill-concierge/skill-concierge/<ver>/` to the SSOT version
-  via `codex plugin marketplace upgrade` then `codex plugin add` — there is no
-  `codex plugin upgrade` verb, and this installer never calls `remove`: a bare `add` refreshes
-  an existing install in place, and a failed `add` never uninstalls the previous copy (both
-  verified live). The CLI installs whatever is pushed to the git remote, and a successful `add`
-  was verified live to wipe the plugin's ENTIRE cache dir (every version and staging dir) before
-  installing the fresh one. A remaining version gap falls back to a `git archive HEAD` export
-  into a NEW version-named cache dir instead — this fallback step itself never deletes anything
-  (Codex resolves the semver-newest by scanning, not a registry) — with a loud unpushed-content
-  notice; a live session actually loading hooks/MCP from that dir is unverified beyond
-  `codex plugin list`. Codex also has no CLI to disable a plugin or keep one disabled through a
-  refresh, so if the plugin is already disabled the installer refuses right away, before
-  `marketplace upgrade` or `add` runs — no mutating CLI call is made — rather than refreshing it
-  first and only complaining afterward.
-  [`adapters/claude-code/install.sh`](../adapters/claude-code/install.sh) refreshes
-  `~/.claude/plugins/cache/skill-concierge/skill-concierge/<ver>/` via
-  `claude plugin update skill-concierge@skill-concierge --json -y`, refusing a downgrade both before
-  and after that call, falling back to a local `git archive` sync plus a backed-up,
-  atomically-written `installed_plugins.json` repoint when the marketplace remote hasn't caught
-  up to this checkout yet (never touching `enabledPlugins` or the shared venv — a session
-  restart is required either way). Whether Claude Code accepts a hand-repointed registry entry
-  is unverified (the tests use a fake `claude`). `doctor`'s Codex and Claude Code rows both warn
-  when the cached content lags the SSOT.
+- **Codex and Claude Code plugin caches are also copies, refreshed only by their own installer**
+  ([`adapters/codex/install.sh`](../adapters/codex/install.sh) and
+  [`adapters/claude-code/install.sh`](../adapters/claude-code/install.sh)). What each does, what it
+  refuses (a downgrade, a disabled Codex plugin) and which parts are unverified is explained once, in
+  [`docs/repository-layout.md`](../docs/repository-layout.md) (`adapters/`) and each installer's
+  header. `doctor`'s Codex and Claude Code rows warn when the cached content lags the SSOT.
 
 ## See also
 

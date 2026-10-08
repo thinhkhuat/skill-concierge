@@ -30,12 +30,11 @@ SKILL_CONCIERGE_VENV (engine venv). Pure stdlib.
 import argparse
 import json
 import os
-import subprocess
 import sys
 from argparse import Namespace
 from pathlib import Path
 
-from _keepon import blocklist_path, keepon_path  # sibling module (scripts/ is on sys.path at run)
+from _keepon import blocklist_path, keepon_path, reconcile  # sibling module (scripts/ is on sys.path at run)
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
@@ -72,20 +71,9 @@ def _reconcile():
     """Re-apply overrides so a disable takes effect now (a blocked keep-on skill must
     drop its full description immediately). Needs the engine venv python (the applier
     imports the vendored discovery). Fail-graceful if it's missing."""
-    py = VENV / "bin" / "python"
-    if not py.exists():
-        print("  (engine venv not found — edited blocklist.json only; retrieval/guard filters "
-              "read it live, run ./setup.sh to reconcile the settings overrides)")
-        return
-    r = subprocess.run([str(py), str(APPLIER)], capture_output=True, text=True, check=False)
-    for ln in (r.stdout or "").splitlines():
-        if ln.startswith(("applied", "NOTE", "wrote", "backup", "stripped")):
-            print(f"  {ln}")
-    for ln in (r.stderr or "").splitlines():
-        if ln.strip():
-            print(f"  ! {ln.strip()}")
-    if r.returncode != 0:
-        print(f"  ! reconcile exit {r.returncode}")
+    reconcile(VENV, APPLIER, "  (engine venv not found — edited blocklist.json only; retrieval/guard filters "
+                             "read it live, run ./setup.sh to reconcile the settings overrides)",
+              ("applied", "NOTE", "wrote", "backup", "stripped"))
 
 
 def cmd_list(_):

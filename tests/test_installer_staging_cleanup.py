@@ -6,11 +6,14 @@ staging dir on a normal exit, on EXIT/INT/TERM, and prune any stale `.skill-conc
 over from an earlier killed run before it stages a new one."""
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import time
 from pathlib import Path
+
+import pytest
 
 import test_codex_installer as cx
 import test_sibling_installers as sib
@@ -44,8 +47,8 @@ def _export_to_body(text):
     return _func_body(text, "_export_to")
 
 
-# The staging-cleanup fix itself, not the whole function (a pre-existing, unrelated wording/
-# exclude-list difference already sits in ZCode's non-git-checkout branch): every installer
+# The staging-cleanup fix itself, not the whole function (the per-harness comments and OMP's
+# legacy-prefix prune differ): every installer
 # must prune a stale staging dir the same way and trap its own staging dir the same way.
 _CLEANUP_LINES = (
     "-mmin +60",
@@ -428,3 +431,33 @@ def test_legacy_bare_staging_prefix_is_pruned_in_zcode(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert not legacy.exists(), "a legacy bare .staging.* dir older than 60 minutes must be pruned too"
     assert (cache / "2.0.0").exists()
+
+
+# ── Non-git export: one exclude list for all four installers ─────────────────────────────────
+# ZCode's copy of `_export_to` once lacked `--exclude='.zcode' --exclude='.unlazy'`, so a
+# non-git ZCode export shipped those per-machine scratch dirs into its plugin cache.
+
+_SCRATCH_DIRS = (".ijfw", "ijfw", ".handoff", "logs", "graphify-out", ".claude", ".zcode",
+                 ".unlazy", "node_modules", "__pycache__", ".venv", ".pytest_cache",
+                 ".mypy_cache", ".ruff_cache")
+
+
+def test_non_git_exclude_list_is_identical_across_the_four_installers():
+    lists = {name: re.findall(r"--exclude='([^']+)'", _export_to_body(path.read_text()))
+             for name, path in INSTALL_SH.items()}
+    assert len({tuple(v) for v in lists.values()}) == 1, lists
+
+
+@pytest.mark.parametrize("name", sorted(INSTALL_SH))
+def test_non_git_export_ships_no_scratch_dir(tmp_path, name):
+    cache = tmp_path / "cache" / "skill-concierge" / "skill-concierge"
+    cache.mkdir(parents=True)
+    for d in _SCRATCH_DIRS:   # cache.parent/fake-root is the $ROOT _run_export_to_direct exports
+        (cache.parent / "fake-root" / d).mkdir(parents=True)
+        (cache.parent / "fake-root" / d / "f.txt").write_text("scratch\n")
+
+    r = _run_export_to_direct(INSTALL_SH[name], cache / "2.0.0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    shipped = {p.name for p in (cache / "2.0.0").iterdir()}
+    assert "marker.txt" in shipped
+    assert not shipped & set(_SCRATCH_DIRS), sorted(shipped & set(_SCRATCH_DIRS))

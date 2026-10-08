@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 build_chains.py — mine real skill chains from the invocation ledger (Phase 1 of the
-skill-chain-intelligence plan, plans/260628-…/plan.md — see repo plans/260828-0004-*).
+skill-chain-intelligence plan, plans/260828-0004-*).
 
 The ADR-0029 CHAIN-HINT layer knows only what it is told: `next-skills:` frontmatter
 (0.4% of the catalogue declares any) plus the operator's curated overrides. Meanwhile
@@ -31,12 +31,11 @@ Usage:
   python3 scripts/build_chains.py                # mine with defaults, write map
   python3 scripts/build_chains.py --since 2026-08-20
   python3 scripts/build_chains.py --dry-run      # print, don't write
-  python3 scripts/build_ch.py --selftest
+  python3 scripts/build_chains.py --selftest
 """
 import argparse
 import json
 import os
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -54,7 +53,6 @@ OUT = Path(os.environ.get(
 
 MIN_SUPPORT = 2          # a pair seen once is an anecdote, not a chain
 MIN_LIFT = 1.5           # B must be ≥1.5× more likely after A than at baseline
-MAX_GAP_S = 120 * 60     # adjacent steps >2h apart in one session are different sittings
 MAX_SUCC = 3             # successors per skill, best-first — a menu, not a firehose
 
 
@@ -119,7 +117,7 @@ def load_sequences(ledger_path, catalogue, since=None):
         seq = seqs.setdefault(e.get("sid") or "", [])
         if seq and seq[-1][1] == name:
             continue          # consecutive repeat — one node, not a new event
-        seq.append((t, name))  # (a gap > MAX_GAP_S is still adjacency: same session)
+        seq.append((t, name))  # no time-gap split: adjacency is session-bounded
         events += 1
     return {sid: [n for _t, n in items] for sid, items in seqs.items()}, events
 
@@ -165,8 +163,7 @@ def build(ledger_path=LEDGER, since=None, dry_run=False,
             "since": since,
             "events": events,
             "sessions": len(seqs),
-            "params": {"min_support": min_support, "min_lift": min_lift,
-                       "max_gap_s": MAX_GAP_S, "max_succ": max_succ},
+            "params": {"min_support": min_support, "min_lift": min_lift, "max_succ": max_succ},
         },
         "chains": chains,
     }
@@ -253,6 +250,7 @@ def _selftest():
         assert (tmp / "mined.json").exists()
         assert doc["chains"].get("a") == ["b"]
         assert doc["_meta"]["params"]["min_support"] == 2
+        assert "max_gap_s" not in doc["_meta"]["params"], "no gap rule is applied, so none is recorded"
         assert not (tmp / "mined.json.tmp").exists()
         # min_support=3 kills a->b (support 3 passes; use 4 to prove the floor bites)
         doc2 = build_chains.build(ledger_path=ledger, dry_run=True, min_support=4)

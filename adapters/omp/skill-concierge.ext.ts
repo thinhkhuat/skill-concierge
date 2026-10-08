@@ -188,18 +188,6 @@ function fireDetached(script: string): void {
   }
 }
 
-/** Extract the skill name from a `skill://<name>...` read path. */
-function skillNameFromPath(pathValue: unknown): string {
-  const raw = String(pathValue ?? "");
-  const marker = "skill://";
-  const idx = raw.indexOf(marker);
-  if (idx === -1) return "";
-  const rest = raw.slice(idx + marker.length);
-  // The name runs to the first `/`, `?`, `#`, whitespace or end of string.
-  const name = rest.split(/[/?#\s]/)[0];
-  return name || "";
-}
-
 export default function (pi: any): void {
   // ── 1. SessionStart: doctrine injection + detached self-heal ──
   pi.on("session_start", (event: { type: "session_start" }, ctx: any) => {

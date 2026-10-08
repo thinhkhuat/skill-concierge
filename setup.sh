@@ -7,10 +7,6 @@
 #
 # Override SKILL_PYTHON / SKILL_CONCIERGE_VENV / SKILL_QDRANT_URL / SKILL_EMBED_MODEL /
 # SKILL_INDEX_DB via env.
-#
-# Behavior flags (both DEFAULT ON; export =0 before this run / a session to revert):
-#   SKILL_BODY_TRIGGERS=0      description-only trigger layer, no body-derived points (ADR-0016)
-#   ENFORCER_AUTHORIZED_SKIP=0 restore the enforcer's old silent getaway/intent_skip (ADR-0015)
 set -euo pipefail
 
 # _safe_port RAW DEFAULT — echoes RAW (canonicalized to base 10, no leading zeros) if it is
@@ -180,8 +176,6 @@ env_run() {
     "$PYTHON" "$ROOT/scripts/engine_env.py" --root "$ROOT" --exec "$@"
 }
 env_run "$VENV/bin/skill-search" --reindex
-# Multi-vector trigger layer (ADR-0012) is built + maintained by --reindex itself (default on).
-# The legacy MEAN enrichment overlay (enrich_index.py) was retired and archived out of the repo.
 env_run "$VENV/bin/skill-search" --health
 
 echo "[3b/4] build the actionability-gate corpus (prompt_intent) from the transcript store"

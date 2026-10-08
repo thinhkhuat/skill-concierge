@@ -1,7 +1,7 @@
 """Audit real skill USAGE from Claude Code's transcript store — the source that
 answers "do agents know + use the RIGHT skill", which the invocation-ledger does NOT.
 
-Counts three signals over ~/.claude/projects/**/*.jsonl, optionally windowed to a
+Counts four signals over ~/.claude/projects/**/*.jsonl, optionally windowed to a
 post-change ship time, with self/meta (dogfood) sessions flagged so organic usage
 is separable:
 
@@ -338,9 +338,8 @@ def _is_authorized_skip_line(line):
     also appears in the skill-first.md doctrine and in any prose/tool-result that discusses the
     feature; matching those would over-count authorized_skip and mask false-skips. Fails SAFE:
     if the enforcer wording drifts from these signatures we under-count authorized (over-flag
-    false), never the reverse. Single source of truth for count-side (saw_marker) AND harvest-side
-    (H1 exclusion) so the two legs can never drift. Keep _AUTHORIZED_SIGNATURES in sync with
-    GETAWAY_SKIP_MSG / INTENT_SKIP_MSG / SELFREF_SKIP_MSG / HARNESS_SKIP_MSG / JEV_SKIP_MSG (ADR-0061) in hooks/scripts/enforcer.py."""
+    false), never the reverse. The count side (saw_marker) and the harvest side (_looks_authorized,
+    the H1 exclusion) share _AUTHORIZED_SIGNATURES, so the two legs can never drift."""
     return AUTHORIZED_SKIP_MARKER in line and any(s in line for s in _AUTHORIZED_SIGNATURES)
 
 # Default harvest sink — gitignored scratch under logs/ (never committed; see ADR-0021 + .gitignore).

@@ -20,7 +20,7 @@ propagate:
 |------|---------------------|--------------------|--------|
 | Embedding model | `BAAI/bge-small-en-v1.5` (384-dim, EN) | **`paraphrase-multilingual-mpnet-base-v2` (768-dim, multilingual)** | `.mcp.json`, the index owner's own `setdefault`, setup.sh |
 | Vector store | HTTP store at `http://localhost:6333` (the embedded on-disk mode was deleted in vector-store Track B) | **the local index owner** (`python -m skill_search.index_owner`, no Docker; speaks the same Qdrant-compatible REST subset at `localhost:6333` — [ADR-0070](../../docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) | `.mcp.json` |
-| `TOP_K` | 6 | **10** (`SKILL_TOP_K`) | `.mcp.json` |
+| `TOP_K` | 6 | **6** (`SKILL_TOP_K`, pinned explicitly) | `.mcp.json` |
 | `SKILL_LLM_TRIGGERS` | `0` (off) | **`1` — the utterance layer is ON here** | `.mcp.json` |
 | `TRIGGERS_MAX` | 12 | **16** (so utterances *add* slots rather than evict desc/body) | `.mcp.json` |
 | Multi-vector, body-triggers | both ON in code | ON (not overridden) | code defaults |
@@ -208,11 +208,12 @@ per-project manifest is now
 stamp. Both filters **fail open** (unreadable manifests → unfiltered cache + warning); `SKILL_PLUGIN_FILTER=0`
 reverts the plugin filter. See [ADR-0028](../../docs/adr/0028-multi-session-index-scoping-and-installed-plugin-filter.md).
 
-## The four MCP tools (exact behavior)
+## The five MCP tools (exact behavior)
 
 | Tool | Signature | Returns |
 |------|-----------|---------|
 | `search_skills` | `(query, extra_queries=None)` | JSON `{query, results:[{name, description, score, origin?, disabled_in?, path?}], note?, queries?, warning?}` — since `0.48.0` ([ADR-0058](../../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md)) rows drop `command` and gain `origin`/`disabled_in` + one response `note`; `SKILL_ROW_ORIGIN=0` restores `{name, command, description, score}` exactly |
+| `consult_candidates` | `(queries, top_n=20)` | the deliberated-consult sieve ([ADR-0049](../../docs/adr/0049-consult-deliberation-layer.md)): one query per sub-goal (up to 5), MAX-pooled over the whole index, installed and external rows alike, capsule dossiers attached when the corpus has them; `top_n` is clamped to 40; `SKILL_CONSULT=0` disables it |
 | `get_skill` | `(name)` | the skill's full SKILL.md text; O(1) lookup via index payload, disk-walk fallback for skills added since last reindex; `{"error":…}` if absent |
 | `reindex` | `(force=False)` | `{indexed, points, embedded, deleted, skipped, collection}` — incremental unless `force` |
 | `health` | `()` | embed probe + Qdrant reachability + indexed count + `dark_skills` (on disk, not indexed) + `stale_points` (indexed, deleted from disk) + dim guard + manifest freshness; `status: ok|degraded` |

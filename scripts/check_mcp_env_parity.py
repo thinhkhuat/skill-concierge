@@ -1,12 +1,12 @@
-"""Env parity between the two MCP descriptors (ADR-0035).
+"""Env parity between the MCP descriptors (ADR-0035).
 
-`.mcp.json` (Claude) and `.codex-plugin/mcp.json` (Codex) each carry an env block for the SAME
-engine, and `auto_reindex._mcp_env()` forwards from `.mcp.json` only — so a key changed in one
-file but not the other silently splits the two harnesses' server configuration. This check fails
-on any key present in BOTH files with different values, and on any key present only in the
-CODEX file (the Claude file is the source of truth; the codex file may omit keys — see the
-descriptor's own comment for the deliberate SKILL_SERVER_RECORDS omission — but never invent
-them).
+`.mcp.json` (Claude) and the Codex, Command Code, OMP, ZCode and DSH descriptors each carry an env
+block for the SAME engine, and `auto_reindex._mcp_env()` forwards from `.mcp.json` only — so a key
+changed in one file but not another silently splits the harnesses' server configuration. This check
+fails on any key present in `.mcp.json` and another descriptor with different values, and on any key
+present only in another descriptor (the Claude file is the source of truth; the others may omit keys
+— see the Codex descriptor's own comment for the deliberate SKILL_SERVER_RECORDS omission — but never
+invent them). The Codex descriptor is required; the adapter descriptors are checked when present.
 
 Wired into driftcheck.json command_checks. Exit 0 = in sync.
 """
@@ -16,6 +16,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# (descriptor, keys whose value may differ from .mcp.json, note on a key .mcp.json lacks)
+DESCRIPTORS = [
+    (".codex-plugin/mcp.json", (), " — the Claude file is the source of truth"),
+    # Command Code and OMP expand the standard path rather than a literal ${HOME}.
+    ("adapters/commandcode/mcp.json", ("SKILL_SERVER_RECORDS",), ""),
+    ("adapters/omp/mcp.json", ("SKILL_SERVER_RECORDS",), ""),
+    ("adapters/zcode/mcp.json", (), ""),
+    ("adapters/dsh/mcp.json", (), ""),
+]
+
 
 def env_of(path, server="skill-search"):
     return json.loads((ROOT / path).read_text(encoding="utf-8"))["mcpServers"][server].get("env", {})
@@ -23,46 +33,15 @@ def env_of(path, server="skill-search"):
 
 def main() -> int:
     claude, codex = env_of(".mcp.json"), env_of(".codex-plugin/mcp.json")
-    cmd_env = env_of("adapters/commandcode/mcp.json") if (ROOT / "adapters/commandcode/mcp.json").exists() else None
-    omp_env = env_of("adapters/omp/mcp.json") if (ROOT / "adapters/omp/mcp.json").exists() else None
     bad = []
-    for k, v in codex.items():
-        if k not in claude:
-            bad.append(f"{k}: only in .codex-plugin/mcp.json ('{v}') — the Claude file is the source of truth")
-        elif claude[k] != v:
-            bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (.codex-plugin/mcp.json)")
-    if cmd_env is not None:
-        for k, v in cmd_env.items():
+    for path, may_differ, note in DESCRIPTORS:
+        if not (ROOT / path).exists():
+            continue
+        for k, v in env_of(path).items():
             if k not in claude:
-                bad.append(f"{k}: only in adapters/commandcode/mcp.json ('{v}')")
-            elif k == "SKILL_SERVER_RECORDS":
-                # commandcode expands standard path rather than literal ${HOME}
-                continue
-            elif claude[k] != v:
-                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/commandcode/mcp.json)")
-    if omp_env is not None:
-        for k, v in omp_env.items():
-            if k not in claude:
-                bad.append(f"{k}: only in adapters/omp/mcp.json ('{v}')")
-            elif k == "SKILL_SERVER_RECORDS":
-                # omp, like commandcode, expands standard path rather than literal ${HOME}
-                continue
-            elif claude[k] != v:
-                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/omp/mcp.json)")
-    zcode_env = env_of("adapters/zcode/mcp.json") if (ROOT / "adapters/zcode/mcp.json").exists() else None
-    if zcode_env is not None:
-        for k, v in zcode_env.items():
-            if k not in claude:
-                bad.append(f"{k}: only in adapters/zcode/mcp.json ('{v}')")
-            elif claude[k] != v:
-                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/zcode/mcp.json)")
-    dsh_env = env_of("adapters/dsh/mcp.json") if (ROOT / "adapters/dsh/mcp.json").exists() else None
-    if dsh_env is not None:
-        for k, v in dsh_env.items():
-            if k not in claude:
-                bad.append(f"{k}: only in adapters/dsh/mcp.json ('{v}')")
-            elif claude[k] != v:
-                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' (adapters/dsh/mcp.json)")
+                bad.append(f"{k}: only in {path} ('{v}'){note}")
+            elif k not in may_differ and claude[k] != v:
+                bad.append(f"{k}: '{claude[k]}' (.mcp.json) != '{v}' ({path})")
     if bad:
         print("mcp-env-parity FAIL:")
         for b in bad:

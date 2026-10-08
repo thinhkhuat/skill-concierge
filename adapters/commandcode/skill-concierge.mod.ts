@@ -134,23 +134,14 @@ export default function (cmd: any): void {
         const trimmed = text.trim();
         if (!trimmed) return { action: "continue" };
 
-        if (trimmed.startsWith("/")) {
-          runLedger({
-            hook_event_name: "UserPromptSubmit",
-            session_id: sid,
-            prompt: trimmed,
-            harness: "commandcode",
-          });
-          return { action: "continue" };
-        }
-
-        // Log turn boundary
+        // Log turn boundary (slash commands too, then pass them through untouched)
         runLedger({
           hook_event_name: "UserPromptSubmit",
           session_id: sid,
           prompt: trimmed,
           harness: "commandcode",
         });
+        if (trimmed.startsWith("/")) return { action: "continue" };
 
         // Run semantic enforcer — pass session_id so enforcer's
         // _last_used_skill + ledger offer/turn join stay linked (ZCode parity).

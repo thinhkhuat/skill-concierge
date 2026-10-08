@@ -12,13 +12,11 @@ WHY THIS EXISTS
     hand-rolled copy that can (and did, for the Command Code installer) drift from it.
 
 WHAT IT PROVIDES
-    write_text(path, text)   — atomic write of a config file that may or may not exist yet
-                                (Command Code's settings.json/mcp.json, OMP's dev-mode
-                                config.yml, the Cline/ZCode manual MCP-fallback merges).
-    write_registry(...)      — the registry-repoint pattern shared by the Claude Code, OMP
-                                and ZCode installers: read, mutate in memory, refuse if the
-                                file changed on disk since it was read (a live harness
+    write_text(path, text)   — atomic write of a config file that may or may not exist yet.
+    write_registry(...)      — the read-modify-write pattern: read, mutate in memory, refuse
+                                if the file changed on disk since it was read (a live harness
                                 session writing it), back up + rotate, atomic swap.
+    Callers: `grep -rn safe_write adapters/`.
 
     Both resolve `path` through `os.path.realpath` first, so a symlinked config is updated
     at the file it points to (the symlink itself is left untouched), and both copy the

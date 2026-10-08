@@ -89,7 +89,7 @@ flywheel did, without watching a live process. Status mode (above) prints the la
 
 - **Endpoint unreachable** → `--generate` fails loud. Configure a provider first; the three
   documented setups (LM-Studio, Ollama, OpenAI-compatible gateway) live in
-  `references/flywheel-llm-providers.md`. The four `FLYWHEEL_LLM_*` env vars belong in the
+  `../../references/flywheel-llm-providers.md`. The four `FLYWHEEL_LLM_*` env vars belong in the
   machine's cross-harness env file `~/.config/harness-env.sh` (sourced by `~/.zshenv` +
   the bash entry files), NOT in `~/.claude/settings.json` env — the settings env block
   reaches Claude sessions only, so a Codex session's doctor reported "not configured"

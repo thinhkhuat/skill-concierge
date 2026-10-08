@@ -218,8 +218,12 @@ def test_setup_registers_the_cline_doctrine_and_starts_self_heal(fake):
     assert sync["argv"] == ["sync"]
 
 
-def test_real_doctrine_renders_for_cline():
-    env = {**os.environ, "SKILL_CONCIERGE_HARNESS": "cline"}
+@pytest.mark.parametrize("harness_env", [{"SKILL_CONCIERGE_HARNESS": "cline"},
+                                         {"CLAUDE_PLUGIN_ROOT": "/x/.cline/plugins/skill-concierge"}])
+def test_real_doctrine_renders_for_cline(harness_env):
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("SKILL_CONCIERGE_HARNESS", "OMPCODE", "ZCODE_PLUGIN_ROOT", "DSH_SHELL")}
+    env.update(harness_env)
     r = subprocess.run(["python3", str(ROOT / "hooks" / "scripts" / "doctrine.py")],
                        input="{}", capture_output=True, text=True, timeout=30, env=env)
     text = json.loads(r.stdout.strip().splitlines()[-1])["hookSpecificOutput"]["additionalContext"]

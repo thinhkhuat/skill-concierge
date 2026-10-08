@@ -31,68 +31,22 @@ top-level `--agent`/persona session (`agent_type` only, no `agent_id`) still fai
 injection — suppression needs positive proof, never absence of signal.
 Per-harness subagent doctrine scope — whether a delegated subagent receives the doctrine + per-turn mandate across each of the four harnesses (Claude Code, Codex, Command Code, OMP) — is documented factually in [§12 of the mental model](../../docs/skill-first-enforcement-mental-model.md#12-per-harness-subagent-doctrine-scope-factual-2026-08-26) with file:line citations and UNVERIFIED markers. Summary: Claude Code subagents never fire `UserPromptSubmit` so get no enforcement; OMP's `before_agent_start` fires per-agent so subagents DO get enforcement; Command Code and Codex are UNVERIFIED from the adapter surface.
 
-The standing order it injects — the **SKILL-FIRST doctrine**:
-
-- **Line-1 ruling.** Every task-bearing reply opens with one of
-  `USING: <skill>` | `SEARCH: <query>` | `NO SKILL: <why>` (the skip, its reason on the same line;
-  the older `SKIPPING` token before `0.52.0`), written *before* anything else.
-- **Know which offer you hold.** A *whole-shelf ranking* (the router judged every skill you can use
-  for this turn) or a *preview* (the top few of a far larger shelf). A fitting row is a `USING:`.
-  When no row of a whole-shelf ranking fits, the agent rules out its top row by name
-  (`NO SKILL: whole-shelf — <top row>: <what it does>; <why this task lies outside it>`), or searches
-  with terms the ranking may have missed when it expects a skill the ranking did not show
-  ([ADR-0082](../../docs/adr/0082-whole-shelf-ranking-is-a-skip-source.md)). When no row of
-  a preview fits, it must **SEARCH the full index** — by intent + domain terms (2–3 phrasings via `extra_queries`), never by the raw user
-  sentence. A `SEARCH:` token is a promise that the `search_skills` call appears **this reply**;
-  narrating an un-run search is a FALSE REPORT. The per-turn offer says which kind it is.
-- **Rule on the hits — the take-bar equals the skip-bar.** A loosely-adaptable fit is a `USING:`;
-  `NO SKILL:` after a search states the query and, for the top hit, what it does and why the task
-  lies outside it. Naming an unfit skill just to pass the gate is the mirror failure — a FALSE
-  REPORT.
-- **A lawful skip has exactly three sources** (rule 4, the single definition every other line points
-  at): a shown search whose hits are not even loosely adaptable; a whole-shelf ranking whose top row
-  the agent rules out by name (ADR-0082); or an enforcer `SKILL-CHECK:` line
-  that itself states the turn is non-task / conversational / harness-generated / a self-recap, or
-  that no installed skill does what it asks (the router's no-fit leg). The
-  line authorizes the ruling it states; when it says the turn may be real work it is an order to
-  SEARCH; the agent writes `NO SKILL: hook-cleared — <its reason>`. Anything that hands the agent
-  work is a task: a notification's content, a message's content, work dispatched to another agent.
-- **A hit your harness does not list still counts** — whatever its `origin` or `external` marker —
-  while it stays switched on for you: a hit whose `disabled_in` names your harness, or that your
-  harness has switched off, is not a hit. Taken via `get_skill` + following its SKILL.md inline —
-  same take-bar ([ADR-0058](../../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md),
-  supersedes ADR-0056's "cannot be invoked by name here" wording).
-- **A skill picked outside the shown hits routes through the search, not around it**: line 1
-  `SEARCH:` → the search → load the body → quote the covering line → `USING: <name>`. A skill the
-  agent invoked earlier this session and keeps following for the same task needs no search when the
-  offer omits it: line 1 `USING: <name> (continuing)`, then a re-read of its body with `get_skill`
-  (the harness skill tool only when that call is unavailable or cannot find the skill) before other
-  work ([ADR-0063](../../docs/adr/0063-continuing-a-skill-and-audit-reader-fixes.md),
-  [ADR-0064](../../docs/adr/0064-continuation-scope-and-counter.md)). The usage audit counts
-  continuations in every written form — re-read or not, earlier use or not, and how many turns since
-  the skill was last used — and a red-flags row sends "I'm still in <skill>" on new work to SEARCH
-  ([ADR-0065](../../docs/adr/0065-continuation-counter-fixes-red-flag-idle-notice.md)). A loaded
-  body that excludes the task — a hit's or not — forces an open re-rule in the same reply: a new
-  `USING:`/`SEARCH:` line, one sentence quoting the excluding line, and telling the user the agent
-  switched. A deterministic `PostToolUse(Skill|get_skill)` hook,
-  [`hooks/scripts/skill_exclusions.py`](../../hooks/scripts/skill_exclusions.py), echoes a
-  just-loaded skill's own "not for" lines back as `additionalContext` so this duty doesn't rely on
-  the agent noticing on its own — natively on Claude Code and ZCode, and since `0.49.0`
-  ([ADR-0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) reached on
-  OMP, Command Code, Cline and DSH too, each through its own adapter forwarding the same load
-  payload it builds for `ledger.py`; the hook reads the loaded text from the tool's own response
-  first, so the echo quotes the copy the agent actually read rather than a same-named copy from
-  another root.
-- **Red Flags** — a four-row table of the thoughts that skip without a source (merged from the
-  earlier eight rows; "mechanical", "trivial", "I can handle it unaided" and "I'm confident none
-  fit" stay named), and **burden of proof is on the skip.**
-
-[ADR-0056](../../docs/adr/0056-doctrine-rewrite-writing-for-agents.md) (v0.47.1) rewrote the body
-under the writing-for-agents levers: it resolved the contradiction where the library section let the
-agent's own "trivial" judgment earn a no-search skip that rule 4 forbade, retired the phantom
-`find-skills` escalation target, and halved the injected body.
-[ADR-0062](../../docs/adr/0062-no-skill-ruling-and-whole-shelf-label.md) (v0.52.0) renamed the skip
-ruling to `NO SKILL: <why>`, taught the two offer kinds, and cut the body a further 28 %.
+The standing order it injects is the **SKILL-FIRST doctrine**; its text is
+[`hooks/doctrine/skill-first.md`](../../hooks/doctrine/skill-first.md) and nothing here restates it.
+In brief: every task-bearing reply opens with a line-1 ruling (`USING:`, `SEARCH:` or
+`NO SKILL: <why>`); a skip has exactly three lawful sources (a shown search with nothing adaptable,
+a whole-shelf ranking whose top row is ruled out by name, an enforcer `SKILL-CHECK:` line); the
+take-bar equals the skip-bar; a loaded body that excludes the task forces an open re-rule, backed
+by the deterministic exclusion echo in
+[`hooks/scripts/skill_exclusions.py`](../../hooks/scripts/skill_exclusions.py) (reaching every
+harness through its own adapter). The reasoning lives in the ADRs:
+[0056](../../docs/adr/0056-doctrine-rewrite-writing-for-agents.md) (writing-for-agents rewrite),
+[0058](../../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) and
+[0059](../../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md) (hits the harness does
+not list, the echo), [0062](../../docs/adr/0062-no-skill-ruling-and-whole-shelf-label.md) (the
+`NO SKILL:` ruling and the two offer kinds), [0063](../../docs/adr/0063-continuing-a-skill-and-audit-reader-fixes.md)
+to [0065](../../docs/adr/0065-continuation-counter-fixes-red-flag-idle-notice.md) (continuing a skill),
+[0082](../../docs/adr/0082-whole-shelf-ranking-is-a-skip-source.md) (whole-shelf skip).
 
 > EFFORT (the "work to done-and-proven" doctrine) was **decoupled in v0.4.0** into the standalone
 > [`effort-gate`](https://github.com/thinhkhuat/effort-gate) plugin; the note no longer rides in
@@ -119,7 +73,7 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    retrieves at full score. On match → mandate-only.
 3. **Self-referential recap skip (leg C).** `_is_selfref(prompt)` — fires **here, before any I/O**
    (`enforcer.py:550`), so a pure "explain your last answer" turn never reaches the embed. Detail in
-   [leg C](#the-authorized-skip-tier-three-legs-two-formerly-silent) below.
+   [leg C](#the-authorized-skip-tier-five-legs) below.
 3b. **Deterministic routes (pure, no I/O).** `_route_hits` matches
    [`config/deterministic-routes.json`](../../config/deterministic-routes.json) phrases as whole
    words (never inside a longer word: `/cook` must not fire on `…/cookbooks`) — a prompt that NAMES a skill (`/unlazy`, `cook --auto`, `progress-map`) — and the hits lead the
@@ -222,7 +176,7 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    line-1 `USING/SEARCH/NO SKILL` instruction. A router turn's offer is headed "Whole-shelf ranking
    for this task" instead of "Preview … not the shelf". Ledger band `offer`.
 
-### The AUTHORIZED-SKIP tier (three legs, two formerly silent)
+### The AUTHORIZED-SKIP tier (five legs)
 
 Legs A (getaway floor miss) and B (conversational) used to be **truly silent**, which backfired:
 the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdict the hook had
@@ -233,8 +187,8 @@ the agent, seeing no mandate, would re-run `search_skills` to re-derive a verdic
   turn is genuinely trivial*, else it orders a term-rich `search_skills` call (the raw prompt is
   what just scored below the floor) and a `get_skill` read when a hit's fit is unclear.
 - **Intent leg** flatly pre-authorizes the skip (the turn was classified conversational).
-- **Self-referential leg** (3rd, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)) pre-authorizes a pure recap of the agent's own prior message.
-- **Harness-message leg** (4th, [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md), `ENFORCER_HARNESS_SKIP`): a prompt whose head is harness-generated (task notification, monitor event, cross-session/teammate message, idle reminder, OMP summarizer wrapper) is pre-authorized **before any I/O** — no embed, no Qdrant, no chain hint; ledger band `harness_skip`. The heading above keeps its original title so existing anchors hold.
+- **Self-referential leg** (3rd, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md), `ENFORCER_SELFREF_SKIP`): described under *Leg C* below.
+- **Harness-message leg** (4th, [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md), `ENFORCER_HARNESS_SKIP`): a prompt whose head is harness-generated (task notification, monitor event, cross-session/teammate message, idle reminder, OMP summarizer wrapper) is pre-authorized **before any I/O** — no embed, no Qdrant, no chain hint; ledger band `harness_skip`.
 - **Jev needs-a-skill leg** (5th, [ADR-0061](../../docs/adr/0061-jev-skill-router.md), `ENFORCER_JEV_ROUTER`; first shipped by ADR-0060 as a yes/no leg): the Jev router found no candidate skill whose `fits` reaches 0.30 — ledger band `jev_skip`, routing telemetry rides the row as `jev`. Fail-open: a non-English prompt, no key, a timeout or an error leaves the embedding path to decide.
 
 `SKILL-CHECK:` is a **cross-file literal contract**: the string is emitted here, honored by the
@@ -243,8 +197,8 @@ doctrine (`skill-first.md`), and **joined on** by the usage audit
 from the false-SKIPPING count. Changing the literal silently breaks both. Set
 `ENFORCER_AUTHORIZED_SKIP=0` to restore the old silence.
 
-**Leg C — the self-referential recap lane (v0.14.0, H5, [ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)).**
-Unlike legs A/B, this leg was never silent — it ships already-authorized. The gate over-fired on
+**Leg C — the self-referential recap lane ([ADR-0019](../../docs/adr/0019-over-fire-lane-and-gate-legibility.md)).**
+This leg was never silent — it ships already-authorized. The gate over-fired on
 turns that only ask the agent to explain/rephrase its own immediately-prior message (no external
 task, no skill applies), forcing a pointless search. `_is_selfref()` fires only when three gates
 all hold: (1) the prompt opens with a recap verb on a 2nd-person/deictic object; (2) **no**
@@ -270,7 +224,7 @@ ids exactly). The indexer writes a scope-keyed sidecar
 `~/.claude/skill-concierge/next-skills.json` (`{scope: {name: [successors]}}`, every indexed
 skill keyed, per-scope merge, atomic replace), and the enforcer appends one `CHAIN-HINT:`
 candidate line to **every inject-bearing leg** — ranked mandate, mandate-only fallbacks, and all
-three AUTHORIZED-SKIP lines — when this session used a skill (auto OR slash-manual) within
+AUTHORIZED-SKIP lines — when this session used a skill (auto OR slash-manual) within
 `ENFORCER_CHAIN_TTL_S` (900 s). State comes from a bounded 64 KB ledger tail-read (sub-stamped
 rows excluded), so there is zero new hot-path network and zero new state files.
 
@@ -360,7 +314,9 @@ description+body fallback still serves. It defers **without stamping** when the 
 unknown counts. Every run (auto or manual) is recorded in the global manifest
 (`~/.claude/skill-concierge/flywheel-manifest.json`, `scripts/flywheel_manifest.py`).
 
-## The six plugin skills
+## The plugin skills
+
+The authoritative list of bundled skills is the `skills/{...}/SKILL.md` brace list in [`AGENTS.md`](../../AGENTS.md) (checked against the directories on disk by `scripts/check_skill_list_parity.py`).
 
 | Skill | Role |
 |-------|------|
@@ -370,5 +326,9 @@ unknown counts. Every run (auto or manual) is recorded in the global manifest
 | [`skills/skill-usage-audit/SKILL.md`](../../skills/skill-usage-audit/SKILL.md) | measures whether a gate-threshold change helped **real usage**, from the transcript SKILL-FIRST trail — **not** the ledger. |
 | [`skills/keep-on/SKILL.md`](../../skills/keep-on/SKILL.md) | curate the always-on **allowlist** — `list` / `add` / `remove` (via `scripts/keep-on.py`), editing the canonical `~/.claude/skill-concierge/keep-on.json` and re-applying the overrides ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)). |
 | [`skills/flywheel/SKILL.md`](../../skills/flywheel/SKILL.md) | **retrieval-flywheel** surface — status mode (default, read-only) shows endpoint health + per-skill utterance coverage; `--generate` runs the incremental utterance generator (only new/changed skills call the LLM) then reindexes ([ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)). |
+| [`skills/blocklist/SKILL.md`](../../skills/blocklist/SKILL.md) | the user-ordered **disable tier** — `list` / `add` / `remove` via `scripts/blocklist.py`; a blocked skill is never offered, searched or served, and its Skill invocation is denied by the PreToolUse guard ([ADR-0046](../../docs/adr/0046-blocklist-disable-tier.md)). |
+| [`skills/reputation/SKILL.md`](../../skills/reputation/SKILL.md) | the owner's **badge ranking** (❤️ favourite, ⭐ trusted, automatic 🔥) shown beside menu rows, via `scripts/reputation.py` ([ADR-0083](../../docs/adr/0083-owner-reputation-badges.md)). |
+| [`skills/catalogs/SKILL.md`](../../skills/catalogs/SKILL.md) | register, list, remove and promote **external catalog roots** — third-party skill collections indexed without installing, via `scripts/catalogs.py` ([ADR-0031](../../docs/adr/0031-external-catalog-roots.md)). |
+| [`skills/consult/SKILL.md`](../../skills/consult/SKILL.md) | the opt-in **deliberated curation** — a wide sieve over installed and external skills, capsule dossiers, a body-reading analyst and a ranked verdict, built on the `consult_candidates` tool ([ADR-0049](../../docs/adr/0049-consult-deliberation-layer.md)). |
 
 Mechanics for setup/doctor/audit are in [operations.md](../operations.md).

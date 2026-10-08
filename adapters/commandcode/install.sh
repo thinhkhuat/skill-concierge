@@ -6,7 +6,8 @@
 # 2. Configures SessionStart hooks in ~/.commandcode/settings.json
 # 3. Configures extra skills location in ~/.commandcode/settings.json
 # 4. Configures skill-search MCP server in ~/.commandcode/mcp.json
-# 5. Removes stale 0.20.8 cache paths and monkey-patch scripts
+# 5. Drops hook events Command Code does not support (UserPromptSubmit, PreCompact) and
+#    stale 0.20.8 / doctrine-patch SessionStart entries from ~/.commandcode/settings.json
 #
 # Usage:
 #   ./adapters/commandcode/install.sh [--root <path>]
@@ -243,14 +244,14 @@ mod_dst = Path(sys.argv[2])
 settings_path = Path(sys.argv[3])
 mcp_path = Path(sys.argv[4])
 bad = False
-# 5a. Mod present and byte-identical to repo HEAD (the enforcer/ledger
+# 5a. Mod present and byte-identical to this checkout's file (the enforcer/ledger
 #     scripts drift check in ZCode is manual; here we ensure the shipped
 #     mod — the in-generation enforcement organ — matches what we installed).
 try:
     if mod_dst.read_text(encoding="utf-8") == mod_src.read_text(encoding="utf-8"):
-        print("    mod byte-identical to repo HEAD: yes")
+        print("    mod byte-identical to this checkout's file: yes")
     else:
-        print("    !! mod differs from repo HEAD — reinstall or re-run this script", flush=True)
+        print("    !! mod differs from this checkout's file — reinstall or re-run this script", flush=True)
         bad = True
 except Exception as e:
     print(f"    !! mod read failed: {e}", flush=True)

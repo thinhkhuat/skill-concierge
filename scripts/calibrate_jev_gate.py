@@ -80,9 +80,6 @@ GATE_QUESTIONS = {
 INVERTED = {"prose_suffices"}
 
 
-def relevant_text(name, desc):   # classifying_rag_passages.md `is_relevant`, candidate named inline
-    return f"Does the skill '{name}' address the subject of the user's request? It is described as: {desc}"
-
 
 ENF = None   # the loaded enforcer module; its question builders and decision policy are used as-is
 
@@ -691,7 +688,6 @@ def cmd_live(a):
     the ledger, offer quality from the label corpus (re-run extract_turn_labels.py first). Prints
     no prompt text: the corpus is private and this output may be pasted into tracked files."""
     since = parse_since(a.since)
-    enf = load_enforcer()
     rows, unknown = router_rows(LEDGER, since.timestamp(), a.harness)
     # ADR-0087: a `stage: wide` row is the safety net (no tier finished its rerank), not a full route.
     wide = [r for r in rows if r["jev"].get("stage") == "wide"]

@@ -58,10 +58,12 @@ const UNLAZY_DIR = resolveUnlazyDir();
 const STOP_HOOK = join(UNLAZY_DIR, "scripts", "stop-hook.mjs");
 
 /**
- * Extract the workspace root (cwd) from the DSH context.
+ * Extract the workspace root (cwd): the pre-step event's agent first (where DSH puts the
+ * session header, as skill-concierge.dsh.ts reads it), then the plugin context.
  */
-function cwdOf(ctx: any): string {
+function cwdOf(event: any, ctx: any): string {
   try {
+    if (event?.agent?.session?.header?.cwd) return event.agent.session.header.cwd;
     if (ctx?.agent?.session?.header?.cwd) return ctx.agent.session.header.cwd;
     if (ctx?.session?.header?.cwd) return ctx.session.header.cwd;
     return process.cwd();
@@ -71,10 +73,12 @@ function cwdOf(ctx: any): string {
 }
 
 /**
- * Extract a session id from the DSH context.
+ * Extract a session id: the pre-step event's `agent.session.header.id` first, then the
+ * plugin context, then DSH_SESSION_ID.
  */
-function sessionIdOf(ctx: any): string {
+function sessionIdOf(event: any, ctx: any): string {
   try {
+    if (event?.agent?.session?.header?.id) return String(event.agent.session.header.id);
     if (ctx?.agent?.session?.id) return ctx.agent.session.id;
     if (ctx?.session?.id) return ctx.session.id;
     if (process.env.DSH_SESSION_ID) return process.env.DSH_SESSION_ID;
@@ -124,8 +128,8 @@ export default function (ctx: any): void {
     try {
       if (!UNLAZY_DIR || !existsSync(STOP_HOOK)) return decision;
 
-      const cwd = cwdOf(ctx);
-      const sid = sessionIdOf(ctx);
+      const cwd = cwdOf(event, ctx);
+      const sid = sessionIdOf(event, ctx);
 
       // Quick probe: skip if the workspace has no unlazy artifacts.
       if (!existsSync(join(cwd, ".unlazy")) && !existsSync(join(cwd, "GATES.md"))) {

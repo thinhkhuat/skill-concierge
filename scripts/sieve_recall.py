@@ -31,7 +31,6 @@ import concurrent.futures
 import datetime
 import hashlib
 import json
-import math
 import os
 import random
 import re
@@ -123,13 +122,9 @@ DOCTRINE_TODAY = (
     "serves only one sub-goal must still surface — that is why the sieve takes one query per "
     "sub-goal, not one blended query. Phrase each query by INTENT + DOMAIN TERMS, away from the "
     "skill names you expect.")
-PART_TASK = ("Put the user's own words first: one query that copies the sentence where the user "
-             "states the task, verbatim, up to about 300 characters.")
 PART_HOW = ("Add one query that says how the work will be carried out (the working method or "
             "process), with no domain terms; place it before the sub-goal queries.")
 PART_SPLIT = "Each sub-goal is one action on one object; never join two actions in one query."
-CAP_NOTE = ("The sieve keeps only the first five queries, so the extra queries above push out the "
-            "last sub-goal queries.")
 # Harness text around the doctrine so the generating model knows its role and the reply shape. Fixed
 # here, part of every system text, therefore part of its recorded sha256.
 _ROLE = ("You write the search queries an agent passes to a skill-search tool for the task the user "
@@ -364,13 +359,6 @@ def rank_of(label_name, rows, miss=41):
     return miss
 
 
-def pctl(xs, q):
-    if not xs:
-        return None
-    s = sorted(xs)
-    return s[min(len(s) - 1, max(0, math.ceil(q * len(s)) - 1))]
-
-
 def session_sign(sids, base_hits, arm_hits):
     """Session-level sign test: a session's net is its gains minus its losses over its cases.
     Returns (gained_sessions, lost_sessions, p). No discordant session gives p = 1."""
@@ -465,7 +453,7 @@ def gate_rules(base, arm, min_n=MIN_N, g6_abs=None):
     share = lambda rs: 100.0 * statistics.mean(r["ext"] / max(r["rows"], 1) for r in rs)
     share_b, share_a = share(base), share(arm)
     med_ext = statistics.median(a["ext"] for a in arm)
-    p90b, p90a = pctl([b["ms"] for b in base], 0.9), pctl([a["ms"] for a in arm], 0.9)
+    p90b, p90a = _cal().pctl([b["ms"] for b in base], 0.9), _cal().pctl([a["ms"] for a in arm], 0.9)
     gs, ls, p = session_sign([b["sid"] for b in base], bh, ah)
     out.update(
         G1=True, gained=gained, lost=lost, gain_pts=gain_pts,
@@ -1426,8 +1414,8 @@ def cmd_gate(args):
         if rs:
             n = len(rs)
             print(f"RECALL {a}: n={n} @20 {100.0 * sum(r['hit'] for r in rs) / n:.1f}  "
-                  f"@40 {100.0 * sum(r['hit40'] for r in rs) / n:.1f}  p50 {pctl([r['ms'] for r in rs], .5):.0f} ms  "
-                  f"p90 {pctl([r['ms'] for r in rs], .9):.0f} ms")
+                  f"@40 {100.0 * sum(r['hit40'] for r in rs) / n:.1f}  p50 {_cal().pctl([r['ms'] for r in rs], .5):.0f} ms  "
+                  f"p90 {_cal().pctl([r['ms'] for r in rs], .9):.0f} ms")
     return 0
 
 
@@ -1677,8 +1665,8 @@ def jev_report(res):
     failed = [r for r in rows if r["jev_failed"]]
     ms = [r["jev_ms"] for r in rows]
     errs = sorted({r["jev_err"] for r in failed})
-    return [f"JEV: calls {len(rows)} failed {len(failed)} {errs if errs else ''} p50 {pctl(ms, .5):.0f} ms "
-            f"p90 {pctl(ms, .9):.0f} ms"]
+    return [f"JEV: calls {len(rows)} failed {len(failed)} {errs if errs else ''} p50 {_cal().pctl(ms, .5):.0f} ms "
+            f"p90 {_cal().pctl(ms, .9):.0f} ms"]
 
 
 def stratum_counts2(cases):
@@ -1733,7 +1721,7 @@ def recall_lines2(res):
         rs = list(res[a].values())
         if rs:
             out.append(f"RECALL {a}: n={len(rs)} @{ARM2[a][4]} {100.0 * sum(r['hit'] for r in rs) / len(rs):.1f}  "
-                       f"p50 {pctl([r['ms'] for r in rs], .5):.0f} ms  p90 {pctl([r['ms'] for r in rs], .9):.0f} ms")
+                       f"p50 {_cal().pctl([r['ms'] for r in rs], .5):.0f} ms  p90 {_cal().pctl([r['ms'] for r in rs], .9):.0f} ms")
     return out
 
 

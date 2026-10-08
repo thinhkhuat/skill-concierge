@@ -113,15 +113,9 @@ _is_own_checkout() {
   [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
 }
 
-# _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
-# interrupted copy never leaves a half-filled DIR that a later run reads as current. The staging
-# dir is trapped (EXIT/INT/TERM) so a killed run removes it instead of leaking it forever
-# (bash defers running that trap until the current foreground step — the git archive/tar
-# pipeline — actually exits, so cleanup lands once that step ends, not the instant the signal
-# arrives), and any
-# staging dir older than 60 minutes left over from an earlier killed run is pruned before a fresh
-# one is made. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which skill
-# discovery skips, and only the newest such copy is kept.
+# _export_to DIR — stage this checkout's content beside DIR, then swap it in, so an interrupted
+# copy never leaves a half-filled DIR. The staging dir is trapped (EXIT/INT/TERM); one older than
+# 60 minutes from a killed run is pruned. An old DIR is kept once, as hidden .DIR.replaced-<time>.
 _export_to() {
   local dest="$1" parent base stage old
   parent="$(dirname "$dest")"; base="$(basename "$dest")"

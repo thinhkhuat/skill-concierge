@@ -22,17 +22,19 @@ caps, not an unbounded wait: 500ms embed + 250ms installed query + up to 2x250ms
 actionability gate + 250ms external annex + 250ms cross-harness annex ~= 1.75s, while the
 ADR-0061 Jev router runs IN PARALLEL in a worker thread (catalogue scroll + 2 calls per bench tier; TypeSafe
 ~0.7s warm), joined under a hard 7.8s cap (ADR-0079: Command Code's 5.5s span, then TypeSafe) — ~8.9s worst
-case against Claude Code's 10s hook timeout.
-The happy path is ~100ms; the annex legs run only on turns that actually carry an offer. On ANY of (a) embed unreachable, (b) Qdrant unreachable, (c)
-embed exceeds the timeout, the hook falls back to MANDATE-ONLY — never silent,
-never crashing — and stays within the per-turn budget regardless of shim health.
-(c) is load-bearing: a reachability check misses an up-but-slow shim that would
-otherwise silently tax every prompt.
+case against Claude Code's 10s hook timeout (JEV_BUDGET_S).
+The annex legs run only on turns that actually carry an offer. On ANY of (a) embed
+unreachable, (b) Qdrant unreachable, (c) embed exceeds the timeout, the hook serves the
+Jev verdict when one arrived (`_jev_serve`), else the named-route hits or MANDATE-ONLY —
+never silent, never crashing. (c) is load-bearing: a reachability check misses an
+up-but-slow shim that would otherwise silently tax every prompt.
 
 Telemetry. Emits an `offer` event to the shared invocation ledger so analyze.py
 can compute hit@k and fallback rate:
   {t, sid, ev:"offer", band, offered:[[name,score]...], fallback, q:<≤120c>}
 """
+from __future__ import annotations
+
 import http.client
 import json
 import math
@@ -84,18 +86,9 @@ QUERY_GROUPS_URL = f"{QDRANT_URL}/collections/{COLLECTION}/points/query/groups"
 # RANK signal, not absolute confidence — so we show top-k above the floor rather
 # than gating hard on a high threshold. Tune from the ledger's offered-but-never-
 # taken rollups once data accrues.
-# HARD embed cap. History: design nominal ~120ms → tuned to 90ms to fit a ≲150ms
-# total budget. But LIVE dogfooding showed ~60% of turns hit embed_timeout: the
-# single-threaded shim's inference, under real in-turn CPU contention (concurrent
-# UserPromptSubmit hooks + overlapping sessions), exceeded 90ms even though it's
-# ~18ms idle. Fix (owner-approved): threaded shim (embed_server.py) + relax the
-# budget to ≲300ms total → 200ms embed cap (widened 0.20→0.35 in 0.22 to cut 65% fallback; hook budget is 5s, so the extra 150ms is cheap). Worst slow-path ≈ 50ms cold-start +
-# 200ms cap ≈ 250ms ≲ 300ms; happy path stays ~100ms. Raise/lower via env.
-# 2026-09-15 (ADR-0054, owner-ordered from the v0.46.0 epoch audit): 0.35→0.5 s embed and
-# 0.10→0.25 s Qdrant. Every one of the epoch's 21 embed timeouts landed at 359-381 ms and
-# every one of its 53 "qdrant_down" rows at 101-106 ms — censoring at the cap, not outages
-# (successful p90: embed 257 ms, Qdrant 87 ms). Worst path ≈ 0.5 + 5×0.25 ≈ 1.75 s (installed
-# query + 2× gate + external + foreign annex) inside the 5 s hook budget. Revert: ENFORCER_EMBED_TIMEOUT=0.35 ENFORCER_QDRANT_TIMEOUT=0.1.
+# HARD embed and Qdrant caps (ADR-0054): 0.5 s / 0.25 s because the old caps were
+# censoring real calls, not catching outages. Earlier cap history: ADR-0008, ADR-0054.
+# Revert: ENFORCER_EMBED_TIMEOUT=0.35 ENFORCER_QDRANT_TIMEOUT=0.1.
 EMBED_TIMEOUT_S = float(os.environ.get("ENFORCER_EMBED_TIMEOUT", "0.5"))
 QDRANT_TIMEOUT_S = float(os.environ.get("ENFORCER_QDRANT_TIMEOUT", "0.25"))
 TOP_K = int(os.environ.get("ENFORCER_TOP_K", "8"))   # offer-menu breadth (was 5; owner-widened 2026-07-05). Wider = more push-noise, against ADR-0009's noise-reduction intent — env-overridable, revert default 5.
@@ -103,64 +96,32 @@ GETAWAY_FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.45"))  # top<t
 ITEM_FLOOR = float(os.environ.get("ENFORCER_ITEM_FLOOR", "0.18"))       # per-candidate cutoff
 
 # ── external catalog annex (ADR-0032) ─────────────────────────────────────────
-# External catalog skills (payload tier=external, ADR-0031) become first-class in the
-# per-turn offer as an ADDITIVE ANNEX: the installed top-k is untouched (zero displacement),
-# and up to EXTERNAL_SLOTS externals scoring ≥ EXTERNAL_FLOOR are appended, marked, consumed
-# via get_skill read-inline (they are not Skill-tool-invocable). This preserves the concierge's
-# zero-resident-cost property (the offer is an on-demand query, not the resident listing) while
-# giving the agent a genuinely large catalog. The external floor is deliberately HIGHER than the
-# installed ITEM_FLOOR (0.18) so externals annex only on strong intent-match — most turns show
-# none; this asymmetry is the injection-surface safeguard. Kill-switch EXTERNAL_ANNEX=0 restores
-# the ADR-0031 search-only tier (must_not tier=external in the query, no annex).
-# ADR-0047 (owner order 2026-08-29): the ADR-0045 merged-pool parity is REVERTED — this annex
-# is the mechanism again. ENFORCER_EXTERNAL_OFFER (the parity-era name) stays honored as an
-# alias so an install that pinned it keeps working. Floor tuned 0.40 → 0.32 (~1.8× ITEM_FLOOR
-# instead of 2.2×): the old floor starved the annex (the parity audit's asymmetry #2); 0.32
-# still demands a strong match. Revert path: ENFORCER_EXTERNAL_FLOOR=0.40.
+# External catalog skills (tier=external) are appended as a marked annex, consumed via
+# get_skill; the installed top-k is never displaced. The floor sits above ITEM_FLOOR so
+# externals annex only on a strong match (ADR-0047: 0.40 → 0.32). ENFORCER_EXTERNAL_OFFER
+# stays an alias. Revert: ENFORCER_EXTERNAL_ANNEX=0 (ADR-0031 search-only),
+# ENFORCER_EXTERNAL_FLOOR=0.40.
 EXTERNAL_ANNEX = os.environ.get(
     "ENFORCER_EXTERNAL_ANNEX",
     os.environ.get("ENFORCER_EXTERNAL_OFFER", "1")) != "0"
 EXTERNAL_FLOOR = float(os.environ.get("ENFORCER_EXTERNAL_FLOOR", "0.32"))
 
 # ── dynamic annex sizing (ADR-0036) ───────────────────────────────────────────
-# The annexes were fixed at 2 rows regardless of intent. Measured on the live index, that is
-# wrong in BOTH directions: the external pool (~1.9k skills) has 8+ rows above the 0.40 floor on
-# essentially every offer-bearing turn (an absolute floor discriminates nothing), while on
-# strong-inventory turns the fixed 2 pads the offer with rows the installed shelf already beats.
-#
-# Competitive-margin rule: an annex row earns a slot by scoring >= max(pool floor,
-# top_installed - ANNEX_MARGIN), capped at the pool's slot cap. The threshold RISES with the
-# installed top, so a well-served intent shrinks the annex to 0-1 (less noise than fixed-2), and
-# FALLS to the pool floor when the inventory is thin, widening the annex to its cap — the annex
-# width itself becomes a read of "what the inventory can offer for this intent". Deterministic
-# hits (score 1.0) push the threshold near 1.0 and naturally silence the annexes: explicit
-# intent wants no alternatives. The original margin 0.05 was measured, not guessed: on the
-# compressed mpnet cosine band (real tasks ~0.5-0.9), 0.10+ saturates every annex at its cap
-# while 0.05 cleanly separates strong-inventory intents (annex 1) from external-dominated ones
-# (annex 4). ADR-0047 tunes the default to 0.08 (owner order: "more helpful than the
-# ADR-0032-era") — deliberately just UNDER the measured 0.10 saturation point, so the annex
-# widens on competitive externals without collapsing into always-at-cap. Revert path:
-# ENFORCER_ANNEX_MARGIN=0.05. ENFORCER_ANNEX_DYNAMIC=0 reverts byte-identically to the fixed
-# sizing (and the old EXTERNAL_SLOTS default of 2). The installed TOP_K is untouched either
-# way — dynamism governs annex WIDTH only; the ADR-0032/0034 zero-displacement invariant is
-# not negotiable here.
+# An annex row needs >= max(pool floor, top_installed - ANNEX_MARGIN), capped at the pool's
+# slot cap, so annex width tracks how well the installed shelf serves the intent; the
+# installed TOP_K is never touched. Margin 0.08 (ADR-0047) sits under the measured 0.10
+# saturation point. Revert: ENFORCER_ANNEX_MARGIN=0.05; ENFORCER_ANNEX_DYNAMIC=0 restores
+# fixed sizing and the EXTERNAL_SLOTS default of 2.
 ANNEX_DYNAMIC = os.environ.get("ENFORCER_ANNEX_DYNAMIC", "1") != "0"
 ANNEX_MARGIN = float(os.environ.get("ENFORCER_ANNEX_MARGIN", "0.08"))
 EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "4" if ANNEX_DYNAMIC else "2"))
 
 # ── complement annex (ADR-0048) ────────────────────────────────────────────────
-# Ledger evidence (2026-08-29): 410 of 2,656 offers carried externals, yet only 6 external
-# pulls EVER — and all 6 were genuine builtin gaps. The margin rule admitted ECHOES of
-# well-served intents (externals trailing the installed top by 0.08) that nobody consumed.
-# Owner order: the annex becomes the builtin's COMPLEMENT, not its echo.
-#   • top_installed >= GETAWAY_FLOOR (builtin answers this intent): an external must BEAT
-#     the installed top by ANNEX_BEAT (0.04) — a complement, not a duplicate voice.
-#   • top_installed < GETAWAY_FLOOR (thin inventory — the case externals exist for): the
-#     plain EXTERNAL_FLOOR applies and the annex widens to its cap.
-# Usage ranking: externals with demonstrated get_skill takes (distinct sessions, digest
-# written by auto_promote.py) float first and render "used N×" — provenness reorders and
-# marks, never admits below the gate. ENFORCER_ANNEX_COMPLEMENT=0 restores the ADR-0047
-# margin-rule annex byte-identically (ANNEX_MARGIN governs the foreign annex either way).
+# The external annex complements the installed shelf instead of echoing it: when the
+# installed top clears GETAWAY_FLOOR an external must beat it by ANNEX_BEAT, else the plain
+# EXTERNAL_FLOOR applies. Externals with get_skill takes (auto_promote.py digest) sort first.
+# Revert: ENFORCER_ANNEX_COMPLEMENT=0 (the ADR-0047 margin rule; ANNEX_MARGIN still governs
+# the foreign annex).
 ANNEX_COMPLEMENT = os.environ.get("ENFORCER_ANNEX_COMPLEMENT", "1") != "0"
 ANNEX_BEAT = float(os.environ.get("ENFORCER_ANNEX_BEAT", "0.04"))
 _TAKES_DIGEST_PATH = Path(os.environ.get(
@@ -233,36 +194,13 @@ RETRIEVE_LIMIT = TOP_K * 5
 
 
 def _running_harness() -> str:
-    """Which harness is executing this hook.
+    """Which harness is executing this hook: one of _HARNESS_ORDER's names.
 
-    Returns one of: 'commandcode', 'codex', 'dsh', 'omp', 'zcode', or 'claude'.
-
-    PRECEDENCE:
-    1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter
-       and the OMP adapter; OMP also maps `oh-my-pi` so the natural name resolves).
-       `dsh` / `deepseek-harness` / `oh-dsh` map to 'dsh'. `cline` / `cline-cli` map to
-       'cline' (ADR-0086 — the Cline code plugin sets it; Cline has no native env
-       identity signal). `opencode` / `open-code` map to 'opencode' (ADR-0085 — the OpenCode
-       v2 plugin adapter sets it; OpenCode sets no harness-identifying env of its own).
-    2. Native harness detection BEFORE path markers: `OMPCODE=1` -> 'omp'. OMP sets BOTH
-       `OMPCODE` and `CLAUDE`'s own markers (`CLAUDE_PLUGIN_ROOT`, `CLAUDE.md` presence, etc.),
-       so `OMPCODE=1` alone is proof of OMP; `CLAUDE`-only markers never are (OMP's provider
-       union reads .claude too, but that is discovery, not the acting harness).
-       `ZCODE_PLUGIN_ROOT` (absolute) -> 'zcode': ZCode injects it — alongside
-       `CLAUDE_PLUGIN_ROOT` — into plugin-hook processes, so it is a positive zcode signal
-       available before path markers; no other harness sets it. A falsy or non-absolute
-       value is never probed (`Path("")` is the cwd, the ADR-0034 falsy-candidate rule).
-       `DSH_SHELL=1` -> 'dsh': DSH sets it in the agent subprocess environment alongside
-       `DSH_HOME` (or `OH_DSH_HOME` for Oh-DSH Desktop). No other harness sets it.
-    3. Where the hook/plugin was installed: `.omp` in path -> 'omp', `.codex` in path -> 'codex',
-       `.zcode` in path -> 'zcode', `.ohdsh` or `.dsh` in path -> 'dsh', `.cline` in path ->
-       'cline' (fallback; the Cline code plugin runs the enforcer from the repo checkout,
-       where the explicit env is the primary signal),
-       `.opencode` in path -> 'opencode' (ADR-0085 fallback; the plugin adapter runs the
-       enforcer from the repo checkout, where the explicit env is the primary signal),
-       `.claude` in path -> 'claude'.
-    4. Fallback: 'claude' (the pre-ADR-0038 default; commandcode runs through its mod
-       adapter, which sets SKILL_CONCIERGE_HARNESS explicitly).
+    Precedence: the explicit `SKILL_CONCIERGE_HARNESS` (set by the Command Code, OMP, Cline and
+    OpenCode adapters) > native env signals > the install-path marker of CLAUDE_PLUGIN_ROOT or
+    this file > 'claude'. The native signals (`OMPCODE=1`, an absolute `ZCODE_PLUGIN_ROOT`,
+    `DSH_SHELL=1`) outrank the path markers because OMP and ZCode also set Claude's own markers;
+    no other harness sets them.
     """
     explicit = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
     if explicit in ("commandcode", "cmd", "command-code"):
@@ -321,13 +259,6 @@ def _running_harness() -> str:
 
 
 RUNNING_HARNESS = _running_harness()
-UNDER_CODEX = (RUNNING_HARNESS == "codex")
-UNDER_COMMANDCODE = (RUNNING_HARNESS == "commandcode")
-UNDER_OMP = (RUNNING_HARNESS == "omp")
-UNDER_ZCODE = (RUNNING_HARNESS == "zcode")
-UNDER_DSH = (RUNNING_HARNESS == "dsh")
-UNDER_CLINE = (RUNNING_HARNESS == "cline")
-UNDER_OPENCODE = (RUNNING_HARNESS == "opencode")
 
 # Cline skill roots (ADR-0051) — the twin test's filesystem rescue set. Mirrors
 # skills_discovery.CLINE_PERSONAL_ROOT / CLINE_PROJECT_ROOT; stdlib-only duplicate
@@ -359,6 +290,10 @@ _OPENCODE_PERSONAL_ROOT = Path(
                    str(Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "opencode"))
 ) / "skills"
 _OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"
+
+
+# The cross-harness convention root (ZCode, DSH, Cline and OpenCode read it).
+_AGENTS_SKILLS = Path.home() / ".agents" / "skills"
 
 
 _HARNESS_ORDER = ("claude", "codex", "commandcode", "omp", "zcode", "dsh", "cline", "opencode")
@@ -397,15 +332,9 @@ def _agents_shares_personal_shelf() -> bool:
     """~/.agents/skills is the cross-harness convention root that ZCode, DSH and Cline all read
     (ZCode: observed live 2026-08-28; DSH: dsh-skill-filesystem `user-agents` root; Cline: its
     skills-dir list and marketplace install target). On this machine it links to
-    ~/.claude/skills, so every `personal` skill is invocable there too."""
-    return _resolves_to_claude_personal(Path.home() / ".agents" / "skills")
-
-
-def _zcode_shares_personal_shelf() -> bool:
-    """ZCode's ~/.agents/skills is the shared shelf (observed live 2026-08-28:
-    ~/.agents/skills -> ~/.claude/skills). When it is not, per-row survival moves to the
-    filesystem twin check."""
-    return _agents_shares_personal_shelf()
+    ~/.claude/skills, so every `personal` skill is invocable there too. When it does not, per-row
+    survival moves to the `_invocable_twin` filesystem check."""
+    return _resolves_to_claude_personal(_AGENTS_SKILLS)
 
 
 def _commandcode_shares_personal_shelf() -> bool:
@@ -417,47 +346,14 @@ def _commandcode_shares_personal_shelf() -> bool:
 
 
 def _foreign_scopes() -> tuple:
-    """The scopes whose skills the RUNNING harness cannot invoke.
-
-    Every tuple below lists every OTHER harness's exclusive roots (ADR-0059 completed them; a
-    test walks every scope discovery can emit and fails on a gap). Per-harness nuance:
-    From Claude: codex-*, commandcode-personal, omp-*, zcode-*, dsh-personal, cline-personal.
-    From Codex: plugin + every non-Claude, non-Codex root + claude-synced (`personal` stays
-    invocable — see below).
-    From Command Code (ADR-0057): the other harnesses' exclusive roots (plugin, codex-*,
-    omp-*, zcode-*, dsh-personal, cline-personal). Command Code reads ~/.commandcode/skills
-    + <cwd>/.commandcode/skills, so `personal` joins the foreign set ONLY when
-    ~/.commandcode/skills does NOT resolve to Claude's personal root — the ZCode rule.
-    From OMP: codex-plugin, commandcode-personal, zcode-*, dsh/cline-personal, claude-synced.
-    OMP's provider union natively invokes the
-    claude (user+project .claude/skills), claude-plugin (claude-plugins registry roots) and
-    codex personal (.codex/skills) scopes, but NOT the Codex plugin cache — the codex provider
-    scans only `~/.codex/skills` and `<cwd>/.codex/skills` (OMP source discovery/codex.ts:238-240,
-    loadSkills), so `codex-plugin` rows are foreign here. commandcode scopes are foreign too
-    (OMP never loads Command Code's personal/project roots).
-    From ZCode (ADR-0042): every other harness's plugin caches and native roots. `personal`
-    joins the foreign set ONLY when ZCode's ~/.agents/skills root does NOT resolve to
-    Claude's personal root — the shared-shelf symlink is positive knowledge the whole
-    scope is ZCode-invocable; on a divergent machine per-row survival moves to the
-    `_invocable_twin` filesystem check instead.
-    From Cline (ADR-0051): every other harness's exclusive roots; `personal` is foreign unless
-    ~/.agents/skills IS Claude's personal shelf.
-    From OpenCode v2 (ADR-0085): every other harness's exclusive root plus the plugin cache and
-    claude-synced; `personal` is invocable BY CONSTRUCTION (OpenCode's documented compatibility
-    read of ~/.claude/skills — no shared-shelf symlink condition applies).
-
-    `project:` scopes are cwd-derived and shared by construction. Never foreign.
-
-    `claude-synced` (Claude account-synced skills under ~/.claude/skills/synced/<bucket>/,
-    named `anthropic-skills:<name>`) is foreign to every harness but Claude Code: only Claude
-    Code loads that tree (OMP's claude provider scans ~/.claude/skills one level deep, so the
-    nested bucket is invisible to it too).
-
-    ADR-0054: `dsh-personal` and `cline-personal` (the DSH_HOME/skills and Cline skill
-    roots) are foreign to EVERY other harness. Before this they were missing from the
-    Claude tuple, so re-rooted copies of the plugin's own skills under ~/.ohdsh/skills
-    entered Claude offers as bare twins (`doctor` beside `skill-concierge:doctor`, 27 of
-    581 offers in the v0.46.0 epoch) instead of meeting the `_invocable_twin` test.
+    """The scopes whose skills the RUNNING harness cannot invoke: every OTHER harness's
+    exclusive roots (ADR-0059). The tuples below are the truth; the branch comments say why a
+    harness differs, and tests/test_foreign_scope_completeness.py fails on any scope discovery
+    can emit that a tuple misses. `project:` scopes are cwd-derived and never foreign.
+    `claude-synced` is foreign everywhere but Claude Code: only it loads the nested
+    ~/.claude/skills/synced/<bucket>/ tree. `personal` is foreign where the harness's own
+    personal root does not resolve to Claude's shelf (Command Code ADR-0057, ZCode ADR-0042,
+    DSH ADR-0050, Cline ADR-0051); Codex, OMP and OpenCode always treat it as invocable.
     """
     if RUNNING_HARNESS == "commandcode":
         base = ("plugin", "codex-plugin", "codex-personal",
@@ -477,7 +373,7 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
-        return base if _zcode_shares_personal_shelf() else base + ("personal",)
+        return base if _agents_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "dsh":
         # DSH reads its own roots (DSH_HOME/skills, <project>/.dsh/skills) plus the
         # ~/.agents/skills + <project>/.agents/skills convention roots (dsh-skill-filesystem
@@ -683,7 +579,7 @@ def _invocable_plugin_ids():
     # Under OMP the claude-plugins provider ALSO honors the OMP registry (helpers.ts:1030-1078),
     # so an id there is invocable here too. Under Claude the OMP registry is not part of
     # discovery and must not leak ids into the twin test.
-    if UNDER_OMP:
+    if RUNNING_HARNESS == "omp":
         try:
             omp_plugins = json.loads(_OMP_INSTALLED_PLUGINS_JSON.read_text(encoding="utf-8"))["plugins"]
             if isinstance(omp_plugins, dict):
@@ -726,7 +622,7 @@ def _invocable_plugin_ids():
 INVOCABLE_PLUGIN_IDS = _invocable_plugin_ids()
 
 
-_ZCODE_READ_ROOTS = (Path.home() / ".agents" / "skills", Path.home() / ".zcode" / "skills")
+_ZCODE_READ_ROOTS = (_AGENTS_SKILLS, Path.home() / ".zcode" / "skills")
 
 # DSH home for filesystem twin checks (ADR-0050). Mirrors skills_discovery.py:
 # explicit SKILL_DSH_HOME > DSH_HOME env > ~/.ohdsh (preferred, Oh-DSH Desktop)
@@ -741,10 +637,15 @@ def _zcode_readable_skill(name: str) -> bool:
     personal root (~/.agents/skills — the shared shelf — or ~/.zcode/skills). This is how
     a `personal`-scoped row survives the foreign filter on machines where the two shelves
     are NOT one symlinked directory, and how un-namespaced foreign rows with a real local
-    twin stay offerable. OSError is UNKNOWN — returns True so the caller's
-    drop-only-on-positive-knowledge rule keeps the row."""
+    twin stay offerable."""
+    return _has_skill_md(name, _ZCODE_READ_ROOTS)
+
+
+def _has_skill_md(name: str, roots) -> bool:
+    """True when `<root>/<name>/SKILL.md` exists under any of `roots`. OSError is UNKNOWN —
+    returns True so the caller's drop-only-on-positive-knowledge rule keeps the row."""
     try:
-        return any((root / name / "SKILL.md").exists() for root in _ZCODE_READ_ROOTS)
+        return any((root / name / "SKILL.md").exists() for root in roots)
     except (OSError, ValueError):
         return True
 
@@ -766,39 +667,21 @@ def _invocable_twin(name: str) -> bool:
     if RUNNING_HARNESS == "dsh":
         # DSH has no plugin registry; a foreign-scoped row survives here only through a
         # filesystem twin — the name exists as a directory under DSH_HOME/skills/
-        # (the DSH personal skill root). OSError -> UNKNOWN -> keep (fail-to-non-blocking).
-        try:
-            roots = [Path.home() / ".agents" / "skills"]
-            if _DSH_HOME and _DSH_HOME.exists():
-                roots.insert(0, _DSH_HOME / "skills")
-            return any((r / name / "SKILL.md").exists() for r in roots)
-        except (OSError, ValueError):
-            return True
+        # (the DSH personal skill root) or ~/.agents/skills.
+        return _has_skill_md(name, (_DSH_HOME / "skills", _AGENTS_SKILLS))
     if RUNNING_HARNESS == "cline":
         # Cline has no skill-plugin registry (ADR-0051); a foreign-scoped row survives only
         # through a filesystem twin: a namespaced row in an installed Agent Plugin (ADR-0086),
-        # a plain row in one of Cline's skill roots. OSError -> UNKNOWN -> keep
-        # (fail-to-non-blocking).
+        # a plain row in one of Cline's skill roots.
         if ":" in name:
             return _cline_agent_plugin_skill(name)
-        try:
-            return any((root / name / "SKILL.md").exists() for root in
-                       (_CLINE_PERSONAL_ROOT, _CLINE_PROJECT_ROOT,
-                        Path.home() / ".agents" / "skills"))
-        except (OSError, ValueError):
-            return True
+        return _has_skill_md(name, (_CLINE_PERSONAL_ROOT, _CLINE_PROJECT_ROOT, _AGENTS_SKILLS))
     if RUNNING_HARNESS == "opencode":
         # OpenCode v2 (ADR-0085) has no plugin registry; a foreign-scoped row survives only
         # through a filesystem twin in OpenCode's own roots or one of its documented
-        # compatibility roots (~/.claude/skills, ~/.agents/skills). OSError -> UNKNOWN ->
-        # keep (fail-to-non-blocking), the Cline rule.
-        try:
-            return any((root / name / "SKILL.md").exists() for root in
-                       (_OPENCODE_PERSONAL_ROOT, _OPENCODE_PROJECT_ROOT,
-                        Path.home() / ".claude" / "skills",
-                        Path.home() / ".agents" / "skills"))
-        except (OSError, ValueError):
-            return True
+        # compatibility roots (~/.claude/skills, ~/.agents/skills).
+        return _has_skill_md(name, (_OPENCODE_PERSONAL_ROOT, _OPENCODE_PROJECT_ROOT,
+                                    Path.home() / ".claude" / "skills", _AGENTS_SKILLS))
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
@@ -823,24 +706,10 @@ def _synced_sidecar_names() -> set:
 
 
 def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
-    """ADR-0052 + ADR-0053: True when THIS session may act on `name`.
-
-    Discovery indexes the machine-wide UNION of enablement layers, so a
-    `plugin:skill` row can name a plugin this session's merged layers have switched
-    off (live case: ponytail project-disabled while user-default-on). Claude and OMP
-    sessions therefore demand membership in INVOCABLE_PLUGIN_IDS for namespaced
-    rows — under OMP that set already unions the claude registry (settings-layer
-    merged) with the OMP registry (per-entry `enabled`), mirroring what OMP's own
-    provider loads, so the offer can never claim invocability the harness refuses.
-    DSH, Cline and OpenCode have NO skill-plugin registry (ADR-0050/0051/0085): a namespaced
-    plugin row is never invocable there and drops; plain rows pass. The one exception: under
-    Cline a `plugin:skill` row of an installed Agent Plugin passes (ADR-0086). Codex, Command
-    Code and ZCode keep their lane semantics — the foreign-scope/twin filter in
-    _retrieve already settles their rows, and ZCode's twin resolves from its own
-    enablement-filtered registry. Non-namespaced rows (personal/project) are
-    session-native by construction and pass everywhere; INVOCABLE_PLUGIN_IDS None
-    (unreadable manifest = UNKNOWN) filters nothing, the ADR-0034 contract;
-    ENFORCER_PLUGIN_GATE=0 restores the ungated behaviour everywhere."""
+    """ADR-0052 + ADR-0053: True when THIS session may act on `name`. Discovery indexes the
+    machine-wide union of enablement layers, so a `plugin:skill` row can name a plugin this
+    session switched off. INVOCABLE_PLUGIN_IDS None (unreadable manifest = UNKNOWN) filters
+    nothing, the ADR-0034 contract. Revert: ENFORCER_PLUGIN_GATE=0."""
     if not PLUGIN_GATE:
         return True
     # Account-synced skills are not plugins: Claude Code alone loads them, and they pass on
@@ -857,8 +726,8 @@ def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
     if RUNNING_HARNESS == "cline":
         return ":" not in name or _cline_agent_plugin_skill(name)
     if RUNNING_HARNESS in ("dsh", "opencode"):
-        return ":" not in name
-    return True
+        return ":" not in name   # no skill-plugin registry (ADR-0050/0085)
+    return True   # Codex, Command Code, ZCode: the foreign-scope/twin filter settles their rows
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
@@ -1122,10 +991,10 @@ def _is_pattern(entry: str) -> bool:
     return any(ch in entry for ch in "*?[")
 
 
-def _owner_tier(name: str, rep: dict | None = None) -> str | None:
+def _owner_tier(name: str) -> str | None:
     """'heart' | 'star' | None. Exact entries first (either tier), then patterns."""
     import fnmatch
-    rep = REPUTATION if rep is None else rep
+    rep = REPUTATION
     for tier, _mark in _TIERS:
         if name in rep.get(tier, ()):
             return tier
@@ -1504,8 +1373,6 @@ except ValueError:
 # every turn without re-paying the rich version. Pre-commitment, not persuasion: it
 # forces a line-1 token and turns "the few don't fit" into an order to SEARCH, never
 # a skip. In-generation only — no post-turn detection.
-# (EFFORT was decoupled to the standalone effort-gate plugin in v0.4.0; this hook
-# now governs which/whether a skill only.)
 MANDATE = (
     "SKILL-FIRST · reply line 1 = USING: <skill> | SEARCH: <query> | NO SKILL: <why>.\n"
     "No preview this turn. A task turn → run search_skills THIS reply with 2–3 intent+domain "
@@ -1629,7 +1496,7 @@ INTENT_SKIP_MSG = (
     "you work, that is the task: route it (SEARCH/USING)."
 )
 # H5 (ADR-0019): the 3rd AUTHORIZED-SKIP leg. Its signature phrase "self-referential recap lane" is
-# a LOCKED cross-file contract — the audit (audit_skill_usage.py `_is_authorized_skip_line` at :93, called :289) matches this exact
+# a LOCKED cross-file contract — the audit (audit_skill_usage.py `_is_authorized_skip_line`) matches this exact
 # substring to count the lane as an authorized-skip, NOT a false-skip. It is prose-unlikely and MUST
 # NOT appear in the skill-first.md doctrine table, else a collision miscounts real dodges as authorized.
 SELFREF_SKIP_MSG = (
@@ -1860,15 +1727,21 @@ def _skill_key(name: str) -> str:
     return (name or "").strip().lstrip("/").split(" ")[0].replace(":", "-").lower()
 
 
+def _tail_lines(path: str, nbytes: int) -> list:
+    """The lines of the last `nbytes` of `path`; the cut first line is dropped when the read
+    starts mid-file."""
+    with open(path, "rb") as fh:
+        fh.seek(0, 2)
+        size = fh.tell()
+        fh.seek(max(0, size - nbytes))
+        return fh.read().decode("utf-8", "replace").splitlines()[1 if size > nbytes else 0:]
+
+
 def _jev_context(transcript_path: str):
     """(tail of the last assistant message, last 3 skills loaded) from the session transcript, via
     a bounded tail read. Any problem -> empty context, never an error."""
     try:
-        with open(transcript_path, "rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - JEV_TAIL_BYTES))
-            lines = fh.read().decode("utf-8", "replace").splitlines()[1 if size > JEV_TAIL_BYTES else 0:]
+        lines = _tail_lines(transcript_path, JEV_TAIL_BYTES)
     except (OSError, TypeError, ValueError):
         return "", []
     prev, skills = "", []
@@ -2070,12 +1943,7 @@ def _jev_history(transcript_path: str, prompt: str, skills: list = (), info: dic
     """The fitted rerank history from a bounded transcript tail, or None. Catches every exception: the
     caller treats None as 'use today's state'. `info["err"]` names why, when a dict is passed."""
     try:
-        with open(transcript_path, "rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - JEV_HISTORY_BYTES))
-            lines = fh.read().decode("utf-8", "replace").splitlines()[1 if size > JEV_HISTORY_BYTES else 0:]
-        res = _jev_history_lines(lines, JEV_HISTORY_TOKENS, prompt, skills)
+        res = _jev_history_lines(_tail_lines(transcript_path, JEV_HISTORY_BYTES), JEV_HISTORY_TOKENS, prompt, skills)
         if res is None and info is not None:
             info["err"] = "Empty"
         return res
@@ -2159,6 +2027,15 @@ def _jev_fits_text(name: str, desc: str) -> str:
             f"It is described as: {desc}")
 
 
+def _prob(x) -> float:
+    """`x` as a probability; raises on NaN or out of range, which must never reach the renderer or
+    the ledger."""
+    v = float(x)
+    if not (math.isfinite(v) and 0.0 <= v <= 1.0):
+        raise ValueError("probability out of range")
+    return v
+
+
 def _jev_wide_rows(answers: dict, catalog: list) -> list:
     """The wide pass's own menu (ADR-0087): the shortlist (top JEV_PER_CHUNK of every chunk) ordered by lift,
     a candidate's probability times its chunk's size, i.e. how far above an even split it stands; top
@@ -2172,12 +2049,7 @@ def _jev_wide_rows(answers: dict, catalog: list) -> list:
             continue
         i = int(k.split("::")[1])
         size = len(catalog[i * JEV_CHUNK:(i + 1) * JEV_CHUNK]) or 1
-        pr = {}
-        for n, v in a["probabilities"].items():
-            v = float(v)
-            if not (math.isfinite(v) and 0.0 <= v <= 1.0):   # a NaN must never reach the renderer or the ledger
-                raise ValueError("probability out of range")
-            pr[n] = v
+        pr = {n: _prob(v) for n, v in a["probabilities"].items()}
         for n in sorted(pr, key=lambda n: -pr[n])[:JEV_PER_CHUNK]:
             if n in desc:
                 lifts[n] = pr[n] * size
@@ -2218,18 +2090,13 @@ def _jev_decide(answers: dict, shortlist: list):
     """Pure policy over one rerank answer -> (verdict, rows, confidence, best_fit).
     "skip" when no candidate's `fits` reaches JEV_FITS_FLOOR; otherwise "offer" with the top
     JEV_OFFER_ROWS rows (name, desc, probability) in Choice order. Raises on a malformed answer."""
-    def prob(x) -> float:
-        v = float(x)
-        if not (math.isfinite(v) and 0.0 <= v <= 1.0):
-            raise ValueError("probability out of range")
-        return v
-    best = max(prob(answers[f"fits::{i}"]["noul"]) for i in range(len(shortlist)))
+    best = max(_prob(answers[f"fits::{i}"]["noul"]) for i in range(len(shortlist)))
     which = answers["which"]
-    conf = prob(which["confidence"])
+    conf = _prob(which["confidence"])
     if best < JEV_FITS_FLOOR:
         return "skip", [], conf, best
     desc = dict(shortlist)
-    probs = {n: prob(p) for n, p in which["probabilities"].items() if n in desc}
+    probs = {n: _prob(p) for n, p in which["probabilities"].items() if n in desc}
     order = sorted(probs, key=lambda n: -probs[n])
     if not order:
         raise ValueError("choice names none of the shortlist")
@@ -2332,11 +2199,9 @@ def _jev_key(tier: dict) -> str:
     return os.environ.get("TYPESAFE_API_KEY", "")
 
 
-def _jev_direct_url(url: str = None, ep: str = "ts") -> str:
-    """`url` (default ENFORCER_JEV_URL), refused unless it is https to endpoint `ep`'s own host, or a
-    loopback host (tests) — so a mis-set variable cannot send a key to another host, and neither key can
-    reach the other endpoint."""
-    url = url or JEV_URL
+def _jev_direct_url(url: str, ep: str) -> str:
+    """`url`, refused unless it is https to endpoint `ep`'s own host, or a loopback host (tests) — so a
+    mis-set variable cannot send a key to another host, and neither key can reach the other endpoint."""
     u = urllib.parse.urlsplit(url)
     host = (u.hostname or "").lower()
     if (u.scheme == "https" and host in JEV_EP_HOSTS.get(ep, set())) or host in ("127.0.0.1", "localhost", "::1"):
@@ -2605,7 +2470,7 @@ def _jev_serve(sid: str, prompt: str, jev, offered: list, outage: str, **ledger)
 
 def _authorized_skip_inject(kind: str, sid: str = "", hint: bool = True, **fmt) -> None:
     """Emit the AUTHORIZED-SKIP line for a silent verdict leg ("getaway" | "intent_skip" |
-    "selfref" | "harness") when the kill-switch is on; no-op when off. ADR-0029: the CHAIN-HINT
+    "selfref" | "harness" | "jev") when the kill-switch is on; no-op when off. ADR-0029: the CHAIN-HINT
     line (when one is due) rides these legs too — the vague ≥4-word continuations hints exist
     for land HERE, not on the ranked mandate — except the harness leg (`hint=False`): a
     notification is not the user's continuation, and 14 of the 19 ROUTE projections in the
@@ -2760,13 +2625,11 @@ def _retrieve(vector: list) -> list:
     Two small queries beat one widened query, which would drop installed skills out of the limit
     window whenever externals ranked high in it.
 
-    ADR-0034 cross-harness: rows the running harness cannot invoke are dropped HERE, per row,
-    after over-fetching to RETRIEVE_LIMIT — never via a Qdrant `must_not scope`. Scope says
-    where the indexed copy LIVES, not whether this harness can invoke it: when the same plugin
-    is installed on both sides, dedup keeps one point and the Codex path can win the name, so a
-    `codex-plugin` row may name a skill Claude invokes fine. `_invocable_twin` is the test a
-    query-side filter cannot make. Trimmed back to TOP_K, so the offer's width is unchanged.
-    ENFORCER_CROSS_HARNESS=0 issues the pre-ADR-0034 request byte-identically."""
+    ADR-0034 cross-harness: rows the running harness cannot invoke are dropped HERE, per row
+    (`_row_invocable`), after over-fetching to RETRIEVE_LIMIT — a post-filter, not a Qdrant
+    `must_not scope`; the module's cross-harness block says why. Trimmed back to TOP_K, so the
+    offer's width is unchanged. ENFORCER_CROSS_HARNESS=0 issues the pre-ADR-0034 request
+    byte-identically."""
     payload = ["name", "description", "scope"] if CROSS_HARNESS else ["name", "description"]
     res = _post_json(QUERY_GROUPS_URL,
                      {"query": vector, "group_by": "name",
@@ -2842,21 +2705,17 @@ def _retrieve_foreign(vector: list, top_installed: float = 0.0,
     >= FOREIGN_FLOOR, from a SEPARATE query. Returns [(name, desc, score, harness)] — the
     harness whose roots hold that row's copy (`_scope_harness`), rendered per row.
 
-    ADR-0054: `installed_bare` is the set of bare names (scope prefix stripped) already in
-    the installed offer. A foreign row whose bare name is in it is the same skill re-rooted
-    for another harness (`doctor` under ~/.ohdsh/skills beside the invocable
-    `skill-concierge:doctor`) — listing it here as "NOT invocable" would state the opposite
-    of the truth, so it is skipped like an invocable twin.
+    Skipped rows: an invocable twin (already IN the installed offer) and, ADR-0054, a row whose
+    bare name is in `installed_bare` (the same skill re-rooted for another harness, e.g. `doctor`
+    under ~/.ohdsh/skills beside the invocable `skill-concierge:doctor`). Listing either under
+    "NOT invocable" would state the opposite of the truth. Over-fetches for the same reason
+    `_retrieve` does, so a skipped twin does not cost a real annex slot.
 
     Same hard invariant as the ADR-0032 external annex: a dedicated query, never a partition of
     a widened installed query, so a foreign skill can NEVER displace an installed offer slot.
-    The floor is deliberately the external floor's height (0.40) rather than ITEM_FLOOR (0.18)
-    — a row the agent cannot invoke earns its place only on strong intent-match.
-
-    An invocable twin is skipped: it is already IN the installed offer, and repeating it here
-    under "NOT invocable" would state the opposite of the truth. Over-fetches for the same
-    reason `_retrieve` does, so a skipped twin does not cost a real annex slot. Empty when the
-    mechanism is off; the caller wraps this so a failed query degrades to no-annex.
+    FOREIGN_FLOOR (0.40) sits far above ITEM_FLOOR (0.18): a row the agent cannot invoke earns
+    its place only on strong intent-match. Empty when the mechanism is off; the caller wraps
+    this so a failed query degrades to no-annex.
 
     ADR-0036: the per-turn floor is `_annex_floor(FOREIGN_FLOOR, top_installed)` — same
     competitive-margin rule as the external annex, one mechanism for both."""
@@ -3026,9 +2885,9 @@ def _multi_intent_gate(clusters: list) -> bool:
     return top > 0 and qual[1][0][2] >= INTENT2_RATIO * top
 
 
-def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_MAX) -> list:
+def _route_of(seed: str, names_map: dict | None = None) -> list:
     """Bounded continuation walk from `seed` through the merged chain map: strongest
-    successor per hop, cycle-safe (visited set), capped at max_nodes, successors must
+    successor per hop, cycle-safe (visited set), capped at _ROUTE_MAX, successors must
     be live map keys (the same catalogue-membership rule _chain_hint filters by).
     Returns [] when seed has no successors — a route of one node is not a route."""
     if not CHAIN_PROJECTION or not seed:
@@ -3036,7 +2895,7 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
     names_map = names_map if names_map is not None else _visible_sidecar_names()
     route, seen = [seed], {seed}
     cur = seed
-    while len(route) < max_nodes:
+    while len(route) < _ROUTE_MAX:
         succ = names_map.get(cur)
         if not isinstance(succ, list):
             break
@@ -3049,6 +2908,27 @@ def _route_of(seed: str, names_map: dict | None = None, max_nodes: int = _ROUTE_
         seen.add(nxt)
         cur = nxt
     return route if len(route) >= 2 else []
+
+
+def _intent_plan(cands: list) -> tuple:
+    """ADR-0041 multi-intent: (rows in render order, intent count) for the SHOWN set — the one
+    computation the renderer and the ledger row both read. When >=2 clusters clear the strength
+    gate, rows go leads-first; otherwise the list and its order are unchanged (one intent)."""
+    if not (MULTI_INTENT and len(cands) > 1):
+        return list(cands), 1
+    clusters = _intent_clusters(cands)
+    if not _multi_intent_gate(clusters):
+        return list(cands), 1
+    qual = _qualifying_intents(clusters)
+    # ADR-0041 amendment (0.32.1): beyond MAX_INTENTS, extra clusters are a clustering miss
+    # and fold back in as supporting rows, not announced intents.
+    extras = []
+    if len(qual) > MAX_INTENTS:
+        ranked = sorted(qual, key=lambda c: -c[0][2])
+        qual, extras = ranked[:MAX_INTENTS], [m for c in ranked[MAX_INTENTS:] for m in c]
+    # leads-first: rows 1..N name the N primaries (one per intent), then the supporting rows
+    # grouped behind their lead. Intra-cluster score order preserved within each group.
+    return [c[0] for c in qual] + [m for c in qual for m in c[1:]] + extras, len(qual)
 
 
 PREVIEW_HEAD = "Preview for this task (the top few of a shelf of hundreds, not the shelf):\n"
@@ -3075,30 +2955,7 @@ def _ranked_mandate(cands: list, annex: list | None = None, foreign: list | None
     # legible: "on disk under the other harness" is not "in a search-only catalog".
     total = sum(s for (_n, _d, s) in cands) or 1.0
     multi = len(cands) > 1
-    # ADR-0041 multi-intent: cluster the SHOWN set; when >=2 clusters clear the strength
-    # gate, reorder leads-first and say so. Single-intent turns take the same list in the
-    # same order (clusters preserve score order), rendering byte-identically.
-    ordered = list(cands)
-    n_intents = 1
-    if MULTI_INTENT and multi:
-        _clusters = _qualifying_intents(_intent_clusters(cands))
-        if _multi_intent_gate(_intent_clusters(cands)):
-            # ADR-0041 amendment (0.32.1): a task with >3 genuinely distinct intents
-            # is vanishingly rare — beyond the cap, extra clusters are a clustering
-            # miss and fold back in as supporting rows, not announced intents.
-            _extras = []
-            if len(_clusters) > MAX_INTENTS:
-                _ranked = sorted(_clusters, key=lambda c: -c[0][2])
-                _clusters = _ranked[:MAX_INTENTS]
-                _extras = [m for c in _ranked[MAX_INTENTS:] for m in c]
-                n_intents = MAX_INTENTS
-            else:
-                n_intents = len(_clusters)
-            # leads-first: rows 1..N name the N primaries (one per intent), then the
-            # supporting rows grouped behind their lead — the "first N rows" the note
-            # promises. Intra-cluster score order preserved within each group.
-            ordered = ([c[0] for c in _clusters]
-                       + [m for c in _clusters for m in c[1:]] + _extras)
+    ordered, n_intents = _intent_plan(cands)
     lines = [f"  • {name}{_badge(name)}{(f' ({round(score / total * 100)}%)' if multi else '')} — {_blurb(desc)}"
              for name, desc, score in ordered]
     if multi and n_intents > 1:
@@ -3265,8 +3122,6 @@ CONSULT_MANDATE = (
     "chain, including any follow-on work the task names. Answer the \"which skills\" "
     "question from its verdict card, never from a per-turn preview alone. Routed consults "
     "default to --fast unless the user asks to go deep.")
-# The SKILL_CONSULT_ROUTE=0 kill-switch is documented for the operator (README / CLAUDE.md /
-# quickstart); it no longer rides in the agent-facing line, which the agent cannot act on.
 
 
 def main() -> int:
@@ -3332,6 +3187,14 @@ def main() -> int:
         # (deterministic hit) is explicit intent and never asks Jev.
         _jev_job = _jev_start(prompt, data.get("transcript_path") or "") if not _hits else None
 
+        def _fallback(reason: str, **ms) -> int:
+            """Outage leg: the Jev verdict if one arrived, else the named hits or MANDATE-ONLY."""
+            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, reason, **ms):
+                return 0
+            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
+            _append_offer(sid, "fallback", _hits_offered, reason, prompt, **ms)
+            return 0
+
         # Embed (HARD timeout, EMBED_TIMEOUT_S) → mandate-only on down/slow (named hits survive).
         embed_ms = None
         t0 = time.time()
@@ -3339,20 +3202,11 @@ def main() -> int:
             vector = _embed(prompt)
             embed_ms = (time.time() - t0) * 1000
         except TimeoutError:
-            embed_ms = (time.time() - t0) * 1000
-            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "embed_timeout", embed_ms=embed_ms):
-                return 0
-            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
-            _append_offer(sid, "fallback", _hits_offered, "embed_timeout", prompt, embed_ms=embed_ms)
-            return 0
+            return _fallback("embed_timeout", embed_ms=(time.time() - t0) * 1000)
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError) as exc:
             embed_ms = (time.time() - t0) * 1000
             _owner_autostart(exc)
-            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "embed_down", embed_ms=embed_ms):
-                return 0
-            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
-            _append_offer(sid, "fallback", _hits_offered, "embed_down", prompt, embed_ms=embed_ms)
-            return 0
+            return _fallback("embed_down", embed_ms=embed_ms)
         # Retrieve → mandate-only fallback if Qdrant is unreachable.
         qdrant_ms = None
         t1 = time.time()
@@ -3360,13 +3214,7 @@ def main() -> int:
             cands = _retrieve(vector)
             qdrant_ms = (time.time() - t1) * 1000
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
-            qdrant_ms = (time.time() - t1) * 1000
-            if _jev_serve(sid, prompt, _jev_join(_jev_job), _hits_offered, "qdrant_down",
-                          embed_ms=embed_ms, qdrant_ms=qdrant_ms):
-                return 0
-            _inject((_ranked_mandate(_hits) if _hits else MANDATE) + _chain_hint(sid))
-            _append_offer(sid, "fallback", _hits_offered, "qdrant_down", prompt, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
-            return 0
+            return _fallback("qdrant_down", embed_ms=embed_ms, qdrant_ms=(time.time() - t1) * 1000)
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
         # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
@@ -3376,13 +3224,8 @@ def main() -> int:
         cands, _bl_dropped = _drop_blocklisted(cands)
         _dropped = _dropped + _bl_dropped
 
-        # Deterministic routes (ADR-0054 — config-driven, default ON): a skill the prompt
-        # NAMES leads the menu at score 1.0 whether or not retrieval found it (the preview
-        # shows only the top rows), and bypasses both the getaway and the actionability gate
-        # (the intent is explicit). Computed above, before the embed step.
-        det = _hits
-        if det:
-            cands = _merge_route_hits(det, cands)
+        if _hits:   # a named skill leads the menu and bypasses both gates below
+            cands = _merge_route_hits(_hits, cands)
 
         top = cands[0][2] if cands else 0.0
         offered = [[n, round(s, 4)] for (n, _d, s) in cands]
@@ -3405,7 +3248,7 @@ def main() -> int:
         # replaces this floor and the actionability gate below — measured on 313 real English
         # skill turns, these two gates wrongly skip 24, Jev 1. Every other turn keeps both.
         floor = _floor_for(cands[0][0]) if cands else GETAWAY_FLOOR
-        if not det and not _jev_rows and top < floor:
+        if not _hits and not _jev_rows and top < floor:
             # No semantic fit → trivial/out-of-catalogue. Log the consideration so
             # coverage/fallback stats stay honest, then authorize the skip (or stay fully
             # silent if the kill-switch is off) instead of leaving the agent to re-derive
@@ -3418,7 +3261,7 @@ def main() -> int:
         # floor — but if this is a NON-imperative turn that leans conversational over
         # actionable, the offer is noise the agent reliably dodges. Suppress it. Fail toward
         # offering (imperative OR any error -> offer). Backtest ~2% false-suppression; fires on novel input.
-        if not det and not _jev_rows and not _is_imperative(prompt) and _intent_conversational(vector):
+        if not _hits and not _jev_rows and not _is_imperative(prompt) and _intent_conversational(vector):
             _append_offer(sid, "intent_skip", offered, "conversational", prompt, dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
             _authorized_skip_inject("intent_skip", sid)
             return 0
@@ -3438,14 +3281,13 @@ def main() -> int:
         # Same rendered output, strictly less work on every suppressed turn.
         # (A strong annex hit on an installed-getaway turn still injects nothing — no installed
         # offer to append to. That remains the deliberate ADR-0032 scope, unchanged here.)
-        _atop = cands[0][2] if cands else 0.0   # post-keepoff/deterministic installed top
         try:
-            _external = _retrieve_external(vector, _atop)
+            _external = _retrieve_external(vector, top)
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _external = []
         try:
             _foreign = _retrieve_foreign(
-                vector, _atop, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in
+                vector, top, frozenset(n.split(":", 1)[-1] for (n, _d, _s) in
                           (_jev_rows or []) + (_jev_pulled if _jev_rows else []) + cands))
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             _foreign = []
@@ -3459,13 +3301,7 @@ def main() -> int:
         _pulled = _jev_pulled if _jev_rows else []
         _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes,
                                 whole_shelf=bool(_jev_rows), pulled=_pulled) + _chain_hint(sid))
-        # ADR-0041 telemetry — computed from the same pure helpers the renderer used, so
-        # the ledger row and the injected text can never disagree.
-        _ni = 1
-        if MULTI_INTENT and len(shown) > 1:
-            _cls = _qualifying_intents(_intent_clusters(shown))
-            if _multi_intent_gate(_intent_clusters(shown)):
-                _ni = min(len(_cls), MAX_INTENTS)   # same qualification + cap the renderer applies
+        _ni = _intent_plan(shown)[1]   # ADR-0041: the same plan the renderer used
         _append_offer(sid, "offer",
                       [[n, round(s, 4)] for (n, _d, s) in shown], None, prompt,
                       dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms,
@@ -3481,9 +3317,7 @@ def main() -> int:
 
 
 def _selftest() -> int:
-    """Pin two contracts: (1) the refusal guard fires on explicit skill-refusal and
-    stays silent on affirmations + bug-report negations; (2) _ranked_mandate renders
-    %-share + a disambiguation note for 2+ candidates, and neither for a lone one.
+    """Contract pins for the hook, one numbered section per contract.
     Run: python3 enforcer.py --selftest"""
     # Declared up-front: section (9) rebinds these BEFORE the section-(10+)
     # consolidated global line — a use-prior-to-global-declaration is a SyntaxError.
@@ -3536,8 +3370,8 @@ def _selftest() -> int:
     # (3) actionability gate — the imperative VETO fires on task-verb openers and stays
     # off for conversational/question/approval turns (the gate suppresses ONLY non-imperatives).
     # NOTE: production main() drops prompts with <= MAX_SHORT_WORDS (3) words BEFORE _is_imperative
-    # runs, so the veto only matters for >5-word prompts. The >5-word VN cases below represent that
-    # production-reachable population; the <=5-word cases pin the function's correctness directly.
+    # runs, so the veto only matters for prompts of 4+ words. The longer cases below represent that
+    # production-reachable population; the <=3-word ones pin the function's correctness directly.
     imp_fire = ["fix the typo on line 12", "now, write the handoff", "please run the tests",
                 "can you refactor this", "delete the cloned copy", "integrate the EFFORT gate",
                 "let's run the tests",
@@ -3933,8 +3767,8 @@ def _selftest() -> int:
     # or reordering a case turned the next into an UnboundLocalError at its own save-line.
     global _post_json, EXTERNAL_ANNEX, EXTERNAL_SLOTS, EXTERNAL_FLOOR
     global CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES
-    global ANNEX_DYNAMIC, ANNEX_MARGIN, UNDER_CODEX, RUNNING_HARNESS
-    global _zcode_readable_skill, _zcode_shares_personal_shelf, _commandcode_shares_personal_shelf
+    global ANNEX_DYNAMIC, ANNEX_MARGIN, RUNNING_HARNESS
+    global _zcode_readable_skill, _commandcode_shares_personal_shelf
     global _agents_shares_personal_shelf
     _saved_dyn12 = ANNEX_DYNAMIC
     _saved_post = _post_json
@@ -4112,7 +3946,6 @@ def _selftest() -> int:
             _grp("f2", "twinpl:dup", 0.89, "codex-plugin")]
             + [_grp(f"i{k}", f"inst-{k}", 0.8 - k / 100, "personal") for k in range(TOP_K)]}}
 
-    _saved_uc = UNDER_CODEX
     _saved_rh = RUNNING_HARNESS
     try:
         if not FOREIGN_SCOPES:
@@ -4173,10 +4006,9 @@ def _selftest() -> int:
         ANNEX_DYNAMIC = False   # case (12) pins the ADR-0034 shape; (11b) owns the dynamic rule
         # Pin the HARNESS DIRECTION too, not just the scope world. The assertions below model the
         # Claude-side twin rescue; run from a Codex cache path (or under garbage env) the module
-        # derives UNDER_CODEX=True, _invocable_twin goes deliberately blind, and exactly the three
-        # twin assertions fail — a false alarm on the documented post-deploy verification command
-        # (found by the first live Codex revalidation, defect D1).
-        UNDER_CODEX = False
+        # derives RUNNING_HARNESS="codex", _invocable_twin goes deliberately blind, and exactly the
+        # three twin assertions fail — a false alarm on the documented post-deploy verification
+        # command (found by the first live Codex revalidation).
         RUNNING_HARNESS = "claude"
         FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = ("codex-plugin", "codex-personal"), {"twinpl"}
         _post_json = _fake_xh_post
@@ -4286,7 +4118,7 @@ def _selftest() -> int:
         _saved_z_env = (os.environ.get("SKILL_CONCIERGE_HARNESS"),
                         os.environ.get("ZCODE_PLUGIN_ROOT"))
         _saved_rh3, _saved_fs3, _saved_inv3 = RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS
-        _saved_fstwin, _saved_shelf = _zcode_readable_skill, _zcode_shares_personal_shelf
+        _saved_fstwin, _saved_shelf = _zcode_readable_skill, _agents_shares_personal_shelf
         try:
             os.environ["SKILL_CONCIERGE_HARNESS"] = "zcode"
             if _running_harness() != "zcode":
@@ -4309,17 +4141,17 @@ def _selftest() -> int:
             os.environ.pop("ZCODE_PLUGIN_ROOT", None)
 
             RUNNING_HARNESS = "zcode"
-            _zcode_shares_personal_shelf = lambda: True
+            _agents_shares_personal_shelf = lambda: True
             _fs = _foreign_scopes()
             if "personal" in _fs or "zcode-personal" in _fs or \
                     not {"plugin", "codex-plugin", "commandcode-personal", "omp-managed",
                          "dsh-personal", "cline-personal"} <= set(_fs):
                 bad.append(f"cross-harness: zcode shared-shelf foreign scopes wrong: {_fs!r}")
-            _zcode_shares_personal_shelf = lambda: False
+            _agents_shares_personal_shelf = lambda: False
             if "personal" not in _foreign_scopes():
                 bad.append("cross-harness: zcode divergent-shelf must foreign personal "
                            "(the per-row filesystem twin rescues what is actually readable)")
-            _zcode_shares_personal_shelf = _saved_shelf
+            _agents_shares_personal_shelf = _saved_shelf
             # twins: registry plugin twin, filesystem twin, a true non-twin, and the
             # unknown-manifest rule (must not rescue — mirrors the OMP assertion).
             FOREIGN_SCOPES = ("personal", "plugin")
@@ -4344,7 +4176,7 @@ def _selftest() -> int:
             if _saved_z_env[1] is not None:
                 os.environ["ZCODE_PLUGIN_ROOT"] = _saved_z_env[1]
             RUNNING_HARNESS, FOREIGN_SCOPES, INVOCABLE_PLUGIN_IDS = _saved_rh3, _saved_fs3, _saved_inv3
-            _zcode_readable_skill, _zcode_shares_personal_shelf = _saved_fstwin, _saved_shelf
+            _zcode_readable_skill, _agents_shares_personal_shelf = _saved_fstwin, _saved_shelf
 
         # (ADR-0051) cline detection pins: explicit env maps, the .cline path marker,
         # the foreign-scope set (every other harness's scopes — no registry), and the
@@ -4419,7 +4251,6 @@ def _selftest() -> int:
         (CROSS_HARNESS, FOREIGN_SLOTS, FOREIGN_FLOOR, FOREIGN_SCOPES,
          INVOCABLE_PLUGIN_IDS, _post_json) = _saved_xh
         ANNEX_DYNAMIC = _saved_dyn12
-        UNDER_CODEX = _saved_uc
         RUNNING_HARNESS = _saved_rh
 
     # (13) ADR-0041 multi-intent shaping + route projection. Pins: two lexically
@@ -4535,7 +4366,7 @@ def _selftest() -> int:
     finally:
         MULTI_INTENT, CHAIN_PROJECTION, _MINED_CHAINS_PATH = _saved_41
 
-    # (12) ADR-0049 consult-intent routing — phrase-class precision + mandate render.
+    # (15) ADR-0049 consult-intent routing — phrase-class precision + mandate render.
     cons_fire = [
         "which skills should I use for this refactor?",
         "which skill should I pick before starting the work?",

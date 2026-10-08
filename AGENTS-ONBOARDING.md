@@ -19,7 +19,7 @@ User prompt
     │                 + auto_reindex / auto_overrides / auto_flywheel self-heal (detached)
     │
     ├── UserPromptSubmit: enforcer.py runs the per-turn gate
-    │     embed (warm shim, 200ms cap) → retrieve (Qdrant) → floors+imperative veto
+    │     embed (local index owner's warm `/embed`, hard timeout) → retrieve (same index) → floors+imperative veto
     │     → inject ranked SKILL-FIRST mandate | SKILL-CHECK: authorization | silent
     │     → ledger.py logs the turn
     │
@@ -34,17 +34,17 @@ don't add a post-hoc detection layer "to catch skips" — it would reverse the i
 
 0. [`openwiki/quickstart.md`](openwiki/quickstart.md) — end-to-end architecture overview (read this first)
 1. [`hooks/doctrine/skill-first.md`](hooks/doctrine/skill-first.md) — the standing order
-   (112 lines; the 6 rules + the Red Flags table are the contract)
-2. [`hooks/scripts/enforcer.py`](hooks/scripts/enforcer.py) — the per-turn gate (846 lines; the
+   (the rules + the Red Flags table are the contract)
+2. [`hooks/scripts/enforcer.py`](hooks/scripts/enforcer.py) — the per-turn gate (the
    real source of truth for the rules; has a `--selftest`)
 3. [`openwiki/architecture/three-organs.md`](openwiki/architecture/three-organs.md) — the
    conceptual spine + how a request flows
-4. [`docs/caveats.md`](docs/caveats.md) — the 15 operational landmines (read before judging
+4. [`docs/caveats.md`](docs/caveats.md) — the operational landmines (read before judging
    anything; this exists because people have been wrong before)
 5. [`AGENTS.md`](AGENTS.md) — full contract + guardrails
 
 Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
-`scripts/doctor.py`, `docs/adr/README.md` (28 ADRs — read the one for whatever area you're touching).
+`scripts/doctor.py`, `docs/adr/README.md` (read the one for whatever area you're touching).
 ## The 5 hard rules (breaking these invalidates your work)
 
 1. **Hooks are fail-silent + additive-only.** Any error → `exit 0`, turn proceeds unchanged.
@@ -52,9 +52,9 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
    exception — never assume silence means success.
 
 2. **Ledger metrics are EPOCH-SCOPED — never pool them.** This repo changes what the ledger
-   measures almost daily (gate floors, retrieval engine, doctrine, embed shim). A rate pooled
+   measures almost daily (gate floors, retrieval engine, doctrine, the index owner). A rate pooled
    across config changes describes no real configuration. Find the current epoch start
-   (`git log -1 --date=format:'%Y-%m-%d %H:%M:%S' --format=%cd -- hooks/scripts/enforcer.py hooks/doctrine/skill-first.md vendor/skill-search/skill_search/server.py scripts/embed_server.py`),
+   (`git log -1 --date=format:'%Y-%m-%d %H:%M:%S' --format=%cd -- hooks/scripts/enforcer.py hooks/doctrine/skill-first.md vendor/skill-search/skill_search/server.py vendor/skill-search/skill_search/index_owner.py`),
    then `python3 scripts/analyze.py --since "<that datetime>"`. Drop subagent / self-session
    traffic. If the window is thin, say **"insufficient data"** — do not pool backward.
    *This exact mistake once invalidated a full multi-agent analysis.*
@@ -69,7 +69,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
    artifact, not a weak retriever.
 
 5. **The plugin lives in the versioned cache; your edits don't go live by themselves.** Bump
-   `.claude-plugin/plugin.json` **and** `.claude-plugin/marketplace.json` together, push,
+   the four manifests together (see [`AGENTS.md`](AGENTS.md) → *Conventions*), push,
    then `/plugin marketplace update` + restart. The MCP launcher (`bin/skill-search-mcp`)
    auto-resyncs the venv engine on a version mismatch (ADR-0018), so a plain `setup.sh` rerun
    is only needed for a dependency change. Read [`docs/caveats.md` §11](docs/caveats.md)
@@ -82,9 +82,9 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
 | Add or change a runtime behavior | `hooks/scripts/enforcer.py` (the gate) — has `--selftest` |
 | Edit the standing order | `hooks/doctrine/skill-first.md` (runtime-read; no code change) |
 | Tune retrieval | `vendor/skill-search/skill_search/server.py` (MAX-pool trigger layer) — see `VENDORED.md` if you change engine code |
-| Add a new plugin skill | `skills/<name>/SKILL.md` with `name: skill-concierge:<name>` + `user-invocable: true` (+ `argument-hint` for skills that take arguments — ClaudeKit pattern, see caveats §15). Minimal skeleton: `skills/setup/SKILL.md` (argument-less, so no `argument-hint`); see `skills/keep-on/SKILL.md` for the `argument-hint` form. |
+| Add a new plugin skill | `skills/<name>/SKILL.md` with a bare `name: <name>` (the directory name) + `user-invocable: true` (+ `argument-hint` for skills that take arguments — ClaudeKit pattern). Minimal skeleton: `skills/setup/SKILL.md` (argument-less, so no `argument-hint`); see `skills/keep-on/SKILL.md` for the `argument-hint` form. |
 | Add a new hook event | `hooks/hooks.json` + `hooks/scripts/<name>.py` (mirror the fail-silent contract) |
-| Bump the version | BOTH `plugin.json` + `marketplace.json` together + `CHANGELOG.md` entry |
+| Bump the version | the four manifests together + `CHANGELOG.md` entry — [`AGENTS.md`](AGENTS.md) → *Conventions* |
 | Check the deployment is healthy | `python3 scripts/doctor.py` (green `status: OK` is the bar) |
 | Curate the always-on allowlist | `skill-concierge:keep-on` skill OR `python3 scripts/keep-on.py list\|add\|remove` |
 | Measure the gate | `python3 scripts/analyze.py --since "<epoch-start>"` (NOT all-time) |
@@ -102,7 +102,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
 - **`.mcp.json` env must reach the DETACHED reindex**, not just the live query server, or
   `auto_reindex` rebuilds at engine defaults and silently prunes the utterance points (v0.16.1
   fix in `auto_reindex._mcp_env()` — caveats §14).
-- **Concurrent sessions sharing one Qdrant collection** — must carry `scope` on every point
+- **Concurrent sessions sharing one index collection** — must carry `scope` on every point
   and only prune what's in `visible_scopes()` (ADR-0028). If you touch `build_index()` or
   `search_skills`, this is load-bearing.
 - **Plugin skills are namespaced in the index** — `ck:worktree`, not `worktree`; look up /
@@ -113,7 +113,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
 ```bash
 ./setup.sh                                       # first-run bootstrap (idempotent)
 python3 scripts/doctor.py                        # deployment health; "status: OK" is the bar
-python3 scripts/doctor.py --fix                  # safe auto-fixes (Qdrant, reindex, reapply overrides, reapply enrichment, rebuild prompt_intent)
+python3 scripts/doctor.py --fix                  # safe auto-fixes (index owner, reindex, reapply overrides, reapply enrichment, rebuild prompt_intent)
 python3 scripts/driftcheck.py driftcheck.json    # version + doc-parity
 python3 hooks/scripts/enforcer.py --selftest     # enforcer contract pinned (repo-local; use $CLAUDE_PLUGIN_ROOT only in deployed cache)
 python3 -m pytest tests/                         # run test suite (vendor/skill-search/tests/ also available)
@@ -136,6 +136,6 @@ python3 -m pytest tests/                         # run test suite (vendor/skill-
 end-to-end architecture, and the relevant ADR(s) for whatever area you're changing. ADRs are
 immutable; supersede with a new one rather than editing an accepted record.*
 > **Skill skeleton reference:** `skills/setup/SKILL.md` is the canonical minimal pattern.
-> Required frontmatter keys: `name: skill-concierge:<name>`, `user-invocable: true` — plus
+> Required frontmatter keys: `name: <name>` (bare, the directory name), `user-invocable: true` — plus
 > `argument-hint` for skills that take arguments (`setup` is argument-less, so it omits it; see
 > `skills/keep-on/SKILL.md` for the `argument-hint` form).

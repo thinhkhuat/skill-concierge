@@ -101,7 +101,6 @@ function latestUserPrompt(messages: any[]): string {
   return "";
 }
 
-/** Best-effort session id (DSH_SESSION_ID in the agent env, else an empty string). */
 /**
  * The session an event belongs to, from the `agent` DSH passes to pre-step and
  * post-execute handlers (`agent.session.header`; DSH's own dsh-hooks-claude-code
@@ -243,7 +242,6 @@ function fireDetached(script: string): void {
   }
 }
 
-/** Build one DSH user-message injection (as the stock tool-skill does). */
 /**
  * A DSH user message. DSH's `Message.id` is required ("stable identity preserved across every
  * representation boundary", dsh-llm message types) — its own Claude-hooks bridge builds context

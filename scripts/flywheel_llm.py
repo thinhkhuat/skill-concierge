@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """flywheel_llm.py — shared LLM client for the retrieval-flywheel generator
-scripts (llm_eval_gen.py, llm_triggers.py). Stdlib only. Any OpenAI-compatible
+scripts (llm_eval_gen.py, llm_triggers.py, llm_capsules.py). Stdlib only. Any OpenAI-compatible
 endpoint; production today is the private cloud gateway api.thinhkhuat.com/v1
 (model and schema mode set by FLYWHEEL_LLM_MODEL / FLYWHEEL_LLM_SCHEMA_MODE), configured
 in ~/.config/harness-env.sh — the canonical cross-harness env home (caveats §20).
@@ -32,10 +32,21 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 # Regen cache lives in the canonical durable home (ADR-0025), NOT ROOT/eval/ — ROOT is the
 # versioned plugin cache dir (…/<version>/), wiped on every /plugin update. A cache under the
-# ephemeral dir goes cold after each update, forcing a full-catalogue regeneration. Both
-# generators (llm_triggers.py, llm_eval_gen.py) share this single path.
+# ephemeral dir goes cold after each update, forcing a full-catalogue regeneration. Every
+# generator (llm_triggers.py, llm_eval_gen.py, llm_capsules.py) shares this single path.
 HOME = Path(os.environ.get("SKILL_CONCIERGE_HOME", Path.home() / ".claude" / "skill-concierge"))
 CACHE_FILE = HOME / ".flywheel-cache.json"
+
+
+def load_cache():
+    if CACHE_FILE.exists():
+        return json.loads(CACHE_FILE.read_text())
+    return {}
+
+
+def save_cache(cache):
+    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
 _HARNESS_ENV_SH = Path.home() / ".config" / "harness-env.sh"
 
@@ -120,11 +131,27 @@ def body_hash(text):
     return hashlib.md5(text.encode()).hexdigest()
 
 
+def _headers():
+    h = {"Content-Type": "application/json"}
+    if API_KEY:
+        h["Authorization"] = f"Bearer {API_KEY}"
+    return h
+
+
+def _response_format(schema):
+    """The OpenAI `response_format` for SCHEMA_MODE, or None (mode "off", or no schema: rely on the prompt)."""
+    if schema is not None and SCHEMA_MODE == "json_schema":
+        return {"type": "json_schema", "json_schema": {"name": "reply", "strict": True, "schema": schema}}
+    if schema is not None and SCHEMA_MODE == "json_object":
+        return {"type": "json_object"}
+    return None
+
+
 def chat(system, user, rate_s=6.0, timeout=120, schema=None):
-    """POST to the LM Studio OpenAI-compatible /v1/chat/completions endpoint, return
-    the parsed JSON reply. If `schema` is given (a JSON-schema dict), pass it as
-    OpenAI `response_format: json_schema` (strict) so LM Studio grammar-constrains the
-    output to valid JSON with quoted keys — LM Studio rejects Ollama's `format` field.
+    """POST to the OpenAI-compatible ENDPOINT (/v1/chat/completions), return the parsed
+    JSON reply. If `schema` is given (a JSON-schema dict), pass it as OpenAI
+    `response_format: json_schema` (strict) so the server grammar-constrains the output to
+    valid JSON with quoted keys (the OpenAI field, not Ollama's `format`).
     NOTE: the generation model must have THINKING OFF. Reasoning is incompatible with a
     response_format (empties the content) and, run schema-less, exhausts the token budget
     on this task's complex prompt — proven dead by every path (reports/qwen35-9b-thinking-*).
@@ -149,19 +176,10 @@ def chat(system, user, rate_s=6.0, timeout=120, schema=None):
         # of content returned on 7/89 skills; the raise is the documented fix (line ~149).
         "max_tokens": 8192,
     }
-    if schema is not None and SCHEMA_MODE == "json_schema":
-        payload["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {"name": "reply", "strict": True, "schema": schema},
-        }
-    elif schema is not None and SCHEMA_MODE == "json_object":
-        payload["response_format"] = {"type": "json_object"}
-    # SCHEMA_MODE == "off" (or no schema given): omit response_format, rely on the prompt.
-    body = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if API_KEY:
-        headers["Authorization"] = f"Bearer {API_KEY}"
-    req = urllib.request.Request(ENDPOINT, data=body, headers=headers)
+    response_format = _response_format(schema)
+    if response_format is not None:
+        payload["response_format"] = response_format
+    req = urllib.request.Request(ENDPOINT, data=json.dumps(payload).encode(), headers=_headers())
     for attempt in range(3):        # transient 5xx/timeout -> backoff, don't hammer
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -247,15 +265,16 @@ def ping(timeout=None):
         return False, f"{url} unreachable: {e}"
 
 
-def live_skills():
+def live_skills(catalog=None):
     """Unique {skill_name: description} from the LIVE index (claude_skills payloads)
     — same source build_triggers.py uses, NOT disk. scroll_all_points() yields one
     entry per chunked point, so many points share a name; dedupe by name (keep the
-    first non-empty description). Names match what precision_eval.py (and the retired enrich_index.py)
-    key on. Generators need the description to prompt the LLM, hence {name: desc}."""
+    first non-empty description). Names match what precision_eval.py keys on.
+    Generators need the description to prompt the LLM, hence {name: desc}.
+    `catalog="<alias>"` scopes to one external catalog's `<alias>:*` skills (ADR-0031)."""
     import build_triggers
     out = {}
-    for name, desc in build_triggers.scroll_all_points():
+    for name, desc in build_triggers.scroll_all_points(catalog=catalog):
         if name and name not in out:
             out[name] = desc or ""
     return out
@@ -264,6 +283,32 @@ def live_skills():
 def live_skill_names():
     """Unique skill names (sorted) — for --limit/--only iteration in the generators."""
     return sorted(live_skills())
+
+
+# A chat() failure that fails one skill, never the pass. URLError and HTTPError are OSError subclasses.
+CHAT_ERRORS = (AttributeError, IndexError, KeyError, OSError, TypeError, json.JSONDecodeError,
+               TruncatedCompletion)
+
+
+def run_batch(names, needs_work, net, merge, workers=1):
+    """The generators' shared driver. `net(name)` is the network phase: it returns (name, reply) or
+    (name, exception) and may run on `workers` threads; `merge(name, reply)` writes the corpus and
+    cache and always runs in this thread, so the files stay single-writer. Skills that no longer
+    `needs_work` are skipped. Returns one {"name", "status", "detail"} record per attempted skill."""
+    batch = [n for n in names if needs_work(n)]
+
+    def collect(name, out):
+        if isinstance(out, BaseException):
+            print(f"WARN: skipping {name}: chat failed ({out})")
+            return {"name": name, "status": "error", "detail": f"chat failed: {out}"}
+        return merge(name, out)
+
+    if workers <= 1 or len(batch) <= 1:
+        return [collect(*net(n)) for n in batch]       # sequential: merge order = name order
+    # Politeness (rate_s) stays per-call inside chat(), so effective gateway load scales with `workers`.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return [collect(*fut.result()) for fut in as_completed([ex.submit(net, n) for n in batch])]
 
 
 def _selftest():
@@ -279,28 +324,24 @@ def _selftest():
     assert len(h) == 32 and re.fullmatch(r"[0-9a-f]{32}", h), "body_hash format failed"
     assert body_hash("abc") == h, "body_hash not stable"
 
-    # Auth header: built when FLYWHEEL_LLM_API_KEY is set, absent otherwise. Network-free —
-    # inspect the Request object build_chat_request() would produce without sending it.
-    def _headers(key):
-        h = {"Content-Type": "application/json"}
-        if key:
-            h["Authorization"] = f"Bearer {key}"
-        return h
-    assert "Authorization" not in _headers(""), "no key -> no Authorization header"
-    assert _headers("sk-test")["Authorization"] == "Bearer sk-test", "key -> Bearer header"
-
-    # Schema-mode -> response_format shape (mirrors the branch in chat()).
-    def _response_format(mode, schema):
-        if schema is not None and mode == "json_schema":
-            return {"type": "json_schema", "json_schema": {"name": "reply", "strict": True, "schema": schema}}
-        if schema is not None and mode == "json_object":
-            return {"type": "json_object"}
-        return None
-    dummy_schema = {"type": "object"}
-    assert _response_format("json_schema", dummy_schema)["type"] == "json_schema", "json_schema mode"
-    assert _response_format("json_object", dummy_schema) == {"type": "json_object"}, "json_object mode"
-    assert _response_format("off", dummy_schema) is None, "off mode omits response_format"
-    assert _response_format("json_schema", None) is None, "no schema -> no response_format regardless of mode"
+    # The headers and response_format chat() sends (network-free: the helpers chat() calls).
+    global API_KEY, SCHEMA_MODE
+    saved = API_KEY, SCHEMA_MODE
+    try:
+        API_KEY = ""
+        assert "Authorization" not in _headers(), "no key -> no Authorization header"
+        API_KEY = "sk-test"
+        assert _headers()["Authorization"] == "Bearer sk-test", "key -> Bearer header"
+        dummy_schema = {"type": "object"}
+        SCHEMA_MODE = "json_schema"
+        assert _response_format(dummy_schema)["type"] == "json_schema", "json_schema mode"
+        assert _response_format(None) is None, "no schema -> no response_format regardless of mode"
+        SCHEMA_MODE = "json_object"
+        assert _response_format(dummy_schema) == {"type": "json_object"}, "json_object mode"
+        SCHEMA_MODE = "off"
+        assert _response_format(dummy_schema) is None, "off mode omits response_format"
+    finally:
+        API_KEY, SCHEMA_MODE = saved
 
     # timeout classification — what chat() may retry vs what must fail fast
     assert _is_timeout(TimeoutError("read timed out")), "bare TimeoutError must classify as timeout"

@@ -5,15 +5,8 @@ flywheel_llm client and merge them additively into the canonical corpus
 (~/.claude/skill-concierge/triggers.json) alongside the
 existing prose-phrase layer build_triggers.py writes.
 
-See plans/2026-07-08-local-llm-retrieval-flywheel.md, Task 3.
-
-Merge shape: the retired enrich_index.py (archived 2026-09-26) only ever reads triggers[name]["triggers"] as one
-flat list (scripts/enrich_index.py:143 `ts = triggers[n]["triggers"]`) — it has
-no notion of layers. So to be additive AND actually consumed without touching
-enrich_index.py, the prose-phrase list is kept verbatim under `prose_triggers`,
-the new utterance list is kept verbatim (capped) under `llm_triggers`, and the
-top-level `triggers`/`n`/`source` become the union of both so the existing
-consumer picks up both layers unchanged.
+Merge shape: the prose layer is kept verbatim under `prose_triggers`, the utterances (capped) under
+`llm_triggers`, and the top-level `triggers`/`n`/`source` are their capped union.
 
 Usage:
   python3 scripts/llm_triggers.py --selftest
@@ -26,19 +19,15 @@ import json
 import os
 import sys
 import tempfile
-import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import flywheel_llm
+from flywheel_llm import load_cache, save_cache  # the shared regen cache; doctor.py calls them through here
 from build_triggers import MAX_TRIGGERS  # same per-skill cap build_triggers.py uses
-
-# Canonical utterance corpus lives in the OPERATOR home (0.37.0 — see build_triggers.py).
-_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
-TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
-CACHE_FILE = flywheel_llm.CACHE_FILE  # canonical durable home (ADR-0025), shared with llm_eval_gen.py
+from build_triggers import OUT as TRIGGERS_FILE  # the canonical corpus, ~/.claude/skill-concierge/triggers.json
 
 # Bump when SYSTEM_PROMPT changes. The cache key hashes only the skill DESCRIPTION,
 # so without a version in the prefix a prompt rewrite regenerates nothing — every
@@ -211,17 +200,6 @@ def save_triggers(triggers, path=None):
         raise
 
 
-def load_cache():
-    if CACHE_FILE.exists():
-        return json.loads(CACHE_FILE.read_text())
-    return {}
-
-
-def save_cache(cache):
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_FILE.write_text(json.dumps(cache, indent=2))
-
-
 def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     """Returns a list of {"name", "status": "generated"|"error", "detail"} records —
     one per skill actually attempted this call (cache-hit/unchanged skills are skipped
@@ -237,14 +215,7 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     cache stay single-writer — merged in this thread as futures complete.
     rate_s remains the per-call politeness sleep, so effective gateway load
     scales with `workers`; per-skill failure isolation is unchanged."""
-    if catalog is None:
-        skills = flywheel_llm.live_skills()
-    else:
-        import build_triggers
-        skills = {}
-        for name, desc in build_triggers.scroll_all_points(catalog=catalog):
-            if name and name not in skills:
-                skills[name] = desc or ""
+    skills = flywheel_llm.live_skills(catalog)
     names = sorted(skills) if only is None else [only]
 
     triggers = load_triggers()
@@ -271,8 +242,6 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
     if limit:
         names = names[:limit]
 
-    results = []
-
     def _net(name):
         """Network phase only — safe to run concurrently. Returns (name, reply)
         on success or (name, exception) on a caught chat failure."""
@@ -290,16 +259,7 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
                 # Scoring never fails the skill: any Jev/sibling error keeps every phrase.
                 jev_res[name] = trigger_filter.filter_phrases(name, desc, clean_triggers(reply["triggers"]),
                                                               jev_ctx)
-        except (
-            AttributeError,
-            IndexError,
-            KeyError,
-            OSError,
-            TypeError,
-            json.JSONDecodeError,
-            flywheel_llm.TruncatedCompletion,
-            urllib.error.URLError,
-        ) as e:
+        except flywheel_llm.CHAT_ERRORS as e:
             return name, e
         return name, reply
 
@@ -323,29 +283,7 @@ def run(limit=None, only=None, rate=6.0, catalog=None, workers=1):
         save_cache(cache)
         return {"name": name, "status": "generated", "detail": None}
 
-    def _collect(name, out):
-        if isinstance(out, BaseException):
-            print(f"WARN: skipping {name}: chat failed ({out})")
-            return {"name": name, "status": "error", "detail": f"chat failed: {out}"}
-        return _merge(name, out)
-
-    if workers <= 1 or len(names) <= 1:
-        for name in names:
-            if not _needs_work(name):
-                continue  # unchanged + already merged
-            name2, out = _net(name)
-            results.append(_collect(name2, out))
-    else:
-        # Fan the network phase out; politeness (rate_s) stays per-call inside
-        # chat(), so effective gateway load scales with `workers`.
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        batch = [n for n in names if _needs_work(n)]
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(_net, n) for n in batch]
-            for fut in as_completed(futs):
-                name, out = fut.result()
-                results.append(_collect(name, out))
-    return results
+    return flywheel_llm.run_batch(names, _needs_work, _net, _merge, workers)
 
 
 def _selftest():
@@ -401,7 +339,7 @@ def _selftest():
         assert u not in entry2["triggers"], f"run-1 utterance stacked into run-2 triggers: {u}"
 
     after = TRIGGERS_FILE.read_bytes() if TRIGGERS_FILE.exists() else None
-    assert before == after, "selftest mutated the real eval/triggers.json on disk!"
+    assert before == after, f"selftest mutated the real {TRIGGERS_FILE} on disk!"
 
     print("PASS")
 

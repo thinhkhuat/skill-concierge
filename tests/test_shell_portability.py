@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 STOCK_BASH = Path("/bin/bash")
-SCRIPTS = [ROOT / "setup.sh", ROOT / "bin" / "skill-search-mcp", ROOT / "bin" / "embed-shim",
+SCRIPTS = [ROOT / "setup.sh", ROOT / "bin" / "skill-search-mcp",
            *sorted((ROOT / "adapters").glob("*/install.sh"))]
 
 

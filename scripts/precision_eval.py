@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
 """
-precision_eval.py — full 495-way recall + cross-skill precision gate (Phase 1 step 4).
-
-The 14-of-495 shadow was un-measurable (an enriched centroid beat 481 bare competitors for
-free). This runs the gate AFTER a FULL-495 enrichment, so every skill competes enriched-vs-
-enriched — apples to apples. It compares LIVE vs the enriched SHADOW on the same queries:
-
-  RECALL (the lever)         : for each labeled positive, 495-way retrieve; report
-                               correct-skill rank-1, top-5, and clears-floor (>=0.20).
-  CONFUSION (cannibalization): when the correct skill is NOT rank-1, who stole it.
-  TRUE-NEGATIVE (precision)  : each authored near-miss negative for skill X — does X still
-                               fire rank-1 above floor? (the precision cost of enrichment).
+precision_eval.py — default mode (`--mode 495`): a LIVE-only recall/crowding report over
+eval/scenarios (correct-skill rank-1, top-5, clears-floor, true-negative fires, offer-set size).
 
 Queries embedded via the ENGINE path (same space as the index). Run under the engine venv:
   PYTHONPATH=vendor/skill-search SKILL_EMBED_BACKEND=fastembed \
   SKILL_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-mpnet-base-v2 \
   $HOME/.claude/skill-concierge/venv/bin/python3 scripts/precision_eval.py
-
-  --selftest   ranking/metric math self-check (no network)
 
 --mode findability (ADR-0074, design plans/260927-1450-findability-at-the-root SS4 E): the
 pre-registered evaluation harness for an index- or ranking-shaping change. Runs a
@@ -44,7 +33,6 @@ import json
 import math
 import os
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -55,7 +43,6 @@ from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
 CORPUS = Path(os.environ.get("SKILL_SCENARIOS_DIR", ROOT / "eval" / "scenarios"))
 QDRANT = ports.qdrant_url(default_port=6333).rstrip("/")
 LIVE = os.environ.get("SKILL_COLLECTION", "claude_skills")
-SHADOW = os.environ.get("SKILL_SHADOW_COLLECTION", "claude_skills_shadow")
 FLOOR = float(os.environ.get("ENFORCER_GETAWAY_FLOOR", "0.20"))
 TOPK = 10
 
@@ -120,15 +107,6 @@ def search(collection, qvec, k=TOPK):
         out.append((name, hits[0]["score"]))
     return out
 
-
-def _exists(collection):
-    try:
-        with urllib.request.urlopen(f"{QDRANT}/collections/{collection}", timeout=10) as r:
-            return r.status == 200
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return False
-        raise
 
 
 METRICS = [("rank1_pct", "correct rank-1 %"), ("top5_pct", "correct top-5 %"),
@@ -197,38 +175,12 @@ def run():
     qvec = dict(zip(prompts, vecs))
 
     live = eval_collection(LIVE, qvec, corpus)
-    if not _exists(SHADOW):
-        # the enrichment shadow was retired (exported, then dropped): report LIVE alone
-        print(f"\nfull 495-way precision_eval  ({live['n_pos']} positives / {live['n_neg']} "
-              f"negatives across {len(corpus)} skills)   floor={FLOOR}   "
-              f"(no '{SHADOW}' collection — LIVE only)")
-        for k, lab in METRICS:
-            print(f"{lab:<26}{live[k]:>10}")
-        print(f"OFFER-SET CROWDING  mean {live['offer_mean']}  median {live['offer_median']}  "
-              f"p95 {live['offer_p95']}  (of 495)")
-        return 0
-    shadow = eval_collection(SHADOW, qvec, corpus)
-
     print(f"\nfull 495-way precision_eval  ({live['n_pos']} positives / {live['n_neg']} "
-          f"negatives across {len(corpus)} skills)   floor={FLOOR}")
-    print(f"{'metric':<26}{'LIVE':>10}{'SHADOW':>10}{'Δ':>10}")
-    print("-" * 56)
+          f"negatives across {len(corpus)} skills)   floor={FLOOR}   (LIVE only)")
     for k, lab in METRICS:
-        d = round(shadow[k] - live[k], 1)
-        print(f"{lab:<26}{live[k]:>10}{shadow[k]:>10}{d:>+10}")
-    print("-" * 56)
-    print(f"recall counts  rank1 {live['rank1']}->{shadow['rank1']}  "
-          f"top5 {live['top5']}->{shadow['top5']}  floor {live['clears_floor']}->{shadow['clears_floor']}  "
-          f"(of {live['n_pos']})")
-    print(f"true-neg fires {live['tn_fire']}->{shadow['tn_fire']}  (of {live['n_neg']})")
-    print(f"\nOFFER-SET CROWDING (skills clearing floor={FLOOR} per query — the real precision gate):")
-    print(f"  LIVE    mean {live['offer_mean']:>6}  median {live['offer_median']:>4}  p95 {live['offer_p95']:>4}  (of 495)")
-    print(f"  SHADOW  mean {shadow['offer_mean']:>6}  median {shadow['offer_median']:>4}  p95 {shadow['offer_p95']:>4}  (of 495)")
-    print("  -> if SHADOW crowds far above LIVE, the global floor MUST be re-tuned before the")
-    print("     enriched index improves OFFERS (rank gains are scale-invariant and stand regardless).")
-    print("\nSHADOW confusion (who steals a positive when correct isn't rank-1):")
-    for n, c in list(shadow["confusion"].items())[:12]:
-        print(f"   {c:>3}x  {n}")
+        print(f"{lab:<26}{live[k]:>10}")
+    print(f"OFFER-SET CROWDING  mean {live['offer_mean']}  median {live['offer_median']}  "
+          f"p95 {live['offer_p95']}  (of 495)")
     return 0
 
 
@@ -596,7 +548,6 @@ def run_findability(args) -> int:
 def main():
     ap = argparse.ArgumentParser(description="full 495-way recall + precision gate, or "
                                               "--mode findability (ADR-0074)")
-    ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--mode", choices=("495", "findability"), default="495",
                     help="495 = the original full-495-way recall/precision gate (default); "
                          "findability = the ADR-0074 base-vs-candidate harness")
@@ -624,40 +575,6 @@ def main():
     ap.add_argument("--markdown", action="store_true",
                     help="findability mode: also print a markdown evidence block")
     args = ap.parse_args()
-    if args.selftest:
-        # selftest must not require the engine import
-        bad = []
-        ranked = [("a", 0.9), ("b", 0.5), ("c", 0.1)]
-        if rank_of(ranked, "b") != (2, 0.5):
-            bad.append("rank_of wrong")
-        if rank_of(ranked, "z") != (None, None):
-            bad.append("missing-name rank wrong")
-        if abs(sign_test_p(8, 24) - 0.0035) > 1e-3:
-            bad.append("sign_test_p (gain direction) wrong (n=32,lost=8)")
-        if sign_test_p(0, 0) != 0.0:
-            bad.append("sign_test_p(0,0) must be 0.0, not undefined")
-        if abs(sign_test_loss_p(10, 0) - 0.000977) > 1e-3:
-            bad.append("sign_test_loss_p wrong (n=10,lost=10)")
-        if sign_test_loss_p(0, 0) != 1.0:
-            bad.append("sign_test_loss_p(0,0) must be 1.0, not undefined")
-        if not cd_bar([True] * 0, [True] * 0)["passed"]:
-            bad.append("cd_bar must pass on zero changed cases")
-        if not cd_bar([False] * 8 + [True] * 5, [True] * 8 + [False] * 5)["passed"]:
-            # +8/-5 (net +3): the earlier implementation gated on gain_p (0.29 > 0.10,
-            # so it FAILED a clean net gain with no significant loss — exactly the bug).
-            bad.append("cd_bar must pass a net gain with no significant loss")
-        if cd_bar([True] * 3, [False] * 3)["passed"]:
-            # 0/-3 (net -3): too small a sample for loss_p to clear 0.10 (0.125), but a
-            # net loss must still fail — this is what the "or net < 0" clause is for.
-            bad.append("cd_bar must fail a net loss even when the sign test is insignificant")
-        if not w_bar([{"base_rank": 1, "cand_rank": 1}])["passed"]:
-            bad.append("w_bar wrong on a no-op")
-        if n_bar(0, 0, 0)["passed"] is not True:
-            bad.append("n_bar must vacuously pass on an empty N")
-        if bad:
-            print("precision_eval --selftest FAIL:", bad); return 1
-        print("precision_eval --selftest OK: rank_of + missing-name handling + bar math")
-        return 0
     if args.mode == "findability":
         return run_findability(args)
     return run()

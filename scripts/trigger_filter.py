@@ -506,13 +506,11 @@ def ledger_event(row):
 
 def all_descriptions():
     """{name: description} for installed skills plus every configured catalog alias."""
-    import build_triggers
     import catalogs
     out = {}
     for alias in catalogs._configured_roots(catalogs._load()):
-        for n, d in build_triggers.scroll_all_points(catalog=alias):
-            if n and n not in out:
-                out[n] = d or ""
+        for n, d in flywheel_llm.live_skills(alias).items():
+            out.setdefault(n, d)
     installed = flywheel_llm.live_skills()
     out.update(installed)
     return out, installed

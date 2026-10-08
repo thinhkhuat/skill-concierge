@@ -31,7 +31,7 @@ If Python is missing, tell the user and stop — `setup.sh` cannot proceed witho
 
    (When working from a git clone instead, `cd` into the repo and run `./setup.sh`.)
    It performs four idempotent steps: stable venv + deps → (re)start the index owner → build/refresh
-   the index (discovers skills from BOTH Claude Code and Codex directories, ADR-0033) and the
+   the index (discovers skills from every supported harness's skill roots) and the
    actionability-gate corpus → apply curated overrides to `~/.claude/settings.json`
    (backed up first; Claude Code only — a harmless no-op when run from Codex).
    Setup never builds the keep-off map: it is consent-only ([ADR-0077](../../docs/adr/0077-keep-off-map-is-consent-only.md)).

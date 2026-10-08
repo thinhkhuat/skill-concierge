@@ -8,7 +8,7 @@
 > **Scope:** the *Enforce* organ of skill-concierge (whether the agent uses a skill), not retrieval.
 > **Role-model:** the `caveman` plugin — a proven, battle-tested governance plugin (tens of thousands
 > of GitHub stars) whose mechanisms we anchor to. File cites below are real, read at the source.
-> **History note (2026-09-26):** the standing order quoted in §10 is the v0.3.0 text. The live text is
+> **History note:** this model describes the v0.3.0 design. The live standing order is
 > `hooks/doctrine/skill-first.md`; since v0.52.0 its skip ruling is `NO SKILL: <why>` (ADR-0062).
 
 ---
@@ -216,72 +216,12 @@ e.g. a fix/go-live commit time — instead of hand-splitting the ledger.
 
 ---
 
-## 10. The gate artifacts (copy-ready, current best)
+## 10. The gate artifacts
 
-These are the **SessionStart doctrine** form (rich). The per-turn hook injects only the trigger in §10.3.
-
-### 10.1 SKILL-FIRST — STANDING ORDER
-```
-SKILL-FIRST — STANDING ORDER. Obey every turn. This is not advice.
-
-1. First line of every reply, no exception — one of:
-      USING: <skill>     invoke it before all else
-      SEARCH: <query>    you queried the FULL index this turn (line 3); ruling pending
-      SKIPPING: none     lawful only per line 4, with the search result shown as proof
-
-2. The skills handed to you each turn are a TOP-FEW PREVIEW — not the inventory.
-   The inventory is ~500 skills, nearly all hidden from you. Treating the preview
-   as the whole shelf is the failure.
-
-3. If no previewed skill fits, you are ORDERED to query the full index BEFORE any skip:
-      tool: mcp__plugin_skill-concierge_skill-search__search_skills  (arg: query)
-      or:   /skill-concierge:skill-search
-   Query with the task in your own words. Read the ranked results. THEN rule.
-
-4. SKIPPING is lawful ONLY after line 3 returns nothing usable — and you show the query.
-   "The previewed few don't fit" is NOT a skip. It is the trigger to SEARCH.
-
-5. These are not exemptions. They are the failure, named:
-      "I can handle this unaided."  Competence is irrelevant. Not about your ability.
-      "I'm confident."              Confidence is not a ruling. A ruling needs the search.
-      "The few don't fit — move on." → SEARCH. Never skip.
-      "Closest fit isn't perfect."  Closest fit, adapted, is the standard. Perfect is not the bar.
-   Naming an unfit skill to pass the gate is a FALSE REPORT. Forbidden.
-
-Persistence: bound every turn, no drift after many turns, still bound if unsure.
-No first-line decision = no reply. No skip without a search. No silent path. Execute.
-
-Not: "These 5 don't fit, I've got this." → SKIPPING none.
-Yes: "5 don't fit → SEARCH('postgres schema migration') → supabase-specialist (0.38) → USING."
-```
-
-### 10.2 EFFORT — STANDING ORDER
-*(Extracted to the standalone effort-gate plugin in v0.4.0 — see §4. Kept here as the origin artifact.)*
-```
-EFFORT — STANDING ORDER. Obey every turn. This is not advice.
-
-Your training pulls you to spend less — tokens, calls, steps. That pull is overridden here.
-
-1. Do every step the task demands. Run the tool. Run the verification. Read the whole file.
-2. Forbidden — and forbidden in silence:
-      - cutting a skill/search/tool call/check to "save tokens" or because "I can just answer"
-      - one call where three are required; a sample where a full read is ordered
-      - concluding "no skill fits" from the previewed few WITHOUT a full-index search
-      - "good enough", thinned reasoning, early wrap
-      - any "to save context/time/effort" excuse for less work
-3. Done means done and proven — never cheap.
-4. Terse words. Full work. Cut prose, never effort.
-
-Less work is the user's order alone: name the cut, halt, await clearance. Never cut by silence. Execute.
-```
-
-### 10.3 Per-turn trigger (cheap, UserPromptSubmit — ~44 tok)
-```
-SKILL-FIRST: reply line 1 = USING <skill> | SEARCH <query> | SKIPPING none.
-"Few don't fit" / "confident" / "I can do this" → SEARCH (search_skills) before any SKIP; show the query.
-Full work, not the cheap stop.  [full doctrine: session-start]
-```
-*(plus the candidate list the enforcer already injects)*
+The standing order is `hooks/doctrine/skill-first.md`, read at runtime by `hooks/scripts/doctrine.py`
+(SessionStart); the per-turn trigger is built in `hooks/scripts/enforcer.py`. This file keeps neither
+text, so there is no copy to drift. The v0.3.0 text (`SKIPPING: none`) and the EFFORT order removed
+in v0.4.0 (§4) are in git history.
 
 ---
 

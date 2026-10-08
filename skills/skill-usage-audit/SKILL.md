@@ -2,7 +2,7 @@
 name: skill-usage-audit
 user-invocable: true
 description: Use when measuring whether a skill-concierge gate-threshold change helped real skill usage or adoption — "did the new gate values help", "skill usage impact after the change", "assess skill helpfulness", "audit skill usage post-deploy", "which telemetry is valid for skill-usage analysis". Stops the reflex of using the skill-invocation-ledger or treating offer→take as usage; routes to the transcript SKILL-FIRST trail instead.
-argument-hint: "[--since <when>] [--until <when>]"
+argument-hint: "[--since <when>]"
 license: MIT
 metadata:
   version: 0.2.1

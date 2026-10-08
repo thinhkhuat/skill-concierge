@@ -113,6 +113,17 @@ def test_cd_bar_no_change_trivially_passes(pe):
     assert r["loss_p"] == 1.0 and r["gain_p"] == 0.0
 
 
+def test_cd_bar_passes_on_zero_cases(pe):
+    assert pe.cd_bar([], [])["passed"]
+
+
+# ── rank_of (the default LIVE-only report) ────────────────────────────────────────────────────
+def test_rank_of_returns_rank_and_score_or_none(pe):
+    ranked = [("a", 0.9), ("b", 0.5), ("c", 0.1)]
+    assert pe.rank_of(ranked, "b") == (2, 0.5)
+    assert pe.rank_of(ranked, "z") == (None, None)
+
+
 # ── w_bar ────────────────────────────────────────────────────────────────────────────────────
 def test_w_bar_fails_when_any_probe_leaves_the_top3(pe):
     rows = [{"skill": "a", "base_rank": 2, "cand_rank": 5}, {"skill": "b", "base_rank": 1, "cand_rank": 1}]

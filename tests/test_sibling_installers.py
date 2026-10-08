@@ -374,16 +374,15 @@ def test_zcode_header_lists_every_refusal_that_exits_before_a_write():
         assert must_mention in header, f"header is missing a mention of: {must_mention!r}"
 
 
-def test_readme_054_1_line_mentions_the_zcode_missing_registry_entry_refusal():
-    """The 0.54.1 line documents that the ZCode installer refuses a downgrade, but that
-    release also shipped a refusal when the registry has no matching entry — the README
-    line must say so too."""
-    readme = (ROOT / "README.md").read_text()
-    start = readme.index("`0.54.1` —")
-    end = readme.index("`0.54.0` —") if "`0.54.0` —" in readme else start + 4000
-    line = readme[start:end]
-    assert "registry" in line and ("no matching entry" in line or "no entry" in line), (
-        "README's 0.54.1 line must mention the ZCode refusal when the registry entry is missing"
+def test_changelog_054_1_entry_mentions_the_zcode_missing_registry_entry_refusal():
+    """The 0.54.1 entry documents that the ZCode installer refuses a downgrade, but that
+    release also shipped a refusal when the registry has no matching entry — the release
+    record (CHANGELOG.md, since the README keeps only the current release line) must say so too."""
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    start = changelog.index("## [0.54.1]")
+    entry = changelog[start:changelog.index("\n## [", start + 1)]
+    assert "registry" in entry and "no matching entry" in entry, (
+        "CHANGELOG's 0.54.1 entry must mention the ZCode refusal when the registry entry is missing"
     )
 
 

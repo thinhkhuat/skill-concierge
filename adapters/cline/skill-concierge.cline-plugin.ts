@@ -61,7 +61,7 @@ const ENV = { ...process.env, SKILL_CONCIERGE_HARNESS: "cline" };
 const SELF_HEAL = ["auto_reindex.py", "auto_overrides.py", "auto_flywheel.py", "auto_promote.py"];
 
 /** Run a hook script without blocking the sandbox; null on any failure or timeout. */
-function run(name: string, payload: unknown, timeoutMs: number, args: string[] = [],
+function run(name: string, payload: unknown, timeoutMs: number,
   env: Record<string, string> = {}): Promise<string | null> {
   const path = script(name);
   if (!path || !existsSync(path)) return Promise.resolve(null);
@@ -71,7 +71,7 @@ function run(name: string, payload: unknown, timeoutMs: number, args: string[] =
     const finish = (v: string | null) => { if (!settled) { settled = true; clearTimeout(timer); done(v); } };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn("python3", [path, ...args], { env: { ...ENV, ...env }, stdio: ["pipe", "pipe", "ignore"] });
+      child = spawn("python3", [path], { env: { ...ENV, ...env }, stdio: ["pipe", "pipe", "ignore"] });
     } catch { finish(null); return; }
     const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } finish(null); }, timeoutMs);
     child.on("error", () => finish(null));
@@ -208,7 +208,7 @@ function startRun(runId: string, prompt: { id: string; text: string }, sid: stri
   fire(script("ledger.py"), { hook_event_name: "UserPromptSubmit", session_id: sid, prompt: prompt.text, harness: "cline" });
   const payload = { prompt: prompt.text, session_id: sid };
   const state = { promptId: prompt.id, sid } as RunState;
-  state.menu = run("enforcer.py", payload, ENFORCER_TIMEOUT_MS, [],
+  state.menu = run("enforcer.py", payload, ENFORCER_TIMEOUT_MS,
     { ENFORCER_LEDGER: "defer", ENFORCER_JEV_TIER: JEV_TIER }).then((out) => {
     state.offer = offerOf(out);
     return additionalContext(out);
@@ -220,7 +220,7 @@ function startRun(runId: string, prompt: { id: string; text: string }, sid: stri
     else if (state.seen && state.seen !== "full") logOffer(state.offer, "later", "offer_late");
   };
   state.menu.then(settle, () => settle(""));
-  run("enforcer.py", payload, HOOK_BUDGET_MS, [], { ENFORCER_JEV_ROUTER: "0", ENFORCER_LEDGER: "defer" })
+  run("enforcer.py", payload, HOOK_BUDGET_MS, { ENFORCER_JEV_ROUTER: "0", ENFORCER_LEDGER: "defer" })
     .then((out) => { state.preview = { text: additionalContext(out), offer: offerOf(out) }; },
       () => { /* full menu only */ });
   runs.set(runId, state);

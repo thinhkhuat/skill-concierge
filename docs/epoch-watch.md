@@ -84,7 +84,7 @@ router watches keep running. Offer events gain `badges` and `pulled`.
 
 ---
 
-## Unreleased — Command Code Jev tier, timeout fall-through, 7.8 s budget (ADR-0079); jevd as the bench source (ADR-0080)
+## v0.59.0 — Command Code Jev tier, timeout fall-through, 7.8 s budget (ADR-0079); jevd as the bench source (ADR-0080)
 
 **Epoch starts.** W38: the go-live of the ADR-0079 enforcer on each harness (until then an older enforcer drops the `cc:` bench entry and stays TypeSafe-first). This changes `hooks/scripts/enforcer.py` (budget cap 3.0 -> 7.8 s, timeout fall-through), so router rates (W21-W24) restart here and must be read per `tier`. The Command Code and DSH adapters run with `ENFORCER_JEV_BUDGET=1.6` and never use the `cc` tier.
 

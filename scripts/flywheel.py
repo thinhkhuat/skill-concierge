@@ -42,9 +42,7 @@ import llm_triggers  # utterance-trigger generator
 import llm_capsules  # capsule-dossier generator (ADR-0049 consult layer)
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
-# Canonical utterance corpus lives in the OPERATOR home (0.37.0 — see build_triggers.py).
-_TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
-TRIGGERS_FILE = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
+TRIGGERS_FILE = build_triggers.OUT  # the canonical utterance corpus, ~/.claude/skill-concierge/triggers.json
 PROVIDERS_DOC = ROOT / "references" / "flywheel-llm-providers.md"
 SS_BIN = VENV / "bin" / "skill-search"
 PY_BIN = VENV / "bin" / "python3"
@@ -56,16 +54,20 @@ def _engine_env():
     return engine_env.engine_env(ROOT)
 
 
+def _covered_names():
+    """triggers.json keys with a non-empty llm_triggers.triggers list (empty when the file is absent)."""
+    if not TRIGGERS_FILE.exists():
+        return set()
+    data = json.loads(TRIGGERS_FILE.read_text(encoding="utf-8"))
+    return {name for name, entry in data.items()
+            if isinstance(entry, dict) and (entry.get("llm_triggers") or {}).get("triggers")}
+
+
 def coverage():
     """(indexed sorted, covered set, missing sorted). indexed = live-index base names;
     covered = triggers.json keys with a non-empty llm_triggers.triggers list."""
     indexed = set(flywheel_llm.live_skill_names())
-    covered = set()
-    if TRIGGERS_FILE.exists():
-        data = json.loads(TRIGGERS_FILE.read_text(encoding="utf-8"))
-        for name, entry in data.items():
-            if isinstance(entry, dict) and (entry.get("llm_triggers", {}) or {}).get("triggers"):
-                covered.add(name)
+    covered = _covered_names()
     missing = sorted(indexed - covered)
     return sorted(indexed), covered, missing
 
@@ -74,13 +76,7 @@ def catalog_coverage(alias):
     """(indexed sorted, missing sorted) for ONE external catalog (ADR-0031 D10).
     Same covered-test as coverage(), over the catalog's alias-namespaced skills."""
     indexed = sorted({n for n, _ in build_triggers.scroll_all_points(catalog=alias)})
-    covered = set()
-    if TRIGGERS_FILE.exists():
-        data = json.loads(TRIGGERS_FILE.read_text(encoding="utf-8"))
-        for name, entry in data.items():
-            if isinstance(entry, dict) and (entry.get("llm_triggers", {}) or {}).get("triggers"):
-                covered.add(name)
-    return indexed, sorted(set(indexed) - covered)
+    return indexed, sorted(set(indexed) - _covered_names())
 
 
 def _config_home():
@@ -102,16 +98,10 @@ def _utterance_covered_count(alias=None):
     optionally scoped to one catalog's alias-namespaced keys. Fast snapshot source
     for live-progress sampling (live index membership is not re-checked per sample)."""
     try:
-        data = json.loads(TRIGGERS_FILE.read_text(encoding="utf-8"))
+        names = _covered_names()
     except (OSError, ValueError):
         return 0
-    if alias is None:
-        return sum(1 for v in data.values()
-                   if isinstance(v, dict) and (v.get("llm_triggers") or {}).get("triggers"))
-    prefix = f"{alias}:"
-    return sum(1 for k, v in data.items()
-               if isinstance(k, str) and k.startswith(prefix)
-               and isinstance(v, dict) and (v.get("llm_triggers") or {}).get("triggers"))
+    return sum(1 for k in names if alias is None or k.startswith(f"{alias}:"))
 
 
 def _print_live_progress(scope_targets):
@@ -149,9 +139,9 @@ def print_status():
     indexed, _covered, missing = coverage()
     have = len(indexed) - len(missing)
     aliases = _configured_aliases()
+    catalogs = {alias: catalog_coverage(alias) for alias in aliases}
     scope_targets = {"(installed)": len(indexed)}
-    for alias in aliases:
-        cat_indexed, _cat_missing = catalog_coverage(alias)
+    for alias, (cat_indexed, _cat_missing) in catalogs.items():
         scope_targets[alias] = len(cat_indexed)
     print("Utterance coverage (llm_triggers)")
     print(f"  installed: {have}/{len(indexed)}; {len(missing)} missing")
@@ -159,8 +149,7 @@ def print_status():
         print(f"    - {m}")
     if len(missing) > 10:
         print(f"    ... and {len(missing) - 10} more")
-    for alias in aliases:
-        cat_indexed, cat_missing = catalog_coverage(alias)
+    for alias, (cat_indexed, cat_missing) in catalogs.items():
         print(f"  {alias}: {len(cat_indexed) - len(cat_missing)}/{len(cat_indexed)}; "
               f"{len(cat_missing)} missing")
         for m in cat_missing[:5]:
@@ -222,11 +211,8 @@ def print_status():
 
     # --- recent runs from the global manifest ----------------------------------
     print("Recent runs (global manifest ~/.claude/skill-concierge/flywheel-manifest.json)")
-    try:
-        runs = (json.loads(flywheel_manifest.MANIFEST_PATH.read_text(encoding="utf-8"))
-                or {}).get("runs", [])
-    except (OSError, ValueError, AttributeError):
-        runs = []
+    manifest = flywheel_manifest.read_manifest()
+    runs = manifest.get("runs", []) if isinstance(manifest, dict) else []
     if not runs:
         print("  none recorded yet (fresh install, or the auto_flywheel hook has not fired)")
 
@@ -245,7 +231,7 @@ def print_status():
         elif gen == 0 and err == 0:
             verdict = "no-op (nothing needed work)"
         else:
-            verdict = "PARTIAL — rerun to fill the gap" if gen or err else "no-op"
+            verdict = "PARTIAL — rerun to fill the gap"
         ts = lr.get("timestamp", "?")
         when = ts
         try:

@@ -28,8 +28,7 @@
 #      that persists. If the plugin is already installed
 #      but disabled, the script refuses BEFORE `marketplace upgrade` or `add`
 #      runs — zero mutating CLI calls — rather than refreshing it first and
-#      only complaining afterward. A post-refresh mismatch check remains as a
-#      backstop.
+#      only complaining afterward.
 #   6. After `add`, `codex plugin list --json` — not just files on disk —
 #      decides what happens next: if `add` failed OR the plugin does not show
 #      installed, exit 1 immediately and the manual-checkout fallback (step 7)
@@ -152,15 +151,10 @@ _is_own_checkout() {
   [ -n "$top" ] && [ "$ROOT" -ef "$top" ]
 }
 
-# _export_to DIR — put this checkout's content at DIR through a staging dir beside it, so an
-# interrupted copy never leaves a half-filled DIR that a later run reads as current. The staging
-# dir is trapped (EXIT/INT/TERM) so a killed run removes it instead of leaking it forever
-# (bash defers running that trap until the current foreground step — the git archive/tar
-# pipeline — actually exits, so cleanup lands once that step ends, not the instant the signal
-# arrives), and any
-# staging dir older than 60 minutes left over from an earlier killed run is pruned before a fresh
-# one is made. An existing DIR is moved aside to the hidden .DIR.replaced-<time>, which
-# neither the version scan nor skill discovery reads, and only the newest such copy is kept.
+# _export_to DIR — stage this checkout's content beside DIR, then swap it in, so an interrupted
+# copy never leaves a half-filled DIR. The staging dir is trapped (EXIT/INT/TERM); one older than
+# 60 minutes from a killed run is pruned. An old DIR is kept once, as hidden .DIR.replaced-<time>,
+# which neither the version scan nor skill discovery reads.
 _export_to() {
   local dest="$1" parent base stage old
   parent="$(dirname "$dest")"; base="$(basename "$dest")"
@@ -333,12 +327,7 @@ PY
     disabled) PLUGIN_INSTALLED=1; ENABLED_BEFORE=0 ;;
   esac
 
-  # ── Disabled-plugin guard — before any mutating CLI call ────────────────
-  # `codex plugin add` always re-enables a plugin, and Codex has no CLI command
-  # to disable one or to keep it disabled through a refresh (no plugin enable/
-  # disable subcommand, and a '-c ...enabled=false' override does not persist).
-  # Refuse now, before 'marketplace upgrade' or 'add' runs,
-  # rather than refreshing it first and only complaining afterward.
+  # ── Disabled-plugin guard — before any mutating CLI call (header step 5) ──
   if [ "$PLUGIN_INSTALLED" = "1" ] && [ "$ENABLED_BEFORE" = "0" ]; then
     echo "!! '$PLUGIN_SELECTOR' is installed but disabled. 'codex plugin add' would" >&2
     echo "   unconditionally re-enable it, and Codex has no CLI command to disable one" >&2
@@ -371,10 +360,9 @@ PY
   codex plugin add "$PLUGIN_SELECTOR" || { ADD_OK=0; echo "!! 'codex plugin add $PLUGIN_SELECTOR' failed." >&2; }
 
   STATE="$(_plugin_state)"
-  INSTALLED_AFTER=0; ENABLED_AFTER=na
+  INSTALLED_AFTER=0
   case "$STATE" in
-    enabled) INSTALLED_AFTER=1; ENABLED_AFTER=1 ;;
-    disabled) INSTALLED_AFTER=1; ENABLED_AFTER=0 ;;
+    enabled|disabled) INSTALLED_AFTER=1 ;;
     error:*) echo "!! ${STATE#error:}" >&2 ;;
   esac
 
@@ -390,20 +378,6 @@ PY
       echo "   Restore steps: fix the error above, then run 'codex plugin add $PLUGIN_SELECTOR'" >&2
       echo "   manually (or re-run this installer)." >&2
     fi
-    exit 1
-  fi
-
-  # Backstop: the guard above already refuses before any mutating call when
-  # ENABLED_BEFORE is 0, so this should be unreachable in the normal flow.
-  # Kept in case the plugin's enabled state changes underneath this run.
-  if [ "$ENABLED_BEFORE" = "0" ] && [ "$ENABLED_AFTER" = "1" ]; then
-    echo "!! '$PLUGIN_SELECTOR' was disabled before this sync. 'codex plugin add' always" >&2
-    echo "   re-enables a plugin, and Codex has no CLI command to disable one or to keep it" >&2
-    echo "   disabled through a refresh (no plugin enable/disable subcommand, and a" >&2
-    echo "   '-c ...enabled=false' override does not persist). The plugin is now" >&2
-    echo "   enabled — this script refuses to leave that silently in place." >&2
-    echo "   Restore step: if that was deliberate, disable it again manually — edit" >&2
-    echo "   ~/.codex/config.toml, under [plugins.\"$PLUGIN_SELECTOR\"] set enabled = false." >&2
     exit 1
   fi
 

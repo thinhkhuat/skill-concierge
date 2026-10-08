@@ -204,6 +204,28 @@ def test_script_runs_as_a_hook_process_and_always_exits_zero(py, tmp_path):
     assert bad.returncode == 0 and bad.stdout == ""
 
 
+@pytest.mark.parametrize("py", ["python3", "/usr/bin/python3"])
+@pytest.mark.parametrize("payload", [
+    {"tool_name": "skill-search_get_skill", "tool_input": {"name": "compound-to-skill"}},
+    {"tool_name": "Skill", "tool_input": {"id": "compound-to-skill"}},
+])
+def test_every_interpreter_reads_ledgers_load_shapes(py, payload, tmp_path):
+    """The load shapes come from ledger.py under every interpreter, a 3.9 system python included:
+    a hand-kept fallback copy once drifted and missed these two shapes there."""
+    import shutil
+    import subprocess
+    if not shutil.which(py):
+        pytest.skip(f"{py} not present")
+    d = tmp_path / ".claude" / "skills" / "compound-to-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(COMPOUND_BODY, encoding="utf-8")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "SKILL_QDRANT_URL": "http://127.0.0.1:9"}
+    r = subprocess.run([shutil.which(py), str(SCRIPT)], cwd=tmp_path, env=env, text=True,
+                       capture_output=True, input=json.dumps(payload))
+    assert r.returncode == 0 and r.stderr == ""
+    assert "Editing or fixing" in json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
 def test_hooks_json_wires_both_load_paths():
     hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     entries = [e for e in hooks["PostToolUse"]

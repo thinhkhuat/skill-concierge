@@ -54,10 +54,13 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
    ([ADR-0025](../../docs/adr/0025-autonomous-override-freshness-and-keep-on-management.md)), and
    [`auto_flywheel.py`](../../hooks/scripts/auto_flywheel.py) generates flywheel utterances for new
    skills when a local LLM endpoint is configured and reachable
-   ([ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)).
+   ([ADR-0027](../../docs/adr/0027-flywheel-first-class-multi-provider.md)). The doctrine hook also
+   warns when jevd is running but the session's `JEVD_URL` would bypass it (`SKILL_JEVD_ENV_CHECK`).
 2. **UserPromptSubmit (every turn)** — the **Enforce** organ:
    [`enforcer.py`](../../hooks/scripts/enforcer.py) runs the per-turn gate — embed the prompt via
-   the local index owner's warm `/embed` → retrieve top-k from the **same** index → apply the score/item floors +
+   the local index owner's warm `/embed` (harness-generated prompts skip before any I/O, and prompts
+   that name a skill are pinned by deterministic routes — [ADR-0054](../../docs/adr/0054-harness-message-lane-and-audit-fixes.md))
+   → retrieve top-k from the **same** index → apply the score/item floors +
    the actionability (imperative-veto) gate → inject a ranked SKILL-FIRST mandate, **or** stay
    silent / emit a `SKILL-CHECK:` authorization (fail-open on any error). Then
    [`ledger.py`](../../hooks/scripts/ledger.py) records the turn (or a manual `/skill`).
@@ -65,7 +68,10 @@ Wiring lives in [`hooks/hooks.json`](../../hooks/hooks.json). One user message t
    the indexed catalogue from the local index owner. Claude reads the ranked names + descriptions.
 4. **Invoke** — Claude fires the genuinely relevant skills by name.
 5. **PostToolUse** — the ledger captures each `Skill` / `search_skills` invocation (matcher
-   `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant), fail-silent, additive-only.
+   `Skill|mcp__.*skill-search__search_skills` — namespace-tolerant), fail-silent, additive-only; a
+   second matcher (`Skill|mcp__.*skill-search__get_skill`) echoes a just-loaded skill's own "not for"
+   lines back as `additionalContext` (`skill_exclusions.py`, [ADR-0058](../../docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md))
+   so a body that excludes the task forces an open re-rule instead of a silent switch.
 6. **Curate** — [`scripts/analyze.py`](../../scripts/analyze.py) rolls the ledger up into
    offer→take / dodge / hit@k metrics. *Usage* questions use the `skill-usage-audit` skill + the
    transcript SKILL-FIRST trail, **not** the ledger (which measures gate compliance only) — this

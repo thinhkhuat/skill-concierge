@@ -11,7 +11,7 @@ Method (mirrors bm25-routing/routing/build-index.js, adapted to cosine + MAX-poo
   - For skill S, fetch ALL its INDEXED point vectors from Qdrant (the `base` point
     PLUS one point per trigger phrase) — the exact points live retrieval scores against.
   - Score each corpus prompt p as MAX over those points of cosine(embed(p), point) via
-    the warm embed shim. This reproduces the live MAX-pool score (Qdrant group_by name,
+    the index owner's /embed. This reproduces the live MAX-pool score (Qdrant group_by name,
     group_size=1) that S gets in the enforcer/server — so calibration == live retrieval,
     no proxy. (No LOO needed — bm25 used prompt-vs-prompt LOO only because it had no
     per-skill vector.)
@@ -23,14 +23,14 @@ HONEST STATUS is the point: a per-skill tau is only meaningful when the skill's 
 positive prompts out-score its contrastive negatives. The separation diagnostic
 (pos_mean - neg_mean) is method-independent and is what status keys on.
 
-Output: eval/thresholds.json  { skill: {tau, separation, pos_mean, neg_mean,
+Output: ~/.claude/skill-concierge/thresholds.json  { skill: {tau, separation, pos_mean, neg_mean,
                                         f1, precision, recall, n_pos, n_neg, status} }
 NOT wired into the enforcer here — producing the thresholds is D's calibration step;
 activating per-skill tau live is a separate, deliberate change (and only worth doing
 for skills whose status is `ok`).
 
 Pure stdlib. Usage:
-  python3 scripts/calibrate_thresholds.py            # calibrate + write eval/thresholds.json
+  python3 scripts/calibrate_thresholds.py            # calibrate + write thresholds.json (SKILL_THRESHOLDS)
   python3 scripts/calibrate_thresholds.py --dry-run  # report only, write nothing
   python3 scripts/calibrate_thresholds.py --selftest # math self-check (no network)
 """

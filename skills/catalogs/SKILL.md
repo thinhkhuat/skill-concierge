@@ -13,9 +13,10 @@ metadata:
 Register **external catalog roots** — local directories of third-party skills (each
 child dir carrying a `SKILL.md`, e.g. a cloned awesome-skills repo) that get indexed
 for semantic retrieval **without being installed**: they never appear in Claude Code's
-per-turn context and never enter the per-turn offer preview (search-only tier). Their
-skills index as `<alias>:<dirname>` and surface only via `search_skills`, marked
-`[external: <alias>]`.
+per-turn context. Their skills index as `<alias>:<dirname>`, surface via `search_skills`
+marked `[external: <alias>]`, and on a strong match join the per-turn offer as a separate
+external annex that never displaces an installed row (ADR-0032; `ENFORCER_EXTERNAL_ANNEX=0`
+makes them search-only).
 
 **Consumption:** an external skill cannot be invoked by the Skill tool. `USING:` one
 means pulling its body with `get_skill("<alias>:<name>")` and following that SKILL.md
@@ -60,9 +61,8 @@ becomes a normal installed skill (with the normal per-turn context cost).
 - Config lives at `~/.claude/skill-concierge/catalog-roots.json` (operator-owned
   durable home; survives plugin updates; env seam `SKILL_CONCIERGE_CATALOG_ROOTS`).
   Absent file = feature off, byte-identical behavior.
-- External skills get embeddings + body-derived triggers only; the flywheel utterance
-  layer deliberately skips them (deferred phase, ADR-0031).
+- External skills get embeddings, body-derived triggers and flywheel utterances: the
+  session-start flywheel run covers each configured catalog after the installed skills, and
+  `flywheel.py --generate --catalog <alias>` runs one by hand (ADR-0043).
 - Telemetry: `get_skill` pulls are ledgered; `analyze.py` reports external takes
   (epoch-scoped — window from the catalog's registration date).
-- First registered catalog on this machine: `antigravity` →
-  `/Users/thinhkhuat/env-DEV/antigravity-awesome-skills/skills` (2026-08-23).

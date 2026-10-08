@@ -5,8 +5,11 @@ Registered for two events (see ../hooks.json):
   • UserPromptSubmit → logs a `turn` per substantive prompt, or `manual` when the
     user typed a `/skill` (captured here because the slash path never reaches
     PostToolUse as a tool call).
-  • PostToolUse (matcher Skill|mcp__skill-search__search_skills) → logs `auto`
-    (Claude invoked a skill) or `search` (Claude called the semantic retriever).
+  • PostToolUse (matcher `Skill|mcp__.*skill[-_]search__(search_skills|get_skill)`) → logs
+    `auto` (a skill was invoked: the Skill tool, an adapter's `activate_skill` / `skill`, or
+    OMP's `read` of `skill://<name>`), `search` (the semantic retriever) or `get_skill` (a
+    deep pull).
+Adapters also send `ConciergeOffer` (ADR-0087): the Cline plugin's offer row, appended as given.
 
 Design contract (mirrors the sibling enforcement hooks):
   • FAIL-SILENT — any error exits 0; telemetry must never break or block a turn.
@@ -19,6 +22,8 @@ name is NOT documented, so we DO NOT assume one: we record the input KEYS (to le
 the real field from live data) plus a best-effort name from likely candidates —
 without logging arbitrary input values.
 """
+from __future__ import annotations
+
 import json
 import os
 import sys
@@ -110,6 +115,15 @@ def _dsh_harness() -> str | None:
     return None
 
 
+def _log(ev: dict, sub: bool, harness: str) -> None:
+    """Stamp the subagent flag and harness when set, then append."""
+    if sub:
+        ev["sub"] = True
+    if harness:
+        ev["harness"] = harness
+    _append(ev)
+
+
 def _append(ev: dict) -> None:
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -151,21 +165,14 @@ def main() -> int:
                 ev = {"t": t, "sid": sid, "ev": "manual", "name": name}
                 if typed:
                     ev["typed"] = typed
-                if sub:
-                    ev["sub"] = True
-                if harness:
-                    ev["harness"] = harness
-                _append(ev)
+                _log(ev, sub, harness)
             else:
                 # turn boundary — lets the analyzer segment uptake per prompt.
                 # Log the STRIPPED prompt so analyze.py can join this `turn` to
                 # the enforcer's `offer` event by (sid, q) — the enforcer logs q
                 # stripped, so an unstripped q here would break the join for any
                 # whitespace-bearing prompt and silently undercount hit@k.
-                ev = {"t": t, "sid": sid, "ev": "turn", "q": s[:120]}
-                if harness:
-                    ev["harness"] = harness
-                _append(ev)
+                _log({"t": t, "sid": sid, "ev": "turn", "q": s[:120]}, False, harness)
 
         elif evt == "PostToolUse":
             tool = d.get("tool_name", "")
@@ -185,11 +192,7 @@ def main() -> int:
                       "name": name, "input_keys": keys}
                 if typed:
                     ev["typed"] = typed
-                if sub:
-                    ev["sub"] = True
-                if harness:
-                    ev["harness"] = harness
-                _append(ev)
+                _log(ev, sub, harness)
             elif tool == "read":
                 # OMP activation lane: OMP consumes skills via the read tool on
                 # `skill://<name>` URLs (no Skill-tool call fires, and the OMP MCP surface is
@@ -202,18 +205,9 @@ def main() -> int:
                 name = path.split("skill://", 1)[1].split("/", 1)[0] \
                     if isinstance(path, str) and path.startswith("skill://") else ""
                 ev = {"t": t, "sid": sid, "ev": "auto", "name": name}
-                if sub:
-                    ev["sub"] = True
-                if harness:
-                    ev["harness"] = harness
-                _append(ev)
+                _log(ev, sub, harness)
             elif tool.endswith(SEARCH_TOOLS):
-                ev = {"t": t, "sid": sid, "ev": "search"}
-                if sub:
-                    ev["sub"] = True    # same subagent stamp as the Skill and get_skill lanes
-                if harness:
-                    ev["harness"] = harness
-                _append(ev)
+                _log({"t": t, "sid": sid, "ev": "search"}, sub, harness)
             elif tool.endswith(GET_TOOLS):
                 # ADR-0031 external-take leg: a get_skill deep pull is how an
                 # external catalog skill is consumed (read-inline). Log EVERY pull
@@ -225,11 +219,7 @@ def main() -> int:
                 name = ti.get("name", "") if isinstance(ti, dict) else ""
                 ev = {"t": t, "sid": sid, "ev": "get_skill",
                       "name": name if isinstance(name, str) else ""}
-                if sub:
-                    ev["sub"] = True
-                if harness:
-                    ev["harness"] = harness
-                _append(ev)
+                _log(ev, sub, harness)
         elif evt == "ConciergeOffer":
             # ADR-0087: the Cline plugin hands back the offer row of the menu the model actually
             # saw on its first call (`seen`), or a late full-pass row kept apart as `offer_late`.

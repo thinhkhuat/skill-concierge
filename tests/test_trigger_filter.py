@@ -61,11 +61,11 @@ def env(tmp_path, monkeypatch):
                       ("LEDGER", tmp_path / "ledger.log")):
         monkeypatch.setattr(tf, name, val)
     monkeypatch.setattr(llm_triggers, "TRIGGERS_FILE", tmp_path / "triggers.json")
-    monkeypatch.setattr(llm_triggers, "CACHE_FILE", tmp_path / "flywheel-cache.json")
+    monkeypatch.setattr(flywheel_llm, "CACHE_FILE", tmp_path / "flywheel-cache.json")
     monkeypatch.setattr(flywheel_lock, "LOCK_PATH", tmp_path / "fw.lock")
     monkeypatch.setattr(tf, "all_descriptions", lambda: (dict(INSTALLED), dict(INSTALLED)))
     monkeypatch.setattr(tf, "_engine_cap", lambda: "16")
-    monkeypatch.setattr(flywheel_llm, "live_skills", lambda: dict(INSTALLED))
+    monkeypatch.setattr(flywheel_llm, "live_skills", lambda catalog=None: dict(INSTALLED))
     (tmp_path / "thr.json").write_text(json.dumps(thresholds()), encoding="utf-8")
     ns = SimpleNamespace(tmp=tmp_path, enf=enf, calls=[], mp=monkeypatch, groups=list(INSTALLED),
                          handler=lambda *a: pytest.fail("Jev was called"))
@@ -166,7 +166,7 @@ def test_siblings_are_installed_only(env):
     # end to end through calibrate: neither the external row nor a sibling is ever the random column
     env.mp.setattr(llm_triggers, "load_triggers",
                    lambda: {"alpha": {"llm_triggers": {"triggers": GOOD}}})
-    env.mp.setattr(flywheel_llm, "live_skills", lambda: dict(INSTALLED))
+    env.mp.setattr(flywheel_llm, "live_skills", lambda catalog=None: dict(INSTALLED))
     fake_jev(env, good_score)
     assert tf.calibrate(env.tmp / "stage", n_skills=1, workers=1) == 0
     assert env.calls
