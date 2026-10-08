@@ -19,11 +19,14 @@
  *
  * The prompt is read in beforeModel because Cline calls beforeRun before it
  * adds the run's input message. Each run starts two enforcer passes: the full
- * one (Jev ranks the whole shelf; Command Code alone may take 5.5 s) and a
- * fast preview (ENFORCER_JEV_ROUTER=0, ~0.3 s, ENFORCER_LEDGER=0 so the turn
- * keeps one offer row). The first model call carries the full menu when it is
- * ready in time and the preview otherwise; later calls carry the full menu
- * once it lands.
+ * one (Jev ranks the whole shelf) and a
+ * fast preview (ENFORCER_JEV_ROUTER=0, ~0.3 s). The full pass runs on jevd's
+ * TypeSafe tier only (ENFORCER_JEV_TIER=typesafe, ~0.7-0.9 s live), so the first
+ * model call usually carries it; the preview covers a slow or failed pass, and
+ * later calls carry the full menu once it lands. Both passes run with
+ * ENFORCER_LEDGER=defer and hand their offer row back, so the turn's one offer
+ * row is the menu the model saw first (`seen`); a full row that lands after the
+ * preview was sent is kept as `offer_late` (ADR-0087).
  * Subagents (snapshot.parentAgentId set) get no menu and write no turn row
  * (ADR-0020). Fail-open everywhere: a broken plugin is a plain Cline session.
  */
@@ -37,6 +40,9 @@ import { fileURLToPath } from "node:url";
 // travels in and out inside that window too; 2 s leaves room for a long transcript.
 const HOOK_BUDGET_MS = 2000;
 const ENFORCER_TIMEOUT_MS = 20000;
+// ADR-0087 (owner's choice: TypeSafe only for Cline): the full pass runs on jevd's TypeSafe tier alone,
+// whose full route (~0.7-0.9 s live) fits the first model call's 2 s wait; Command Code's takes 2-2.5 s.
+const JEV_TIER = "typesafe";
 const MAX_TRACKED_RUNS = 32;
 
 type Json = Record<string, unknown>;
@@ -69,6 +75,7 @@ function run(name: string, payload: unknown, timeoutMs: number, args: string[] =
     } catch { finish(null); return; }
     const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } finish(null); }, timeoutMs);
     child.on("error", () => finish(null));
+    child.stdout?.setEncoding("utf8");   // a multi-byte character split across chunks stays whole
     child.stdout?.on("data", (d: unknown) => { out += String(d); });
     child.on("close", (code: number | null) => finish(code === 0 ? out : null));
     child.stdin?.on("error", () => { /* script exited before reading */ });
@@ -157,20 +164,65 @@ function lane(toolName: string): string {
   return "";
 }
 
-type RunState = { promptId: string; menu: Promise<string>; value?: string; preview?: string };
+/** A menu one pass produced: its text and the offer row it would log. */
+type Menu = { text: string; offer?: Json };
+type RunState = {
+  promptId: string; sid: string; menu: Promise<string>; value?: string; offer?: Json;
+  preview?: Menu; chosen?: string; seen?: string;
+};
 const runs = new Map<string, RunState>();
 let setupSessionId = "";
+
+function offerOf(stdout: string | null): Json | undefined {
+  const o = lastJson(stdout)?.["skillConciergeOffer"];
+  return o && typeof o === "object" ? (o as Json) : undefined;
+}
+
+function logOffer(offer: Json | undefined, seen: string, ev?: string): void {
+  if (offer) fire(script("ledger.py"), { hook_event_name: "ConciergeOffer", offer: { ...offer, ev: ev ?? offer["ev"], seen } });
+}
+
+/**
+ * Called once, at the run's first model call: pick the best menu ready now and log its offer row.
+ * Order (ADR-0087): the full pass (TypeSafe's full Jev route), then the embedding preview. A full row that
+ * lands after the preview was sent is kept as `offer_late`, which offer counts never read.
+ */
+function recordSeen(state: RunState): void {
+  const fullDone = state.value !== undefined;
+  const picks: [string, Menu | undefined][] = [
+    ["full", fullDone ? { text: state.value as string, offer: state.offer } : undefined], ["preview", state.preview]];
+  const hit = picks.find(([, m]) => m && m.text);
+  if (!hit) {
+    state.seen = "none";   // no menu yet: the full row is logged when it lands (seen "late")
+    if (fullDone) { state.seen = "full"; logOffer(state.offer, "full"); }
+    return;
+  }
+  const [seen, menu] = hit as [string, Menu];
+  state.seen = seen;
+  state.chosen = menu.text;
+  logOffer(menu.offer, seen);
+  if (seen !== "full" && fullDone) logOffer(state.offer, "later", "offer_late");
+}
 
 function startRun(runId: string, prompt: { id: string; text: string }, sid: string): RunState {
   fire(script("ledger.py"), { hook_event_name: "UserPromptSubmit", session_id: sid, prompt: prompt.text, harness: "cline" });
   const payload = { prompt: prompt.text, session_id: sid };
-  const state: RunState = {
-    promptId: prompt.id,
-    menu: run("enforcer.py", payload, ENFORCER_TIMEOUT_MS).then(additionalContext),
+  const state = { promptId: prompt.id, sid } as RunState;
+  state.menu = run("enforcer.py", payload, ENFORCER_TIMEOUT_MS, [],
+    { ENFORCER_LEDGER: "defer", ENFORCER_JEV_TIER: JEV_TIER }).then((out) => {
+    state.offer = offerOf(out);
+    return additionalContext(out);
+  });
+  // Same callback as the value, so recordSeen never sees a menu without its done-ness.
+  const settle = (v: string) => {
+    state.value = v;
+    if (state.seen === "none") logOffer(state.offer, "late");
+    else if (state.seen && state.seen !== "full") logOffer(state.offer, "later", "offer_late");
   };
-  state.menu.then((v) => { state.value = v; }, () => { state.value = ""; });
-  run("enforcer.py", payload, HOOK_BUDGET_MS, [], { ENFORCER_JEV_ROUTER: "0", ENFORCER_LEDGER: "0" })
-    .then(additionalContext).then((v) => { state.preview = v; }, () => { /* full menu only */ });
+  state.menu.then(settle, () => settle(""));
+  run("enforcer.py", payload, HOOK_BUDGET_MS, [], { ENFORCER_JEV_ROUTER: "0", ENFORCER_LEDGER: "defer" })
+    .then((out) => { state.preview = { text: additionalContext(out), offer: offerOf(out) }; },
+      () => { /* full menu only */ });
   runs.set(runId, state);
   while (runs.size > MAX_TRACKED_RUNS) runs.delete(runs.keys().next().value as string);
   return state;
@@ -221,8 +273,9 @@ const plugin = {
           if (!prompt) return undefined;
           state = startRun(runId, prompt, sessionIdOf(snapshot));
           await wait(state.menu, HOOK_BUDGET_MS - (Date.now() - started));
+          recordSeen(state);
         }
-        const menu = state.value || state.preview;
+        const menu = state.value || state.chosen;
         if (!menu) return undefined;
         return { messages: withMenu(messages, state.promptId, menu) };
       } catch { return undefined; }

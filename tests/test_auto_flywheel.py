@@ -35,6 +35,9 @@ def _isolate(tmp_path, monkeypatch):
         monkeypatch.setattr(af, attr, f)
     monkeypatch.setattr(af, "_mcp_env", lambda: ({}, "http://localhost:6333"))
     monkeypatch.setattr(af, "_qdrant_up", lambda _u: True)
+    # The machine's real flywheel lock must not leak in: a live run holding it made three of these
+    # tests fail mid-suite on 2026-10-08 (lock touched 22:46:56, suite 22:47-22:52).
+    monkeypatch.setattr(af, "_flywheel_locked", lambda: False)
 
 
 def test_defers_without_stamping_when_index_lags_disk(monkeypatch, tmp_path):

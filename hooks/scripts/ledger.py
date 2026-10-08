@@ -230,6 +230,12 @@ def main() -> int:
                 if harness:
                     ev["harness"] = harness
                 _append(ev)
+        elif evt == "ConciergeOffer":
+            # ADR-0087: the Cline plugin hands back the offer row of the menu the model actually
+            # saw on its first call (`seen`), or a late full-pass row kept apart as `offer_late`.
+            offer = d.get("offer")
+            if isinstance(offer, dict) and offer.get("ev") in ("offer", "offer_late"):
+                _append(offer)
     except Exception:  # noqa: BLE001 (fail-silent hook boundary)
         return 0
     return 0

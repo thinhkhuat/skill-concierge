@@ -693,7 +693,9 @@ def cmd_live(a):
     since = parse_since(a.since)
     enf = load_enforcer()
     rows, unknown = router_rows(LEDGER, since.timestamp(), a.harness)
-    ok = [r for r in rows if "err" not in r["jev"]]
+    # ADR-0087: a `stage: wide` row is the safety net (no tier finished its rerank), not a full route.
+    wide = [r for r in rows if r["jev"].get("stage") == "wide"]
+    ok = [r for r in rows if "err" not in r["jev"] and r["jev"].get("stage") != "wide"]
     ms = [r["jev"]["ms"] for r in ok if "ms" in r["jev"]]
     via = {v: sum(r["jev"].get("via") == v for r in ok) for v in ("relay", "direct", "jevd")}
     errs = {}
@@ -701,7 +703,8 @@ def cmd_live(a):
         if "err" in r["jev"]:
             errs[r["jev"]["err"]] = errs.get(r["jev"]["err"], 0) + 1
     print(f"router rows since {since.isoformat(timespec='minutes')} ({a.harness}): {len(rows)} "
-          f"({len(ok)} routed, {len(rows) - len(ok)} errors; {unknown} unattributed error rows left out)")
+          f"({len(ok)} routed, {len(wide)} kept the wide menu after a failed rerank, "
+          f"{len(rows) - len(ok) - len(wide)} errors; {unknown} unattributed error rows left out)")
     print(f"W23 latency ms p50 {pctl(ms, .5)} p90 {pctl(ms, .9)} (trigger p90 > 1500);"
           f" errors {100 * (len(rows) - len(ok)) / max(len(rows), 1):.1f}% {errs} (trigger > 5%); via {via}")
     ns = [r["jev"]["n"] for r in ok if "n" in r["jev"]]

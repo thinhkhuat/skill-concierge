@@ -1537,8 +1537,27 @@ def _clean(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None, hint=None, pulled=None) -> None:
-    """Append the offer event. Fail-silent: telemetry must never surface.
+def _append_offer(sid: str, band: str, offered: list, fallback, q: str, **kw) -> None:
+    """Append the offer event built by `_offer_ev`. Fail-silent: telemetry must never surface.
+    ENFORCER_LEDGER=0 writes no row. ENFORCER_LEDGER=defer writes none either: the row goes back
+    to the caller in the hook output (`skillConciergeOffer`), because the Cline plugin (ADR-0086)
+    runs two passes per turn and only it knows which menu the model saw (ADR-0087)."""
+    if os.environ.get("ENFORCER_LEDGER", "1") == "0":
+        return
+    try:
+        ev = _offer_ev(sid, band, offered, fallback, q, **kw)
+        if os.environ.get("ENFORCER_LEDGER") == "defer":
+            _DEFERRED["skillConciergeOffer"] = ev
+            return
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with LEDGER.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
+        return
+
+
+def _offer_ev(sid: str, band: str, offered: list, fallback, q: str, dropped=None, embed_ms=None, qdrant_ms=None, ext=None, xh=None, n_intents=None, route=None, hint=None, pulled=None) -> dict:
+    """Build the offer event that `_append_offer` writes (or, under ENFORCER_LEDGER=defer, hands back).
     ADR-0032: `ext` records the external annex names offered this turn (external offer→take
     is measured against the ADR-0031 get_skill takes); absent when no external annexed.
     ADR-0034: `xh` records the cross-harness annex the same way; absent when none annexed.
@@ -1547,55 +1566,50 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
     continuation-rate metric; additive keys, old analyzers ignore them.
     EPOCH NOTE: ADR-0034 changes what `offered` contains, so any offer-composition rate
     measured across the v0.25.0 boundary pools two different configs — window it.
-    ENFORCER_LEDGER=0 writes no row: the Cline plugin's fast preview run (ADR-0086) shadows a
-    full run of the same turn, and a second offer row would double-count that turn."""
-    if os.environ.get("ENFORCER_LEDGER", "1") == "0":
-        return
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        ev = {"t": round(time.time(), 3), "sid": sid, "ev": "offer",
-              "band": band, "offered": offered, "fallback": fallback, "q": q[:120],
-              "harness": RUNNING_HARNESS}
-        if dropped:
-            ev["dropped"] = dropped
-        if ext:
-            ev["ext"] = ext
-        if xh:
-            ev["xh"] = xh
-        if n_intents and n_intents > 1:
-            ev["n_intents"] = n_intents
-        if route:
-            ev["route"] = route
-        if hint and len(hint) >= 2:
-            ev["hint"] = hint    # ADR-0041 L4: [seed] + successors named by the CHAIN-HINT line
-        if pulled:
-            ev["pulled"] = pulled    # ADR-0083: owner-badged rows appended under Jev's rows
-        # ADR-0083: the badges this turn showed, so a take of a badged row below row 1 is countable
-        if band == "offer":    # a skip leg shows no menu, so it shows no badge
-            _names = [r[0] if isinstance(r, (list, tuple)) else r
-                      for grp in (offered, pulled) if isinstance(grp, list) for r in grp]
-            badges = {n: b.strip() for n in _names if isinstance(n, str) and (b := _badge(n))}
-            if badges:
-                ev["badges"] = badges
-        if embed_ms is not None:
-            ev["embed_ms"] = int(embed_ms)
-        if qdrant_ms is not None:
-            ev["qdrant_ms"] = int(qdrant_ms)
-        if _JEV_EVENT:
-            ev["jev"] = _JEV_EVENT    # ADR-0061: routing telemetry (or error) on every row after an attempted route
-        with LEDGER.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
-    except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
-        return
+    """
+    ev = {"t": round(time.time(), 3), "sid": sid, "ev": "offer",
+          "band": band, "offered": offered, "fallback": fallback, "q": q[:120],
+          "harness": RUNNING_HARNESS}
+    if dropped:
+        ev["dropped"] = dropped
+    if ext:
+        ev["ext"] = ext
+    if xh:
+        ev["xh"] = xh
+    if n_intents and n_intents > 1:
+        ev["n_intents"] = n_intents
+    if route:
+        ev["route"] = route
+    if hint and len(hint) >= 2:
+        ev["hint"] = hint    # ADR-0041 L4: [seed] + successors named by the CHAIN-HINT line
+    if pulled:
+        ev["pulled"] = pulled    # ADR-0083: owner-badged rows appended under Jev's rows
+    # ADR-0083: the badges this turn showed, so a take of a badged row below row 1 is countable
+    if band == "offer":    # a skip leg shows no menu, so it shows no badge
+        _names = [r[0] if isinstance(r, (list, tuple)) else r
+                  for grp in (offered, pulled) if isinstance(grp, list) for r in grp]
+        badges = {n: b.strip() for n in _names if isinstance(n, str) and (b := _badge(n))}
+        if badges:
+            ev["badges"] = badges
+    if embed_ms is not None:
+        ev["embed_ms"] = int(embed_ms)
+    if qdrant_ms is not None:
+        ev["qdrant_ms"] = int(qdrant_ms)
+    if _JEV_EVENT:
+        ev["jev"] = _JEV_EVENT    # ADR-0061: routing telemetry (or error) on every row after an attempted route
+    return ev
+
+
+# ENFORCER_LEDGER=defer: the hook output and the offer row leave as ONE JSON object at exit.
+_DEFERRED: dict = {}
 
 
 def _inject(text: str) -> None:
-    sys.stdout.write(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": text,
-        }
-    }))
+    out = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}
+    if os.environ.get("ENFORCER_LEDGER") == "defer":
+        _DEFERRED.update(out)
+        return
+    sys.stdout.write(json.dumps(out))
 
 
 # Authorization lines for the silent verdict legs (see AUTHORIZED_SKIP above). Burden of
@@ -1734,6 +1748,13 @@ JEV_PER_CHUNK = 5        # shortlist = top 5 of every chunk (chunk distributions
 JEV_RERANK_DESC = 400
 JEV_OFFER_ROWS = 5      # measured: top 5 -> 74 % recall, top 3 -> 65 %, today's 8-row menu -> 36 %
 JEV_CTX_CHARS = 1500
+# ADR-0087, the staged menu. The wide pass's own menu (its shortlist ordered by lift) is a result of its own:
+# a turn whose rerank fails on every tier keeps it instead of dropping to the embedding menu.
+# ENFORCER_JEV_TIER limits the route to one tier (a jevd provider name or a model id); the Cline plugin pins
+# `typesafe` so its 2 s first-call wait gets the full route.
+JEV_TIER_PIN = os.environ.get("ENFORCER_JEV_TIER", "").strip()
+# jevd's provider names -> the ENFORCER_JEV_BENCH endpoint of the same provider, so a pin holds without jevd
+JEV_PIN_EP = {"typesafe": "ts", "commandcode": "cc", "gateway": "gw"}
 JEV_TAIL_BYTES = 262144  # transcript tail read for the conversation context
 
 # Ported from fast-jev-compaction (MIT), src/state.ts estimateTokens: a word costs one token per six
@@ -2138,6 +2159,35 @@ def _jev_fits_text(name: str, desc: str) -> str:
             f"It is described as: {desc}")
 
 
+def _jev_wide_rows(answers: dict, catalog: list) -> list:
+    """The wide pass's own menu (ADR-0087): the shortlist (top JEV_PER_CHUNK of every chunk) ordered by lift,
+    a candidate's probability times its chunk's size, i.e. how far above an even split it stands; top
+    JEV_OFFER_ROWS as (name, desc, share of the shown lift). Raw probabilities favour a small chunk, whose few
+    options split the same mass (a one-option chunk always answers 1.0). Replayed on 233 real skill turns,
+    lift and raw order find the used skill alike (top 5: 70.8 % vs 71.2 %; top 1: 36.5 % vs 36.1 %)."""
+    desc = dict(catalog)
+    lifts = {}
+    for k, a in answers.items():
+        if not k.startswith("wide::"):
+            continue
+        i = int(k.split("::")[1])
+        size = len(catalog[i * JEV_CHUNK:(i + 1) * JEV_CHUNK]) or 1
+        pr = {}
+        for n, v in a["probabilities"].items():
+            v = float(v)
+            if not (math.isfinite(v) and 0.0 <= v <= 1.0):   # a NaN must never reach the renderer or the ledger
+                raise ValueError("probability out of range")
+            pr[n] = v
+        for n in sorted(pr, key=lambda n: -pr[n])[:JEV_PER_CHUNK]:
+            if n in desc:
+                lifts[n] = pr[n] * size
+    top = sorted(lifts, key=lambda n: -lifts[n])[:JEV_OFFER_ROWS]
+    if not top:
+        raise ValueError("wide answer names none of the catalogue")
+    total = sum(lifts[n] for n in top) or 1.0
+    return [(n, desc[n], lifts[n] / total) for n in top]
+
+
 def _jev_wide_questions(catalog: list) -> dict:
     """The whole catalogue as parallel Choice questions of at most JEV_CHUNK options each."""
     return {f"wide::{i // JEV_CHUNK}": {
@@ -2375,14 +2425,18 @@ def _jev_relay_timeout(e: urllib.error.HTTPError) -> bool:
     return err in ("TimeoutError", "timeout", "ReadTimeout")
 
 
-def _jev_route(prompt: str, transcript_path: str) -> dict:
+def _jev_route(prompt: str, transcript_path: str, sink: dict | None = None) -> dict:
     """One ADR-0061 routing decision -> {"result": (verdict, rows, best_fit, pulled) | None, "event": {...}}.
     Result None = not eligible or failed: the embedding path decides. Runs in a worker thread, so
-    it returns its telemetry instead of writing module state."""
+    it returns its telemetry instead of writing module state. ADR-0087: the event's `stage` says whether the
+    result is the full (reranked) menu or the wide pass's own menu, kept when no tier finished its rerank."""
     if not (JEV_ROUTER and _is_english(prompt)):
         return {"result": None, "event": None}
     t0 = time.time()   # before the jevd ladder fetch, so the fetch spends this turn's budget
     bench = _jev_bench()
+    if JEV_TIER_PIN:   # ADR-0087: one tier only, by jevd provider name, model, or (no jevd) endpoint
+        bench = [t for t in bench if JEV_TIER_PIN in (t.get("name"), t["model"])
+                 or JEV_PIN_EP.get(JEV_TIER_PIN) == t["ep"]]
     if not any(_jev_key(t) for t in bench):
         return {"result": None, "event": None}
     deadline = t0 + JEV_BUDGET_S
@@ -2403,6 +2457,7 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
     if JEV_HISTORY:   # fitted alongside the wide call, never ahead of it
         hth, hbox = _jev_history_start(transcript_path, prompt, skills)
     hist_ev = None
+    wide_menu = None   # ADR-0087: the first tier's wide menu, kept in case no tier finishes its rerank
     # ADR-0075 tiers in order; ADR-0079: any failure, a timeout included, moves the turn to the next tier that
     # can still finish inside the budget (a timed-out call may still be billed — the owner's accepted cost). A
     # tier with a `span` (Command Code) may spend only that much of the turn, so the tiers behind it keep theirs.
@@ -2422,6 +2477,14 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             shortlist = [(n, desc[n]) for n in _jev_shortlist(wide) if n in desc]
             if not shortlist:
                 raise ValueError("wide answer names none of the catalogue")
+            wide_ev = {"stage": "wide", "ms": int((t1 - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
+                       "via": via, "n": len(catalog), "ctx": bool(prev), "model": tier["model"], "rmodel": answered,
+                       "tier": i, "to": tier["timeout"], **({"prov": tier["name"]} if "name" in tier else {}), **src}
+            if wide_menu is None:
+                wide_menu = (_jev_wide_rows(wide, catalog), wide_ev)
+                wide_ev["lead"] = wide_menu[0][0][0]
+                if sink is not None:   # the join may give up before this route does; it serves this then
+                    sink["wide"] = {"result": ("offer", wide_menu[0], None, []), "event": dict(wide_ev, **src)}
             rstate, hist_ev = state, None
             if hth is not None:
                 # leave the rerank one call's time; a span tier's timeout is its whole span, so reserve TypeSafe's
@@ -2444,6 +2507,10 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
                 # History alone must never cause the authorized skip: a skip needs today's state to agree.
                 hist_ev["reask"] = True
                 if tdl - time.time() < JEV_REASK_MIN_S:
+                    if wide_menu is not None:   # ADR-0087: the wide menu stands, as when a rerank fails
+                        return {"result": ("offer", wide_menu[0], None, []),
+                                "event": {**wide_menu[1], "ms": int((time.time() - t0) * 1000),
+                                          "err": "HistorySkip", "hist": hist_ev}}
                     return {"result": None, "event": {**_jev_err("HistorySkip", t0), "model": tier["model"],
                                                       "hist": hist_ev, **src}}
                 rerank, _, _ = _jev_call_capped(state, questions, tier, key,
@@ -2459,7 +2526,7 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
         except (KeyError, TypeError, ValueError):
             pulled = []
         return {"result": (verdict, rows, best, pulled), "event": {
-            "ms": int((time.time() - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
+            "stage": "full", "ms": int((time.time() - t0) * 1000), "wide_ms": int((t1 - t0) * 1000),
             "conf": round(conf, 3), "fit": round(best, 3), "via": via, "n": len(catalog),
             "ctx": bool(prev), "lead": rows[0][0] if rows else None,
             # which tier answered (`rmodel` = the exact id Jev returned: a new dated snapshot under the same
@@ -2468,6 +2535,10 @@ def _jev_route(prompt: str, transcript_path: str) -> dict:
             "to": tier["timeout"], **({"prov": tier["name"]} if "name" in tier else {}), **src,
             **({"fell": fell} if fell else {}), **({"hist": hist_ev} if hist_ev else {}),
             **({"pulled": [n for (n, _d, _p) in pulled]} if pulled else {})}}
+    if wide_menu is not None:   # ADR-0087 safety net: no tier finished its rerank; the wide menu stands
+        rows, ev = wide_menu
+        return {"result": ("offer", rows, None, []),
+                "event": {**ev, "ms": int((time.time() - t0) * 1000), "fell": fell}}
     return {"result": None, "event": {**_jev_err(err, t0), "fell": fell, **src}}
 
 
@@ -2484,7 +2555,7 @@ def _jev_start(prompt: str, transcript_path: str):
 
     def work():
         try:
-            box.update(_jev_route(prompt, transcript_path))
+            box.update(_jev_route(prompt, transcript_path, box))
         except Exception as e:  # noqa: BLE001 — the thread boundary: a hook never lets an error escape
             box.update({"result": None, "event": _jev_err(type(e).__name__, t0)})
     t = threading.Thread(target=work, daemon=True)
@@ -2502,7 +2573,11 @@ def _jev_join(job):
     t, box, deadline = job
     t.join(max(0.0, deadline - time.time()))
     if t.is_alive():
+        wide = box.get("wide")   # ADR-0087: the wide menu the route already had still stands
         _JEV_EVENT = {"err": "BudgetExceeded", "ms": int(JEV_BUDGET_S * 1000), "leg": "router"}
+        if wide is not None:
+            _JEV_EVENT = {**wide["event"], **_JEV_EVENT}
+            return wide["result"]
         return None
     _JEV_EVENT = box.get("event")
     return box.get("result")
@@ -4043,7 +4118,7 @@ def _selftest() -> int:
         if not FOREIGN_SCOPES:
             bad.append(f"cross-harness: foreign scopes unset: {FOREIGN_SCOPES!r}")
         if RUNNING_HARNESS == "claude" and (
-                not all(x.startswith(("codex-", "commandcode-", "omp-", "zcode-", "dsh-", "cline-"))
+                not all(x.startswith(("codex-", "commandcode-", "omp-", "zcode-", "dsh-", "cline-", "opencode-"))
                         for x in FOREIGN_SCOPES)
                 or not {"omp-managed", "zcode-plugin"} <= set(FOREIGN_SCOPES)):
             bad.append(f"cross-harness: claude foreign scopes must be every other harness's roots: {FOREIGN_SCOPES!r}")
@@ -4184,7 +4259,7 @@ def _selftest() -> int:
             RUNNING_HARNESS = "omp"
             if _foreign_scopes() != ("codex-plugin", "commandcode-personal", "zcode-personal",
                                      "zcode-plugin", "dsh-personal", "cline-personal",
-                                     "claude-synced"):
+                                     "opencode-personal", "claude-synced"):
                 bad.append("cross-harness: omp foreign scopes wrong: "
                            f"{_foreign_scopes()!r}")
             # twin test is active under omp (plugin ids invocable via the claude/omp union)
@@ -4676,4 +4751,11 @@ def _selftest() -> int:
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(_selftest())
-    sys.exit(main())
+    _rc = main()
+    if _DEFERRED:
+        try:
+            sys.stdout.write(json.dumps(_DEFERRED, allow_nan=False))
+        except (ValueError, TypeError, OSError):   # an unwritable value must never cost the turn its menu
+            if "hookSpecificOutput" in _DEFERRED:
+                sys.stdout.write(json.dumps({"hookSpecificOutput": _DEFERRED["hookSpecificOutput"]}))
+    sys.exit(_rc)

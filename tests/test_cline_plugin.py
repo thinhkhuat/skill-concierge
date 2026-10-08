@@ -23,15 +23,20 @@ name = os.path.basename(__file__)
 raw = sys.stdin.read()
 with open(os.path.join(os.environ["STUB_LOG"], name + ".jsonl"), "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:], "stdin": raw, "harness": os.environ.get("SKILL_CONCIERGE_HARNESS"),
-                        "jev": os.environ.get("ENFORCER_JEV_ROUTER"), "ledger": os.environ.get("ENFORCER_LEDGER")}) + "\\n")
+                        "jev": os.environ.get("ENFORCER_JEV_ROUTER"), "ledger": os.environ.get("ENFORCER_LEDGER"),
+                        "tier": os.environ.get("ENFORCER_JEV_TIER")}) + "\\n")
 p = json.loads(raw or "{}")
-def ctx(text):
-    print(json.dumps({"hookSpecificOutput": {"additionalContext": text}}))
+def ctx(text, offer=None):
+    out = {"hookSpecificOutput": {"additionalContext": text}}
+    if offer and os.environ.get("ENFORCER_LEDGER") == "defer":
+        out["skillConciergeOffer"] = offer
+    print(json.dumps(out))
 if name == "enforcer.py" and os.environ.get("ENFORCER_JEV_ROUTER") == "0":
-    ctx("PREVIEW for: " + p["prompt"])
+    ctx("PREVIEW for: " + p["prompt"], {"ev": "offer", "band": "offer", "offered": [["embed-pick", 0.5]]})
 elif name == "enforcer.py":
     time.sleep(float(os.environ.get("STUB_ENFORCER_SLEEP", "0")))
-    ctx("MENU for: " + p["prompt"])
+    ctx("MENU for: " + p["prompt"], {"ev": "offer", "band": "offer", "offered": [["jev-pick", 0.9]],
+                                     "jev": {"ms": 2100}})
 elif name == "skill_guard.py":
     if p["tool_input"]["skill"] == "blocked-skill":
         print(json.dumps({"hookSpecificOutput": {"permissionDecision": "deny",
@@ -112,8 +117,8 @@ def test_menu_is_added_after_the_prompt_and_nothing_is_dropped(fake):
     calls = logged("enforcer.py", wait_for=2)
     assert {json.loads(c["stdin"])["prompt"] for c in calls} == {"refactor the auth middleware"}
     assert all(c["harness"] == "cline" for c in calls)
-    # One full pass (Jev on, ledger on) and one fast preview that writes no offer row.
-    assert sorted((c["jev"] or "", c["ledger"] or "") for c in calls) == [("", ""), ("0", "0")]
+    # One full pass (Jev on) and one fast preview (Jev off); both hand their offer row back.
+    assert sorted((c["jev"] or "", c["ledger"] or "") for c in calls) == [("", "defer"), ("0", "defer")]
 
 
 def test_one_turn_row_per_run_however_many_model_calls(fake):
@@ -124,15 +129,27 @@ def test_one_turn_row_per_run_however_many_model_calls(fake):
     rows = logged("ledger.py", wait_for=1)
     time.sleep(0.3)
     rows = logged("ledger.py")
-    assert [json.loads(r["stdin"])["hook_event_name"] for r in rows] == ["UserPromptSubmit"]
+    assert [json.loads(r["stdin"])["hook_event_name"] for r in rows] == ["UserPromptSubmit", "ConciergeOffer"]
+
+
+def _text(res):
+    return res["result"]["messages"][3]["content"][0]["text"]
 
 
 def test_slow_menu_sends_the_preview_first_then_the_full_menu(fake):
     drive, _ = fake
     first, second = drive([model_call(), {**model_call(), "pauseMs": 2500}], STUB_ENFORCER_SLEEP="3.5")
     assert first["ms"] < 2300
-    assert "PREVIEW for: refactor the auth middleware" in first["result"]["messages"][3]["content"][0]["text"]
-    assert "MENU for: refactor the auth middleware" in second["result"]["messages"][3]["content"][0]["text"]
+    assert "PREVIEW for: refactor the auth middleware" in _text(first)
+    assert "MENU for: refactor the auth middleware" in _text(second)
+
+
+def test_the_full_pass_runs_on_typesafe_only(fake):
+    """The owner's choice (ADR-0087): Cline's Jev route bills one provider, TypeSafe."""
+    drive, logged = fake
+    drive([model_call()])
+    calls = logged("enforcer.py", wait_for=2)
+    assert sorted((c["jev"] or "", c["tier"] or "") for c in calls) == [("", "typesafe"), ("0", "")]
 
 
 def test_subagents_get_no_menu_and_no_turn_row(fake):
@@ -212,7 +229,7 @@ def test_real_doctrine_renders_for_cline():
     assert "mcp__plugin_skill-concierge" not in text
 
 
-@pytest.mark.parametrize("flag,rows", [("0", 0), ("1", 1)])
+@pytest.mark.parametrize("flag,rows", [("0", 0), ("1", 1), ("defer", 0)])
 def test_enforcer_ledger_switch(tmp_path, flag, rows):
     env = {**os.environ, "SKILL_CONCIERGE_LOG": str(tmp_path), "ENFORCER_LEDGER": flag,
            "ENFORCER_JEV_ROUTER": "0", "SKILL_OWNER_AUTOSTART": "0", "SKILL_CONCIERGE_HARNESS": "cline"}
@@ -223,6 +240,24 @@ def test_enforcer_ledger_switch(tmp_path, flag, rows):
     ledger = tmp_path / "skill-invocation-ledger.log"
     offers = [l for l in ledger.read_text().splitlines() if '"ev": "offer"' in l] if ledger.exists() else []
     assert len(offers) == rows
+    out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    if flag == "defer":   # the row comes back to the caller instead, in the same one JSON object
+        assert out["skillConciergeOffer"]["ev"] == "offer" and out["skillConciergeOffer"]["sid"] == "t"
+        assert out["hookSpecificOutput"]["additionalContext"]
+    else:
+        assert "skillConciergeOffer" not in out
+
+
+def test_ledger_appends_a_handed_back_offer_row(tmp_path):
+    env = {**os.environ, "SKILL_CONCIERGE_LOG": str(tmp_path)}
+    offer = {"t": 1.0, "sid": "s", "ev": "offer", "band": "offer", "offered": [["x", 0.5]], "seen": "preview"}
+    for payload in ({"hook_event_name": "ConciergeOffer", "offer": offer},
+                    {"hook_event_name": "ConciergeOffer", "offer": {**offer, "ev": "turn"}},   # not an offer row
+                    {"hook_event_name": "ConciergeOffer", "offer": "junk"}):
+        subprocess.run(["python3", str(ROOT / "hooks" / "scripts" / "ledger.py")], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=30, env=env)
+    rows = [json.loads(l) for l in (tmp_path / "skill-invocation-ledger.log").read_text().splitlines()]
+    assert rows == [offer]
 
 
 def test_a_runtime_reminder_is_not_mistaken_for_the_prompt(fake):
@@ -256,3 +291,32 @@ def test_every_skill_lane_marks_a_subagent_row(tmp_path, tool, ev):
                    capture_output=True, text=True, timeout=30, env=env)
     rows = [json.loads(l) for l in (tmp_path / "skill-invocation-ledger.log").read_text().splitlines()]
     assert [(r["ev"], r.get("sub")) for r in rows] == [(ev, True)]
+
+
+def _offer_rows(logged, n):
+    return [json.loads(r["stdin"]) for r in logged("ledger.py", wait_for=n)
+            if json.loads(r["stdin"])["hook_event_name"] == "ConciergeOffer"]
+
+
+def test_both_passes_hand_their_offer_row_to_the_plugin(fake):
+    drive, logged = fake
+    drive([model_call()])
+    assert {c["ledger"] for c in logged("enforcer.py", wait_for=2)} == {"defer"}
+
+
+def test_the_offer_row_is_the_full_menu_when_the_model_saw_it(fake):
+    drive, logged = fake
+    drive([model_call(), model_call()])
+    [row] = _offer_rows(logged, 2)
+    assert row["offer"]["offered"] == [["jev-pick", 0.9]] and row["offer"]["seen"] == "full"
+
+
+def test_the_offer_row_is_the_preview_when_the_model_saw_the_preview(fake):
+    """The first call carried the preview: the turn's offer row is the preview's menu, and the late full
+    row is kept apart (ev offer_late) so offer counts never use it."""
+    drive, logged = fake
+    drive([model_call(), {**model_call(), "pauseMs": 2500}], STUB_ENFORCER_SLEEP="3.5")
+    rows = _offer_rows(logged, 3)
+    assert [(r["offer"]["ev"], r["offer"]["seen"]) for r in rows] == [("offer", "preview"), ("offer_late", "later")]
+    assert rows[0]["offer"]["offered"] == [["embed-pick", 0.5]]
+    assert rows[1]["offer"]["jev"] == {"ms": 2100}

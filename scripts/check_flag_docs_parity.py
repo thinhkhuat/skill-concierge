@@ -11,7 +11,8 @@ docs/runtime-flags.md. SSOT for a flag's default = the code's `os.environ.get("<
   - a docs entry states no default ("default ON", "default OFF", "default `0`/`1`", or "Unset = `<v>`");
   - a setting that is not on/off (table cell "unset = `<v>`", e.g. `ENFORCER_JEV_BENCH`) differs between
     the table, its docs entry ("Unset = `<v>`") and the code's string default, where an f-string's
-    `{CONST}` reads as `<ENV>` when the code sets `CONST = os.environ.get("ENV", ...)`;
+    `{CONST}` reads as `<ENV>` when the code sets `CONST = os.environ.get("ENV", ...)`; an empty-string
+    default is written "unset = (empty)" in both places (e.g. `ENFORCER_JEV_TIER`);
   - a table default cell is neither ON/OFF nor "unset = `<v>`".
 Stdlib-only. Exit 0 = parity, 1 = drift.
 ROOT override via SKILL_CONCIERGE_ROOT (used by tests/test_flag_docs_parity.py)."""
@@ -86,7 +87,7 @@ for i, m in enumerate(heads):
 
 code = code_defaults()
 strings = code_strings()
-UNSET = re.compile(r"[Uu]nset = `([^`]+)`")
+UNSET = re.compile(r"[Uu]nset = (?:`([^`]+)`|\(empty\))")
 problems = []
 n_table = n_docs = 0
 for flag in sorted(set(entries) - set(rows)):
@@ -100,9 +101,10 @@ for flag in sorted(rows):
         if not m:
             problems.append(f"AGENTS.md row {flag} has a default cell that is neither ON/OFF nor 'unset = `<v>`'")
             continue
-        v, n_table = m.group(1), n_table + 1
-        if f"nset = `{v}`" not in entries.get(flag, ""):
-            problems.append(f"AGENTS.md says {flag} unset = {v!r}, its docs entry does not say 'Unset = `{v}`'")
+        v, n_table = m.group(1) or "", n_table + 1
+        said = f"nset = `{v}`" if v else "nset = (empty)"
+        if said not in entries.get(flag, ""):
+            problems.append(f"AGENTS.md says {flag} unset = {v!r}, its docs entry does not say 'U{said}'")
         if v not in strings.get(flag, set()):
             problems.append(f"AGENTS.md says {flag} unset = {v!r}, code says {sorted(strings.get(flag, set()))}")
         continue

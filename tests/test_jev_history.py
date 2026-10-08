@@ -271,10 +271,11 @@ def test_history_alone_never_skips(mod, monkeypatch, tmp_path):
     assert verdict == "offer" and best == pytest.approx(0.8) and rows[0][0] == "update-config"
     assert res["event"]["hist"]["reask"] is True and len(calls) == 3
     assert "conversation" in calls[1][0] and three_key(calls[2][0])
-    # no budget left for the second rerank: the embedding path decides, never a skip
+    # no budget left for the second rerank: never a skip — the wide menu stands (ADR-0087), as when a rerank fails
     monkeypatch.setattr(mod, "JEV_REASK_MIN_S", 99.0)
     res, calls = route(mod, monkeypatch, t, fake=skip_on_history)
-    assert res["result"] is None and res["event"]["err"] == "HistorySkip" and len(calls) == 2
+    assert res["result"][0] == "offer" and res["event"]["stage"] == "wide"
+    assert res["event"]["err"] == "HistorySkip" and len(calls) == 2
 
 
 def test_todays_own_skip_still_skips_with_history_on(mod, monkeypatch, tmp_path):

@@ -3,6 +3,81 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.64.0] - 2026-10-08
+
+### Added
+
+- **Staged Jev menu (ADR-0087, amends ADR-0086).** The Jev router's wide pass (the whole shelf in chunks of
+  at most 250, top 5 per chunk) now has a menu of its own: the shortlist ordered by lift (within-chunk
+  probability times chunk size), top 5 (`_jev_wide_rows`). When no tier finishes its rerank (failure,
+  refused answer, no time, or the hook's own time limit running out), the turn keeps the first tier's wide menu instead of dropping to the
+  embedding menu; a later tier's full route is still tried first. This holds on every harness. The routing
+  telemetry gains `stage` (`full` or `wide`). Lift, not raw probability, because a one-option chunk always
+  answers 1.0; on 312 replayed wide answers the two find the used skill alike (top 5: 70.8 % vs 71.2 %).
+- **`ENFORCER_LEDGER=defer`.** The enforcer writes no ledger row and returns its would-be offer row in its
+  JSON output as `skillConciergeOffer`. `ledger.py` accepts a new hook event, `ConciergeOffer`, that logs
+  an `offer` or `offer_late` row handed back by the Cline plugin.
+- **`ENFORCER_JEV_TIER=<jevd provider name or model id>` (default unset = all tiers).** Limits the Jev
+  route to that one tier. When jevd is not answering it also matches a bench tier by endpoint: `typesafe` =
+  `ts`, `commandcode` = `cc`, `gateway` = `gw`.
+- Tests: `tests/test_jev_staged_menu.py` (new), `tests/test_cline_plugin.py` and `tests/test_jev_router.py`
+  (extended). Replay tool: `plans/261008-2151-cline-first-menu-replay/first_menu_replay.py`.
+
+### Changed
+
+- **Cline's Jev calls go to TypeSafe only (`adapters/cline/skill-concierge.cline-plugin.ts`).** Each run
+  starts ONE full enforcer pass pinned to jevd's TypeSafe tier (`ENFORCER_JEV_TIER=typesafe`) plus the
+  embedding preview. The first model call (2 s wait, inside Cline's 3 s hook limit) carries the full TypeSafe
+  menu when ready, else the preview; later calls carry the full menu once it lands. Cline never calls
+  Command Code. Live on Cline 3.0.70 (3 turns): the first call carried the TypeSafe full menu at
+  751 / 673 / 822 ms. Billing: Cline's Jev calls (two per routed turn) are billed to TypeSafe; Command Code
+  serves the other harnesses' full routes. The owner chose this on 2026-10-08 (options: TypeSafe only / keep
+  both / Command Code only). An early-menu flag and a TypeSafe backup timer were built and removed before
+  release.
+- **Every Cline enforcer pass runs with `ENFORCER_LEDGER=defer`.** The plugin no longer sets
+  `ENFORCER_LEDGER=0` on the preview pass.
+- **Epoch.** Cline offer rows change meaning at this release (see Fixed). Cline offer metrics before and
+  after 0.64.0 are different epochs, and any Jev metric that reads `stage` starts a new one
+  (`docs/epoch-watch.md`, v0.64.0).
+- The 10-second harnesses (Claude Code, Codex, ZCode, OMP, OpenCode) keep the full Jev route, and Command
+  Code and DSH keep the full route through jevd's TypeSafe tier (owner's decision, ADR-0087).
+
+### Fixed
+
+- **Cline's offer row described a menu the model did not see.** The full pass logged the turn's offer row
+  even when the first model call had been given the embedding preview, so Cline's offer-to-take numbers
+  mixed two menus. The row now records the menu the first call carried, tagged `seen` (`full`, `preview`,
+  or `late` when no menu was ready). A full-pass row that lands after another menu was
+  sent is logged `ev: "offer_late"` (`seen: "later"`), which offer counts never read.
+
+- **The wide-menu safety net now survives the hook's time limit.** The route hands its first wide menu to the
+  join as soon as it has one, so a join that times out serves it (`stage: wide`, `err: BudgetExceeded`); an
+  independent review had measured the menu surviving only 4 of 10 such runs. With `ENFORCER_JEV_HISTORY=1`, a
+  history-skip guard that runs out of time keeps it too (`err: HistorySkip`, `stage: wide`).
+- **Wide probabilities are validated like the rerank's.** A NaN, infinite or out-of-range probability fails
+  that tier (`ValueError`, recorded in `fell`) and the next tier runs. Before this, a NaN emptied the turn's
+  output on every harness and wrote invalid JSON to the ledger.
+- **The `ENFORCER_JEV_TIER` pin found nothing when jevd was down**, so Cline would have run without Jev. It now
+  also matches the `ENFORCER_JEV_BENCH` tier by endpoint.
+- **The deferred final write is guarded.** If the `ENFORCER_LEDGER=defer` value cannot be serialised, the
+  enforcer writes the menu alone.
+- **The Cline plugin decodes the enforcer's stdout as UTF-8**, so a multi-byte character split across chunks
+  (for example the reputation badges) no longer turns into U+FFFD. This defect predates 0.64.0.
+- `scripts/calibrate_jev_gate.py live` counts `stage: wide` rows apart from routed turns ("kept the wide menu
+  after a failed rerank").
+- `tests/test_auto_flywheel.py` no longer reads the machine's real flywheel lock.
+- `hooks/scripts/enforcer.py --selftest` expects the `opencode-personal` foreign scope that 0.62.0 (ADR-0085)
+  added; it had failed two cross-harness lines since then.
+
+### Documentation
+
+- ADR-0087 records the decisions, the replay numbers (hit@5 on 233 real turns: embedding preview 22.7 %
+  corrected from 27.5 %, wide 71.2 %, full 75.1 %), the validator's corrections, the limits and the revert
+  paths. The replay's claim that the wide pass fits Cline's 2 s wait on 96 % of turns is retracted: live,
+  it took p50 1,786 ms and p90 2,498 ms over 90 Command Code turns, so 36 to 52 % would fit
+  (`docs/caveats.md` §26). Replay report: `plans/reports/replay-261008-2151-cline-first-menu.md`;
+  validation: `plans/reports/validator-261008-2151-cline-first-menu-replay.md`.
+
 ## [0.63.0] - 2026-10-08
 
 ### Upgrade notes — Cline users must re-run the installer

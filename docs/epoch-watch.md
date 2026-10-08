@@ -13,6 +13,36 @@ say "insufficient data" when the window is too small. Never pool across epochs
 
 ---
 
+## v0.64.0 — staged Jev menu, Cline first-call chain, honest Cline offer row (ADR-0087)
+
+**Epoch starts** at the 0.64.0 commit (2026-10-08, Asia/Saigon); take the exact time from `git log` on `hooks/scripts/enforcer.py`. Two things change what the ledger measures.
+
+1. **Cline offer rows now record the menu the model saw.** Before this release the row was the full Jev
+   menu whatever the first model call carried (usually the embedding preview); from it, the row is the
+   menu seen, tagged `seen` (`full`, `preview`, `late`). A full row that lands after
+   another menu was sent is `ev: "offer_late"`, `seen: "later"`, which `analyze.py` never counts as an
+   offer. Cline offer-to-take, hit@k and menu-size rates before and after are different epochs; do not
+   pool them, and do not compare them with the 0.63.0 Cline numbers.
+2. **The Jev router can end a turn on its wide menu.** Every harness: when no tier finishes its rerank,
+   the turn keeps the first tier's wide menu, and the routing telemetry carries `stage` (`full` or `wide`).
+   Any Jev metric that reads the `jev` event (fallback rate, `conf`, `fit`, `lead`, `jev_skip` share) now
+   mixes `stage: wide` turns that have no `conf` or `fit`. Window to this epoch and split by `stage`.
+
+**Watch items.**
+
+| # | What | Trigger | Action |
+|---|------|---------|--------|
+| W45 | Share of Cline turns by `seen` (`full`, `preview`, `late`) and the share of `offer_late` rows | `preview` is above ~20 % once at least 30 Cline turns are in the epoch (the live check was 3 turns, all `full`) | read the `jev.prov`, `jev.ms` and `jev.err` of the turn's rows; a TypeSafe outage or slow route is the first suspect; an index-owner restart also yields `preview`/embedding turns (caveats §26) |
+| W46 | TypeSafe full-route latency on Cline (`jev.ms` on `seen: full` rows) | p90 above ~1.5 s (live: 0.67 to 0.82 s over 3 turns, unmeasured at scale) | the full pass misses the 2 s wait and the first call falls to the preview; raise it with the owner before changing the chain |
+| W47 | How often `stage: wide` appears, per harness | more than a few percent of Jev turns on any harness | a harness's rerank is failing or late: check `jev.fell` and the tier errors first; the wide menu is the safety net, not a design target. On a 10-second harness the owner locked the full route (ADR-0087, Decision 7) |
+| W48 | The wide menu on turns the full route would have skipped | a `stage: wide` offer on a turn the user then answers with no skill | the wide menu has no `fits` floor and shows 5 rows even when nothing fits; count it, then raise with the owner |
+
+Trigger thresholds above (30 turns, 20 %, 1.5 s, a few percent) are the doc author's proposals, not owner decisions; the 3-turn live check and the replay give no basis for tighter numbers. Measurement notes: exclude subagent and self-session traffic as always. Cline offer rows with `seen: late`
+are written when the full pass lands, so their `ms` is not a first-call time. Billing: Cline's Jev calls go to TypeSafe only
+from this epoch on (no Command Code call for a Cline turn).
+
+---
+
 ## v0.62.0 — OpenCode v2 harness (ADR-0085)
 
 **Epoch starts.** W42: the OpenCode plugin's first live turns. A NEW harness's rows (stamped

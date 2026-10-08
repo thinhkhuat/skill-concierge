@@ -190,17 +190,21 @@ def test_jev_failure_leaves_the_embedding_path_to_decide(tmp_path, monkeypatch):
         assert rows[-1]["jev"]["leg"] == "router"   # tells it from the v0.50.0 leg's unmarked {err, ms}
 
 
-def test_malformed_rerank_answer_falls_back(tmp_path, monkeypatch):
+def test_malformed_rerank_answer_keeps_the_wide_menu(tmp_path, monkeypatch):
+    """ADR-0087: a rerank answer the policy refuses no longer drops the turn to the embedding menu; the wide
+    pass's own menu stands, and the refusal is still recorded."""
     for bad in (_rerank(1.7, [0.9, 0.1, 0.1, 0.1], {"update-config": 1.0}),          # out of range
                 _rerank(0.9, [0.9, 0.1, 0.1, 0.1], {"not-in-shortlist": 1.0})):      # names nothing offered
         mod = _load(tmp_path / str(abs(hash(json.dumps(bad)))))
-        _, _, embed, rows = _run(mod, monkeypatch, rerank=bad)
-        assert embed and rows[-1]["jev"]["err"] == "ValueError"
+        _, _, _embed, rows = _run(mod, monkeypatch, rerank=bad)
+        jev = rows[-1]["jev"]
+        assert rows[-1]["band"] == "offer" and jev["stage"] == "wide"
+        assert jev["fell"] == [["jev-1.13.0", "ValueError"]] and "err" not in jev
 
 
 def test_blown_budget_is_abandoned(tmp_path, monkeypatch):
     mod = _load(tmp_path, ENFORCER_JEV_BUDGET="0.05")
-    monkeypatch.setattr(mod, "_jev_route", lambda p, t: (time.sleep(0.5), {"result": ("offer", [], 0.9)})[1])
+    monkeypatch.setattr(mod, "_jev_route", lambda p, t, *_w: (time.sleep(0.5), {"result": ("offer", [], 0.9)})[1])
     out, _, embed, rows = _run(mod, monkeypatch, rerank=CONFIDENT)
     assert embed and rows[-1]["jev"]["err"] == "BudgetExceeded" and "tk-research" in out
     assert rows[-1]["jev"]["leg"] == "router"
@@ -254,12 +258,14 @@ def test_relay_falls_back_to_direct_only_when_the_route_is_missing(tmp_path, mon
             assert seen == [mod.JEV_RELAY_URL]
 
 
-def test_non_finite_probability_falls_back(tmp_path, monkeypatch):
+def test_non_finite_probability_keeps_the_wide_menu(tmp_path, monkeypatch):
     for bad in (_rerank(0.9, [float("nan"), 0.5, 0.1, 0.1], {"update-config": 0.9}),
                 _rerank(0.9, [0.9, 0.5, 0.1, 0.1], {"update-config": float("inf"), "ak-git": 0.1})):
         mod = _load(tmp_path / str(abs(hash(repr(bad)))))
-        out, _, embed, rows = _run(mod, monkeypatch, rerank=bad)
-        assert embed and rows[-1]["jev"]["err"] == "ValueError" and "tk-research" in out
+        out, _, _embed, rows = _run(mod, monkeypatch, rerank=bad)
+        jev = rows[-1]["jev"]
+        assert rows[-1]["band"] == "offer" and jev["stage"] == "wide" and jev["fell"][0][1] == "ValueError"
+        assert mod.WHOLE_SHELF_HEAD.strip() in out, "the wide menu is a whole-shelf ranking"
 
 
 def test_unexpected_error_in_the_worker_is_contained(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.63.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.64.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -462,6 +462,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.64.0` — **published, staged Jev menu and an honest Cline offer row (ADR-0087, amends ADR-0086). The Jev router's wide pass now has a menu of its own (its shortlist ordered by lift, top 5): when no tier finishes its rerank, the turn keeps it instead of dropping to the embedding menu, on every harness; the routing telemetry gains `stage` (`full`/`wide`). New settings: `ENFORCER_LEDGER=defer` (hand the offer row back to the caller) and `ENFORCER_JEV_TIER=<tier>` (pin the route to one jevd tier). The Cline plugin now runs one full pass pinned to TypeSafe (the owner's choice, so Cline never calls Command Code; live: 0.67 to 0.82 s over 3 turns) beside the embedding preview, and logs the offer row of the menu its first model call actually carried (`seen`: `full` or `preview`; a later full row is `offer_late`, which offer counts ignore). Cline's Jev calls are billed to TypeSafe; Command Code serves the other harnesses. The 10-second harnesses keep the full route. Replay on 233 real turns (Claude Code corpus, not Cline): hit@5 embedding preview 22.7 %, wide 71.2 %, full 75.1 %. Cline offer metrics before and after this release are different epochs.**
 
 `0.63.0` — **published, Cline gets a native code plugin and an Agent Plugin (ADR-0086, supersedes ADR-0051's file-hook vehicle). On Cline 3.0.69+ the file hooks that inject context run detached and their output is discarded, so the menu and doctrine had not been reaching Cline's model. The code plugin (`adapters/cline/skill-concierge.cline-plugin.ts`, loaded from the checkout through `~/.cline/plugins/skill-concierge.ts`) registers the SKILL-FIRST doctrine as a system-prompt rule, inserts the per-turn enforcer menu in `beforeModel`, refuses a blocklisted skill for that one call only, and writes the ledger row and the "not for" echo after the tool call. Because Cline allows 3 s per plugin hook, each run starts the full Jev pass beside a fast embedding preview that writes no ledger row (`ENFORCER_LEDGER=0`). `adapters/cline/agent_plugin.py` generates an Agent Plugin in `~/.agents/plugins/skill-concierge/` with the ten plugin skills and the skill-search MCP server, re-synced at each Cline session start. Cline's own system prompt now skips as a harness message, and `install.sh` takes no options and retires the old file-hook installer's shims and MCP row; the file-hook fallback is removed. Cline ledger metrics before and after this release are different epochs.**
 

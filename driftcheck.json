@@ -86,7 +86,8 @@
     "adapters/cline/agent_plugin.py",
     "adapters/cline/agent-plugin.json",
     "adapters/cline/mcp_row.py",
-    "docs/adr/0086-cline-native-plugin-and-agent-plugin.md"
+    "docs/adr/0086-cline-native-plugin-and-agent-plugin.md",
+    "docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md"
   ],
   "command_checks": [
     {

@@ -100,7 +100,7 @@ TURNS = [
 
 def test_live_report(run):
     out = run(LEDGER_ROWS, TURNS)
-    assert "router rows since 2026-09-26T10:03+07:00 (claude): 6 (4 routed, 2 errors; 1 unattributed error rows left out)" in out
+    assert "router rows since 2026-09-26T10:03+07:00 (claude): 6 (4 routed, 0 kept the wide menu after a failed rerank, 2 errors; 1 unattributed error rows left out)" in out
     assert "W23 latency ms p50 800 p90 2000" in out
     assert "errors 33.3% {'TimeoutError': 1, 'ValueError': 1}" in out and "via {'relay': 3, 'direct': 1, 'jevd': 0}" in out
     assert "W24 catalogue size on rows: median 494 min 490 max 500; replay catalogue 494" in out
@@ -125,10 +125,19 @@ def test_w24_trigger_tightens_above_500_skills(base_n, med, want):
 
 def test_since_with_offset_is_the_same_instant(run):
     out = run(LEDGER_ROWS, TURNS, since="2026-09-26T03:03:00+00:00")
-    assert "(claude): 6 (4 routed, 2 errors;" in out and "W21 jev_skip turns: 1;" in out
+    assert "(claude): 6 (4 routed, 0 kept the wide menu after a failed rerank, 2 errors;" in out and "W21 jev_skip turns: 1;" in out
 
 
 def test_other_harness_reports_the_ledger_only(run):
     out = run(LEDGER_ROWS, TURNS, harness="omp")
-    assert "(omp): 1 (1 routed, 0 errors;" in out
+    assert "(omp): 1 (1 routed, 0 kept the wide menu after a failed rerank, 0 errors;" in out
     assert "W21/W22 skipped: the label corpus holds Claude Code transcripts only" in out
+
+
+def test_a_safety_net_row_is_counted_apart_from_routed_turns(run):
+    """ADR-0087: a `stage: wide` row kept the wide menu after every rerank failed; it is no full route."""
+    rows = [_offer(2, {"ms": 800, "fit": 0.9, "via": "relay", "n": 490, "stage": "full"}),
+            _offer(3, {"ms": 1900, "via": "jevd", "n": 490, "stage": "wide", "fell": [["jev-1.13.0", "URLError"]]})]
+    out = run(rows, [])
+    assert "(claude): 2 (1 routed, 1 kept the wide menu after a failed rerank, 0 errors;" in out
+    assert "p50 800 p90 800" in out, "the latency figures read routed turns only"

@@ -103,3 +103,10 @@ def test_default_cell_that_is_not_understood_fails(tree):
     edit(tree / "AGENTS.md", "| `SKILL_CONSULT_SLOTS` | OFF |", "| `SKILL_CONSULT_SLOTS` | sometimes |")
     r = run(tree)
     assert r.returncode == 1 and "SKILL_CONSULT_SLOTS has a default cell that is neither" in r.stdout
+
+
+def test_empty_unset_value_in_code_that_differs_fails(tree):
+    """An empty-string default is written "unset = (empty)" (ENFORCER_JEV_TIER) and still checked."""
+    edit(tree / "hooks" / "scripts" / "enforcer.py", '"ENFORCER_JEV_TIER", ""', '"ENFORCER_JEV_TIER", "typesafe"')
+    r = run(tree)
+    assert r.returncode == 1 and "AGENTS.md says ENFORCER_JEV_TIER unset = ''" in r.stdout
