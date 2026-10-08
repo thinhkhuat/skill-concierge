@@ -49,6 +49,8 @@
     "docs/adr/README.md",
     "docs/caveats.md",
     "docs/plan.md",
+    "docs/runtime-flags.md",
+    "docs/repository-layout.md",
     "vendor/skill-search/VENDORED.md",
     "config/keep-on.json",
     "scripts/doctor.py",
