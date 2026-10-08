@@ -58,5 +58,8 @@ plans/261009-0305-maintenance-four/**.
   lone-copy `--root`/OMP `safe_write` symlink cases match main (not regressions); the audit report's "shipped" wording
   becomes true at G9. G1-G6 re-verified on a94cae3 after both rounds.
 
-- [ ] G9: Shipped: on origin/main, every installer re-run, doctor status OK with all integration rows green.
-  EVIDENCE: pending
+- [x] G9: Shipped: on origin/main, every installer re-run, doctor status OK with all integration rows green.
+  EVIDENCE: 2026-10-09 ~04:25: `git push` -> origin/main 62ce04f (v0.65.0). All eight installers exit 0; Claude Code,
+  Codex, OMP, ZCode caches at v0.65.0. `doctor.py` in a fresh login shell: `status: OK`, eight integration rows [✓].
+  Live probe of the shipped cache `.../0.65.0/hooks/scripts/enforcer.py` on the case review 1 crashed (a low-fit
+  Vietnamese prompt): Python 3.9.6 and 3.12.11 both rc=0, empty stderr, SKILL-CHECK injected; `--selftest` OK.
