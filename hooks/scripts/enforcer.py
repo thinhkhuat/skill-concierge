@@ -241,7 +241,7 @@ def _running_harness() -> str:
     1. Explicit env override: `SKILL_CONCIERGE_HARNESS` (used by the Command Code mod adapter
        and the OMP adapter; OMP also maps `oh-my-pi` so the natural name resolves).
        `dsh` / `deepseek-harness` / `oh-dsh` map to 'dsh'. `cline` / `cline-cli` map to
-       'cline' (ADR-0051 — the Cline file-hook bridge sets it; Cline has no native env
+       'cline' (ADR-0086 — the Cline code plugin sets it; Cline has no native env
        identity signal). `opencode` / `open-code` map to 'opencode' (ADR-0085 — the OpenCode
        v2 plugin adapter sets it; OpenCode sets no harness-identifying env of its own).
     2. Native harness detection BEFORE path markers: `OMPCODE=1` -> 'omp'. OMP sets BOTH
@@ -256,8 +256,8 @@ def _running_harness() -> str:
        `DSH_HOME` (or `OH_DSH_HOME` for Oh-DSH Desktop). No other harness sets it.
     3. Where the hook/plugin was installed: `.omp` in path -> 'omp', `.codex` in path -> 'codex',
        `.zcode` in path -> 'zcode', `.ohdsh` or `.dsh` in path -> 'dsh', `.cline` in path ->
-       'cline' (ADR-0051 fallback; the Cline adapter's shim lives under ~/.cline/hooks only if
-       someone copies the enforcer there — the bridge's explicit env is the primary signal),
+       'cline' (fallback; the Cline code plugin runs the enforcer from the repo checkout,
+       where the explicit env is the primary signal),
        `.opencode` in path -> 'opencode' (ADR-0085 fallback; the plugin adapter runs the
        enforcer from the repo checkout, where the explicit env is the primary signal),
        `.claude` in path -> 'claude'.
@@ -334,6 +334,22 @@ UNDER_OPENCODE = (RUNNING_HARNESS == "opencode")
 # because enforcer.py must not import the engine package.
 _CLINE_PERSONAL_ROOT = Path.home() / ".cline" / "data" / "settings" / "skills"
 _CLINE_PROJECT_ROOT = Path.cwd() / ".cline" / "skills"
+# Cline Agent Plugins (agent-plugins.org, ADR-0086): <root>/<plugin>/plugin.json + skills/<skill>/.
+# Cline lists a plugin skill as `<plugin>:<skill>`, the same form as a Claude plugin row.
+_CLINE_AGENT_PLUGINS = Path.home() / ".agents" / "plugins"
+
+
+def _cline_agent_plugin_skill(name: str) -> bool:
+    """True when `plugin:skill` is a skill of a Cline Agent Plugin installed on this machine.
+    OSError -> UNKNOWN -> True (fail-to-non-blocking, the twin rule)."""
+    plugin, _, skill = name.partition(":")
+    if not plugin or not skill or "/" in name or ".." in name:
+        return False
+    try:
+        root = _CLINE_AGENT_PLUGINS / plugin
+        return (root / "plugin.json").is_file() and (root / "skills" / skill / "SKILL.md").is_file()
+    except (OSError, ValueError):
+        return True
 
 # OpenCode skill roots (ADR-0085) — the twin test's filesystem rescue set. Mirrors
 # skills_discovery.OPENCODE_PERSONAL_ROOT / OPENCODE_PROJECT_ROOT plus OpenCode's documented
@@ -649,8 +665,9 @@ def _invocable_plugin_ids():
         # filesystem-side.
         return None
     if RUNNING_HARNESS == "cline":
-        # Cline has no skill plugin registry either (ADR-0051: its AgentPlugin
-        # plugins contribute rules/commands/mcpServers/hooks/tools — never skills).
+        # Cline has no skill plugin registry either (ADR-0051: its code plugins
+        # contribute rules/commands/mcpServers/hooks/tools — never skills; Agent Plugin
+        # skills, ADR-0086, are found on disk by _cline_agent_plugin_skill).
         # Same None-means-UNKNOWN contract as DSH; the filesystem twin settles it.
         return None
     installed = {}
@@ -758,9 +775,12 @@ def _invocable_twin(name: str) -> bool:
         except (OSError, ValueError):
             return True
     if RUNNING_HARNESS == "cline":
-        # Cline has no plugin registry (ADR-0051); a foreign-scoped row survives only
-        # through a filesystem twin in one of Cline's two skill roots. OSError ->
-        # UNKNOWN -> keep (fail-to-non-blocking).
+        # Cline has no skill-plugin registry (ADR-0051); a foreign-scoped row survives only
+        # through a filesystem twin: a namespaced row in an installed Agent Plugin (ADR-0086),
+        # a plain row in one of Cline's skill roots. OSError -> UNKNOWN -> keep
+        # (fail-to-non-blocking).
+        if ":" in name:
+            return _cline_agent_plugin_skill(name)
         try:
             return any((root / name / "SKILL.md").exists() for root in
                        (_CLINE_PERSONAL_ROOT, _CLINE_PROJECT_ROOT,
@@ -813,7 +833,8 @@ def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
     merged) with the OMP registry (per-entry `enabled`), mirroring what OMP's own
     provider loads, so the offer can never claim invocability the harness refuses.
     DSH, Cline and OpenCode have NO skill-plugin registry (ADR-0050/0051/0085): a namespaced
-    plugin row is never invocable there and drops; plain rows pass. Codex, Command
+    plugin row is never invocable there and drops; plain rows pass. The one exception: under
+    Cline a `plugin:skill` row of an installed Agent Plugin passes (ADR-0086). Codex, Command
     Code and ZCode keep their lane semantics — the foreign-scope/twin filter in
     _retrieve already settles their rows, and ZCode's twin resolves from its own
     enablement-filtered registry. Non-namespaced rows (personal/project) are
@@ -833,7 +854,9 @@ def _plugin_gate_ok(name: str, scope: str | None = None) -> bool:
         if INVOCABLE_PLUGIN_IDS is None or ":" not in name:
             return True
         return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
-    if RUNNING_HARNESS in ("dsh", "cline", "opencode"):
+    if RUNNING_HARNESS == "cline":
+        return ":" not in name or _cline_agent_plugin_skill(name)
+    if RUNNING_HARNESS in ("dsh", "opencode"):
         return ":" not in name
     return True
 MAX_SHORT_WORDS = 3   # ≤ this many words → trivial getaway, skip embed entirely. OPERATOR-SET 3 (2026-06-29, ADR-0010 supersedes ADR-0009 word floor) lowered from 5 so the now-language-aware imperative-veto sees 4-5w commands (incl. Vietnamese) the old floor dropped pre-veto; ≤3w ultra-short trivia still skipped. (data-backed analysis favored 2; operator chose 3.) Do NOT change without a superseding ADR.
@@ -1523,7 +1546,11 @@ def _append_offer(sid: str, band: str, offered: list, fallback, q: str, dropped=
     rendered this turn (absent when 1 intent / no route) — the seed of the L4
     continuation-rate metric; additive keys, old analyzers ignore them.
     EPOCH NOTE: ADR-0034 changes what `offered` contains, so any offer-composition rate
-    measured across the v0.25.0 boundary pools two different configs — window it."""
+    measured across the v0.25.0 boundary pools two different configs — window it.
+    ENFORCER_LEDGER=0 writes no row: the Cline plugin's fast preview run (ADR-0086) shadows a
+    full run of the same turn, and a second offer row would double-count that turn."""
+    if os.environ.get("ENFORCER_LEDGER", "1") == "0":
+        return
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ev = {"t": round(time.time(), 3), "sid": sid, "ev": "offer",
@@ -1618,7 +1645,11 @@ _HARNESS_MSG_RE = re.compile(
     r"|Another Claude session sent a message|\[Request interrupted by user"
     r"|\[SYSTEM NOTIFICATION\b|\[Cross-session idle notice\]"
     r"|This session is being continued from a previous conversation"
-    r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
+    r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">"
+    # Cline on its claude-code provider runs Claude Code underneath; that inner session's
+    # UserPromptSubmit carries Cline's whole system prompt, which the Cline plugin already
+    # governs at the real prompt (ADR-0086).
+    r"|You are Cline, an AI coding agent\b)")
 HARNESS_SKIP_MSG = (
     AUTHORIZED_SKIP_MARKER + " this prompt is harness-generated, not a user task — the "
     "harness-message lane. NO SKILL: hook-cleared is pre-authorized; no search_skills needed. If the "

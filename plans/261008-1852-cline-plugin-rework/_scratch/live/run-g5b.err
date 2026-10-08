@@ -1,0 +1,2 @@
+{"ts":"2026-10-08T12:17:33.984Z","type":"error","message":"hook dispatch failed: session.hook requires a valid hook event payload"}
+{"ts":"2026-10-08T12:17:37.405Z","type":"error","message":"Model \"claude-sonnet-5-5\" must be called via /provider/v1/messages (Anthropic Messages shape)."}

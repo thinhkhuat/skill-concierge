@@ -673,3 +673,9 @@ rather than guessing.
 behavior byte-identically — a project row passes unless its exact scope string happens to be in
 `FOREIGN_SCOPES`, which it never is. If a session using `--add-dir`/`/cd` is missing a project
 skill it should see, that is the recorded gap above, not a misconfiguration to chase.
+
+## §26 — Cline: a 3-second plugin hook limit and a hub host limit (ADR-0086)
+
+**3-second hook limit.** Cline's plugin sandbox gives each hook 3 seconds, with no environment override. The full enforcer takes 2–4 s live, because the Jev router makes two calls to Command Code (about 0.8 s at p50 and 1.6 s at p90 per call). The Cline plugin therefore starts two passes per run: the full one and a fast embedding preview (`ENFORCER_JEV_ROUTER=0`, about 0.3 s, `ENFORCER_LEDGER=0` so the turn keeps one offer row). The 3 seconds start when Cline sends the call, so the conversation's trip into and out of the sandbox counts too, and a hook that overruns fails the user's whole turn. The plugin therefore waits at most 2 s: the first model call carries the full menu when it lands within 2 s and the preview otherwise; later calls in the run carry the full menu once it lands. Live, the full Jev menu landed in 2.0–2.3 s, so most first calls see the embedding preview, not the whole-shelf ranking.
+
+**Hub host limit.** When the Cline CLI attaches to a running hub, here the VS Code extension's sidecar, the hub builds the session with `configExtensionCount: 0`, so no plugin runs. That sidecar also fails to start its plugin sandbox (`Cannot find module 'jiti'`). **Do:** run Cline with `CLINE_SESSION_BACKEND_MODE=local`, which makes the CLI run the session itself. Whether a standalone hub loads plugins is unverified.

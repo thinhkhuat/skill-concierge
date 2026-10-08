@@ -1,7 +1,7 @@
 """The skill-exclusion echo reaches the model through every non-Claude-format harness adapter.
 
 Each adapter is driven the way its host calls it (tests/adapters/echo_driver.ts for the TS
-adapters; the Cline bridge as the real stdin/stdout process Cline spawns) against a throwaway
+adapters; the Cline code plugin through tests/cline_plugin_harness.mjs, ADR-0086) against a throwaway
 HOME holding one fixture skill, a dead Qdrant URL (so resolution uses the fallback roots) and a
 scratch ledger — nothing live is read or written. Negative controls: a non-skill tool, an OMP
 sub-resource read, and a search call must change nothing."""
@@ -78,24 +78,27 @@ def test_dsh_other_tools_pass_downstream_unchanged(env):
 def _cline(env, tool, params):
     if not shutil.which("node"):
         pytest.skip("node not installed")
-    payload = {"postToolUse": {"toolName": tool, "parameters": params, "success": True},
-               "taskId": "t-cline"}
-    r = subprocess.run(["node", str(ROOT / "adapters" / "cline" / "skill-concierge.cline-hook.cjs"),
-                        "tool_result"], input=json.dumps(payload), env=env,
+    ctx = {"snapshot": {"agentId": "a1", "conversationId": "t-cline", "runId": "r1"},
+           "toolCall": {"type": "tool-call", "toolCallId": "c1", "toolName": tool, "input": params},
+           "input": params, "result": {"output": "loaded"}}
+    r = subprocess.run(["node", str(ROOT / "tests" / "cline_plugin_harness.mjs"),
+                        str(ROOT / "adapters" / "cline" / "skill-concierge.cline-plugin.ts")],
+                       input=json.dumps({"calls": [{"hook": "afterTool", "context": ctx}]}), env=env,
                        capture_output=True, text=True, timeout=60)
-    return json.loads(r.stdout.strip().splitlines()[-1])
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)[0]["result"]
 
 
 @pytest.mark.parametrize("tool,params", [("skills", {"skill": "echo-fixture"}),
-                                         ("use_skill", {"skill": "echo-fixture"}),
-                                         ("skill-search__get_skill", {"name": "echo-fixture"})])
-def test_cline_bridge_returns_context_modification(env, tool, params):
+                                         ("skill-concierge_skill-search__get_skill_d998a651",
+                                          {"name": "echo-fixture"})])
+def test_cline_plugin_appends_the_echo_as_context(env, tool, params):
     out = _cline(env, tool, params)
-    assert out["cancel"] is False and MARK in out["contextModification"]
+    assert set(out) == {"appendContext"} and MARK in out["appendContext"]
 
 
 def test_cline_search_call_adds_no_context(env):
-    assert _cline(env, "skill-search__search_skills", {"query": "x"}) == {"cancel": False}
+    assert _cline(env, "skill-concierge_skill-search__search_skills_4d64eb2e", {"query": "x"}) is None
 
 
 def test_dsh_pre_step_skips_subagents_and_injects_doctrine_once_per_session(env):

@@ -28,7 +28,7 @@
 # `${CLAUDE_PLUGIN_ROOT}` interpolation, and Claude Code expands that natively
 # (the OMP precedent). We DO NOT write a second, manual MCP entry anywhere:
 # a duplicate `skill-search` declaration is a known hazard. There is
-# deliberately no --no-mcp / --mcp-fallback flag here (unlike Cline / ZCode).
+# deliberately no --no-mcp / --mcp-fallback flag here (unlike ZCode).
 #
 # `-y` is passed to `claude plugin update` because a non-interactive run needs
 # it. Per --help, `-y` accepts "the displayed marketplace-declared command"

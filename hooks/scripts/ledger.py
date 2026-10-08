@@ -209,6 +209,8 @@ def main() -> int:
                 _append(ev)
             elif tool.endswith(SEARCH_TOOLS):
                 ev = {"t": t, "sid": sid, "ev": "search"}
+                if sub:
+                    ev["sub"] = True    # same subagent stamp as the Skill and get_skill lanes
                 if harness:
                     ev["harness"] = harness
                 _append(ev)

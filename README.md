@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.62.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.63.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -371,7 +371,7 @@ skill-concierge/
 ├── adapters/commandcode/                      # Command Code adapter: mod adapter + install.sh + mcp.json (ADR-0038)
 ├── adapters/omp/                              # Oh My Pi adapter: skill-concierge.ext.ts + install.sh + mcp.json (ADR-0039)
 ├── adapters/zcode/                            # ZCode surface: verifier/repair install.sh + manual-fallback mcp.json — no adapter vehicle needed (ADR-0042)
-├── adapters/cline/                            # Cline adapter: file-hook bridge (.cjs) + hook shim templates + install.sh + mcp.json (ADR-0051)
+├── adapters/cline/                            # Cline adapter: code plugin (skill-concierge.cline-plugin.ts) + Agent Plugin generator (agent_plugin.py) and its manifest template (agent-plugin.json) + mcp_row.py (retires the old MCP row) + install.sh (no options; retires the old file-hook installer's leftovers) (ADR-0086)
 ├── .mcp.json                                  # registers the MCP via bin/skill-search-mcp launcher
 ├── bin/skill-search-mcp                       # launcher → stable venv (survives cache wipes; ADR-0004)
 ├── setup.sh                                    # bootstrap: venv + start the index owner + reindex + apply-overrides
@@ -405,7 +405,8 @@ skill-concierge is a first-class citizen in all eight harnesses. Enforcement rid
 each harness's extension mechanism supports (settings hooks for Claude Code, a mod adapter for
 Command Code, a TS extension module for OMP — Codex auto-discovers hooks, no `hooks` field; ZCode
 natively runs the Claude-format plugin hooks; DSH rides a Cordis `agent/pre-step` plugin; Cline
-uses its native file hooks; OpenCode v2 loads a native plugin — the last three via
+loads a native code plugin plus a generated Agent Plugin, with file hooks as the fallback;
+OpenCode v2 loads a native plugin — the last three via
 `adapters/dsh/`, `adapters/cline/` and `adapters/opencode/`);
 discovery always indexes **all** harnesses' roots into one shared collection (served by the
 local index owner in Qdrant's REST shape) under distinct per-harness scopes (fail-open — a
@@ -420,7 +421,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 | Oh My Pi (OMP) | `~/.omp/agent/skills`, `$CWD/.omp/skills`, `~/.omp/agent/managed-skills`, `~/.omp/plugins/cache/plugins/**` (`omp-*`) | extension module `before_agent_start` (`adapters/omp/skill-concierge.ext.ts` via `package.json` `omp.extensions`; ADR-0039) | plugin `.mcp.json` imported natively (`${CLAUDE_PLUGIN_ROOT}` expanded by OMP); `adapters/omp/mcp.json` manual fallback only |
 | ZCode | `~/.zcode/skills`, `$CWD/.zcode/skills`, `$CWD/.agents/skills`, `~/.zcode/cli/plugins/cache/**` (registry-enumerated) (`zcode-*`) | **none needed** — ZCode natively runs the plugin `hooks/hooks.json` (ADR-0042) | plugin `.mcp.json` auto-connected (interpreter-form command, exec-bit-proof); `adapters/zcode/mcp.json` manual fallback only |
 | DeepSeek Harness (DSH) | `DSH_HOME/skills`, `$CWD/.dsh/skills` (`dsh-*`) | Cordis plugin `agent/pre-step` (`adapters/dsh/skill-concierge.dsh.ts`; ADR-0050) | Cordis `cordis.patch.yml` row via the `dsh-mcp-client` bridge (`mcp__skill-search__*`); `adapters/dsh/mcp.json` reference |
-| Cline | `~/.cline/data/settings/skills`, `$CWD/.cline/skills` (`cline-*`) | native file hooks — `UserPromptSubmit.cjs`/`PostToolUse.cjs` shims → shared bridge (`adapters/cline/`; ADR-0051) | installer-merged global row in `cline_mcp_settings.json`; `adapters/cline/mcp.json` manual fallback |
+| Cline | `~/.cline/data/settings/skills`, `$CWD/.cline/skills` (`cline-*`) | native code plugin (`adapters/cline/skill-concierge.cline-plugin.ts`, loaded through `~/.cline/plugins/skill-concierge.ts`) plus a generated Agent Plugin (`~/.agents/plugins/skill-concierge/`) (ADR-0086; the ADR-0051 file-hook vehicle is retired) | the Agent Plugin's `mcp.json`, which Cline starts itself |
 | OpenCode v2 | `~/.config/opencode/skills`, `$CWD/.opencode/skills` (`opencode-*`); `personal` invocable via OpenCode's documented compat read of `~/.claude/skills` | native v2 plugin — `session.hook("prompt")` + `context` system-part doctrine/enforcer, `permission.hook` blocklist deny, `tool.hook("execute.after")` ledger+echo (`adapters/opencode/plugin/`; ADR-0085) | `ctx.mcp.transform` registers the server from the shared `.mcp.json` (no manual config at all) |
 
 `SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` / `SKILL_ZCODE_ROOTS` /
@@ -461,6 +462,8 @@ Per-epoch watch items (what to monitor after a release, triggers, env-first acti
 [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical reference.
 
 
+
+`0.63.0` — **published, Cline gets a native code plugin and an Agent Plugin (ADR-0086, supersedes ADR-0051's file-hook vehicle). On Cline 3.0.69+ the file hooks that inject context run detached and their output is discarded, so the menu and doctrine had not been reaching Cline's model. The code plugin (`adapters/cline/skill-concierge.cline-plugin.ts`, loaded from the checkout through `~/.cline/plugins/skill-concierge.ts`) registers the SKILL-FIRST doctrine as a system-prompt rule, inserts the per-turn enforcer menu in `beforeModel`, refuses a blocklisted skill for that one call only, and writes the ledger row and the "not for" echo after the tool call. Because Cline allows 3 s per plugin hook, each run starts the full Jev pass beside a fast embedding preview that writes no ledger row (`ENFORCER_LEDGER=0`). `adapters/cline/agent_plugin.py` generates an Agent Plugin in `~/.agents/plugins/skill-concierge/` with the ten plugin skills and the skill-search MCP server, re-synced at each Cline session start. Cline's own system prompt now skips as a harness message, and `install.sh` takes no options and retires the old file-hook installer's shims and MCP row; the file-hook fallback is removed. Cline ledger metrics before and after this release are different epochs.**
 
 `0.62.0` — **published, OpenCode v2 as the eighth harness (ADR-0085, octa-harness parity): a native v2 plugin (`adapters/opencode/plugin/`) with full Claude Code parity — skill-search MCP registered from the shared `.mcp.json` via `ctx.mcp.transform`, SKILL-FIRST doctrine once per session + the per-turn enforcer block as system parts (`prompt`/`context` hooks; the prompt text is never edited), the blocklist denied through the `skill` permission action by delegating to `skill_guard.py` (fail-open), ledger + the "not for" exclusion echo on `tool execute.after`, and the detached self-heal batch at setup. New roots `SKILL_OPENCODE_ROOTS` (default ON, in `ENGINE_ENV_KEYS`, pinned in `.mcp.json`): `~/.config/opencode/skills` (`opencode-personal`) + `<cwd>/.opencode/skills` (`opencode-project:`); `personal` invocable from OpenCode by construction (its documented compat read of `~/.claude/skills`), namespaced plugin rows never invocable (the DSH/Cline lane); every other harness's foreign tuple gained `opencode-personal`. Installer registers the plugin path in the global `opencode.json` `plugins` array and re-roots the plugin's skills behind a managed-names marker; doctor grows a WARN-only "OpenCode integration" row; tests `test_opencode_adapter.py` + the completeness matrix. EPOCH v0.62.0.**
 

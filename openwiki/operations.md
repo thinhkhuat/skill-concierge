@@ -373,8 +373,14 @@ never blocks; the openwiki guard is the **sole deliberate exception** that denie
   a repo-side change — such as `0.49.0`'s exclusion echo reaching Command Code
   ([ADR-0059](../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) — does not
   take effect there until that installer reruns (since `0.49.0`, `doctor`'s Command Code row warns
-  when the installed mod differs from the repo copy). Cline's hook shims `require()` the repo's
-  bridge, so it picks up a change immediately; OMP loads the adapter from its plugin cache, so it
+  when the installed mod differs from the repo copy). Cline's plugin mode loads the code plugin from the checkout through
+  `~/.cline/plugins/skill-concierge.ts`, so a change takes effect at the next Cline session; the Agent
+  Plugin in `~/.agents/plugins/skill-concierge/` is a generated copy that is re-synced at each Cline
+  session start, and `doctor` flags drift
+  ([ADR-0086](../docs/adr/0086-cline-native-plugin-and-agent-plugin.md)). Plugins do not run when the
+  CLI attaches to a running hub (the VS Code extension's sidecar), so run Cline with
+  `CLINE_SESSION_BACKEND_MODE=local` to make the CLI host the session itself (ADR-0086, Consequences).
+  OMP loads the adapter from its plugin cache, so it
   needs that cache refreshed. **DSH** loads everything through its profile patch layer:
   [`adapters/dsh/install.sh`](../adapters/dsh/install.sh) writes the skill-search MCP server, the unlazy
   stop-hook and the enforcement plugin into each profile's `cordis.patch.yml` as `- insert:` patches

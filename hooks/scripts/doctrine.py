@@ -238,13 +238,14 @@ def _harness_adapt(doctrine: str) -> str:
             "mcp__skill-search__search_skills"
         ))
     if harness == "cline":
-        # Cline (ADR-0051): the MCP server rides the plain global mcpServers map (no
-        # plugin namespace). LIVE-VERIFIED 2026-09-01 on Cline CLI 3.0.60: the CLI is
+        # Cline (ADR-0051, then ADR-0086). LIVE-VERIFIED 2026-09-01 on Cline CLI 3.0.60: the CLI is
         # built on the Claude Agent SDK (embedded @anthropic-ai/claude-agent-sdk in
         # the shipped binary), so MCP tools surface FLATTENED as `<server>__<tool>` —
         # there is no `use_mcp_tool` in the model-facing tool surface. No
-        # slash-commands hint form either.
-        _cline_tool = "skill-search__search_skills"
+        # slash-commands hint form either. ADR-0086: the server now comes from the Agent
+        # Plugin, which Cline names `skill-concierge.skill-search` and exposes as
+        # `skill-concierge_skill-search__search_skills_<8-hex suffix>` (seen live, 3.0.70).
+        _cline_tool = "skill-concierge_skill-search__search_skills_<suffix>"
         return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
             _cline_tool

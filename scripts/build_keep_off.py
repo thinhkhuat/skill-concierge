@@ -44,7 +44,8 @@ _HARNESS_MSG_RE = re.compile(
     r"|Another Claude session sent a message|\[Request interrupted by user"
     r"|\[SYSTEM NOTIFICATION\b|\[Cross-session idle notice\]"
     r"|This session is being continued from a previous conversation"
-    r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">)")
+    r"|<file name=\"[^\"\n]*omp-msum-[^\"\n]*\">"
+    r"|You are Cline, an AI coding agent\b)")
 MIN_OFFERS = int(os.environ.get("KEEPOFF_MIN_OFFERS", "15"))
 MAX_TAKE_RATE = float(os.environ.get("KEEPOFF_MAX_TAKE_RATE", "0.05"))
 MIN_WINDOW_OFFERED_TURNS = int(os.environ.get("KEEPOFF_MIN_WINDOW", "40"))

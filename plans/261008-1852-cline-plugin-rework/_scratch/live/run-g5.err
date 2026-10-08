@@ -1,0 +1,6 @@
+[WARN] Claude Code Model: Unknown model ID: 'claude-sonnet-5-5'. Proceeding with custom model. Known models are: opus, sonnet, haiku, fable
+[WARN] [claude-code] MCP servers not connected: wigolo:failed
+(node:48487) Warning: AI SDK Warning System: To turn off warning logging, set the AI_SDK_LOG_WARNINGS global to false.
+(Use `.cline --trace-warnings ...` to show where the warning was created)
+(node:48487) Warning: AI SDK Warning (claude-code / claude-sonnet-5-5): The feature "maxOutputTokens" is not supported. Claude Code CLI does not accept an output token cap. The maxOutputTokens parameter will be ignored.
+(node:48487) Warning: AI SDK Warning (claude-code / claude-sonnet-5-5): Unknown model ID: 'claude-sonnet-5-5'. Proceeding with custom model. Known models are: opus, sonnet, haiku, fable

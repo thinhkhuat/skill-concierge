@@ -747,7 +747,7 @@ def _copy_min_repo(dest):
     adapters/dsh's own reads (their own .claude-plugin, scripts, hooks, bin) — placed at an
     apostrophe path so the smoke test actually exercises quoting."""
     dest.mkdir(parents=True)
-    for rel in (".claude-plugin", "adapters", "scripts", "hooks", "bin", "setup.sh"):
+    for rel in (".claude-plugin", ".mcp.json", "adapters", "scripts", "hooks", "bin", "skills", "setup.sh"):
         src = ROOT / rel
         if not src.exists():
             continue

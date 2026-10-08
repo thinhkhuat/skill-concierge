@@ -39,9 +39,12 @@ def test_evidenced_shapes_fire_and_pasted_block_does_not():
         "<system-reminder> Last turn had no tool call → session idle.",
         "<cross-session-message from=\"uds:/tmp/x.sock\"> FYI",
         "<file name=\"/var/folders/vz/T/omp-msum-o650bgz2.txt\">\nSummarize the following agent turn",
+        # Cline's system prompt, as Claude Code underneath Cline's claude-code provider sees it.
+        "You are Cline, an AI coding agent. Your primary goal is to assist users with various coding tasks",
     ]
     off = [
         "look at this <task-notification> I pasted and tell me what it means",
+        "what does the line 'You are Cline, an AI coding agent' in my config do?",
         "commit & push pls and ensure a clean worktree afterwards",
     ]
     for rx in (enf._HARNESS_MSG_RE, gen._HARNESS_MSG_RE):

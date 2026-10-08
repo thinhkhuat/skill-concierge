@@ -26,6 +26,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER_SCRIPTS = sorted((ROOT / "adapters").glob("*/install.sh"))
+# Helpers an installer shells out to for a config write (Cline's mcp_row.py) carry the same duty.
+ADAPTER_PY = sorted(f for f in (ROOT / "adapters").glob("*/*.py")
+                    if f.parent.name != "lib")   # adapters/lib/safe_write.py IS the safe write
 CONFIG_EXTENSIONS = (".json", ".yml", ".yaml")
 
 _VAR_ASSIGN_RE = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)="([^"\n]*)"\s*$', re.MULTILINE)
@@ -39,6 +42,9 @@ ALLOWED_RAW_PY_WRITES = {
     ("dsh", '.write_text(patch_text + "\\n", encoding="utf-8")'):
         "writes the .new SCRATCH candidate beside cordis.patch.yml, before DSH's own parser "
         "validates it — the live file is only ever repointed through safe_write.write_text",
+    ("cline", "tmp.write_bytes(data)"):
+        "agent_plugin.py writes the generated Agent Plugin folder it owns end to end (it refuses a "
+        "symlinked or foreign destination), never a config file the user edits",
 }
 
 
@@ -90,6 +96,8 @@ def test_every_installer_config_write_goes_through_safe_write():
         text = script.read_text(encoding="utf-8")
         offenders += [f"{adapter} (bash) {o}" for o in find_unsafe_bash_writes(text)]
         offenders += _py_write_offenders(adapter, text)
+    for helper in ADAPTER_PY:
+        offenders += _py_write_offenders(helper.parent.name, helper.read_text(encoding="utf-8"))
     assert offenders == [], "raw config write(s) bypassing safe_write:\n" + "\n".join(offenders)
 
 
