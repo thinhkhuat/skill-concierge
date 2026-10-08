@@ -1244,7 +1244,7 @@ def check_corpus_health():
     so the fix-list is visible in the normal health workflow. Read-only, fail-open: missing
     file -> N/A (calibration is optional); WARN only if calibration is wholly signal-less."""
     # Durable home first (survives /plugin update), then the legacy cache-local copy, honoring
-    # the same SKILL_THRESHOLDS env seam the enforcer and calibrator already use — this check
+    # the same SKILL_THRESHOLDS env seam the calibrator uses — this check
     # previously hardcoded the cache path and went silently N/A on every fresh release cache.
     env = os.environ.get("SKILL_THRESHOLDS")
     durable = Path.home() / ".claude" / "skill-concierge" / "thresholds.json"
@@ -2494,7 +2494,7 @@ def main():
                   file=sys.stderr)
             return 2
         exec(compile(body.read_text(encoding="utf-8"), str(body), "exec"), globals())
-        return _selftest()  # noqa: F821  (defined by the exec above)
+        return globals()["_selftest"]()  # defined by the exec above
     global CUTOVER
     CUTOVER = args.cutover
 

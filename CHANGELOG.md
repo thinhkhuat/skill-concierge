@@ -27,10 +27,15 @@ The four owner decisions left by the 0.64.1 audit, Thinh: "do 1, 2, 3, 4" (ADR-0
 - **One harness detector, `hooks/scripts/harness.py`,** serves enforcer, doctrine and ledger. Answers match 0.64.1
   in every harness setup checked (16 live-process setups; 77 table cases in `tests/test_harness_detector.py`).
   Where the three old copies disagreed, the enforcer's answer wins, except that the enforcer now also reads the
-  `.commandcode` path marker doctrine already had; this can change an offer row's `harness` from `claude` to
-  `commandcode` only when the enforcer runs from a `/.commandcode/` path with `SKILL_CONCIERGE_HARNESS` unset (the
-  Command Code mod always sets it). A symlink loop in `CLAUDE_PLUGIN_ROOT` no longer crashes the enforcer at import.
-  If `harness.py` cannot be imported, each hook exits 0 with no output.
+  `.commandcode` path marker doctrine already had; this can change an offer row's `harness` to
+  `commandcode` only when a `/.commandcode/` path is in play with `SKILL_CONCIERGE_HARNESS` unset (the Command Code
+  mod always sets it). A symlink loop in `CLAUDE_PLUGIN_ROOT` no longer crashes the enforcer at import.
+  If `harness.py` cannot be imported, a hook run exits 0 with no output, and a process that imports the module
+  (doctor, the findability sweep) gets an ImportError it already handles.
+- **Installers called through a symlink** find `adapters/lib/sync.sh` beside the real file.
+- **`tests/test_no_undefined_names.py`** fails on any undefined name in shipped Python (pyflakes), and
+  `tests/test_getaway_leg.py` drives the enforcer's low-fit authorized skip end to end: during this release the
+  lever removal left that leg reading a deleted name, and no test reached it. Caught by the pre-release review.
 
 ## [0.64.1] - 2026-10-09
 

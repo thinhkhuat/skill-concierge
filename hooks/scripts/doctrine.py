@@ -43,7 +43,9 @@ try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from harness import running_harness
 except Exception:  # noqa: BLE001
-    sys.exit(0)
+    if __name__ == "__main__":
+        sys.exit(0)  # a hook run stays silent on a broken install
+    raise  # an importer (doctor, findability, skill_exclusions) handles the ImportError
 
 # Doctrine lives two levels up from this script: hooks/scripts/doctrine.py →
 # hooks/doctrine/skill-first.md. Resolved from __file__ so it is install-location

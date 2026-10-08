@@ -76,7 +76,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # The helpers every installer shares (adapters/lib/sync.sh), found from this file's own location.
-SYNC_LIB="$(cd "$SCRIPT_DIR/.." && pwd)/lib/sync.sh"
+# Follow symlinks to this file so a linked installer still finds the lib beside the real one.
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _link="$(readlink "$_self")"
+  case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
+done
+SYNC_LIB="$(cd "$(dirname "$_self")/.." && pwd)/lib/sync.sh"
 if [ ! -f "$SYNC_LIB" ]; then
   echo "!! $SYNC_LIB is missing: this installer needs the shared helpers in adapters/lib/." >&2
   echo "   Run it from a complete checkout; nothing was changed." >&2

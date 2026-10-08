@@ -34,7 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from harness import running_harness  # the detector enforcer, doctrine and ledger share
 except Exception:  # noqa: BLE001 - fail-silent: no detector, no row
-    sys.exit(0)
+    if __name__ == "__main__":
+        sys.exit(0)  # a hook run stays silent on a broken install
+    raise  # an importer (doctor, findability, skill_exclusions) handles the ImportError
 
 
 def _menu_name(name: str, harness: str) -> tuple:

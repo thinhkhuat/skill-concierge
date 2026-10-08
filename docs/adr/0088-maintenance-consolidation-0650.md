@@ -43,7 +43,7 @@ left four structural changes to the owner, because each removes a feature or mov
    enforcer's answer wins, with one exception: the `.commandcode` path marker doctrine already had is kept, so the
    enforcer now also reads it (`docs/caveats.md` requires it; the Command Code mod always sets
    `SKILL_CONCIERGE_HARNESS`, so this changes an offer row's `harness` only when that variable is unset). If
-   `harness.py` cannot be imported, each hook exits 0 with no output.
+   `harness.py` cannot be imported, a hook run exits 0 with no output and an importing process gets ImportError.
 
 ## Consequences
 
@@ -53,8 +53,13 @@ left four structural changes to the owner, because each removes a feature or mov
   setups (doctrine output, enforcer output and ledger rows identical), and 139 installer runs matched main's exit
   codes, output (bar timestamps and bash line numbers) and written files. `tests/test_harness_detector.py` pins the
   detector against main's answers over 77 cases; `tests/test_installer_shared_lib.py` pins the shared lib.
-- Ledger rows change only in conflicting-signal cases no live harness produces (several env markers set at once,
-  no payload, no explicit `SKILL_CONCIERGE_HARNESS`), now answered the enforcer's way. Evidence and the case list:
+- Ledger rows change only in conflicting-signal cases no live harness produces, all with no payload and no explicit
+  `SKILL_CONCIERGE_HARNESS`: several env markers set at once, or one env marker that disagrees with the script's
+  path marker (for example `CLAUDE_PLUGIN_ROOT` under `.claude` with the script under `.zcode`: the row was stamped
+  `zcode`, now unstamped; `DSH_SHELL=1` with the script under `.zcode`: `zcode` becomes `dsh`). They are now answered
+  the enforcer's way; `tests/test_harness_detector.py` pins each one. The `.commandcode` marker can likewise turn an
+  offer row's `harness` into `commandcode` when `CLAUDE_PLUGIN_ROOT` carries `/.commandcode/` and the script path
+  another harness's marker. Evidence and the case list:
   `plans/261009-0305-maintenance-four/`.
 - Revert: each part is its own commit on `maint/integrate`; reverting the lever removal restores both flags at
   their default-off behaviour.

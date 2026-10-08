@@ -21,7 +21,7 @@ STOCK_BASH = Path("/bin/bash")
 INSTALLERS = ("claude-code", "codex", "omp", "zcode", "opencode")
 MOVED = {"_ver_ge", "_is_own_checkout", "_export_to", "_refuse_unexportable_checkout"}
 SOURCE_LINES = (
-    'SYNC_LIB="$(cd "$SCRIPT_DIR/.." && pwd)/lib/sync.sh"',
+    'SYNC_LIB="$(cd "$(dirname "$_self")/.." && pwd)/lib/sync.sh"',
     '. "$SYNC_LIB"',
 )
 _FUNC_DEF = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.M)
@@ -77,3 +77,13 @@ def test_a_missing_lib_is_refused_before_anything_runs(tmp_path, name):
     assert f"{tmp_path / 'repo' / 'adapters' / 'lib' / 'sync.sh'} is missing" in r.stderr, r.stderr
     assert r.stdout == "", r.stdout
     assert not any(home.rglob("*")), sorted(str(p) for p in home.rglob("*"))
+
+
+@pytest.mark.parametrize("name", INSTALLERS)
+def test_a_symlinked_installer_still_finds_the_lib(name, tmp_path):
+    """The lib is looked up beside the installer's real file, not beside a symlink to it."""
+    link = tmp_path / "linked-install.sh"
+    link.symlink_to(_installer(name))
+    run = subprocess.run(["/bin/bash", str(link), "--not-an-option"], capture_output=True, text=True,
+                         timeout=60, env=installer_env(tmp_path, tmp_path / "home"))
+    assert "is missing: this installer needs the shared helpers" not in run.stderr, run.stderr

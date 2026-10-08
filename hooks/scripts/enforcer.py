@@ -69,7 +69,9 @@ try:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from harness import running_harness
 except Exception:  # noqa: BLE001
-    sys.exit(0)
+    if __name__ == "__main__":
+        sys.exit(0)  # a hook run stays silent on a broken install
+    raise  # an importer (doctor, findability, skill_exclusions) handles the ImportError
 
 # ── endpoints ────────────────────────────────────────────────────────────────
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
@@ -3138,7 +3140,7 @@ def main() -> int:
             # silent if the kill-switch is off) instead of leaving the agent to re-derive
             # this verdict via a fresh search_skills call.
             _append_offer(sid, "getaway", offered, None, prompt, dropped=_dropped or None, embed_ms=embed_ms, qdrant_ms=qdrant_ms)
-            _authorized_skip_inject("getaway", sid, top=top, floor=floor)
+            _authorized_skip_inject("getaway", sid, top=top, floor=GETAWAY_FLOOR)
             return 0
 
         # Actionability gate (prior-independent class-margin). A relevant skill cleared the
@@ -3210,7 +3212,7 @@ if __name__ == "__main__":
             print(f"enforcer --selftest: {_st} not found (stripped install?)", file=sys.stderr)
             sys.exit(2)
         exec(compile(_src, str(_st), "exec"), globals())
-        sys.exit(_selftest())  # noqa: F821 - defined by the exec above
+        sys.exit(globals()["_selftest"]())  # defined by the exec above
     _rc = main()
     if _DEFERRED:
         try:
