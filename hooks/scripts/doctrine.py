@@ -37,6 +37,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# The one harness detector enforcer, doctrine and ledger share. A copy that lacks it exits 0
+# rather than inject a standing order that names the wrong harness's tools.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from harness import running_harness
+except Exception:  # noqa: BLE001
+    sys.exit(0)
+
 # Doctrine lives two levels up from this script: hooks/scripts/doctrine.py →
 # hooks/doctrine/skill-first.md. Resolved from __file__ so it is install-location
 # independent (the plugin cache path differs from the dev repo path).
@@ -171,66 +179,9 @@ def _harness_adapt(doctrine: str) -> str:
     `get_skill("<name>")` hint is left as written: it names the tool by its short name, which the
     agent resolves to the bridged form.
     """
-    harness = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
-    if harness in ("omp", "oh-my-pi"):
-        harness = "omp"
-    if harness in ("commandcode", "cmd", "command-code"):
-        harness = "commandcode"
-    if harness in ("zcode", "z-code"):
+    harness = running_harness(__file__)
+    if harness == "zcode":
         return doctrine  # ZCode rendering is Claude-default; no rewrite (ADR-0042)
-    if harness in ("dsh", "deepseek-harness", "oh-dsh", "ohdsh"):
-        harness = "dsh"
-    if harness in ("cline", "cline-cli"):
-        harness = "cline"
-    if harness in ("opencode", "open-code"):
-        harness = "opencode"
-    if not harness and os.environ.get("OMPCODE", "").strip() == "1":
-        harness = "omp"
-    _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
-    if not harness and _zpr and os.path.isabs(_zpr):
-        return doctrine
-    if not harness and os.environ.get("DSH_SHELL", "").strip() == "1":
-        harness = "dsh"
-    if not harness:
-        marker_omp = f"{os.sep}.omp{os.sep}"
-        marker_codex = f"{os.sep}.codex{os.sep}"
-        marker_zcode = f"{os.sep}.zcode{os.sep}"
-        marker_cmd = f"{os.sep}.commandcode{os.sep}"
-        marker_dsh = f"{os.sep}.dsh{os.sep}"
-        marker_ohdsh = f"{os.sep}.ohdsh{os.sep}"
-        marker_cline = f"{os.sep}.cline{os.sep}"
-        marker_opencode = f"{os.sep}.opencode{os.sep}"
-        marker_claude = f"{os.sep}.claude{os.sep}"
-        for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
-            if not cand or not os.path.isabs(cand):
-                continue
-            try:
-                resolved = str(Path(cand).resolve())
-            except (OSError, RuntimeError):
-                resolved = ""
-            if marker_omp in resolved:
-                harness = "omp"
-                break
-            if marker_codex in resolved:
-                harness = "codex"
-                break
-            if marker_zcode in resolved:
-                return doctrine
-            if marker_cmd in resolved:
-                harness = "commandcode"
-                break
-            if marker_dsh in resolved or marker_ohdsh in resolved:
-                harness = "dsh"
-                break
-            if marker_cline in resolved:
-                harness = "cline"
-                break
-            if marker_opencode in resolved:
-                harness = "opencode"
-                break
-            if marker_claude in resolved:
-                harness = "claude"
-                break
     if harness == "dsh":
         # DSH's MCP client bridges as `mcp__<serverName>__<rawName>` — same naming
         # as Command Code. No slash-commands in DSH; rewrite both slash hints to the bridged

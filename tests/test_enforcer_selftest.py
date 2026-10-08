@@ -55,6 +55,7 @@ def test_selftest_cli_exits_2_when_the_tests_file_is_missing(tmp_path):
     hook = tmp_path / "hooks" / "scripts" / "enforcer.py"
     hook.parent.mkdir(parents=True)
     shutil.copy(ENFORCER, hook)
+    shutil.copy(ENFORCER.parent / "harness.py", hook.parent / "harness.py")
     run = subprocess.run([sys.executable, str(hook), "--selftest"], capture_output=True, text=True,
                          timeout=120, cwd=tmp_path,
                          env={**os.environ, "SKILL_CONCIERGE_LOG": str(tmp_path), "ENFORCER_LEDGER": "0"})

@@ -31,6 +31,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from harness import running_harness  # the detector enforcer, doctrine and ledger share
+except Exception:  # noqa: BLE001 - fail-silent: no detector, no row
+    sys.exit(0)
 
 
 def _menu_name(name: str, harness: str) -> tuple:
@@ -70,49 +74,12 @@ GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type", "id")
 
 
-def _zcode_harness() -> str | None:
-    """ZCode stamp fallback (ADR-0042). Payload harness and SKILL_CONCIERGE_HARNESS keep
-    their existing precedence (the OMP adapter passes it via payload); this runs only when
-    both are absent, via ZCode's two positive signals: ZCODE_PLUGIN_ROOT (injected —
-    alongside CLAUDE_PLUGIN_ROOT — into plugin-hook processes; falsy/non-absolute values
-    are never probed) and the `.zcode` path marker on the hook's own install location.
-    Other harnesses are untouched by construction: they never set the env var and their
-    install paths never carry the marker."""
-    _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
-    if _zpr and os.path.isabs(_zpr):
-        return "zcode"
-    marker = f"{os.sep}.zcode{os.sep}"
-    for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
-        if not cand or not os.path.isabs(cand):
-            continue
-        try:
-            resolved = str(Path(cand).resolve())
-        except (OSError, RuntimeError):
-            continue
-        if marker in resolved:
-            return "zcode"
-    return None
-
-
-def _dsh_harness() -> str | None:
-    """DSH stamp fallback (ADR-0050). Same precedence as _zcode_harness: runs only when
-    payload harness and SKILL_CONCIERGE_HARNESS are absent. Detects DSH via DSH_SHELL=1
-    (the env flag DSH sets in agent subprocesses) and the `.ohdsh`/`.dsh` path marker
-    on the hook's install location. Other harnesses are untouched by construction:
-    they never set DSH_SHELL and their install paths never carry the marker."""
-    if os.environ.get("DSH_SHELL", "").strip() == "1":
-        return "dsh"
-    for marker in (f"{os.sep}.ohdsh{os.sep}", f"{os.sep}.dsh{os.sep}"):
-        for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
-            if not cand or not os.path.isabs(cand):
-                continue
-            try:
-                resolved = str(Path(cand).resolve())
-            except (OSError, RuntimeError):
-                continue
-            if marker in resolved:
-                return "dsh"
-    return None
+def _native_harness() -> str:
+    """The stamp when neither the payload nor SKILL_CONCIERGE_HARNESS names the harness: ZCode
+    (ADR-0042) and DSH (ADR-0050) from their native signals, via the shared detector. Every other
+    harness, Claude included, keeps its rows unstamped."""
+    harness = running_harness(__file__)
+    return harness if harness in ("zcode", "dsh") else ""
 
 
 def _log(ev: dict, sub: bool, harness: str) -> None:
@@ -150,8 +117,7 @@ def main() -> int:
 
         harness = (d.get("harness")
                    or os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
-                   or _zcode_harness()
-                   or _dsh_harness())
+                   or _native_harness())
 
         if evt == "UserPromptSubmit":
             prompt = d.get("prompt") or ""

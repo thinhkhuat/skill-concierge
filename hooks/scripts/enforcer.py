@@ -63,6 +63,14 @@ try:
 except Exception:  # pragma: no cover - defensive; see comment above
     ports = None
 
+# The one harness detector enforcer, doctrine and ledger share. Without it the offer could
+# target the wrong harness's skills, so a copy that lacks it serves no menu (fail-silent).
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from harness import running_harness
+except Exception:  # noqa: BLE001
+    sys.exit(0)
+
 # ── endpoints ────────────────────────────────────────────────────────────────
 EMBED_HOST = os.environ.get("EMBED_SHIM_HOST", "127.0.0.1")
 if ports is not None:
@@ -194,68 +202,8 @@ RETRIEVE_LIMIT = TOP_K * 5
 
 
 def _running_harness() -> str:
-    """Which harness is executing this hook: one of _HARNESS_ORDER's names.
-
-    Precedence: the explicit `SKILL_CONCIERGE_HARNESS` (set by the Command Code, OMP, Cline and
-    OpenCode adapters) > native env signals > the install-path marker of CLAUDE_PLUGIN_ROOT or
-    this file > 'claude'. The native signals (`OMPCODE=1`, an absolute `ZCODE_PLUGIN_ROOT`,
-    `DSH_SHELL=1`) outrank the path markers because OMP and ZCode also set Claude's own markers;
-    no other harness sets them.
-    """
-    explicit = os.environ.get("SKILL_CONCIERGE_HARNESS", "").strip().lower()
-    if explicit in ("commandcode", "cmd", "command-code"):
-        return "commandcode"
-    if explicit in ("codex", "claude", "omp", "oh-my-pi"):
-        return "omp" if explicit in ("omp", "oh-my-pi") else explicit
-    if explicit in ("zcode", "z-code"):
-        return "zcode"
-    if explicit in ("dsh", "deepseek-harness", "oh-dsh", "ohdsh"):
-        return "dsh"
-    if explicit in ("cline", "cline-cli"):
-        return "cline"
-    if explicit in ("opencode", "open-code"):
-        return "opencode"
-
-    if os.environ.get("OMPCODE", "").strip() == "1":
-        return "omp"
-
-    _zpr = os.environ.get("ZCODE_PLUGIN_ROOT", "").strip()
-    if _zpr and os.path.isabs(_zpr):
-        return "zcode"
-
-    if os.environ.get("DSH_SHELL", "").strip() == "1":
-        return "dsh"
-
-    marker_omp = f"{os.sep}.omp{os.sep}"
-    marker_codex = f"{os.sep}.codex{os.sep}"
-    marker_zcode = f"{os.sep}.zcode{os.sep}"
-    marker_dsh = f"{os.sep}.dsh{os.sep}"
-    marker_ohdsh = f"{os.sep}.ohdsh{os.sep}"
-    marker_cline = f"{os.sep}.cline{os.sep}"
-    marker_opencode = f"{os.sep}.opencode{os.sep}"
-    marker_claude = f"{os.sep}.claude{os.sep}"
-    for cand in (os.environ.get("CLAUDE_PLUGIN_ROOT"), __file__):
-        if not cand or not os.path.isabs(cand):
-            continue
-        try:
-            resolved = str(Path(cand).resolve())
-        except OSError:
-            resolved = ""
-        if marker_omp in resolved:
-            return "omp"
-        if marker_codex in resolved:
-            return "codex"
-        if marker_zcode in resolved:
-            return "zcode"
-        if marker_dsh in resolved or marker_ohdsh in resolved:
-            return "dsh"
-        if marker_cline in resolved:
-            return "cline"
-        if marker_opencode in resolved:
-            return "opencode"
-        if marker_claude in resolved:
-            return "claude"
-    return "claude"
+    """Which harness is executing this hook: one of _HARNESS_ORDER's names (harness.py)."""
+    return running_harness(__file__)
 
 
 RUNNING_HARNESS = _running_harness()
