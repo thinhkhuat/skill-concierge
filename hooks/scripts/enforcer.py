@@ -868,7 +868,7 @@ KEEPOFF = _load_keepoff()
 
 def _drop_keepoff(cands: list, keepoff: frozenset):
     """Split retrieved cands into (survivors, dropped-names) by the keep-off set. Pure +
-    order-preserving so P6's later gap-collapse runs over the POST-suppression set."""
+    order-preserving."""
     survivors = [c for c in cands if c[0] not in keepoff]
     dropped = [c[0] for c in cands if c[0] in keepoff]
     return survivors, dropped
@@ -1227,48 +1227,6 @@ def _chain_hint(sid: str) -> str:
             + ", ".join(data[1:]) + " — candidates, fit still required.")
 
 
-# ── per-skill calibrated tau (Phase D wiring, default-INERT) ───────────────
-# Wire eval/thresholds.json so an `ok`-calibrated skill gates on ITS OWN tau instead of the
-# single global GETAWAY_FLOOR. DEFAULT OFF (ENFORCER_PER_SKILL_TAU unset) -> _PER_SKILL_TAU is
-# empty -> _floor_for() returns the global floor -> behaviour byte-identical to today.
-# WHY OFF BY DEFAULT (data, 2026-06-30): all 5 current `ok` skills calibrate to tau < 0.45 (one
-# negative), so arming this LOWERS their bar and ADDS the false-offers ADR-0009 tuned against.
-# On the compressed-cosine band the lever is index CONTENT (multi-vector), not thresholds —
-# calibrate_thresholds.py says the same. Mechanism shipped + tested; arm only after a substrate
-# change lifts separation. Opt in: export ENFORCER_PER_SKILL_TAU=1.  FAIL-OPEN on a bad file.
-# The calibration artifact lives in the DURABLE HOME, not the plugin cache: every
-# `/plugin update` mints a fresh cache dir, so a generated file kept under the plugin root
-# silently dies with each release (observed 2026-08-24 — the 0.25.0 cache shipped without it,
-# muting doctor's Corpus health row and every per-skill tau). Same class, same fix as the
-# flywheel manifest (ADR-0027) and SKILL_TRIGGERS (0.21.1). Legacy cache-local copies are
-# still honored as a read fallback so an un-migrated install keeps working.
-_THRESHOLDS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "thresholds.json"
-_THRESHOLDS_LEGACY = Path(__file__).resolve().parents[2] / "eval" / "thresholds.json"
-_env_thresholds = os.environ.get("SKILL_THRESHOLDS")
-_THRESHOLDS_PATH = Path(_env_thresholds) if _env_thresholds else (
-    _THRESHOLDS_DURABLE if _THRESHOLDS_DURABLE.exists() else _THRESHOLDS_LEGACY)
-
-
-def _load_per_skill_tau() -> dict:
-    if not os.environ.get("ENFORCER_PER_SKILL_TAU", "").strip():
-        return {}  # default-inert
-    try:
-        data = json.loads(_THRESHOLDS_PATH.read_text(encoding="utf-8"))
-        return {k: float(v["tau"]) for k, v in data.items()
-                if v.get("status") == "ok" and isinstance(v.get("tau"), (int, float))}
-    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError):
-        return {}  # fail-open: a bad thresholds file must never break a turn
-
-
-_PER_SKILL_TAU = _load_per_skill_tau()
-
-
-def _floor_for(name: str) -> float:
-    """Getaway floor for a candidate: its calibrated per-skill tau when armed AND `ok`,
-    else the global floor. Inert by default (_PER_SKILL_TAU empty)."""
-    return _PER_SKILL_TAU.get(name, GETAWAY_FLOOR)
-
-
 # ── deterministic route overrides (config-driven, default ON since ADR-0054) ──────
 # A tiny, high-precision whole-word phrase -> skill map for intents where semantic ranking is
 # unreliable but the intent is unambiguous — above all a prompt that NAMES the skill
@@ -1356,17 +1314,6 @@ def _merge_route_hits(hits: list, cands: list) -> list:
     return ([(n, desc.get(n, d), s) for (n, d, s) in hits]
             + [c for c in cands if c[0] not in names])
 
-
-# ── P6: runner-up-gap menu collapse (default-INERT) ──────────────────
-# Collapse the menu to the top skill when it is clearly ahead of the runner-up by RAW-score
-# gap (NOT %-share, which never concentrates: top-share maxes ~0.285 on the live ledger).
-# Default OFF — no evidence collapsing improves conversion; gap>=1.25 fires only ~5%. Opt in
-# by exporting ENFORCER_DOMINANCE_RATIO=<ratio>.
-_DR = os.environ.get("ENFORCER_DOMINANCE_RATIO", "").strip()
-try:
-    DOMINANCE_RATIO = float(_DR) if _DR else None
-except ValueError:
-    DOMINANCE_RATIO = None  # fail-silent on a malformed opt-in value (hook contract)
 
 # Per-turn GATE TRIGGER — the cheap re-assert. The full SKILL-FIRST standing order
 # is injected once at SessionStart (doctrine.py); this keeps it live in attention
@@ -2749,16 +2696,6 @@ def _retrieve_foreign(vector: list, top_installed: float = 0.0,
     return out
 
 
-def _apply_dominance(cands: list) -> list:
-    """P6 (default-inert): collapse to the top skill when it is clearly ahead of the runner-up by
-    RAW-score gap. Decided HERE (not in _ranked_mandate) so the CALLER logs the post-collapse menu —
-    agent and ledger see the same set. Off unless ENFORCER_DOMINANCE_RATIO is set."""
-    if (DOMINANCE_RATIO and len(cands) >= 2 and cands[1][2] > 0
-            and cands[0][2] / cands[1][2] >= DOMINANCE_RATIO):
-        return [cands[0]]
-    return cands
-
-
 def _blurb(desc: str) -> str:
     b = _clean(desc)
     return b[:_DESC_CHARS].rsplit(" ", 1)[0] + "…" if len(b) > _DESC_CHARS else b
@@ -3216,7 +3153,7 @@ def main() -> int:
         except (OSError, UnicodeError, ValueError, TypeError, AttributeError, KeyError, IndexError):
             return _fallback("qdrant_down", embed_ms=embed_ms, qdrant_ms=(time.time() - t1) * 1000)
         # P5 (ADR-0011): hard-drop chronic never-take skills BEFORE floors/gate/rank, so they
-        # vanish from the menu and from P6's collapse set. Fail-open (KEEPOFF empty -> no-op).
+        # vanish from the menu. Fail-open (KEEPOFF empty -> no-op).
         cands, _dropped = _drop_keepoff(cands, KEEPOFF)
         # ADR-0046: user-ordered disable outranks everything — a blocked skill never
         # reaches floors, gates, or the menu. Dropped names ride the same `dropped`
@@ -3242,13 +3179,12 @@ def main() -> int:
         _jev_rows = _jev[1] if _jev is not None else None
         _jev_pulled = (_jev[3] if _jev is not None and len(_jev) > 3 else []) or []
 
-        # Getaway: top candidate below its floor (per-skill tau when armed+`ok`, else the
-        # global floor). A deterministic hit always clears — it IS the intent. ADR-0061 (owner-
-        # approved 2026-09-26): on a turn the Jev router decided (`_jev_rows`), Jev's verdict
-        # replaces this floor and the actionability gate below — measured on 313 real English
-        # skill turns, these two gates wrongly skip 24, Jev 1. Every other turn keeps both.
-        floor = _floor_for(cands[0][0]) if cands else GETAWAY_FLOOR
-        if not _hits and not _jev_rows and top < floor:
+        # Getaway: top candidate below the global floor. A deterministic hit always clears —
+        # it IS the intent. ADR-0061 (owner-approved 2026-09-26): on a turn the Jev router
+        # decided (`_jev_rows`), Jev's verdict replaces this floor and the actionability gate
+        # below — measured on 313 real English skill turns, these two gates wrongly skip 24,
+        # Jev 1. Every other turn keeps both.
+        if not _hits and not _jev_rows and top < GETAWAY_FLOOR:
             # No semantic fit → trivial/out-of-catalogue. Log the consideration so
             # coverage/fallback stats stay honest, then authorize the skip (or stay fully
             # silent if the kill-switch is off) instead of leaving the agent to re-derive
@@ -3269,7 +3205,7 @@ def main() -> int:
         # Annex queries, issued ONLY once the turn is known to carry an offer.
         #
         # Both are SEPARATE queries so `cands` (installed) and the whole pipeline above
-        # (keepoff, deterministic, getaway, intent gate, ITEM_FLOOR, dominance) run
+        # (keepoff, deterministic, getaway, intent gate, ITEM_FLOOR) run
         # byte-identical — an annex can never touch the installed ranking or displace a slot.
         # ADR-0032 supplies the external-catalog annex, ADR-0034 the cross-harness one; each is
         # best-effort, so a failed annex query degrades to no-annex and never breaks the offer.
@@ -3296,7 +3232,6 @@ def main() -> int:
             shown = _jev_rows
         else:
             shown = [(n, d, s) for (n, d, s) in cands if s >= ITEM_FLOOR] or cands[:1]
-            shown = _apply_dominance(shown)   # P6 collapse decided once: agent + ledger see the same set
         _ext_takes = _external_takes() if (ANNEX_COMPLEMENT and _external) else None
         _pulled = _jev_pulled if _jev_rows else []
         _inject(_ranked_mandate(shown, annex=_external, foreign=_foreign, takes=_ext_takes,
@@ -3436,41 +3371,18 @@ def _selftest() -> int:
     finally:
         BLOCKLIST, _BLOCKLIST_PATH = _saved_bl, _saved_blp
 
-    # (5) P6 gap-collapse: decided in _apply_dominance (so the CALLER logs the post-collapse menu),
-    # default-inert. Plus a collapsed input must render as a lone candidate (no %-share, no note).
-    global DOMINANCE_RATIO
-    _saved = DOMINANCE_RATIO
-    try:
-        DOMINANCE_RATIO = 1.25
-        if _apply_dominance([("a", "da", 0.30), ("b", "db", 0.20)]) != [("a", "da", 0.30)]:
-            bad.append("dominance: should collapse to top when gap >= ratio")
-        if len(_apply_dominance([("a", "da", 0.30), ("b", "db", 0.28)])) != 2:
-            bad.append("dominance: should NOT collapse a flat menu (gap < ratio)")
-        DOMINANCE_RATIO = None
-        if len(_apply_dominance([("a", "da", 0.30), ("b", "db", 0.20)])) != 2:
-            bad.append("dominance: default-inert must not collapse")
-    finally:
-        DOMINANCE_RATIO = _saved
-    lone_collapsed = _ranked_mandate([("a", "da", 0.30)])
-    if "%" in lone_collapsed or "RELATIVE rank" in lone_collapsed:
-        bad.append("collapsed render must be lone (no %-share / note)")
+    # (5) a lone candidate (the `cands[:1]` fallback) renders alone: no %-share, no note.
+    lone = _ranked_mandate([("a", "da", 0.30)])
+    if "%" in lone or "RELATIVE rank" in lone:
+        bad.append("a lone candidate must render alone (no %-share / note)")
 
-    # (6) per-skill tau (default-INERT) + deterministic routes (ADR-0054: config-driven,
-    # default ON; ENFORCER_DETERMINISTIC=0 empties them). Routes are pure and run before embed.
-    global _PER_SKILL_TAU, _ROUTES
-    if _PER_SKILL_TAU != {}:
-        bad.append("per-skill tau must be empty/inert by default (ENFORCER_PER_SKILL_TAU unset)")
+    # (6) deterministic routes (ADR-0054: config-driven, default ON;
+    # ENFORCER_DETERMINISTIC=0 empties them). Routes are pure and run before embed.
+    global _ROUTES
     if os.environ.get("ENFORCER_DETERMINISTIC", "1").strip() == "0" and _ROUTES:
         bad.append("deterministic routes must be empty when ENFORCER_DETERMINISTIC=0")
-    if _floor_for("whatever") != GETAWAY_FLOOR:
-        bad.append("floor_for must return the global floor when inert")
-    _saved_tau, _saved_routes = _PER_SKILL_TAU, _ROUTES
+    _saved_routes = _ROUTES
     try:
-        _PER_SKILL_TAU = {"vn-author": 0.30}
-        if _floor_for("vn-author") != 0.30:
-            bad.append("floor_for must use per-skill tau for an armed `ok` skill")
-        if _floor_for("uncalibrated") != GETAWAY_FLOOR:
-            bad.append("floor_for must fall back to the global floor for an uncalibrated skill")
         _ROUTES = [("open a pull request", "ck:git")]
         hit = [n for n, _d, _s in _route_hits("please open a pull request now")]
         if hit != ["ck:git"]:
@@ -3495,7 +3407,7 @@ def _selftest() -> int:
         if _route_hits("open a pull request") != []:
             bad.append("deterministic routes must be inert when the config is empty")
     finally:
-        _PER_SKILL_TAU, _ROUTES = _saved_tau, _saved_routes
+        _ROUTES = _saved_routes
 
     # (6b) keep-off must survive a co-configured deterministic route (ADR-0011): a route
     # pointing at a keep-off'd skill must NOT resurface it at score 1.0 (which would bypass
@@ -4568,8 +4480,8 @@ def _selftest() -> int:
           f"{len(must_not_fire)} silent) + ranked-mandate %-share "
           f"+ actionability imperative-veto ({len(imp_fire)} fire / {len(imp_off)} off) "
           "+ consult-intent routing (ADR-0049) "
-          "+ keepoff-drop + blocklist-drop (ADR-0046) + gap-collapse "
-          "+ per-skill-tau (inert) / deterministic-routes (ADR-0054 config, ON) + authorized-skip tier "
+          "+ keepoff-drop + blocklist-drop (ADR-0046) "
+          "+ deterministic-routes (ADR-0054 config, ON) + authorized-skip tier "
           f"(4 injects on / silent-off) + selfref over-fire lane ({len(selfref_fire)} fire / "
           f"{len(selfref_off)} off) "
           f"+ harness-message lane ({len(harness_fire)} fire / {len(harness_off)} off) "
