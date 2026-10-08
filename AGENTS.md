@@ -55,7 +55,7 @@ flag or its default.
 
 - **Python:** 3.10–3.12, `snake_case`. `analyze.py` and `doctor.py` are **stdlib-only** — keep them dependency-free.
 - **Shell:** `setup.sh` and the `bin/` launchers target POSIX `sh`/`bash`; keep them portable and idempotent.
-- **Versioning:** bump `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.codex-plugin/plugin.json`, AND root `package.json` together, plus a `CHANGELOG.md` entry. Never bump one alone — `driftcheck.json` mirrors the manifest/CHANGELOG/README/quickstart set, and `package.json` carries the OMP extension hook (`omp.extensions`), so its version must stay in lockstep even though driftcheck does not regex it.
+- **Versioning:** bump `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.codex-plugin/plugin.json`, root `package.json` AND `adapters/opencode/plugin/package.json` together, plus a `CHANGELOG.md` entry. Never bump one alone — `driftcheck.json` mirrors all five manifests plus the CHANGELOG/README/quickstart set. Root `package.json` carries the OMP extension hook (`omp.extensions`).
 - **Tests run with a clean Jev environment.** `tests/conftest.py` removes every `ENFORCER_JEV_*` variable plus `TYPESAFE_API_KEY` and `CMD_API_KEY` before collection; without it, a shell that has loaded the machine's `harness-env.sh` fails 13 router/history tests.
 - **ADRs are immutable.** Don't edit an accepted ADR — supersede it with a new one.
 - **Vendored engine:** never patch `vendor/skill-search/` to diverge from upstream silently; record any customization in [`vendor/skill-search/VENDORED.md`](vendor/skill-search/VENDORED.md).

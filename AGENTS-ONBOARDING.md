@@ -69,7 +69,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
    artifact, not a weak retriever.
 
 5. **The plugin lives in the versioned cache; your edits don't go live by themselves.** Bump
-   the four manifests together (see [`AGENTS.md`](AGENTS.md) → *Conventions*), push,
+   the five manifests together (see [`AGENTS.md`](AGENTS.md) → *Conventions*), push,
    then `/plugin marketplace update` + restart. The MCP launcher (`bin/skill-search-mcp`)
    auto-resyncs the venv engine on a version mismatch (ADR-0018), so a plain `setup.sh` rerun
    is only needed for a dependency change. Read [`docs/caveats.md` §11](docs/caveats.md)
@@ -84,7 +84,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
 | Tune retrieval | `vendor/skill-search/skill_search/server.py` (MAX-pool trigger layer) — see `VENDORED.md` if you change engine code |
 | Add a new plugin skill | `skills/<name>/SKILL.md` with a bare `name: <name>` (the directory name) + `user-invocable: true` (+ `argument-hint` for skills that take arguments — ClaudeKit pattern). Minimal skeleton: `skills/setup/SKILL.md` (argument-less, so no `argument-hint`); see `skills/keep-on/SKILL.md` for the `argument-hint` form. |
 | Add a new hook event | `hooks/hooks.json` + `hooks/scripts/<name>.py` (mirror the fail-silent contract) |
-| Bump the version | the four manifests together + `CHANGELOG.md` entry — [`AGENTS.md`](AGENTS.md) → *Conventions* |
+| Bump the version | the five manifests together + `CHANGELOG.md` entry — [`AGENTS.md`](AGENTS.md) → *Conventions* |
 | Check the deployment is healthy | `python3 scripts/doctor.py` (green `status: OK` is the bar) |
 | Curate the always-on allowlist | `skill-concierge:keep-on` skill OR `python3 scripts/keep-on.py list\|add\|remove` |
 | Measure the gate | `python3 scripts/analyze.py --since "<epoch-start>"` (NOT all-time) |

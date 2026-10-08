@@ -31,7 +31,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from selfheal import recent as _recent  # noqa: E402
+try:
+    from selfheal import recent as _recent  # noqa: E402
+except Exception:  # fail-silent: a hook must never break session start
+    sys.exit(0)
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 PY_BIN = VENV / "bin" / "python"

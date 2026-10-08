@@ -32,8 +32,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import selfheal  # noqa: E402
-from selfheal import qdrant_up as _qdrant_up, recent as _recent  # noqa: E402
+try:
+    import selfheal  # noqa: E402
+    from selfheal import qdrant_up as _qdrant_up, recent as _recent  # noqa: E402
+except Exception:  # fail-silent: a hook must never break session start
+    sys.exit(0)
 
 VENV = Path(os.environ.get("SKILL_CONCIERGE_VENV", Path.home() / ".claude/skill-concierge/venv"))
 SS_BIN = VENV / "bin" / "skill-search"

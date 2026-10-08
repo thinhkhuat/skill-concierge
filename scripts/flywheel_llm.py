@@ -293,8 +293,8 @@ CHAT_ERRORS = (AttributeError, IndexError, KeyError, OSError, TypeError, json.JS
 def run_batch(names, needs_work, net, merge, workers=1):
     """The generators' shared driver. `net(name)` is the network phase: it returns (name, reply) or
     (name, exception) and may run on `workers` threads; `merge(name, reply)` writes the corpus and
-    cache and always runs in this thread, so the files stay single-writer. Skills that no longer
-    `needs_work` are skipped. Returns one {"name", "status", "detail"} record per attempted skill."""
+    cache and always runs in this thread, so the files stay single-writer. Skills that do not
+    `needs_work` are filtered out once, before the batch starts. Returns one {"name", "status", "detail"} record per attempted skill."""
     batch = [n for n in names if needs_work(n)]
 
     def collect(name, out):

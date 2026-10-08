@@ -7,7 +7,8 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 A whole-repo bloat audit (six areas: enforcer; other hooks, bin and skills; the large scripts; the other
 scripts; adapters and setup; docs), then the cuts that keep behaviour the same, plus the real defects it found.
-Findings and one disposition line per finding: `plans/261009-0102-chisle-audit/`.
+Findings and one disposition line per finding: `plans/261009-0102-chisle-audit/`; synthesis:
+`plans/reports/chisle-audit-261009-0102-whole-concierge.md`.
 
 ### Fixed
 - **The hooks run on macOS's system Python 3.9.** `hooks/hooks.json` runs plain `python3`; with a PATH that
@@ -16,8 +17,8 @@ Findings and one disposition line per finding: `plans/261009-0102-chisle-audit/`
   annotations`); `tests/test_python39_hooks.py` imports every hook module and runs the enforcer self-test
   under 3.9 when that interpreter exists.
 - **The built-in self-tests run under pytest.** `tests/test_builtin_selftests.py` runs `enforcer.py
-  --selftest` and `doctor.py --selftest`; nothing ran them before, which is how the enforcer self-test sat
-  failing on main.
+  --selftest` and `doctor.py --selftest`; nothing ran them before, which is how an enforcer self-test
+  failure (the `opencode-personal` scope, fixed in 0.64.0) sat on main unnoticed.
 - **`doctrine.py` recognises OpenCode** and names OpenCode's `skill-search_search_skills` tool instead of
   Claude Code's; it also detects the `.opencode` and `.cline` path markers the enforcer already used.
 - **`skill_exclusions.py`** drops its drifted fallback copy of the ledger's tool names (missing
@@ -55,7 +56,9 @@ Findings and one disposition line per finding: `plans/261009-0102-chisle-audit/`
   `ledger.py` writes through one `_log` helper (rows byte-identical).
 - **Scripts:** the three LLM generators share one cache loader/saver and batch driver in `flywheel_llm.py`;
   `check_mcp_env_parity.py` compares in one table-driven loop; keep-on and blocklist share `_reconcile`;
-  doctor reads each install record and Command Code's settings once; `mined-chains.json` no longer records
+  doctor reads each install record and Command Code's settings once; `calibrate_jev_gate.py live` loads
+  the enforcer lazily, so a broken enforcer prints "(live catalogue unavailable)" instead of crashing at start;
+  `flywheel.py status` may word its verdict differently when a manifest holds malformed totals; `mined-chains.json` no longer records
   `max_gap_s`, a setting the code never applied.
 - **Docs:** stale statements fixed against the code (harness counts, tool and skill counts, `SKILL_TOP_K`,
   the keep-on seed size, the guard count, four manifests); four flags documented only in README copies

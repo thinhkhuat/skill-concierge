@@ -61,9 +61,9 @@ answer, the enforcer hook starts it on a refused connection, and `setup.sh` star
 it after (re)install. `skill-concierge:doctor --fix` starts a stopped owner, and also stops
 and disables a revived `skill-search-qdrant`/`skill-concierge-embed-shim` container if an old
 harness copy brought Docker back onto these ports. In the live fusion, an owner outage
-degrades to mandate-only fallback (ADR-0002), not a crash: if the owner is down, still loading, or
-the model fails, the enforcer hits `ENFORCER_EMBED_TIMEOUT` (0.5 s default) and falls back to
-mandate-only, so enforcement degrades. A sustained high `fallback: true` rate in
+degrades, not a crash (ADR-0002): if the owner is down, still loading, or the model fails, the
+enforcer hits `ENFORCER_EMBED_TIMEOUT` (0.5 s default) and serves the Jev verdict when one arrived,
+else the named-skill hits, else the bare mandate (`_fallback` in `hooks/scripts/enforcer.py`). A sustained high `fallback: true` rate in
 `~/.claude/skill-concierge/logs/skill-invocation-ledger.log` signals an owner health problem. The old
 embed shim (`scripts/embed_server.py`, `bin/embed-shim`) is retired, archived in v0.64.1; there is no
 `skill-concierge-embed-shim` container to restart.
