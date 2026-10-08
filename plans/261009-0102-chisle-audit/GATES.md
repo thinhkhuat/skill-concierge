@@ -41,5 +41,9 @@ only the files a kept finding names, plus CHANGELOG.md and the four manifests fo
   missing (probe: copied hook alone, exit 0); L6 calibrate lazy load and flywheel status wording declared, run_batch
   docstring fixed. L4 accepted: `_zcode_installed_path` in doctor.py is a 1-line helper the tests still call.
 
-- [ ] G6: The fixes are on origin/main and every harness runs them (doctor status OK, all integration rows green).
-  EVIDENCE: pending
+- [x] G6: The fixes are on origin/main and every harness runs them (doctor status OK, all integration rows green).
+  EVIDENCE: 2026-10-09 ~02:20: `git push` -> origin/main 4214664. All eight installers (claude-code, codex, omp,
+  zcode, commandcode, dsh, cline, opencode) exit 0; Claude Code, Codex, OMP, ZCode caches at v0.64.1. `doctor.py` in a
+  fresh login shell: `status: OK`, all eight integration rows [✓]. Live probe: the shipped
+  `~/.claude/plugins/cache/.../0.64.1/hooks/scripts/enforcer.py` under /usr/bin/python3 (3.9) exit 0, 1,418-byte menu,
+  empty stderr (on 0.64.0 it died at import).
