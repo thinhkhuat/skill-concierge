@@ -210,8 +210,8 @@ costs one harmless forced search, a false-fire would bless real work. Default ON
 enforcer's `SKILL-CHECK:` line for it, so the agent doesn't mistake its own recap turns for a
 self-authorized skip on a turn that actually carries a task tail.
 
-> **Per-skill tau and the runner-up dominance collapse are gone.** Both levers
-> (`ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) were default-off and are removed in v0.65.0
+> **Per-skill tau and the runner-up dominance collapse are gone.** Both levers were default-off and
+> are removed in v0.65.0 (their variable names are recorded in the ADR)
 > ([ADR-0088](../../docs/adr/0088-maintenance-consolidation-0650.md)); the getaway floor is always
 > `GETAWAY_FLOOR`. `scripts/calibrate_thresholds.py` and `thresholds.json` stay, because doctor reads
 > them. **Run `python3 hooks/scripts/enforcer.py --selftest` after any edit**; its body lives in
