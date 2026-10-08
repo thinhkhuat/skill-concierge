@@ -315,7 +315,11 @@ def test_engine_timeout_is_under_the_agents_bash_limit():
 
 @pytest.mark.parametrize("py", ["/nonexistent/python3", sys.executable])
 def test_engine_child_failure_raises_sieve_unavailable(monkeypatch, tmp_path, py):
-    monkeypatch.setenv("PYTHONPATH", str(tmp_path))      # no skill_search there: the import fails
+    # A skill_search that fails on import, placed on PYTHONPATH (searched before site-packages), so the child
+    # fails even under a venv that has the real engine installed; an empty PYTHONPATH dir would not block it.
+    (tmp_path / "skill_search").mkdir()
+    (tmp_path / "skill_search" / "__init__.py").write_text("raise ImportError('engine blocked by test')\n")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
     with pytest.raises(cf.SieveUnavailable):
         cf.sieve_rows_from_engine(["q"], python=py)
 
