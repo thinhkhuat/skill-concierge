@@ -201,9 +201,9 @@ The gate still fails open below its data-sufficiency floor, but any watch item r
 rates must not compare against a baseline built on the 2,044-point collection.
 
 **Pre-existing quirk, newly load-bearing here (TASK-022): `embed_down` over-counts on Python
-3.9.** The enforcer's embed call (`_embed` → `urllib.request.urlopen(..., timeout=EMBED_TIMEOUT_S)`,
-`hooks/scripts/enforcer.py:1793`) is guarded by `except TimeoutError` first (`:2481`) and falls
-through to `except (OSError, ...)` (`:2488`), which logs the row `embed_down`. `socket.timeout`
+3.9.** The enforcer's embed call (`_embed` → `_post_json(EMBED_URL, ..., EMBED_TIMEOUT_S)`, which reads through `_OPENER.open(..., timeout=...)`,
+all in `hooks/scripts/enforcer.py`) is guarded in `main()` by `except TimeoutError` first and falls
+through to the `except (OSError, UnicodeError, ...)` branch that follows it, which logs the row `embed_down`. `socket.timeout`
 became an alias of `TimeoutError` only from Python 3.10 on; under Python 3.9 a plain read timeout
 still raises the pre-3.10 `socket.timeout` class, which the `TimeoutError` branch misses and the
 `OSError` branch catches instead — so a slow-but-alive owner is logged `embed_down` (unreachable)

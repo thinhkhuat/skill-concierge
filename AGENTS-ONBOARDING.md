@@ -36,7 +36,7 @@ don't add a post-hoc detection layer "to catch skips" — it would reverse the i
 1. [`hooks/doctrine/skill-first.md`](hooks/doctrine/skill-first.md) — the standing order
    (the rules + the Red Flags table are the contract)
 2. [`hooks/scripts/enforcer.py`](hooks/scripts/enforcer.py) — the per-turn gate (the
-   real source of truth for the rules; has a `--selftest`)
+   real source of truth for the rules; has a `--selftest`, whose body lives in `tests/enforcer_selftest.py`)
 3. [`openwiki/architecture/three-organs.md`](openwiki/architecture/three-organs.md) — the
    conceptual spine + how a request flows
 4. [`docs/caveats.md`](docs/caveats.md) — the operational landmines (read before judging
@@ -79,7 +79,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
 
 | If you need to… | Go to |
 |---|---|
-| Add or change a runtime behavior | `hooks/scripts/enforcer.py` (the gate) — has `--selftest` |
+| Add or change a runtime behavior | `hooks/scripts/enforcer.py` (the gate) — has `--selftest` (body in `tests/enforcer_selftest.py`; doctor's is `tests/doctor_selftest.py`) |
 | Edit the standing order | `hooks/doctrine/skill-first.md` (runtime-read; no code change) |
 | Tune retrieval | `vendor/skill-search/skill_search/server.py` (MAX-pool trigger layer) — see `VENDORED.md` if you change engine code |
 | Add a new plugin skill | `skills/<name>/SKILL.md` with a bare `name: <name>` (the directory name) + `user-invocable: true` (+ `argument-hint` for skills that take arguments — ClaudeKit pattern). Minimal skeleton: `skills/setup/SKILL.md` (argument-less, so no `argument-hint`); see `skills/keep-on/SKILL.md` for the `argument-hint` form. |
@@ -115,7 +115,7 @@ Skip-read (skim, don't memorize): `vendor/skill-search/skill_search/server.py`,
 python3 scripts/doctor.py                        # deployment health; "status: OK" is the bar
 python3 scripts/doctor.py --fix                  # safe auto-fixes (index owner, reindex, reapply overrides, reapply enrichment, rebuild prompt_intent)
 python3 scripts/driftcheck.py driftcheck.json    # version + doc-parity
-python3 hooks/scripts/enforcer.py --selftest     # enforcer contract pinned (repo-local; use $CLAUDE_PLUGIN_ROOT only in deployed cache)
+python3 hooks/scripts/enforcer.py --selftest     # enforcer contract pinned, body in tests/enforcer_selftest.py (repo-local; use $CLAUDE_PLUGIN_ROOT only in deployed cache)
 python3 -m pytest tests/                         # run test suite (vendor/skill-search/tests/ also available)
 ## When in doubt
 

@@ -72,7 +72,7 @@ Its `main()` walks a fixed sequence; each early-return is a *verdict*:
    catches "don't use skill X" — mpnet cosine doesn't encode negation, so a refused skill still
    retrieves at full score. On match → mandate-only.
 3. **Self-referential recap skip (leg C).** `_is_selfref(prompt)` — fires **here, before any I/O**
-   (`enforcer.py:550`), so a pure "explain your last answer" turn never reaches the embed. Detail in
+   (the `_is_selfref` call in `main()` of `enforcer.py`), so a pure "explain your last answer" turn never reaches the embed. Detail in
    [leg C](#the-authorized-skip-tier-five-legs) below.
 3b. **Deterministic routes (pure, no I/O).** `_route_hits` matches
    [`config/deterministic-routes.json`](../../config/deterministic-routes.json) phrases as whole
@@ -210,12 +210,13 @@ costs one harmless forced search, a false-fire would bless real work. Default ON
 enforcer's `SKILL-CHECK:` line for it, so the agent doesn't mistake its own recap turns for a
 self-authorized skip on a turn that actually carries a task tail.
 
-> **Two enforcer levers are default-INERT and env-gated** — per-skill tau
-> (`ENFORCER_PER_SKILL_TAU`) and the P6 runner-up dominance collapse (`ENFORCER_DOMINANCE_RATIO`).
-> The data reasons for keeping them off are pinned in source comments, and
-> `python3 enforcer.py --selftest` asserts they stay inert by default. Deterministic routes
-> left this set in `0.47.0` (config-driven, default ON — step 3b above). **Run `--selftest`
-> after any edit.**
+> **Per-skill tau and the runner-up dominance collapse are gone.** Both levers
+> (`ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) were default-off and are removed in v0.65.0
+> ([ADR-0088](../../docs/adr/0088-maintenance-consolidation-0650.md)); the getaway floor is always
+> `GETAWAY_FLOOR`. `scripts/calibrate_thresholds.py` and `thresholds.json` stay, because doctor reads
+> them. **Run `python3 hooks/scripts/enforcer.py --selftest` after any edit**; its body lives in
+> [`tests/enforcer_selftest.py`](../../tests/enforcer_selftest.py) and pytest runs it through
+> `tests/test_enforcer_selftest.py`.
 
 ## Chain hints — engine-side skill sequencing (ADR-0029)
 

@@ -3,6 +3,35 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.65.0] - 2026-10-09
+
+The four owner decisions left by the 0.64.1 audit, Thinh: "do 1, 2, 3, 4" (ADR-0088). Evidence and gates:
+`plans/261009-0305-maintenance-four/`.
+
+### Removed
+- **The runner-up-gap menu collapse (`ENFORCER_DOMINANCE_RATIO`) and the per-skill floor (`ENFORCER_PER_SKILL_TAU`).**
+  Both were default-off since they shipped and set in no settings file, harness env or adapter on this machine.
+  The getaway floor is always `GETAWAY_FLOOR`, and the menu is never collapsed to one row; with both variables unset,
+  hook output is byte-identical to 0.64.1. `scripts/calibrate_thresholds.py` and `thresholds.json` stay.
+
+### Changed
+- **The enforcer's and doctor's self-test bodies live in `tests/`** (`tests/enforcer_selftest.py`,
+  `tests/doctor_selftest.py`). `--selftest` on both still works by loading the body into the script's own namespace;
+  a copy without `tests/` prints one line and exits 2. pytest runs both through `tests/test_enforcer_selftest.py` and
+  `tests/test_doctor_selftest.py`. `enforcer.py` drops from 4,592 to 3,221 lines, and its per-prompt compile from
+  17.0–18.3 ms to 11.5–12.1 ms (median of 30, five runs); `doctor.py` drops from 3,038 to 2,529 lines.
+- **Installers share `adapters/lib/sync.sh`.** The helpers that were byte-identical across the claude-code, codex,
+  omp, zcode and opencode installers (`_ver_ge`, `_is_own_checkout`, the staged `_export_to`,
+  `_refuse_unexportable_checkout`) live there; each installer sources it from its own path and exits 1, naming the
+  path, if it is missing. Output, exit codes and written files match 0.64.1 over 139 installer runs.
+- **One harness detector, `hooks/scripts/harness.py`,** serves enforcer, doctrine and ledger. Answers match 0.64.1
+  in every harness setup checked (16 live-process setups; 77 table cases in `tests/test_harness_detector.py`).
+  Where the three old copies disagreed, the enforcer's answer wins, except that the enforcer now also reads the
+  `.commandcode` path marker doctrine already had; this can change an offer row's `harness` from `claude` to
+  `commandcode` only when the enforcer runs from a `/.commandcode/` path with `SKILL_CONCIERGE_HARNESS` unset (the
+  Command Code mod always sets it). A symlink loop in `CLAUDE_PLUGIN_ROOT` no longer crashes the enforcer at import.
+  If `harness.py` cannot be imported, each hook exits 0 with no output.
+
 ## [0.64.1] - 2026-10-09
 
 A whole-repo bloat audit (six areas: enforcer; other hooks, bin and skills; the large scripts; the other

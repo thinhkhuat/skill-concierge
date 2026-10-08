@@ -45,6 +45,9 @@ Net diff: 91 files, +1,237 / −4,375 lines.
 
 ## Left for the owner (decisions, not done)
 
+Update 2026-10-09 ~03:03: Thinh approved items 1–4 ("do 1, 2, 3, 4"); all four shipped in v0.65.0 (ADR-0088,
+`plans/261009-0305-maintenance-four/`). Item 5 stays open.
+
 1. **Move `enforcer.py`'s 1,266-line `_selftest` (and doctor's 516-line one) into tests/.** Saves ~8.6 ms of compile
    on every prompt (measured: 26.3 vs 17.7 ms) and 27 % of the hot file. Skipped because the `--selftest` CLI is cited
    by immutable ADRs and it is a structural move of the hot file in an unattended run. Recommend: yes, as its own change.

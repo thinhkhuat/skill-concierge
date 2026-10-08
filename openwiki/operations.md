@@ -166,9 +166,10 @@ Every flag, with its default, code owner and ADR, is indexed in [`AGENTS.md` →
 each flag's full text, tuning knobs and deploy preconditions (the utterance-layer caveat for
 `SKILL_LLM_TRIGGERS` and `TRIGGERS_MAX` included) are in
 [`docs/runtime-flags.md`](../docs/runtime-flags.md). The one list every reindex path forwards from
-`.mcp.json` is `ENGINE_ENV_KEYS` in [`scripts/engine_env.py`](../scripts/engine_env.py). Two enforcer
-levers (`ENFORCER_PER_SKILL_TAU`, `ENFORCER_DOMINANCE_RATIO`) are default-inert; see
-[enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-five-legs).
+`.mcp.json` is `ENGINE_ENV_KEYS` in [`scripts/engine_env.py`](../scripts/engine_env.py). Per-skill tau and the
+runner-up dominance collapse were removed in v0.65.0
+([ADR-0088](../docs/adr/0088-maintenance-consolidation-0650.md)); the getaway floor is always
+`GETAWAY_FLOOR` ([enforcement-gate.md](architecture/enforcement-gate.md#the-authorized-skip-tier-five-legs)).
 
 ## The retrieval flywheel (v0.17.0+, ADR-0027)
 
