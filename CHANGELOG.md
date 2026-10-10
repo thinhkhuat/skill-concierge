@@ -3,6 +3,38 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.65.1] - 2026-10-09
+
+OpenCode v2 works end to end (ADR-0089). Thinh's OpenCode listed two `skill-concierge` server plugins, one `failed`;
+live sessions on OpenCode 2.0.24 found five more defects. Each fix was checked in a real OpenCode session.
+
+### Fixed
+- **Duplicate plugin entry.** The OpenCode installer now keeps exactly one skill-concierge entry in
+  `opencode.json` `plugins`, replacing another copy's entry (another checkout, a versioned Claude Code cache, a deleted
+  folder) instead of appending. Every copy declares the plugin id `skill-concierge`, so OpenCode failed the second.
+  Doctor's OpenCode row warns on more than one entry.
+- **The plugin's skills no longer land in Claude Code's shelf.** They go to `~/.config/opencode/skill-concierge-skills/`,
+  registered in `opencode.json` `skills`; the installer never writes into `~/.config/opencode/skills`, which is often a
+  symlink to `~/.claude/skills` (where Claude Code then listed plain `doctor`, `setup`, … beside
+  `skill-concierge:doctor`). Copies an older installer left there are removed only when they still match the repo
+  exactly. The engine indexes the new folder as `opencode-personal`; the enforcer and doctor know it.
+- **skill-search tools are native.** The plugin registers the MCP server with `codemode: false`; OpenCode v2 otherwise
+  exposes MCP tools only through Code Mode, where `skill-search_search_skills` (the name the doctrine and ledger use)
+  does not exist.
+- **Subagents are scoped like Claude Code.** A subagent's child session (`parentID`) gets no doctrine, no menu and no
+  turn row; its tool rows carry `agent_id`, so the ledger marks them `sub`. The parent lookup is never awaited inside
+  a hook, which deadlocked the session live.
+- **A refused skill call is not logged as a use**, and a leading `<system-context>` block another plugin prepends is
+  not part of the prompt the enforcer ranks or the ledger stores.
+
+### Added
+- `tests/test_opencode_plugin.py` with `tests/opencode_plugin_harness.mjs` (drives the plugin through a fake
+  OpenCode context; four of five tests fail on the 0.65.0 plugin) and `tests/test_opencode_install_dedupe.py` (the
+  real installer against throwaway configs).
+
+### Upgrade
+- Re-run `adapters/opencode/install.sh`, then `opencode service restart`.
+
 ## [0.65.0] - 2026-10-09
 
 The four owner decisions left by the 0.64.1 audit, Thinh: "do 1, 2, 3, 4" (ADR-0088). Evidence and gates:

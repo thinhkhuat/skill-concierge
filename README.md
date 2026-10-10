@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.65.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.65.1-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -362,7 +362,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 | ZCode | `~/.zcode/skills`, `$CWD/.zcode/skills`, `$CWD/.agents/skills`, `~/.zcode/cli/plugins/cache/**` (registry-enumerated) (`zcode-*`) | **none needed** — ZCode natively runs the plugin `hooks/hooks.json` (ADR-0042) | plugin `.mcp.json` auto-connected (interpreter-form command, exec-bit-proof); `adapters/zcode/mcp.json` manual fallback only |
 | DeepSeek Harness (DSH) | `DSH_HOME/skills`, `$CWD/.dsh/skills` (`dsh-*`) | Cordis plugin `agent/pre-step` (`adapters/dsh/skill-concierge.dsh.ts`; ADR-0050) | Cordis `cordis.patch.yml` row via the `dsh-mcp-client` bridge (`mcp__skill-search__*`); `adapters/dsh/mcp.json` reference |
 | Cline | `~/.cline/data/settings/skills`, `$CWD/.cline/skills` (`cline-*`) | native code plugin (`adapters/cline/skill-concierge.cline-plugin.ts`, loaded through `~/.cline/plugins/skill-concierge.ts`) plus a generated Agent Plugin (`~/.agents/plugins/skill-concierge/`) (ADR-0086; the ADR-0051 file-hook vehicle is retired) | the Agent Plugin's `mcp.json`, which Cline starts itself |
-| OpenCode v2 | `~/.config/opencode/skills`, `$CWD/.opencode/skills` (`opencode-*`); `personal` invocable via OpenCode's documented compat read of `~/.claude/skills` | native v2 plugin — `session.hook("prompt")` + `context` system-part doctrine/enforcer, `permission.hook` blocklist deny, `tool.hook("execute.after")` ledger+echo (`adapters/opencode/plugin/`; ADR-0085) | `ctx.mcp.transform` registers the server from the shared `.mcp.json` (no manual config at all) |
+| OpenCode v2 | `~/.config/opencode/skills`, `$CWD/.opencode/skills` (`opencode-*`), plus the plugin's own `~/.config/opencode/skill-concierge-skills/` (`opencode-personal`, registered in `opencode.json` `skills`); `personal` invocable via OpenCode's documented compat read of `~/.claude/skills` | native v2 plugin — `session.hook("prompt")` + `context` system-part doctrine/enforcer, `permission.hook` blocklist deny, `tool.hook("execute.after")` ledger+echo (`adapters/opencode/plugin/`; ADR-0085) | `ctx.mcp.transform` registers the server from the shared `.mcp.json` with `codemode: false`, so `skill-search_search_skills` and `skill-search_get_skill` are native tools (no manual config at all). A subagent's child session gets no doctrine, menu or turn row; a refused call is not logged; the menu is built at the first model call; a leading `<system-context>` block is stripped from the prompt ([ADR-0089](docs/adr/0089-opencode-v2-live-fixes.md)) |
 
 `SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` / `SKILL_ZCODE_ROOTS` /
 `SKILL_DSH_ROOTS` / `SKILL_CLINE_ROOTS` / `SKILL_OPENCODE_ROOTS`
@@ -382,7 +382,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.65.0` — **published**. Per-version history, including every release since
+Current release: `0.65.1` — **published**. Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical
@@ -507,7 +507,7 @@ Each installer touches only skill-concierge-owned entries (the installer's heade
 
 - **DSH** ([`adapters/dsh/install.sh`](adapters/dsh/install.sh)): delete the skill-concierge `- insert:` patches (the `skill-search` MCP row, the unlazy stop-hook and the enforcement plugin) from `cordis.patch.yml` in each DSH profile it wired (`~/.ohdsh/profiles/desktop/`, `~/.ohdsh/profiles/tui/`, or under `DSH_HOME`).
 - **Cline** ([`adapters/cline/install.sh`](adapters/cline/install.sh)): remove `~/.cline/plugins/skill-concierge.ts` and the directory `~/.agents/plugins/skill-concierge/`.
-- **OpenCode v2** ([`adapters/opencode/install.sh`](adapters/opencode/install.sh)): remove the plugin path from the `plugins` array of `~/.config/opencode/opencode.json`, delete the skills it re-rooted into `~/.config/opencode/skills/` (the names are listed in `.skill-concierge-managed.json` there; leave your own skills), and restart the OpenCode service.
+- **OpenCode v2** ([`adapters/opencode/install.sh`](adapters/opencode/install.sh)): remove the plugin path from the `plugins` array of `~/.config/opencode/opencode.json`, remove the `~/.config/opencode/skill-concierge-skills/` entry from its `skills` array and delete that folder (only the installer writes it), and restart the OpenCode service.
 - For all three, optionally drop the scope env pin (`SKILL_DSH_ROOTS`, `SKILL_CLINE_ROOTS`, `SKILL_OPENCODE_ROOTS`).
 
 After removing a harness, run `skill-concierge:doctor --fix` or `python3 scripts/doctor.py --fix` to reindex the shared catalogue (the harness's scope points are pruned at the next reindex).

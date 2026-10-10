@@ -1,6 +1,6 @@
 {
   "name": "skill-concierge-opencode",
-  "version": "0.65.0",
+  "version": "0.65.1",
   "description": "skill-concierge — skill-governance layer for OpenCode v2 (semantic retrieval + use-enforcement + invocation ledger). Loaded by path from the skill-concierge checkout as a package dir (opencode.json plugins: [{package: <this dir>}]); adapters/opencode/install.sh requires this manifest.",
   "type": "module",
   "license": "MIT",
