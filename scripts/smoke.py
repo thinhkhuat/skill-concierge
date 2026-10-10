@@ -122,6 +122,9 @@ def _child_env(work: Path, **extra: str) -> dict:
     """The parent environment minus SCRUBBED_ENV, with this run's own log folder."""
     env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_ENV}
     env["SKILL_CONCIERGE_LOG"] = str(work / "logs")
+    # Memory hooks the harnesses run (mnemosyne's session digest, recall) write to this run's own store,
+    # not the live one: smoke turns once landed in live memory as session digests.
+    env["MNEMOSYNE_DATA_DIR"] = env["MNEMOSYNE_HOME"] = str(work / "mnemosyne")
     env.update(extra)
     return env
 

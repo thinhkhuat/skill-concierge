@@ -131,6 +131,7 @@ def test_cli_gets_a_scrubbed_environment(sandbox, monkeypatch):
     smoke._run_cli("claude", work)
     env = json.loads((work / "env.json").read_text())
     assert env["SKILL_CONCIERGE_LOG"] == str(work / "logs")
+    assert env["MNEMOSYNE_DATA_DIR"] == env["MNEMOSYNE_HOME"] == str(work / "mnemosyne")   # no live memory writes
     assert "SKILL_CONCIERGE_HARNESS" not in env                 # a forced label would mislabel the run
     assert env["SKILL_CONCIERGE_ROOT"] == "/a/clone"              # install settings stay
     assert "CLAUDECODE" not in env and "ANTHROPIC_API_KEY" not in env
