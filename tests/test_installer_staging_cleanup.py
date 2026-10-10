@@ -62,8 +62,13 @@ def _export_to_body(name):
 # must prune a stale staging dir the same way and trap its own staging dir the same way.
 _CLEANUP_LINES = (
     "-mmin +60",
-    'trap \'rm -rf "$stage"; exit 1\' EXIT INT TERM',
+    'trap \'[ -z "$stage" ] || rm -rf "$stage"; exit 1\' EXIT INT TERM',
     "trap - EXIT INT TERM",
+    # The export pipelines run in a subshell: a TERM landing while the trapping shell forks a
+    # two-process pipeline hangs it (measured: about 2 in 100 kills, bash 3.2 and 5.3). Source pin;
+    # the kill tests above exercise it only statistically.
+    'if ! ( git -C "$ROOT" archive HEAD | tar -x -C "$stage" ); then',
+    '. | tar -xf - -C "$stage" ); then',
 )
 
 
@@ -363,6 +368,55 @@ def test_a_signal_killed_codex_export_leaves_no_staging_dir_behind(tmp_path):
     assert rc != 0
     assert not list(cache.glob(".skill-concierge-staging.*"))
     assert not (cache / cx.SSOT_VERSION).exists()
+
+
+# ── The kill that lands between `mktemp` and the trap install ────────────────────────────────
+# The tests above kill the installer once the staging dir shows up on disk, which is the instant
+# `mktemp` returns. If the installer had not yet registered its trap at that instant, a SIGTERM
+# in that gap would hit bash's default action and leave the dir behind (a flake of about 1 in 25
+# runs). This pins the gap shut deterministically: a `mktemp` shim that creates the dir and then
+# holds the command substitution open, so the signal always arrives "just after mktemp".
+
+def _slow_mktemp_dir(tmp_path, seconds=2):
+    real_mktemp = shutil.which("mktemp")
+    assert real_mktemp, "no mktemp on PATH to wrap"
+    d = tmp_path / "slowmktemp"
+    d.mkdir()
+    shim = d / "mktemp"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'"{real_mktemp}" "$@" || exit $?\n'
+        f"sleep {seconds}\n"
+    )
+    shim.chmod(0o755)
+    return d
+
+
+def test_a_kill_right_after_mktemp_in_the_shared_export_leaves_no_staging_dir_behind(tmp_path):
+    repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+    home = sib._seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=tmp_path / "irrelevant")
+    dest_dir = repo / "adapters" / "zcode"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(INSTALL_SH["zcode"], dest_dir / "install.sh")
+    shutil.copytree(LIB, repo / "adapters" / "lib")
+    env = installer_env(tmp_path, home, _slow_mktemp_dir(tmp_path))
+    cache = home / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+
+    rc = _kill_during_export(["bash", str(dest_dir / "install.sh")], env, cache)
+    assert rc != 0
+    assert not list(cache.glob(".skill-concierge-staging.*"))
+    assert not (cache / "2.0.0").exists()
+
+
+def test_a_kill_right_after_mktemp_in_the_omp_export_leaves_no_staging_dir_behind(tmp_path):
+    repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+    home, _ = sib._seed_omp_home_with_cache(tmp_path, version="1.9.0")
+    env = installer_env(tmp_path, home, _slow_mktemp_dir(tmp_path))
+    cache = home / ".omp" / "plugins" / "cache" / "plugins"
+
+    rc = _kill_during_export(["bash", str(INSTALL_SH["omp"]), "--root", str(repo)], env, cache)
+    assert rc != 0
+    assert not list(cache.glob(".skill-concierge-staging.*"))
 
 
 # ── Legacy `.staging.*` prefix (pre-rename runs) ─────────────────────────────────────────────

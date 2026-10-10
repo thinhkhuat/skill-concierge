@@ -1,0 +1,27 @@
+.........F.......                                                        [100%]
+=================================== FAILURES ===================================
+________ test_a_signal_killed_codex_export_leaves_no_staging_dir_behind ________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-591/test_a_signal_killed_codex_exp0')
+
+    def test_a_signal_killed_codex_export_leaves_no_staging_dir_behind(tmp_path):
+        # A marketplace remote below SSOT forces the git-archive fallback (the export this
+        # test kills); the fake `codex add` still runs first and needs a real enforcer.py.
+        home, fakebin = cx._make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                                 "remote_version": "0.45.0"})
+        env = installer_env(tmp_path, home, _slow_git_dir(tmp_path), fakebin,
+                            FAKE_CODEX_ENFORCER_SRC=str(cx.ENFORCER_SRC))
+        cache = cx._cache_root(home)
+    
+        rc = _kill_during_export(["bash", str(cx.INSTALLER)], env, cache)
+        assert rc != 0
+>       assert not list(cache.glob(".skill-concierge-staging.*"))
+E       AssertionError: assert not [PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-591/test_a_signal_killed_codex_exp0/home/.codex/plugins/cache/skill-concierge/skill-concierge/.skill-concierge-staging.Jj34wL')]
+E        +  where [PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-591/test_a_signal_killed_codex_exp0/home/.codex/plugins/cache/skill-concierge/skill-concierge/.skill-concierge-staging.Jj34wL')] = list(<generator object Path.glob at 0x10a6e29b0>)
+E        +    where <generator object Path.glob at 0x10a6e29b0> = glob('.skill-concierge-staging.*')
+E        +      where glob = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-591/test_a_signal_killed_codex_exp0/home/.codex/plugins/cache/skill-concierge/skill-concierge').glob
+
+tests/test_installer_staging_cleanup.py:364: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_installer_staging_cleanup.py::test_a_signal_killed_codex_export_leaves_no_staging_dir_behind
+1 failed, 16 passed in 8.16s

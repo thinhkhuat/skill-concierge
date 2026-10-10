@@ -1,0 +1,89 @@
+0 rc 1 wait 2.26s leftover []
+1 rc 1 wait 2.22s leftover []
+2 rc 1 wait 0.01s leftover []
+3 rc 1 wait 2.19s leftover []
+4 rc 1 wait 0.01s leftover []
+5 rc 1 wait 0.02s leftover []
+6 rc 1 wait 2.19s leftover []
+7 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+65391 63792 65391 Ss     00:08 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+65472 65391 65391 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+8 rc 1 wait 2.24s leftover []
+9 rc 1 wait 0.02s leftover []
+10 rc 1 wait 2.22s leftover []
+11 rc 1 wait 2.22s leftover []
+12 rc 1 wait 0.02s leftover []
+13 rc 1 wait 2.23s leftover []
+14 rc 1 wait 2.22s leftover []
+15 rc 1 wait 0.01s leftover []
+16 rc 1 wait 2.22s leftover []
+17 rc 1 wait 0.02s leftover []
+18 rc 1 wait 2.22s leftover []
+19 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+67519 63792 67519 Ss     00:09 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+67597 67519 67519 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+20 rc 1 wait 2.23s leftover []
+21 rc 1 wait 2.22s leftover []
+22 rc 1 wait 0.01s leftover []
+23 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+68291 63792 68291 Ss     00:08 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+68350 68291 68291 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+24 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+68740 63792 68740 Ss     00:08 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+68811 68740 68740 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+25 rc 1 wait 0.02s leftover []
+26 rc 1 wait 0.02s leftover []
+27 rc 1 wait 0.01s leftover []
+28 rc 1 wait 2.22s leftover []
+29 rc 1 wait 2.23s leftover []
+30 rc 1 wait 2.20s leftover []
+31 rc 1 wait 0.02s leftover []
+32 rc 1 wait 2.25s leftover []
+33 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+70165 63792 70165 Ss     00:09 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+70214 70165 70165 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+34 rc 1 wait 0.01s leftover []
+35 rc 1 wait 2.22s leftover []
+36 rc 1 wait 2.20s leftover []
+37 rc 1 wait 0.02s leftover []
+38 rc 1 wait 0.02s leftover []
+39 rc 1 wait 0.01s leftover []
+40 rc 1 wait 2.22s leftover []
+41 rc 1 wait 0.01s leftover []
+42 rc 1 wait 2.23s leftover []
+43 rc 1 wait 0.02s leftover []
+44 rc 1 wait 2.23s leftover []
+45 rc 1 wait 0.01s leftover []
+46 rc 1 wait 0.01s leftover []
+47 rc 1 wait 2.19s leftover []
+48 rc 1 wait 2.22s leftover []
+49 rc 1 wait 0.01s leftover []
+50 rc 1 wait 0.02s leftover []
+51 rc 1 wait 2.25s leftover []
+52 rc 1 wait 0.02s leftover []
+53 rc 1 wait 0.02s leftover []
+54 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+72901 63792 72901 Ss     00:09 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+72960 72901 72901 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+55 rc 1 wait 0.02s leftover []
+56 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+73365 63792 73365 Ss     00:09 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+73529 73365 73365 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+57 rc 1 wait 2.23s leftover []
+58 rc 1 wait 0.01s leftover []
+59 rc 1 wait 0.01s leftover []
+bad 7 of 60

@@ -67,22 +67,30 @@ _export_to() {
   # leftover from a run killed under a version before the prefix above was renamed to be
   # skill-concierge-specific. Safe to prune the same way.
   find "$parent" -maxdepth 1 -name '.staging.*' -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  # Register the trap BEFORE the dir exists: a signal that lands between mktemp and a later
+  # `trap` line would hit bash's default action and strand the dir. bash runs a trap only
+  # between commands, so the assignment below always completes first and $stage is then set.
+  stage=""
+  trap '[ -z "$stage" ] || rm -rf "$stage"; exit 1' EXIT INT TERM
   stage="$(mktemp -d "$parent/.skill-concierge-staging.XXXXXX")"
-  trap 'rm -rf "$stage"; exit 1' EXIT INT TERM
   if _is_own_checkout; then
-    if ! git -C "$ROOT" archive HEAD | tar -x -C "$stage"; then
+    # Each pipeline runs in its own subshell. bash forks a pipeline's second stage after its first,
+    # and a TERM/INT landing in between, while this shell holds the trap above, leaves the first
+    # stage blocked on a pipe this shell itself keeps open: the installer hangs and never reaches
+    # its cleanup. The subshell carries no trap, so the shell that does only ever forks one child.
+    if ! ( git -C "$ROOT" archive HEAD | tar -x -C "$stage" ); then
       echo "!! exporting HEAD to $dest failed (see above); nothing was changed" >&2; exit 1
     fi
     echo "    exported HEAD → $dest"
   else
     # A tree with no git metadata at all: copy everything except scratch dirs.
-    if ! tar -C "$ROOT" -cf - \
+    if ! ( tar -C "$ROOT" -cf - \
         --exclude='.git' --exclude='.ijfw' --exclude='ijfw' --exclude='.handoff' \
         --exclude='logs' --exclude='graphify-out' --exclude='.claude' \
         --exclude='.zcode' --exclude='.unlazy' \
         --exclude='node_modules' --exclude='__pycache__' --exclude='.venv' \
         --exclude='.pytest_cache' --exclude='.mypy_cache' --exclude='.ruff_cache' \
-        . | tar -xf - -C "$stage"; then
+        . | tar -xf - -C "$stage" ); then
       echo "!! copying $ROOT to $dest failed (see above); nothing was changed" >&2; exit 1
     fi
     echo "    copied the working tree (not a git checkout) → $dest"

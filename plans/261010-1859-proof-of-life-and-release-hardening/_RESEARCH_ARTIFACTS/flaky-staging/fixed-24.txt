@@ -1,0 +1,61 @@
+...............F...                                                      [100%]
+=================================== FAILURES ===================================
+________ test_a_signal_killed_codex_export_leaves_no_staging_dir_behind ________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-631/test_a_signal_killed_codex_exp0')
+
+    def test_a_signal_killed_codex_export_leaves_no_staging_dir_behind(tmp_path):
+        # A marketplace remote below SSOT forces the git-archive fallback (the export this
+        # test kills); the fake `codex add` still runs first and needs a real enforcer.py.
+        home, fakebin = cx._make_home(tmp_path, {"marketplace_registered": True, "plugin_installed": False,
+                                                 "remote_version": "0.45.0"})
+        env = installer_env(tmp_path, home, _slow_git_dir(tmp_path), fakebin,
+                            FAKE_CODEX_ENFORCER_SRC=str(cx.ENFORCER_SRC))
+        cache = cx._cache_root(home)
+    
+>       rc = _kill_during_export(["bash", str(cx.INSTALLER)], env, cache)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_installer_staging_cleanup.py:362: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_installer_staging_cleanup.py:315: in _kill_during_export
+    proc.wait(timeout=timeout)
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/subprocess.py:1264: in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: -9 args: ['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENC...>
+timeout = 30
+
+    def _wait(self, timeout):
+        """Internal implementation of wait() on POSIX."""
+        if self.returncode is not None:
+            return self.returncode
+    
+        if timeout is not None:
+            endtime = _time() + timeout
+            # Enter a busy loop if we have a timeout.  This busy loop was
+            # cribbed from Lib/threading.py in Thread.wait() at r71065.
+            delay = 0.0005 # 500 us -> initial delay of 1 ms
+            while True:
+                if self._waitpid_lock.acquire(False):
+                    try:
+                        if self.returncode is not None:
+                            break  # Another thread waited.
+                        (pid, sts) = self._try_wait(os.WNOHANG)
+                        assert pid == self.pid or pid == 0
+                        if pid == self.pid:
+                            self._handle_exitstatus(sts)
+                            break
+                    finally:
+                        self._waitpid_lock.release()
+                remaining = self._remaining_time(endtime)
+                if remaining <= 0:
+>                   raise TimeoutExpired(self.args, timeout)
+E                   subprocess.TimeoutExpired: Command '['bash', '/Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh']' timed out after 30 seconds
+
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/subprocess.py:2045: TimeoutExpired
+=========================== short test summary info ============================
+FAILED tests/test_installer_staging_cleanup.py::test_a_signal_killed_codex_export_leaves_no_staging_dir_behind
+1 failed, 18 passed in 45.28s

@@ -1,0 +1,101 @@
+0 rc 1 wait 2.25s leftover []
+1 rc 1 wait 2.22s leftover []
+2 rc 1 wait 2.23s leftover []
+3 rc 1 wait 0.01s leftover []
+4 rc 1 wait 0.02s leftover []
+5 rc 1 wait 0.02s leftover []
+6 rc 1 wait 0.01s leftover []
+7 rc 1 wait 2.22s leftover []
+8 rc 1 wait 0.02s leftover []
+9 rc 1 wait 2.22s leftover []
+10 rc 1 wait 2.21s leftover []
+11 rc 1 wait 2.21s leftover []
+12 rc 1 wait 2.22s leftover []
+13 rc 1 wait 2.23s leftover []
+14 rc 1 wait 2.22s leftover []
+15 rc 1 wait 0.01s leftover []
+16 rc 1 wait 2.22s leftover []
+17 rc 1 wait 2.22s leftover []
+18 rc 1 wait 0.02s leftover []
+19 rc 1 wait 2.21s leftover []
+20 rc 1 wait 0.02s leftover []
+21 rc 1 wait 0.01s leftover []
+22 rc 1 wait 2.26s leftover []
+23 rc 1 wait 2.22s leftover []
+24 rc 1 wait 0.01s leftover []
+25 rc 1 wait 2.23s leftover []
+26 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+82211 76562 82211 Ss     00:09 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+82280 82211 82211 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+COMMAND   PID       USER   FD   TYPE             DEVICE SIZE/OFF                NODE NAME
+git     82280 thinhkhuat  cwd    DIR               1,14     1056           636884733 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b
+git     82280 thinhkhuat  txt    REG               1,14  3699840           497175132 /opt/homebrew/Cellar/git/2.55.0/bin/git
+git     82280 thinhkhuat  txt    REG               1,14    33360           632478922 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/info/commit-graphs/graph-da4573ed8407a5fbfbed44b768572960dd5db1e6.graph
+git     82280 thinhkhuat  txt    REG               1,14   228800           323463483 /opt/homebrew/Cellar/gettext/1.0/lib/libintl.8.dylib
+git     82280 thinhkhuat  txt    REG               1,14   574096           626234498 /opt/homebrew/Cellar/pcre2/10.49/lib/libpcre2-8.0.dylib
+git     82280 thinhkhuat  txt    REG               1,14   197860           632478987 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/pack/multi-pack-index
+git     82280 thinhkhuat  txt    REG               1,14   168764           632478966 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/pack/pack-1ec00192876fc99319544af55ab4bafb59162b61.idx
+git     82280 thinhkhuat  txt    REG               1,14  4129088 1152921500312612879 /usr/lib/dyld
+git     82280 thinhkhuat  txt    REG               1,14  3796470           632478965 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/pack/pack-1ec00192876fc99319544af55ab4bafb59162b61.pack
+git     82280 thinhkhuat    0r   CHR                3,2      0t0                 336 /dev/null
+git     82280 thinhkhuat    1   PIPE 0xbc7da998db927f78    65536                     ->0x783d99293bbd44d8
+git     82280 thinhkhuat    2   PIPE 0x95f6af954ed8c2d6    16384                     ->0xda1cec5451c10b9a
+
+
+tar procs: 
+27 rc 1 wait 2.17s leftover []
+28 rc 1 wait 2.20s leftover []
+29 rc 1 wait 2.21s leftover []
+30 rc 1 wait 2.23s leftover []
+31 HANG after SIGTERM; process tree:
+  PID  PPID  PGID STAT ELAPSED COMMAND
+83614 76562 83614 Ss     00:09 bash /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b/adapters/codex/install.sh
+83662 83614 83614 S      00:08 /opt/homebrew/bin/git -C /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b archive HEAD
+
+COMMAND   PID       USER   FD   TYPE             DEVICE SIZE/OFF                NODE NAME
+git     83662 thinhkhuat  cwd    DIR               1,14     1056           636884733 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.claude/worktrees/agent-aa13c66f92fa7594b
+git     83662 thinhkhuat  txt    REG               1,14  3699840           497175132 /opt/homebrew/Cellar/git/2.55.0/bin/git
+git     83662 thinhkhuat  txt    REG               1,14    33360           632478922 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/info/commit-graphs/graph-da4573ed8407a5fbfbed44b768572960dd5db1e6.graph
+git     83662 thinhkhuat  txt    REG               1,14   228800           323463483 /opt/homebrew/Cellar/gettext/1.0/lib/libintl.8.dylib
+git     83662 thinhkhuat  txt    REG               1,14   574096           626234498 /opt/homebrew/Cellar/pcre2/10.49/lib/libpcre2-8.0.dylib
+git     83662 thinhkhuat  txt    REG               1,14   197860           632478987 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/pack/multi-pack-index
+git     83662 thinhkhuat  txt    REG               1,14   168764           632478966 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/pack/pack-1ec00192876fc99319544af55ab4bafb59162b61.idx
+git     83662 thinhkhuat  txt    REG               1,14  4129088 1152921500312612879 /usr/lib/dyld
+git     83662 thinhkhuat  txt    REG               1,14  3796470           632478965 /Users/thinhkhuat/in-PROD/MY-WORKBENCH/skill-concierge/.git/objects/pack/pack-1ec00192876fc99319544af55ab4bafb59162b61.pack
+git     83662 thinhkhuat    0r   CHR                3,2      0t0                 336 /dev/null
+git     83662 thinhkhuat    1   PIPE 0x8e29b097f73a1405    65536                     ->0x1e1adfb7cb9f79d8
+git     83662 thinhkhuat    2   PIPE 0x7284d7ea53d86364    16384                     ->0x4a4fc96a3ba54d10
+
+
+tar procs: 
+32 rc 1 wait 2.24s leftover []
+33 rc 1 wait 0.01s leftover []
+34 rc 1 wait 2.23s leftover []
+35 rc 1 wait 2.22s leftover []
+36 rc 1 wait 2.23s leftover []
+37 rc 1 wait 0.03s leftover []
+38 rc 1 wait 0.01s leftover []
+39 rc 1 wait 2.22s leftover []
+40 rc 1 wait 0.02s leftover []
+41 rc 1 wait 2.17s leftover []
+42 rc 1 wait 0.02s leftover []
+43 rc 1 wait 2.22s leftover []
+44 rc 1 wait 2.27s leftover []
+45 rc 1 wait 2.21s leftover []
+46 rc 1 wait 2.18s leftover []
+47 rc 1 wait 2.23s leftover []
+48 rc 1 wait 2.22s leftover []
+49 rc 1 wait 2.22s leftover []
+50 rc 1 wait 2.28s leftover []
+51 rc 1 wait 2.23s leftover []
+52 rc 1 wait 0.02s leftover []
+53 rc 1 wait 0.02s leftover []
+54 rc 1 wait 2.22s leftover []
+55 rc 1 wait 0.04s leftover []
+56 rc 1 wait 2.23s leftover []
+57 rc 1 wait 0.01s leftover []
+58 rc 1 wait 0.01s leftover []
+59 rc 1 wait 0.02s leftover []
+bad 2 of 60
