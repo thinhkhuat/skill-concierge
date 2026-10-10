@@ -1,0 +1,240 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Tools documentation for OpenCode."><meta name="theme-color" content="#000000"><meta name="astro-view-transitions-enabled" content="true"><meta name="astro-view-transitions-fallback" content="swap"><script type="module" src="/v2/_astro/ClientRouter.astro_astro_type_script_index_0_lang.QXqYV-0P.js"></script><link rel="canonical" href="https://opencode.ai/v2/docs/tools"><link rel="icon" type="image/svg+xml" href="/v2/favicon.svg"><title>Tools | OpenCode</title><link rel="stylesheet" href="/v2/_astro/_..CwgjG4PU.css"></head><body><a class="skip-link" href="#docs-content">Skip to content</a><header class="site-header"><div class="header-inner"><a class="brand" href="/v2/" aria-label="OpenCode home"><img src="/v2/assets/logo-dark.svg" alt="OpenCode"></a><nav aria-label="Documentation sections"><a href="/v2/docs/" aria-current="page">Docs</a><a href="/v2/docs/cli/">CLI</a><a href="/v2/docs/build/">Build</a><a href="/v2/docs/api/">API</a><a href="/v2/docs/console/">Console</a><a href="/docs">V1</a></nav><div class="header-spacer"></div><button class="search-trigger" type="button" data-search-open aria-label="Search documentation"><span>Search</span><kbd>⌘K</kbd></button><a class="github-link" href="https://github.com/anomalyco/opencode" aria-label="OpenCode on GitHub">GitHub</a></div></header><dialog class="search-dialog" data-search-dialog data-pagefind-path="/v2/docs/pagefind/pagefind.js" data-base-url="/v2/docs/" aria-label="Search documentation"><form method="dialog" class="search-bar"><span aria-hidden="true">&gt;</span><input data-search-input type="search" placeholder="Search docs" autocomplete="off"><button type="submit" aria-label="Close search">Esc</button></form><div class="search-results" data-search-results><p>Start typing to search the documentation.</p></div></dialog><script>
+  let pagefind
+
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault()
+      const dialog = document.querySelector("[data-search-dialog]")
+      dialog?.showModal()
+      dialog?.querySelector("[data-search-input]")?.focus()
+    }
+  })
+
+  const setupSearch = () => {
+    const dialog = document.querySelector("[data-search-dialog]")
+    const input = document.querySelector("[data-search-input]")
+    const results = document.querySelector("[data-search-results]")
+    const trigger = document.querySelector("[data-search-open]")
+    if (trigger && !trigger.dataset.searchReady) {
+      trigger.dataset.searchReady = "true"
+      trigger.addEventListener("click", () => {
+        dialog?.showModal()
+        input?.focus()
+      })
+    }
+
+    if (input && results && !input.dataset.searchReady) input.addEventListener("input", async () => {
+      input.dataset.searchReady = "true"
+      const query = input.value.trim()
+      if (!query) {
+        results.innerHTML = "<p>Start typing to search the documentation.</p>"
+        return
+      }
+
+      const pagefindPath = dialog?.dataset.pagefindPath
+      if (!pagefindPath) return
+      const api = pagefind ?? (pagefind = await import(pagefindPath))
+      const search = await api.search(query)
+      const pages = await Promise.all(search.results.slice(0, 8).map((result) => result.data()))
+      results.replaceChildren(
+        ...pages.map((page) => {
+          const link = document.createElement("a")
+          const base = dialog.dataset.baseUrl ?? "/"
+          link.href = page.url.startsWith(base)
+            ? page.url
+            : `${dialog.dataset.baseUrl?.replace(/\/$/, "")}${page.url}`
+          const title = document.createElement("strong")
+          title.textContent = page.meta.title
+          const excerpt = document.createElement("span")
+          excerpt.innerHTML = page.excerpt
+          link.append(title, excerpt)
+          return link
+        }),
+      )
+      if (!pages.length) results.innerHTML = "<p>No results found.</p>"
+    })
+  }
+
+  setupSearch()
+  document.addEventListener("astro:page-load", setupSearch)
+</script><details class="mobile-navigation"><summary>Docs navigation</summary><nav class="docs-sidebar" aria-label="Documentation"><section><ul><li><a href="/v2/docs/">Intro</a></li><li><a href="/v2/docs/config/">Config</a></li><li><a href="/v2/docs/migrate-v1/">Migrate from V1</a></li><li><a href="/v2/docs/troubleshooting/">Troubleshooting</a></li></ul></section><section><h2>Configure</h2><ul><li><a href="/v2/docs/agents/">Agents</a></li><li><a href="/v2/docs/models/">Models</a></li><li><a href="/v2/docs/skills/">Skills</a></li><li><a href="/v2/docs/themes/">Themes</a></li><li><a href="/v2/docs/commands/">Commands</a></li><li><a href="/v2/docs/plugins/">Plugins</a></li><li><a href="/v2/docs/providers/">Providers</a></li><li><a href="/v2/docs/websearch/">Websearch</a></li><li><a href="/v2/docs/network/">Network</a></li><li><a href="/v2/docs/snapshots/">Snapshots</a></li><li><a href="/v2/docs/compaction/">Compaction</a></li><li><a href="/v2/docs/formatters/">Formatters</a></li><li><a href="/v2/docs/references/">References</a></li><li><a href="/v2/docs/attachments/">Attachments</a></li><li><a href="/v2/docs/tools/" aria-current="page">Tools</a></li><li><a href="/v2/docs/mcp-servers/">MCP servers</a></li><li><a href="/v2/docs/permissions/">Permissions</a></li><li><a href="/v2/docs/policies/">Policies</a></li><li><a href="/v2/docs/instructions/">Instructions</a></li><li><a href="/v2/docs/sharing/">Sharing</a></li><li><a href="/v2/docs/warming/">Warming</a></li></ul></section></nav></details><div class="docs-frame"><aside class="sidebar-column"><nav class="docs-sidebar" aria-label="Documentation"><section><ul><li><a href="/v2/docs/">Intro</a></li><li><a href="/v2/docs/config/">Config</a></li><li><a href="/v2/docs/migrate-v1/">Migrate from V1</a></li><li><a href="/v2/docs/troubleshooting/">Troubleshooting</a></li></ul></section><section><h2>Configure</h2><ul><li><a href="/v2/docs/agents/">Agents</a></li><li><a href="/v2/docs/models/">Models</a></li><li><a href="/v2/docs/skills/">Skills</a></li><li><a href="/v2/docs/themes/">Themes</a></li><li><a href="/v2/docs/commands/">Commands</a></li><li><a href="/v2/docs/plugins/">Plugins</a></li><li><a href="/v2/docs/providers/">Providers</a></li><li><a href="/v2/docs/websearch/">Websearch</a></li><li><a href="/v2/docs/network/">Network</a></li><li><a href="/v2/docs/snapshots/">Snapshots</a></li><li><a href="/v2/docs/compaction/">Compaction</a></li><li><a href="/v2/docs/formatters/">Formatters</a></li><li><a href="/v2/docs/references/">References</a></li><li><a href="/v2/docs/attachments/">Attachments</a></li><li><a href="/v2/docs/tools/" aria-current="page">Tools</a></li><li><a href="/v2/docs/mcp-servers/">MCP servers</a></li><li><a href="/v2/docs/permissions/">Permissions</a></li><li><a href="/v2/docs/policies/">Policies</a></li><li><a href="/v2/docs/instructions/">Instructions</a></li><li><a href="/v2/docs/sharing/">Sharing</a></li><li><a href="/v2/docs/warming/">Warming</a></li></ul></section></nav></aside><main id="docs-content"><article class="prose" data-pagefind-body data-pagefind-meta="title:Tools"><h1>Tools<button type="button" aria-label="Copy page as Markdown" data-copy-markdown data-pagefind-ignore><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg></button></h1><p>Ask for the outcome you want. OpenCode chooses the available tools, requests
+approval when required, and returns the result.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Find where request timeouts are configured, change the default to 30 seconds,</span></span>
+<span class="line"><span>and run the relevant existing tests.</span></span></code></pre>
+<p>This task typically uses <code>grep</code> or <code>glob</code>, <code>read</code>, an editing tool, and <code>shell</code>.
+You can also name a tool when you want a specific approach.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Use grep to find every reference to DEFAULT_TIMEOUT, then read the matching files.</span></span></code></pre>
+<h2 id="files">Files</h2>
+<h3 id="read">Read</h3>
+<p><code>read</code> returns a file or a non-recursive directory listing. Give it a <code>path</code>;
+use <code>offset</code> and <code>limit</code> to page through large results.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Read src/server.ts starting at line 120 and return at most 80 lines.</span></span></code></pre>
+<p>Text reads contain numbered lines and are limited to 2,000 lines and 50 KiB per
+page. Individual lines are shortened after 2,000 characters. The tool also
+passes PNG, JPEG, GIF, WebP, and PDF files to the model, up to 20 MiB of source
+data. Other binary files fail. See <a href="/v2/docs/attachments">Attachments</a> for supported
+media and image processing.</p>
+<p>Permission: <code>read</code> with the normalized path as its resource.</p>
+<h3 id="glob">Glob</h3>
+<p><code>glob</code> finds file paths from a pattern such as <code>**/*.ts</code>. It searches the
+current directory unless <code>path</code> selects another relative directory; <code>hidden</code>
+includes hidden entries and <code>limit</code> caps the results.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Use glob with **/*.test.ts under packages/core and return at most 50 files.</span></span></code></pre>
+<p>The default limit is 100 files and the search timeout is 30 seconds.
+Permission: <code>glob</code> with the requested pattern as its resource.</p>
+<h3 id="grep">Grep</h3>
+<p><code>grep</code> searches file contents and returns paths, line numbers, and previews.
+Its <code>pattern</code> uses regular-expression syntax unless <code>literal</code> is true. Narrow a
+search with <code>path</code>, <code>include</code>, <code>caseSensitive</code>, or <code>limit</code>.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Use grep for the literal text &quot;request timed out&quot; in src, including only *.ts files.</span></span></code></pre>
+<p>The default limit is 100 matching lines and the search timeout is 30 seconds.
+Permission: <code>grep</code> with the requested pattern, not the search path, as its
+resource.</p>
+<h3 id="edit">Edit</h3>
+<p><code>edit</code> replaces text in an existing file. Supply <code>path</code>, <code>oldString</code>, and a
+different <code>newString</code>; the old text must match exactly once unless <code>replaceAll</code>
+is true.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>In src/config.ts, replace the unique text &quot;timeout: 60&quot; with &quot;timeout: 30&quot;.</span></span></code></pre>
+<p>Use <code>edit</code> for a focused change. OpenCode may format the file after writing it.
+Permission: <code>edit</code> with the target path as its resource.</p>
+<h3 id="write">Write</h3>
+<p><code>write</code> creates or completely replaces a text file from <code>path</code> and <code>content</code>.
+It creates missing parent directories and may run the configured formatter.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Create docs/example.md with a heading and one setup command.</span></span></code></pre>
+<p>Use <code>edit</code> instead when only part of an existing file should change.
+Permission: <code>edit</code> with the target path as its resource.</p>
+<h3 id="patch">Patch</h3>
+<p><code>patch</code> applies one patch that can add, update, move, or delete several files.
+Its <code>patchText</code> uses <code>*** Add File</code>, <code>*** Update File</code>, and <code>*** Delete File</code>
+sections.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Use patch to rename src/old.ts to src/new.ts and update its exported name.</span></span></code></pre>
+<p>OpenCode exposes <code>patch</code> for supported GPT models; other models receive <code>edit</code>
+and <code>write</code> instead. Permission: <code>edit</code> with every affected path as a resource.</p>
+<p>Paths outside the active Location or its project worktree also require
+<code>external_directory</code> approval. See <a href="/v2/docs/permissions">Permissions</a> for path
+normalization, rule order, and saved approvals. To make outside material
+available by name, configure <a href="/v2/docs/references">References</a>.</p>
+<h2 id="commands">Commands</h2>
+<h3 id="shell">Shell</h3>
+<p><code>shell</code> executes a command in the host user’s shell. Set <code>workdir</code> instead of
+putting <code>cd</code> in the command, and set <code>timeout</code> in milliseconds when the default
+two-minute foreground timeout is not suitable.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Run bun test from packages/core with a five-minute timeout.</span></span></code></pre>
+<p>Set <code>background</code> to true for a dev server or another long-running process.
+Background calls return immediately and notify the session when they finish;
+they have no timeout unless one is supplied. Large output is shortened and the
+complete output is retained in a managed file.</p>
+<p>Permission: <code>shell</code> with each scanner-produced command as a resource. The
+scanner also checks an external working directory and directories it can infer
+from the command. Shell has the host user’s filesystem, process, and network
+authority, so use narrow rules in <a href="/v2/docs/permissions">Permissions</a>.</p>
+<h2 id="web">Web</h2>
+<h3 id="webfetch">Webfetch</h3>
+<p><code>webfetch</code> retrieves one HTTP or HTTPS URL as <code>markdown</code>, <code>text</code>, or <code>html</code>.
+Markdown is the default; <code>timeout</code> accepts up to 120 seconds.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Fetch https://example.com/docs as markdown.</span></span></code></pre>
+<p>It accepts textual responses such as HTML, plain text, JSON, and XML, but not
+images or other binary downloads. Large output can be shortened while the full
+text is retained in managed storage. Permission: <code>webfetch</code> with the requested
+URL as its resource.</p>
+<h3 id="websearch">Websearch</h3>
+<p><code>websearch</code> searches the selected integration for current information. Its
+input is a search <code>query</code>.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Search the web for the latest Bun release notes.</span></span></code></pre>
+<p>Permission: <code>websearch</code> with the query as its resource. See <a href="/v2/docs/websearch">Websearch</a>
+for providers, selection, rate limits, and disabling the tool.</p>
+<h2 id="interaction">Interaction</h2>
+<h3 id="question">Question</h3>
+<p><code>question</code> pauses execution and presents one or more questions to the user.
+Each question has a short header, prompt, and choices; <code>multiple</code> allows more
+than one choice. A free-form answer is always available.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Before changing the API, ask me to choose between a breaking change and a compatibility layer.</span></span></code></pre>
+<p>Permission: <code>question</code> with <code>*</code> as its resource. A client must support the
+interactive form, and dismissing it cancels the question.</p>
+<h3 id="skill">Skill</h3>
+<p><code>skill</code> loads the instructions and bundled resources for one available skill
+ID into the conversation.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Load the effect skill before changing this Effect code.</span></span></code></pre>
+<p>The ID must be in the advertised skill list or explicitly named by the user.
+Permission: <code>skill</code> with the skill ID as its resource. See <a href="/v2/docs/skills">Skills</a> for
+creation, discovery, and loading rules.</p>
+<h2 id="automation">Automation</h2>
+<h3 id="subagent">Subagent</h3>
+<p><code>subagent</code> starts a child session with a configured subagent. Supply the agent
+ID, a short <code>description</code>, and a complete <code>prompt</code>.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Ask the explore subagent to map the authentication flow and return the key files.</span></span></code></pre>
+<p>Foreground calls wait for the result. <code>background: true</code> returns immediately
+and notifies the parent when the child finishes. Pass the returned <code>sessionID</code>
+to continue that same child conversation. Only subagent-mode agents can be
+used, and the default nesting depth is one.</p>
+<p>Permission: <code>subagent</code> with the selected agent ID as its resource.</p>
+<h3 id="execute">Execute</h3>
+<p><code>execute</code> runs JavaScript in Code Mode so the agent can call and combine tools
+from the catalog. It is useful for parallel independent calls and for processing
+results without adding every intermediate value to the model context.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Read package.json and README.md in parallel, then return their relevant setup details.</span></span></code></pre>
+<p>The runtime has no direct filesystem access, imports, timers, or <code>fetch</code>; it can
+only call tools in its catalog. Permission <code>execute</code> with resource <code>*</code> controls
+whether Code Mode is available. Every nested tool still enforces its own
+permission.</p>
+<h3 id="sessions">Sessions</h3>
+<p>The <code>opencode</code> Code Mode namespace contains session utilities:</p>
+<ul>
+<li><code>session_rename</code> changes the title of the current session, or another session
+selected by <code>sessionID</code>.</li>
+<li><code>session_move</code> moves the current session, or another selected session, to a
+relative or absolute <code>directory</code>. The move takes effect at a safe boundary,
+so destination-dependent work belongs in a later call.</li>
+</ul>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Rename this session to &quot;Timeout cleanup&quot;, then move it to the new worktree.</span></span></code></pre>
+<p>These utilities do not request a built-in permission action.</p>
+<h3 id="worktrees">Worktrees</h3>
+<p>The same namespace manages worktrees for the session’s project:</p>
+<ul>
+<li><code>worktree_create</code> creates a worktree from a <code>name</code> and returns its
+<code>directory</code>. The project’s worktree configuration selects the destination and
+strategy.</li>
+<li><code>worktree_list</code> lists the project’s worktrees.</li>
+<li><code>worktree_remove</code> removes a worktree OpenCode recorded for the project. Set
+<code>force</code> to discard uncommitted changes.</li>
+</ul>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Create a worktree named &quot;login&quot; and move this session into it.</span></span></code></pre>
+<p><code>worktree_remove</code> uses the <code>edit</code> permission with the worktree directory as its
+resource. The other worktree utilities do not request a built-in permission
+action.</p>
+<h2 id="browser">Browser</h2>
+<p>The <code>browser</code> Code Mode namespace controls the browser attached by the OpenCode
+desktop app. Open a tab, keep its returned <code>tabID</code>, then pass that explicit ID to
+every page operation.</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>Open https://example.com, take a snapshot of that tab, and report the main heading.</span></span></code></pre>
+<p>The namespace includes tab and navigation commands, page snapshots and search,
+clicking and form input, screenshots, file transfer, console and network
+inspection, performance traces, heap inspection, and Lighthouse audits.
+Screenshots require a focused visible tab. Upload paths are server-local;
+captures return server-local paths, and each file transfer is limited to 5 MiB.</p>
+<p>Page content, logs, headers, and response bodies are untrusted data, not agent
+instructions. A <code>browser</code> deny rule with resource <code>*</code> removes the browser catalog;
+browser operations do not issue individual permission prompts.</p>
+<h2 id="extensions">Extensions</h2>
+<p><a href="/v2/docs/mcp-servers">MCP servers</a> add tools whose names and inputs come from each
+connected server. Their permission action is <code>&lt;server&gt;_&lt;tool&gt;</code> with resource
+<code>*</code>. They are not a fixed part of the built-in catalog.</p>
+<p><a href="/v2/docs/skills">Skills</a> add task instructions rather than new executable tools.
+<a href="/v2/docs/attachments">Attachments</a> put user-selected content into a prompt, while
+<a href="/v2/docs/references">References</a> provide named outside directories. These features
+complement tools without bypassing their permission checks.</p></article></main><aside class="toc-column"><nav class="docs-toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#files">Files</a></li><li class="nested"><a href="#read">Read</a></li><li class="nested"><a href="#glob">Glob</a></li><li class="nested"><a href="#grep">Grep</a></li><li class="nested"><a href="#edit">Edit</a></li><li class="nested"><a href="#write">Write</a></li><li class="nested"><a href="#patch">Patch</a></li><li><a href="#commands">Commands</a></li><li class="nested"><a href="#shell">Shell</a></li><li><a href="#web">Web</a></li><li class="nested"><a href="#webfetch">Webfetch</a></li><li class="nested"><a href="#websearch">Websearch</a></li><li><a href="#interaction">Interaction</a></li><li class="nested"><a href="#question">Question</a></li><li class="nested"><a href="#skill">Skill</a></li><li><a href="#automation">Automation</a></li><li class="nested"><a href="#subagent">Subagent</a></li><li class="nested"><a href="#execute">Execute</a></li><li class="nested"><a href="#sessions">Sessions</a></li><li class="nested"><a href="#worktrees">Worktrees</a></li><li><a href="#browser">Browser</a></li><li><a href="#extensions">Extensions</a></li></ul></nav></aside></div><script>
+      const addHeadingAnchors = () => {
+        for (const heading of document.querySelectorAll(".prose :is(h2, h3)[id]")) {
+          if (heading.querySelector(".heading-anchor")) continue
+          const anchor = document.createElement("a")
+          anchor.className = "heading-anchor"
+          anchor.href = `#${heading.id}`
+          anchor.setAttribute("aria-label", `Link to ${heading.textContent ?? "section"}`)
+          anchor.textContent = "#"
+          heading.append(anchor)
+        }
+      }
+
+      addHeadingAnchors()
+      document.addEventListener("astro:page-load", addHeadingAnchors)
+    </script><script type="module">globalThis.process??={},globalThis.process.env??={},document.addEventListener(`click`,async e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`[data-copy-markdown]`);if(!t)return;t.dataset.copied=`true`,t.setAttribute(`aria-label`,`Copied`),window.setTimeout(()=>{delete t.dataset.copied,t.setAttribute(`aria-label`,`Copy page as Markdown`)},1500);let n=await fetch(window.location.href,{headers:{Accept:`text/markdown`}});n.ok&&await navigator.clipboard.writeText(await n.text())});</script></body></html>

@@ -1,0 +1,347 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Skills documentation for OpenCode."><meta name="theme-color" content="#000000"><meta name="astro-view-transitions-enabled" content="true"><meta name="astro-view-transitions-fallback" content="swap"><script type="module" src="/v2/_astro/ClientRouter.astro_astro_type_script_index_0_lang.QXqYV-0P.js"></script><link rel="canonical" href="https://opencode.ai/v2/docs/skills"><link rel="icon" type="image/svg+xml" href="/v2/favicon.svg"><title>Skills | OpenCode</title><link rel="stylesheet" href="/v2/_astro/_..CwgjG4PU.css"></head><body><a class="skip-link" href="#docs-content">Skip to content</a><header class="site-header"><div class="header-inner"><a class="brand" href="/v2/" aria-label="OpenCode home"><img src="/v2/assets/logo-dark.svg" alt="OpenCode"></a><nav aria-label="Documentation sections"><a href="/v2/docs/" aria-current="page">Docs</a><a href="/v2/docs/cli/">CLI</a><a href="/v2/docs/build/">Build</a><a href="/v2/docs/api/">API</a><a href="/v2/docs/console/">Console</a><a href="/docs">V1</a></nav><div class="header-spacer"></div><button class="search-trigger" type="button" data-search-open aria-label="Search documentation"><span>Search</span><kbd>⌘K</kbd></button><a class="github-link" href="https://github.com/anomalyco/opencode" aria-label="OpenCode on GitHub">GitHub</a></div></header><dialog class="search-dialog" data-search-dialog data-pagefind-path="/v2/docs/pagefind/pagefind.js" data-base-url="/v2/docs/" aria-label="Search documentation"><form method="dialog" class="search-bar"><span aria-hidden="true">&gt;</span><input data-search-input type="search" placeholder="Search docs" autocomplete="off"><button type="submit" aria-label="Close search">Esc</button></form><div class="search-results" data-search-results><p>Start typing to search the documentation.</p></div></dialog><script>
+  let pagefind
+
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault()
+      const dialog = document.querySelector("[data-search-dialog]")
+      dialog?.showModal()
+      dialog?.querySelector("[data-search-input]")?.focus()
+    }
+  })
+
+  const setupSearch = () => {
+    const dialog = document.querySelector("[data-search-dialog]")
+    const input = document.querySelector("[data-search-input]")
+    const results = document.querySelector("[data-search-results]")
+    const trigger = document.querySelector("[data-search-open]")
+    if (trigger && !trigger.dataset.searchReady) {
+      trigger.dataset.searchReady = "true"
+      trigger.addEventListener("click", () => {
+        dialog?.showModal()
+        input?.focus()
+      })
+    }
+
+    if (input && results && !input.dataset.searchReady) input.addEventListener("input", async () => {
+      input.dataset.searchReady = "true"
+      const query = input.value.trim()
+      if (!query) {
+        results.innerHTML = "<p>Start typing to search the documentation.</p>"
+        return
+      }
+
+      const pagefindPath = dialog?.dataset.pagefindPath
+      if (!pagefindPath) return
+      const api = pagefind ?? (pagefind = await import(pagefindPath))
+      const search = await api.search(query)
+      const pages = await Promise.all(search.results.slice(0, 8).map((result) => result.data()))
+      results.replaceChildren(
+        ...pages.map((page) => {
+          const link = document.createElement("a")
+          const base = dialog.dataset.baseUrl ?? "/"
+          link.href = page.url.startsWith(base)
+            ? page.url
+            : `${dialog.dataset.baseUrl?.replace(/\/$/, "")}${page.url}`
+          const title = document.createElement("strong")
+          title.textContent = page.meta.title
+          const excerpt = document.createElement("span")
+          excerpt.innerHTML = page.excerpt
+          link.append(title, excerpt)
+          return link
+        }),
+      )
+      if (!pages.length) results.innerHTML = "<p>No results found.</p>"
+    })
+  }
+
+  setupSearch()
+  document.addEventListener("astro:page-load", setupSearch)
+</script><details class="mobile-navigation"><summary>Docs navigation</summary><nav class="docs-sidebar" aria-label="Documentation"><section><ul><li><a href="/v2/docs/">Intro</a></li><li><a href="/v2/docs/config/">Config</a></li><li><a href="/v2/docs/migrate-v1/">Migrate from V1</a></li><li><a href="/v2/docs/troubleshooting/">Troubleshooting</a></li></ul></section><section><h2>Configure</h2><ul><li><a href="/v2/docs/agents/">Agents</a></li><li><a href="/v2/docs/models/">Models</a></li><li><a href="/v2/docs/skills/" aria-current="page">Skills</a></li><li><a href="/v2/docs/themes/">Themes</a></li><li><a href="/v2/docs/commands/">Commands</a></li><li><a href="/v2/docs/plugins/">Plugins</a></li><li><a href="/v2/docs/providers/">Providers</a></li><li><a href="/v2/docs/websearch/">Websearch</a></li><li><a href="/v2/docs/network/">Network</a></li><li><a href="/v2/docs/snapshots/">Snapshots</a></li><li><a href="/v2/docs/compaction/">Compaction</a></li><li><a href="/v2/docs/formatters/">Formatters</a></li><li><a href="/v2/docs/references/">References</a></li><li><a href="/v2/docs/attachments/">Attachments</a></li><li><a href="/v2/docs/tools/">Tools</a></li><li><a href="/v2/docs/mcp-servers/">MCP servers</a></li><li><a href="/v2/docs/permissions/">Permissions</a></li><li><a href="/v2/docs/policies/">Policies</a></li><li><a href="/v2/docs/instructions/">Instructions</a></li><li><a href="/v2/docs/sharing/">Sharing</a></li><li><a href="/v2/docs/warming/">Warming</a></li></ul></section></nav></details><div class="docs-frame"><aside class="sidebar-column"><nav class="docs-sidebar" aria-label="Documentation"><section><ul><li><a href="/v2/docs/">Intro</a></li><li><a href="/v2/docs/config/">Config</a></li><li><a href="/v2/docs/migrate-v1/">Migrate from V1</a></li><li><a href="/v2/docs/troubleshooting/">Troubleshooting</a></li></ul></section><section><h2>Configure</h2><ul><li><a href="/v2/docs/agents/">Agents</a></li><li><a href="/v2/docs/models/">Models</a></li><li><a href="/v2/docs/skills/" aria-current="page">Skills</a></li><li><a href="/v2/docs/themes/">Themes</a></li><li><a href="/v2/docs/commands/">Commands</a></li><li><a href="/v2/docs/plugins/">Plugins</a></li><li><a href="/v2/docs/providers/">Providers</a></li><li><a href="/v2/docs/websearch/">Websearch</a></li><li><a href="/v2/docs/network/">Network</a></li><li><a href="/v2/docs/snapshots/">Snapshots</a></li><li><a href="/v2/docs/compaction/">Compaction</a></li><li><a href="/v2/docs/formatters/">Formatters</a></li><li><a href="/v2/docs/references/">References</a></li><li><a href="/v2/docs/attachments/">Attachments</a></li><li><a href="/v2/docs/tools/">Tools</a></li><li><a href="/v2/docs/mcp-servers/">MCP servers</a></li><li><a href="/v2/docs/permissions/">Permissions</a></li><li><a href="/v2/docs/policies/">Policies</a></li><li><a href="/v2/docs/instructions/">Instructions</a></li><li><a href="/v2/docs/sharing/">Sharing</a></li><li><a href="/v2/docs/warming/">Warming</a></li></ul></section></nav></aside><main id="docs-content"><article class="prose" data-pagefind-body data-pagefind-meta="title:Skills"><h1>Skills<button type="button" aria-label="Copy page as Markdown" data-copy-markdown data-pagefind-ignore><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg></button></h1><p>Create a skill to give an agent reusable instructions for a specific task. Put a <code>SKILL.md</code> file in <code>.opencode/skills/&lt;skill-id&gt;</code> and describe when to use it in <code>description</code>.</p>
+<figure class="astro-code-figure"><figcaption class="astro-code-title">.opencode/skills/git-release/SKILL.md</figcaption><pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="markdown"><code><span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">---</span></span>
+<span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">name</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">Git Release</span></span>
+<span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">description</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">Prepare release notes, version bumps, and GitHub releases</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">---</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#005CC5;--shiki-light-font-weight:bold;--shiki-dark:#79B8FF;--shiki-dark-font-weight:bold">## Workflow</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#E36209;--shiki-dark:#FFAB70">1.</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> Read </span><span style="color:#005CC5;--shiki-dark:#79B8FF">`references/release-policy.md`</span><span style="color:#24292E;--shiki-dark:#E1E4E8">.</span></span>
+<span class="line"><span style="color:#E36209;--shiki-dark:#FFAB70">2.</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> Summarize merged changes since the previous tag.</span></span>
+<span class="line"><span style="color:#E36209;--shiki-dark:#FFAB70">3.</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> Propose the version bump before changing files.</span></span>
+<span class="line"><span style="color:#E36209;--shiki-dark:#FFAB70">4.</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> Run </span><span style="color:#005CC5;--shiki-dark:#79B8FF">`scripts/changelog.ts`</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> only after the user approves the version.</span></span></code></pre></figure>
+<p>OpenCode advertises this skill when it is relevant. The agent can then load its instructions with the <code>skill</code> tool instead of adding every skill to every prompt.</p>
+<h2 id="create">Create</h2>
+<p>Keep related scripts, references, and templates beside <code>SKILL.md</code>:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>.opencode/skills/</span></span>
+<span class="line"><span>└── git-release/</span></span>
+<span class="line"><span>    ├── SKILL.md</span></span>
+<span class="line"><span>    ├── scripts/</span></span>
+<span class="line"><span>    │   └── changelog.ts</span></span>
+<span class="line"><span>    └── references/</span></span>
+<span class="line"><span>        └── release-policy.md</span></span></code></pre>
+<p>Paths written inside the skill are relative to the directory containing <code>SKILL.md</code>. The directory form is recommended because it gives supporting files a private base directory.</p>
+<h2 id="discovery">Discovery</h2>
+<p>OpenCode automatically searches these locations:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Scope</th><th>Sources</th></tr></thead><tbody><tr><td>Global</td><td><code>~/.config/opencode/skills</code></td></tr><tr><td>Global compatibility</td><td><code>~/.claude/skills</code>, <code>~/.agents/skills</code></td></tr><tr><td>Project</td><td><code>.opencode/skills</code></td></tr><tr><td>Project compatibility</td><td><code>.claude/skills</code>, <code>.agents/skills</code></td></tr></tbody></table>
+<p>For project sources, OpenCode searches from the current directory up to the project root and includes matching directories at every level.</p>
+<p>Each source can contain either form:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>skills/</span></span>
+<span class="line"><span>├── review.md</span></span>
+<span class="line"><span>└── git-release/</span></span>
+<span class="line"><span>    └── SKILL.md</span></span></code></pre>
+<ul>
+<li>Markdown files must be at the source root, such as <code>skills/review.md</code>.</li>
+<li>Files named exactly <code>SKILL.md</code> can be at any depth, such as <code>skills/git-release/SKILL.md</code>.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<p>Add more local directories or HTTP catalogs with the <code>skills</code> array in any <code>opencode.json</code> or <code>opencode.jsonc</code>:</p>
+<figure class="astro-code-figure"><figcaption class="astro-code-title">opencode.jsonc</figcaption><pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="jsonc"><code><span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">  &quot;$schema&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;https://opencode.ai/config.json&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">  &quot;skills&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: [</span></span>
+<span class="line"><span style="color:#032F62;--shiki-dark:#9ECBFF">    &quot;./team-skills&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#032F62;--shiki-dark:#9ECBFF">    &quot;~/shared/opencode-skills&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#032F62;--shiki-dark:#9ECBFF">    &quot;/opt/company-skills&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#032F62;--shiki-dark:#9ECBFF">    &quot;https://example.com/opencode/skills/&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">  ],</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre></figure>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Value</th><th>Resolution</th></tr></thead><tbody><tr><td>Relative path</td><td>From the active OpenCode working directory, not the config file</td></tr><tr><td><code>~/</code> path</td><td>From the current user’s home directory</td></tr><tr><td>Absolute path</td><td>Used as written</td></tr><tr><td><code>http://</code> or <code>https://</code> URL</td><td>Loaded as an HTTP catalog</td></tr></tbody></table>
+<p>Every discovered config file contributes its entries. <code>skills</code> arrays are combined rather than replaced.</p>
+<h2 id="catalogs">Catalogs</h2>
+<p>An HTTP catalog is a base URL with an <code>index.json</code> file:</p>
+<figure class="astro-code-figure"><figcaption class="astro-code-title">index.json</figcaption><pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="json"><code><span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">  &quot;skills&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: [</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">    {</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">      &quot;name&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;git-release&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">      &quot;version&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;3&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">      &quot;files&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: [</span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;git-release.md&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;references/release-policy.md&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">]</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">    }</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">  ]</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre></figure>
+<p>For that entry, OpenCode downloads each file from <code>&lt;base-url&gt;/git-release/&lt;file&gt;</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Rule</th><th>Requirement</th></tr></thead><tbody><tr><td>Paths</td><td>Must be safe, relative, and same-origin</td></tr><tr><td>Entry file</td><td>Include <code>SKILL.md</code> or <code>&lt;name&gt;.md</code>, such as <code>git-release.md</code></td></tr><tr><td>Updates</td><td>Increment <code>version</code> when files change so OpenCode refreshes its cache</td></tr></tbody></table>
+<p>Prefer the named Markdown form in an HTTP catalog. Each downloaded skill directory becomes a source root, so <code>git-release.md</code> has the ID <code>git-release</code>. A root-level <code>SKILL.md</code> currently has the literal ID <code>SKILL</code> in V2.</p>
+<h2 id="frontmatter">Frontmatter</h2>
+<p>Use frontmatter to name the skill and control where it appears:</p>
+<figure class="astro-code-figure"><figcaption class="astro-code-title">SKILL.md</figcaption><pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="markdown"><code><span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">---</span></span>
+<span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">name</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">Git Release</span></span>
+<span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">description</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">Prepare a repository release</span></span>
+<span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">metadata</span><span style="color:#24292E;--shiki-dark:#E1E4E8">:</span></span>
+<span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">  opencode/autoinvoke</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#005CC5;--shiki-dark:#79B8FF">false</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">---</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">Prepare the changelog, version bump, tag, and release notes.</span></span></code></pre></figure>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Field</th><th>Behavior</th></tr></thead><tbody><tr><td><code>name</code></td><td>Display name; defaults to the path-derived ID</td></tr><tr><td><code>description</code></td><td>Summary used to show the skill to the model</td></tr><tr><td><code>metadata.opencode/autoinvoke</code></td><td>Set to <code>false</code> to omit the skill from the model’s available list</td></tr><tr><td><code>disable-model-invocation</code></td><td>Set to <code>true</code> for the same effect as <code>opencode/autoinvoke: false</code></td></tr></tbody></table>
+<p>All frontmatter is optional at runtime. Add a clear <code>description</code> when the model should discover the skill; skills without one are not advertised.</p>
+<p><code>opencode/autoinvoke: false</code> only hides the skill from the model’s available list. The skill remains registered and can still be loaded explicitly by ID. When both <code>disable-model-invocation</code> and <code>opencode/autoinvoke</code> are set, <code>opencode/autoinvoke</code> wins. V2 accepts portability fields such as <code>license</code> and <code>compatibility</code> but does not interpret them.</p>
+<h2 id="ids">IDs</h2>
+<p>The file path determines the skill ID. The frontmatter <code>name</code> is only a display label.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>File</th><th>ID</th></tr></thead><tbody><tr><td><code>&lt;source&gt;/git-release.md</code></td><td><code>git-release</code></td></tr><tr><td><code>&lt;source&gt;/git-release/SKILL.md</code></td><td><code>git-release</code></td></tr><tr><td><code>&lt;source&gt;/teams/release/SKILL.md</code></td><td><code>release</code></td></tr></tbody></table>
+<p>IDs are exact and case-sensitive. For portable skills, use a unique lowercase kebab-case ID of 1–64 characters and keep it aligned with the directory name:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>^[a-z0-9]+(-[a-z0-9]+)*$</span></span></code></pre>
+<p>V2 currently does not enforce this pattern, the 1–64 character recommendation, a match between <code>name</code> and the directory, or a maximum description length.</p>
+<h2 id="precedence">Precedence</h2>
+<p>Skills are selected by ID. If two sources define <code>git-release</code>, the source registered later supplies the skill that OpenCode loads:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>~/.config/opencode/skills/git-release/SKILL.md  ← lower precedence</span></span>
+<span class="line"><span>.opencode/skills/git-release/SKILL.md           ← loaded</span></span></code></pre>
+<p>Sources are registered from lower to higher precedence:</p>
+<ol>
+<li>Built-in skills</li>
+<li><code>.claude/skills</code>, global first and then from the farthest ancestor toward the current directory</li>
+<li><code>.agents/skills</code>, global first and then from the farthest ancestor toward the current directory</li>
+<li><code>~/.config/opencode/skills</code></li>
+<li>Project <code>.opencode/skills</code>, from the project root toward the current directory</li>
+<li>Explicit <code>skills</code> config entries, in config priority and array order</li>
+</ol>
+<p>Avoid duplicate IDs unless you intend to override an earlier skill.</p>
+<h2 id="loading">Loading</h2>
+<p>At each model step, OpenCode lists permitted skills that have a description and do not set <code>opencode/autoinvoke</code> to <code>false</code>. The list includes only the ID, name, and description, not the full Markdown body.</p>
+<p>The model loads a skill by calling the <code>skill</code> tool with its exact ID:</p>
+<figure class="astro-code-figure"><figcaption class="astro-code-title">skill tool input</figcaption><pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="json"><code><span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">  &quot;id&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;git-release&quot;</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre></figure>
+<p>OpenCode then:</p>
+<ol>
+<li>Selects the current definition for that ID.</li>
+<li>Checks the selected agent’s <code>skill</code> permission.</li>
+<li>Adds the Markdown body, without frontmatter, to the conversation.</li>
+<li>Provides the skill’s base directory and a sample of up to ten supporting file paths.</li>
+</ol>
+<p>To load a skill yourself, mention it in your prompt as <code>@skill-id</code>.</p>
+<p>Supporting file contents are not loaded automatically. The agent reads them when the skill directs it to do so. The file sample is available for directory-based <code>SKILL.md</code> skills; flat Markdown skills do not receive a neighboring file list.</p>
+<h2 id="permissions">Permissions</h2>
+<p>Use the <code>skill</code> action and the skill ID as the resource. Rules run in order, and the last matching rule wins:</p>
+<figure class="astro-code-figure"><figcaption class="astro-code-title">opencode.jsonc</figcaption><pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="jsonc"><code><span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">  &quot;permissions&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: [</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">    { </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;action&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;skill&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;resource&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;*&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;effect&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;allow&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">    { </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;action&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;skill&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;resource&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;internal-*&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;effect&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;deny&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">    { </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;action&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;skill&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;resource&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;experimental-*&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">, </span><span style="color:#005CC5;--shiki-dark:#79B8FF">&quot;effect&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#032F62;--shiki-dark:#9ECBFF">&quot;ask&quot;</span><span style="color:#24292E;--shiki-dark:#E1E4E8"> },</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">  ],</span></span>
+<span class="line"><span style="color:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre></figure>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Effect</th><th>Behavior</th></tr></thead><tbody><tr><td><code>allow</code></td><td>Advertises and loads matching skills without approval</td></tr><tr><td><code>ask</code></td><td>Advertises matching skills and asks before loading them</td></tr><tr><td><code>deny</code></td><td>Hides matching skills from the model and rejects loading</td></tr></tbody></table>
+<p>Place the same rules under <code>agents.&lt;id&gt;.permissions</code> to apply them only to one agent.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p>For example, this skill’s ID is <code>release</code>, not its frontmatter name <code>Git Release</code>:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto" tabindex="0" data-language="text"><code><span class="line"><span>.opencode/skills/release/SKILL.md</span></span>
+<span class="line"><span>                      └─ ID: release</span></span></code></pre>
+<p>If a skill is missing or loads the wrong content:</p>
+<ol>
+<li>Confirm the file is either a root-level <code>*.md</code> or a nested file named exactly <code>SKILL.md</code>.</li>
+<li>Check the path-derived, case-sensitive ID rather than the frontmatter <code>name</code>.</li>
+<li>Add a <code>description</code> if the model should discover the skill.</li>
+<li>Check <code>opencode/autoinvoke</code> and the selected agent’s <code>skill</code> permissions.</li>
+<li>Look for a later source that defines the same ID.</li>
+<li>For HTTP catalogs, verify <code>index.json</code>, same-origin file paths, and a changed <code>version</code>.</li>
+</ol></article></main><aside class="toc-column"><nav class="docs-toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#create">Create</a></li><li><a href="#discovery">Discovery</a></li><li><a href="#sources">Sources</a></li><li><a href="#catalogs">Catalogs</a></li><li><a href="#frontmatter">Frontmatter</a></li><li><a href="#ids">IDs</a></li><li><a href="#precedence">Precedence</a></li><li><a href="#loading">Loading</a></li><li><a href="#permissions">Permissions</a></li><li><a href="#troubleshooting">Troubleshooting</a></li></ul></nav></aside></div><script>
+      const addHeadingAnchors = () => {
+        for (const heading of document.querySelectorAll(".prose :is(h2, h3)[id]")) {
+          if (heading.querySelector(".heading-anchor")) continue
+          const anchor = document.createElement("a")
+          anchor.className = "heading-anchor"
+          anchor.href = `#${heading.id}`
+          anchor.setAttribute("aria-label", `Link to ${heading.textContent ?? "section"}`)
+          anchor.textContent = "#"
+          heading.append(anchor)
+        }
+      }
+
+      addHeadingAnchors()
+      document.addEventListener("astro:page-load", addHeadingAnchors)
+    </script><script type="module">globalThis.process??={},globalThis.process.env??={},document.addEventListener(`click`,async e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`[data-copy-markdown]`);if(!t)return;t.dataset.copied=`true`,t.setAttribute(`aria-label`,`Copied`),window.setTimeout(()=>{delete t.dataset.copied,t.setAttribute(`aria-label`,`Copy page as Markdown`)},1500);let n=await fetch(window.location.href,{headers:{Accept:`text/markdown`}});n.ok&&await navigator.clipboard.writeText(await n.text())});</script></body></html>
