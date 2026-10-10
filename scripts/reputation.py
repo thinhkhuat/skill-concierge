@@ -59,8 +59,9 @@ def _path() -> Path:
 
 
 def _proven_path() -> Path:
-    return Path(os.environ.get("SKILL_CONCIERGE_PROVEN",
-                               Path.home() / ".claude" / "skill-concierge" / "proven.json"))
+    # Beside the ledger it is derived from, as auto_promote.py writes it.
+    home = Path(os.environ.get("SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs")).parent
+    return Path(os.environ.get("SKILL_CONCIERGE_PROVEN", home / "proven.json"))
 
 
 def _load():

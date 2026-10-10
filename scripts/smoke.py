@@ -38,17 +38,24 @@ from pathlib import Path
 # No "do not" clauses: a prompt that refuses skills takes the enforcer's negation exit before any
 # retrieval, and a broken index would still pass.
 PROMPT = 'Call the search_skills tool once with the query "haiku about weather", then reply with only the name of the top result.'
-# Offer-row bands that prove retrieval ran: a ranked menu, or Jev judging the whole catalogue and
-# finding no fit. Every other band is an early exit (negation, harness, self-reference) or an outage.
-RETRIEVAL_BANDS = ("offer", "jev_skip")
+# Offer-row bands that prove retrieval ran: a ranked menu, Jev judging the whole catalogue and finding
+# no fit, or a skip decided after the embedding and index lookup (getaway: top hit under the floor;
+# intent_skip: conversational turn). Every other band is an early exit before retrieval
+# (negation, harness, self-reference, consult route) or an outage (fallback).
+RETRIEVAL_BANDS = ("offer", "jev_skip", "getaway", "intent_skip")
+# A row carrying one of these fallbacks was written while the embedder or the index was down.
+OUTAGE_FALLBACKS = ("embed_timeout", "embed_down", "qdrant_down")
 TIMEOUT = 300
 KILL_GRACE = 5      # seconds between SIGTERM and SIGKILL for a child's process group
 LEDGER_GRACE = 5    # seconds to wait for detached ledger writers after a CLI exits
 STARTUP = 60        # seconds for opencode serve to listen and report skill-search connected
 POLL = 2            # seconds between ledger checks while the opencode turn runs
 POLL_START = 0.5    # seconds between startup probes of opencode serve
-# Removed from every child's environment, together with every SKILL_CONCIERGE_* variable.
-SCRUBBED_ENV = ("CLAUDECODE", "ANTHROPIC_API_KEY")
+# Removed from every child's environment: a forced harness label would mislabel the run, the
+# Claude Code session marker would make a nested claude think it runs inside this session, and the
+# metered API key must never bill a smoke turn. Install settings (SKILL_CONCIERGE_ROOT, _VENV,
+# _CATALOG_ROOTS …) stay: a harness needs them to run as it does day to day.
+SCRUBBED_ENV = ("SKILL_CONCIERGE_HARNESS", "CLAUDECODE", "ANTHROPIC_API_KEY")
 # (executable, argv before the prompt). The prompt is the last argument.
 CLI = {
     "claude": ("claude", ["claude", "-p"]),
@@ -73,6 +80,9 @@ def verdict(rows: list[dict], cli_found: bool = True) -> tuple[str, str]:
     missing = []
     if not bands:
         missing.append("no offer row: the per-turn enforcer did not run")
+    elif any(r.get("fallback") in OUTAGE_FALLBACKS for r in rows if r.get("ev") == "offer"):
+        missing.append("offer row records an outage: "
+                       + ", ".join(sorted({r["fallback"] for r in rows if r.get("fallback") in OUTAGE_FALLBACKS})))
     elif not set(bands) & set(RETRIEVAL_BANDS):
         missing.append(f"offer band {bands[-1]}: the enforcer exited before retrieval")
     if not any(r.get("ev") == "search" for r in rows):
@@ -107,11 +117,8 @@ def _workdir(harness: str) -> Path:
 
 
 def _child_env(work: Path, **extra: str) -> dict:
-    """The parent environment minus anything that could steer the run at live state: every
-    SKILL_CONCIERGE_* setting (the log folder set here is the only one allowed), the Claude Code
-    session marker and the metered API key."""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith("SKILL_CONCIERGE_") and k not in SCRUBBED_ENV}
+    """The parent environment minus SCRUBBED_ENV, with this run's own log folder."""
+    env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_ENV}
     env["SKILL_CONCIERGE_LOG"] = str(work / "logs")
     env.update(extra)
     return env

@@ -134,9 +134,10 @@ EXTERNAL_SLOTS = int(os.environ.get("ENFORCER_EXTERNAL_SLOTS", "4" if ANNEX_DYNA
 # the foreign annex).
 ANNEX_COMPLEMENT = os.environ.get("ENFORCER_ANNEX_COMPLEMENT", "1") != "0"
 ANNEX_BEAT = float(os.environ.get("ENFORCER_ANNEX_BEAT", "0.04"))
-_TAKES_DIGEST_PATH = Path(os.environ.get(
-    "SKILL_CONCIERGE_TAKES_DIGEST",
-    Path.home() / ".claude" / "skill-concierge" / "external-takes.json"))
+# The ledger-derived digests sit beside the ledger they come from, as auto_promote.py writes them.
+_DIGEST_HOME = Path(os.environ.get(
+    "SKILL_CONCIERGE_LOG", Path.home() / ".claude" / "skill-concierge" / "logs")).parent
+_TAKES_DIGEST_PATH = Path(os.environ.get("SKILL_CONCIERGE_TAKES_DIGEST", _DIGEST_HOME / "external-takes.json"))
 
 
 def _external_takes() -> dict:
@@ -892,9 +893,7 @@ REPUTATION_ON = os.environ.get("SKILL_REPUTATION", "1") != "0"
 _REPUTATION_PATH = Path(os.environ.get(
     "SKILL_CONCIERGE_REPUTATION",
     Path.home() / ".claude" / "skill-concierge" / "reputation.json"))
-_PROVEN_PATH = Path(os.environ.get(
-    "SKILL_CONCIERGE_PROVEN",
-    Path.home() / ".claude" / "skill-concierge" / "proven.json"))
+_PROVEN_PATH = Path(os.environ.get("SKILL_CONCIERGE_PROVEN", _DIGEST_HOME / "proven.json"))
 _TIERS = (("heart", "❤️"), ("star", "⭐"))
 BADGE_LEGEND = ("Badges are the owner's ranking: ❤️ house favourite, ⭐ trusted, 🔥 used often here. "
                 "Choose in two passes: mark every row (owner's list included) that does this task's job as "

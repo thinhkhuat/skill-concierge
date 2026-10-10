@@ -34,7 +34,15 @@ if name == "enforcer.py":
 SCRIPTS = ["enforcer.py", "ledger.py", "skill_exclusions.py"]
 HOOK_OPEN = '<hook_context source="skill-concierge">'
 
-pytestmark = pytest.mark.skipif(NODE is None, reason="node is required for the Command Code mod tests")
+def _node_imports_ts() -> bool:
+    """Node 22.6+ strips TypeScript types on import; older versions error instead of skipping."""
+    if NODE is None:
+        return False
+    out = subprocess.run([NODE, "--version"], capture_output=True, text=True).stdout.strip().lstrip("v")
+    return tuple(int(x) for x in out.split(".")[:2]) >= (22, 6)
+
+
+pytestmark = pytest.mark.skipif(not _node_imports_ts(), reason="needs node 22.6+ (the mod is imported as .ts)")
 
 
 @pytest.fixture()

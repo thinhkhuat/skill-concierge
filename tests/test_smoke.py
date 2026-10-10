@@ -36,10 +36,23 @@ def test_hook_rows_without_a_search_row_fail():
 
 
 def test_an_early_exit_band_fails_because_retrieval_never_ran():
-    for band in ("negation", "harness_skip", "fallback", "getaway"):
+    for band in ("negation", "harness_skip", "selfref_skip", "consult_route"):
         status, detail = smoke.verdict([{"ev": "offer", "band": band}, {"ev": "search"}])
         assert status == "FAIL" and "before retrieval" in detail, band
-    assert smoke.verdict([{"ev": "offer", "band": "jev_skip"}, {"ev": "search"}])[0] == "PASS"
+
+
+def test_bands_decided_after_the_index_lookup_pass():
+    # getaway and intent_skip are decided after embedding and the index query (enforcer.py, the
+    # getaway and actionability gates), so they prove retrieval ran.
+    for band in ("offer", "jev_skip", "getaway", "intent_skip"):
+        assert smoke.verdict([{"ev": "offer", "band": band}, {"ev": "search"}])[0] == "PASS", band
+
+
+def test_an_outage_fallback_fails_even_on_a_retrieval_band():
+    for fb in ("embed_timeout", "embed_down", "qdrant_down"):
+        status, detail = smoke.verdict([{"ev": "offer", "band": "offer", "fallback": fb}, {"ev": "search"}])
+        assert status == "FAIL" and fb in detail, fb
+    assert smoke.verdict([{"ev": "offer", "band": "fallback", "fallback": "qdrant_down"}, {"ev": "search"}])[0] == "FAIL"
 
 
 def test_an_empty_ledger_fails_on_both_signals():
@@ -109,7 +122,8 @@ def _fake_cli(sandbox: Path, monkeypatch, body: str) -> None:
 def test_cli_gets_a_scrubbed_environment(sandbox, monkeypatch):
     _fake_cli(sandbox, monkeypatch, "import json, os\njson.dump(dict(os.environ), open('env.json', 'w'))\n")
     monkeypatch.setenv("SKILL_CONCIERGE_LOG", "/live/ledger")
-    monkeypatch.setenv("SKILL_CONCIERGE_FOO", "x")
+    monkeypatch.setenv("SKILL_CONCIERGE_HARNESS", "claude")
+    monkeypatch.setenv("SKILL_CONCIERGE_ROOT", "/a/clone")
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("KEEP_ME", "yes")
@@ -117,7 +131,8 @@ def test_cli_gets_a_scrubbed_environment(sandbox, monkeypatch):
     smoke._run_cli("claude", work)
     env = json.loads((work / "env.json").read_text())
     assert env["SKILL_CONCIERGE_LOG"] == str(work / "logs")
-    assert not [k for k in env if k.startswith("SKILL_CONCIERGE_") and k != "SKILL_CONCIERGE_LOG"]
+    assert "SKILL_CONCIERGE_HARNESS" not in env                 # a forced label would mislabel the run
+    assert env["SKILL_CONCIERGE_ROOT"] == "/a/clone"              # install settings stay
     assert "CLAUDECODE" not in env and "ANTHROPIC_API_KEY" not in env
     assert env["KEEP_ME"] == "yes"
 
