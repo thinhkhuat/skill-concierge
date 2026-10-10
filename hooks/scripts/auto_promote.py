@@ -132,9 +132,12 @@ def run_once() -> int:
     return promoted
 
 
+# Both digests default to the folder that holds the ledger they are built from (the durable home
+# for the default ledger). A run on another ledger (SKILL_CONCIERGE_LOG, e.g. a smoke test's empty
+# temp folder) then writes beside it and can never overwrite the live digests: on 2026-10-10 smoke
+# runs did exactly that and emptied the live 🔥 badges and external-take counts.
 TAKES_DIGEST = Path(os.environ.get(
-    "SKILL_CONCIERGE_TAKES_DIGEST",
-    Path.home() / ".claude" / "skill-concierge" / "external-takes.json"))
+    "SKILL_CONCIERGE_TAKES_DIGEST", LOGDIR.parent / "external-takes.json"))
 
 
 def _write_takes_digest(takes: dict) -> None:
@@ -155,9 +158,7 @@ def _write_takes_digest(takes: dict) -> None:
 # enforcer reads the digest live and badges those rows; the badge never moves a row. 5 sessions
 # in 30 days was the owner's pick (2026-10-07): 28 of the 169 skills used in that window.
 REPUTATION_ON = os.environ.get("SKILL_REPUTATION", "1") != "0"
-PROVEN_DIGEST = Path(os.environ.get(
-    "SKILL_CONCIERGE_PROVEN",
-    Path.home() / ".claude" / "skill-concierge" / "proven.json"))
+PROVEN_DIGEST = Path(os.environ.get("SKILL_CONCIERGE_PROVEN", LOGDIR.parent / "proven.json"))
 def _env_int(name, default):
     """A malformed tunable falls back to its default: a session-start hook never dies over an env typo."""
     try:

@@ -259,6 +259,8 @@ export default function (pi: any): void {
   // fully try/caught and fire-and-forget on the hot path.
   pi.on("tool_result", (event: any, ctx: any) => {
     try {
+      // A failed or refused call is not a use: Claude Code fires no PostToolUse for one.
+      if (event?.isError) return undefined;
       const toolName: string = event?.toolName || "";
       const input: Record<string, unknown> = event?.input || {};
       const sessionId = sessionIdOf(ctx);

@@ -9,7 +9,7 @@ import smoke  # noqa: E402
 
 
 def test_offer_and_search_pass():
-    assert smoke.verdict([{"ev": "turn"}, {"ev": "offer"}, {"ev": "search"}]) == ("PASS", "offer + search")
+    assert smoke.verdict([{"ev": "turn"}, {"ev": "offer", "band": "offer"}, {"ev": "search"}]) == ("PASS", "offer + search")
 
 
 def test_a_turn_row_without_an_offer_row_fails():
@@ -18,8 +18,15 @@ def test_a_turn_row_without_an_offer_row_fails():
 
 
 def test_hook_rows_without_a_search_row_fail():
-    status, detail = smoke.verdict([{"ev": "turn"}, {"ev": "offer"}])
+    status, detail = smoke.verdict([{"ev": "turn"}, {"ev": "offer", "band": "offer"}])
     assert status == "FAIL" and "search_skills did not reach the model" in detail
+
+
+def test_an_early_exit_band_fails_because_retrieval_never_ran():
+    for band in ("negation", "harness_skip", "fallback", "getaway"):
+        status, detail = smoke.verdict([{"ev": "offer", "band": band}, {"ev": "search"}])
+        assert status == "FAIL" and "before retrieval" in detail, band
+    assert smoke.verdict([{"ev": "offer", "band": "jev_skip"}, {"ev": "search"}])[0] == "PASS"
 
 
 def test_an_empty_ledger_fails_on_both_signals():
@@ -28,7 +35,7 @@ def test_an_empty_ledger_fails_on_both_signals():
 
 
 def test_a_missing_command_line_fails_instead_of_skipping():
-    assert smoke.verdict([{"ev": "offer"}, {"ev": "search"}], cli_found=False)[0] == "FAIL"
+    assert smoke.verdict([{"ev": "offer", "band": "offer"}, {"ev": "search"}], cli_found=False)[0] == "FAIL"
 
 
 def test_zcode_is_unproven_and_fails_the_run_unless_accepted(capsys):

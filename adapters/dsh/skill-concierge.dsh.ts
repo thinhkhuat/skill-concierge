@@ -327,14 +327,14 @@ export default function (ctx: any): void {
     const downstream = await next();
     try {
       const load = skillLoadPayload(exec);
-      if (!load) return downstream;
+      // A failed or blocked call is not a use: Claude Code fires no PostToolUse for one.
+      if (!load || result?.isError || downstream?.kind === "block") return downstream;
       const { id: sid, sub } = sessionOf(exec?.agent);
       const payload = { hook_event_name: "PostToolUse", session_id: sid, harness: "dsh",
                         ...(sub ? { agent_id: sid } : {}), ...load };   // ledger stamps subagent rows `sub`
       runLedger(payload);
       // A search row only records that the MCP tool reached the model; there is no skill to echo.
       if (/search_skills$/.test(String(load.tool_name))) return downstream;
-      if (result?.isError || downstream?.kind === "block") return downstream;
       const echo = await runExclusions({ ...payload, tool_response: result?.content });
       if (!echo) return downstream;
       return {

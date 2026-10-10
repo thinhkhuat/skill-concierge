@@ -6,7 +6,8 @@ side-effect-free prompt in its own empty temp folder, with SKILL_CONCIERGE_LOG p
 folder, so every ledger row there came from that run and nothing reaches the live ledger, badges or
 auto-promotion. PASS needs both rows a working install writes:
 
-  offer   the per-turn enforcer ran (the turn row alone is written by ledger.py, so it proves less)
+  offer   the per-turn enforcer ran retrieval (band offer or jev_skip; the turn row alone is written
+          by ledger.py, and an early-exit band never touches the index)
   search  the skill-search MCP tool reached the model and the post-tool hook logged it
 
 A missing CLI is FAIL. ZCode has no command line, so it is UNPROVEN. Exit 1 on any FAIL, or on an
@@ -31,9 +32,12 @@ import time
 import urllib.request
 from pathlib import Path
 
-PROMPT = ('Use the search_skills tool exactly once with the query "haiku about weather". Then reply with '
-          'only the name of the top result. Do not invoke any skill, do not use any other tool, do not '
-          'edit any file.')
+# No "do not" clauses: a prompt that refuses skills takes the enforcer's negation exit before any
+# retrieval, and a broken index would still pass.
+PROMPT = 'Call the search_skills tool once with the query "haiku about weather", then reply with only the name of the top result.'
+# Offer-row bands that prove retrieval ran: a ranked menu, or Jev judging the whole catalogue and
+# finding no fit. Every other band is an early exit (negation, harness, self-reference) or an outage.
+RETRIEVAL_BANDS = ("offer", "jev_skip")
 TIMEOUT = 300
 # (executable, argv before the prompt). The prompt is the last argument.
 CLI = {
@@ -54,10 +58,14 @@ def verdict(rows: list[dict], cli_found: bool = True) -> tuple[str, str]:
     """PASS when the run's ledger holds an offer row and a search row; else FAIL naming what is missing."""
     if not cli_found:
         return "FAIL", "command line not found on PATH"
-    evs = {r.get("ev") for r in rows}
-    missing = [what for ev, what in (("offer", "no offer row: the per-turn enforcer did not run"),
-                                     ("search", "no search row: search_skills did not reach the model"))
-               if ev not in evs]
+    bands = [r.get("band") for r in rows if r.get("ev") == "offer"]
+    missing = []
+    if not bands:
+        missing.append("no offer row: the per-turn enforcer did not run")
+    elif not set(bands) & set(RETRIEVAL_BANDS):
+        missing.append(f"offer band {bands[-1]}: the enforcer exited before retrieval")
+    if not any(r.get("ev") == "search" for r in rows):
+        missing.append("no search row: search_skills did not reach the model")
     return ("FAIL", "; ".join(missing)) if missing else ("PASS", "offer + search")
 
 
@@ -70,6 +78,21 @@ def _rows(logdir: Path) -> list[dict]:
         except ValueError:
             pass
     return out
+
+
+# The session-start self-heal scripts throttle on stamps in the log folder. An empty one would let
+# all four run unthrottled against live state (a reindex, settings sync, LLM trigger generation,
+# promotion), so each run's log folder starts with fresh stamps: they are not what this tests.
+SELF_HEAL_STAMPS = (".auto-reindex-stamp", ".auto-overrides-stamp", ".auto-flywheel-stamp",
+                    ".auto-promote-stamp")
+
+
+def _workdir(harness: str) -> Path:
+    work = Path(tempfile.mkdtemp(prefix=f"sc-smoke-{harness}-")).resolve()
+    (work / "logs").mkdir()
+    for stamp in SELF_HEAL_STAMPS:
+        (work / "logs" / stamp).write_text(str(int(time.time())))
+    return work
 
 
 def _run_cli(harness: str, work: Path) -> str:
@@ -89,7 +112,6 @@ def _run_opencode(work: Path) -> str:
     its HTTP API (`opencode run --server` can stall before creating a session). The prompt waits
     until skill-search reports connected for the folder: a fresh server connects its MCP servers
     after the session exists, and a model call made first gets no search_skills tool."""
-    work = work.resolve()   # one OpenCode instance per folder: /var and /private/var would be two
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", OPENCODE_PORT)) == 0:
             return f"port {OPENCODE_PORT} is busy (set SMOKE_OPENCODE_PORT)"
@@ -162,7 +184,7 @@ def smoke(harness: str) -> tuple[str, str, float, Path | None]:
     exe = "opencode" if harness == "opencode" else CLI[harness][0]
     if shutil.which(exe) is None:
         return (*verdict([], cli_found=False), 0.0, None)
-    work = Path(tempfile.mkdtemp(prefix=f"sc-smoke-{harness}-"))
+    work = _workdir(harness)
     t0 = time.time()
     note = _run_opencode(work) if harness == "opencode" else _run_cli(harness, work)
     status, detail = verdict(_rows(work / "logs"))
