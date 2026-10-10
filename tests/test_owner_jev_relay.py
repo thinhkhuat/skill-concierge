@@ -32,6 +32,7 @@ class Fake:
 
     def __init__(self, mode="ok"):
         self.mode, self.posts, self.gets, self.conns = mode, [], [], 0
+        self.closed = queue.Queue()     # one item per connection the server has finished closing
         owner = self
 
         class H(BaseHTTPRequestHandler):
@@ -67,7 +68,12 @@ class Fake:
                 self.end_headers()
                 self.wfile.write(out)
 
-        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        class Srv(ThreadingHTTPServer):
+            def shutdown_request(self, request):
+                super().shutdown_request(request)
+                owner.closed.put(request)
+
+        self.srv = Srv(("127.0.0.1", 0), H)
         self.srv.daemon_threads = True
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.port = self.srv.server_address[1]
@@ -112,6 +118,10 @@ def test_a_pooled_connection_the_provider_closed_is_discarded_before_use(fakes):
     fakes["ts"].mode = "silent-close"
     for _ in range(3):
         assert io._jev_relay(b"{}", "Bearer k", 2.0)[0] == 200
+        # The handler thread closes the socket after the reply is on the wire, so the client can win that race
+        # and reuse the connection while it is still open at the provider's end. That is not the case under
+        # test (a provider that had already closed): wait until the close has happened.
+        fakes["ts"].closed.get(timeout=5)
     assert len(fakes["ts"].posts) == 3 and fakes["ts"].conns == 3          # each request went out once
 
 

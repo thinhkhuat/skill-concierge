@@ -1,0 +1,24 @@
+....F............                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_a_signal_killed_omp_export_leaves_no_staging_dir_behind _________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-546/test_a_signal_killed_omp_expor0')
+
+    def test_a_signal_killed_omp_export_leaves_no_staging_dir_behind(tmp_path):
+        repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+        home, _ = sib._seed_omp_home_with_cache(tmp_path, version="1.9.0")
+        env = installer_env(tmp_path, home, _slow_git_dir(tmp_path))
+        cache = home / ".omp" / "plugins" / "cache" / "plugins"
+    
+        rc = _kill_during_export(["bash", str(INSTALL_SH["omp"]), "--root", str(repo)], env, cache)
+        assert rc != 0
+>       assert not list(cache.glob(".skill-concierge-staging.*"))
+E       AssertionError: assert not [PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-546/test_a_signal_killed_omp_expor0/home/.omp/plugins/cache/plugins/.skill-concierge-staging.Oo3edA')]
+E        +  where [PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-546/test_a_signal_killed_omp_expor0/home/.omp/plugins/cache/plugins/.skill-concierge-staging.Oo3edA')] = list(<generator object Path.glob at 0x10c7c69b0>)
+E        +    where <generator object Path.glob at 0x10c7c69b0> = glob('.skill-concierge-staging.*')
+E        +      where glob = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-546/test_a_signal_killed_omp_expor0/home/.omp/plugins/cache/plugins').glob
+
+tests/test_installer_staging_cleanup.py:347: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_installer_staging_cleanup.py::test_a_signal_killed_omp_export_leaves_no_staging_dir_behind
+1 failed, 16 passed in 8.12s

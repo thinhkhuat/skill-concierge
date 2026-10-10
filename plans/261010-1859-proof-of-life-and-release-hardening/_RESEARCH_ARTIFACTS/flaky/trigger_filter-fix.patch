@@ -1,0 +1,27 @@
+diff --git a/scripts/trigger_filter.py b/scripts/trigger_filter.py
+index 5716030..51ee5ab 100644
+--- a/scripts/trigger_filter.py
++++ b/scripts/trigger_filter.py
+@@ -158,7 +158,6 @@ class Ctx:
+ 
+ # --- scoring -----------------------------------------------------------------------------------------
+ 
+-_TIMEOUTS_SET = set()
+ _TIMEOUT_LOCK = threading.Lock()
+ 
+ 
+@@ -168,12 +167,12 @@ def _enforcer():
+     explicit ENFORCER_*_TIMEOUT from the caller still wins."""
+     enf = jev_client.load_enforcer()
+     with _TIMEOUT_LOCK:
+-        if id(enf) not in _TIMEOUTS_SET:
++        if not getattr(enf, "_offline_timeouts_set", False):   # a flag on the module itself: an id() is reused once a module is freed
+             for var, attr in (("ENFORCER_EMBED_TIMEOUT", "EMBED_TIMEOUT_S"),
+                               ("ENFORCER_QDRANT_TIMEOUT", "QDRANT_TIMEOUT_S")):
+                 if var not in os.environ:
+                     setattr(enf, attr, 15.0)
+-            _TIMEOUTS_SET.add(id(enf))
++            enf._offline_timeouts_set = True
+     return enf
+ 
+ 

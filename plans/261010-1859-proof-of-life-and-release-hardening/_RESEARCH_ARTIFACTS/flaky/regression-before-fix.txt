@@ -1,0 +1,26 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_enforcer_setup_reaches_every_new_module_even_when_a_freed_one_had_its_address _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b9c3b30>
+
+    def test_enforcer_setup_reaches_every_new_module_even_when_a_freed_one_had_its_address(monkeypatch):
+        # The offline timeouts must follow the module object, not its id(): once a module is freed, CPython hands
+        # its address to the next object of that size, so an id-keyed record skipped the setup for a fresh module.
+        monkeypatch.delenv("ENFORCER_EMBED_TIMEOUT", raising=False)
+        monkeypatch.delenv("ENFORCER_QDRANT_TIMEOUT", raising=False)
+        holder = []
+        monkeypatch.setattr(jev_client, "load_enforcer", lambda: holder[0])
+        for _ in range(200):
+            holder[:] = [SimpleNamespace(EMBED_TIMEOUT_S=0.5, QDRANT_TIMEOUT_S=0.5)]   # the previous one is freed here
+            enf = tf._enforcer()
+>           assert (enf.EMBED_TIMEOUT_S, enf.QDRANT_TIMEOUT_S) == (15.0, 15.0)
+E           assert (0.5, 0.5) == (15.0, 15.0)
+E             
+E             At index 0 diff: 0.5 != 15.0
+E             Use -v to get more diff
+
+tests/test_trigger_filter.py:654: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_trigger_filter.py::test_enforcer_setup_reaches_every_new_module_even_when_a_freed_one_had_its_address
+1 failed, 34 deselected in 0.09s

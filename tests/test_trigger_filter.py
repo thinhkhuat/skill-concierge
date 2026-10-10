@@ -639,3 +639,17 @@ def test_enforcer_setup_leaves_the_process_environment_alone(env, monkeypatch):
     monkeypatch.setenv("ENFORCER_EMBED_TIMEOUT", "2")
     monkeypatch.setattr(jev_client, "_ENF", None)
     assert tf._enforcer().EMBED_TIMEOUT_S == 2.0
+
+
+def test_enforcer_setup_reaches_every_new_module_even_when_a_freed_one_had_its_address(monkeypatch):
+    # The offline timeouts must follow the module object, not its id(): once a module is freed, CPython hands
+    # its address to the next object of that size, so an id-keyed record skipped the setup for a fresh module.
+    monkeypatch.delenv("ENFORCER_EMBED_TIMEOUT", raising=False)
+    monkeypatch.delenv("ENFORCER_QDRANT_TIMEOUT", raising=False)
+    holder = []
+    monkeypatch.setattr(jev_client, "load_enforcer", lambda: holder[0])
+    for _ in range(200):
+        holder[:] = [SimpleNamespace(EMBED_TIMEOUT_S=0.5, QDRANT_TIMEOUT_S=0.5)]   # the previous one is freed here
+        enf = tf._enforcer()
+        assert (enf.EMBED_TIMEOUT_S, enf.QDRANT_TIMEOUT_S) == (15.0, 15.0)
+        del enf

@@ -1,0 +1,5 @@
+1 passed in 1.07s
+1 passed in 1.06s
+1 passed in 1.07s
+1 passed in 1.06s
+1 passed in 1.06s

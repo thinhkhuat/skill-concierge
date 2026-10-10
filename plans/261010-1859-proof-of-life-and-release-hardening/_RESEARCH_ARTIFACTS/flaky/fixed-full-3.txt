@@ -1,0 +1,48 @@
+........................................................................ [  4%]
+........................................................................ [  9%]
+........................................................................ [ 14%]
+........................................................................ [ 19%]
+........................................................................ [ 24%]
+..............F......................................................... [ 29%]
+........................................................................ [ 33%]
+........................................................................ [ 38%]
+........................................................................ [ 43%]
+........................................................................ [ 48%]
+........................................................................ [ 53%]
+........................................................................ [ 58%]
+........................................................................ [ 63%]
+........................................................................ [ 67%]
+........................................................................ [ 72%]
+........................................................................ [ 77%]
+........................................................................ [ 82%]
+........................................................................ [ 87%]
+........................................................................ [ 92%]
+........................................................................ [ 97%]
+............................................                             [100%]
+=================================== FAILURES ===================================
+________ test_a_signal_killed_zcode_export_leaves_no_staging_dir_behind ________
+
+tmp_path = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-521/test_a_signal_killed_zcode_exp0')
+
+    def test_a_signal_killed_zcode_export_leaves_no_staging_dir_behind(tmp_path):
+        repo = sib._make_repo(tmp_path, "repo", "2.0.0")
+        home = sib._seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=tmp_path / "irrelevant")
+        dest_dir = repo / "adapters" / "zcode"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(INSTALL_SH["zcode"], dest_dir / "install.sh")
+        shutil.copytree(LIB, repo / "adapters" / "lib")
+        env = installer_env(tmp_path, home, _slow_git_dir(tmp_path))
+        cache = home / ".zcode" / "cli" / "plugins" / "cache" / "skill-concierge" / "skill-concierge"
+    
+        rc = _kill_during_export(["bash", str(dest_dir / "install.sh")], env, cache)
+        assert rc != 0
+>       assert not list(cache.glob(".skill-concierge-staging.*"))
+E       AssertionError: assert not [PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-521/test_a_signal_killed_zcode_exp0/home/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/.skill-concierge-staging.fGfaq0')]
+E        +  where [PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-521/test_a_signal_killed_zcode_exp0/home/.zcode/cli/plugins/cache/skill-concierge/skill-concierge/.skill-concierge-staging.fGfaq0')] = list(<generator object Path.glob at 0x1121db340>)
+E        +    where <generator object Path.glob at 0x1121db340> = glob('.skill-concierge-staging.*')
+E        +      where glob = PosixPath('/private/var/folders/vz/ktjwf0t17gv6psjwq2319bh00000gn/T/pytest-of-thinhkhuat/pytest-521/test_a_signal_killed_zcode_exp0/home/.zcode/cli/plugins/cache/skill-concierge/skill-concierge').glob
+
+tests/test_installer_staging_cleanup.py:335: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_installer_staging_cleanup.py::test_a_signal_killed_zcode_export_leaves_no_staging_dir_behind
+1 failed, 1483 passed in 173.55s (0:02:53)

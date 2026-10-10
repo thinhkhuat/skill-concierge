@@ -1,0 +1,43 @@
+..........................................F                              [100%]
+=================================== FAILURES ===================================
+_____ test_a_pooled_connection_the_provider_closed_is_discarded_before_use _____
+
+fakes = {'ts': <test_owner_jev_relay.Fake object at 0x10c521e20>, 'cc': <test_owner_jev_relay.Fake object at 0x10c74b2c0>}
+
+    def test_a_pooled_connection_the_provider_closed_is_discarded_before_use(fakes):
+        fakes["ts"].mode = "silent-close"
+        for _ in range(3):
+>           assert io._jev_relay(b"{}", "Bearer k", 2.0)[0] == 200
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_owner_jev_relay.py:114: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+vendor/skill-search/skill_search/index_owner.py:761: in _jev_relay
+    resp = conn.getresponse()
+           ^^^^^^^^^^^^^^^^^^
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/http/client.py:1430: in getresponse
+    response.begin()
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/http/client.py:331: in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <http.client.HTTPResponse object at 0x10c7b8700>
+
+    def _read_status(self):
+        line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+        if len(line) > _MAXLINE:
+            raise LineTooLong("status line")
+        if self.debuglevel > 0:
+            print("reply:", repr(line))
+        if not line:
+            # Presumably, the server closed the connection before
+            # sending a valid response.
+>           raise RemoteDisconnected("Remote end closed connection without"
+                                     " response")
+E           http.client.RemoteDisconnected: Remote end closed connection without response
+
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/http/client.py:300: RemoteDisconnected
+=========================== short test summary info ============================
+FAILED tests/test_owner_jev_relay.py::test_a_pooled_connection_the_provider_closed_is_discarded_before_use
+1 failed, 42 passed in 6.03s

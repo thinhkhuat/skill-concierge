@@ -1,0 +1,51 @@
+F..........................................                              [100%]
+=================================== FAILURES ===================================
+_____ test_a_pooled_connection_the_provider_closed_is_discarded_before_use _____
+
+fakes = {'ts': <test_owner_jev_relay.Fake object at 0x10c405280>, 'cc': <test_owner_jev_relay.Fake object at 0x10c406ab0>}
+
+    def test_a_pooled_connection_the_provider_closed_is_discarded_before_use(fakes):
+        fakes["ts"].mode = "silent-close"
+        for _ in range(3):
+>           assert io._jev_relay(b"{}", "Bearer k", 2.0)[0] == 200
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_owner_jev_relay.py:114: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+vendor/skill-search/skill_search/index_owner.py:761: in _jev_relay
+    resp = conn.getresponse()
+           ^^^^^^^^^^^^^^^^^^
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/http/client.py:1430: in getresponse
+    response.begin()
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/http/client.py:331: in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/http/client.py:292: in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.SocketIO object at 0x10c3a5870>, b = <memory at 0x10c410640>
+
+    def readinto(self, b):
+        """Read up to len(b) bytes into the writable buffer *b* and return
+        the number of bytes read.  If the socket is non-blocking and no bytes
+        are available, None is returned.
+    
+        If *b* is non-empty, a 0 return value indicates that the connection
+        was shutdown at the other end.
+        """
+        self._checkClosed()
+        self._checkReadable()
+        if self._timeout_occurred:
+            raise OSError("cannot read from timed out object")
+        while True:
+            try:
+>               return self._sock.recv_into(b)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+E               ConnectionResetError: [Errno 54] Connection reset by peer
+
+/Users/thinhkhuat/.pyenv/versions/3.12.11/lib/python3.12/socket.py:720: ConnectionResetError
+=========================== short test summary info ============================
+FAILED tests/test_owner_jev_relay.py::test_a_pooled_connection_the_provider_closed_is_discarded_before_use
+1 failed, 42 passed in 6.07s
