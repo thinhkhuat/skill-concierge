@@ -89,3 +89,17 @@ def test_a_symlink_to_a_cache_copy_refuses(harness, tmp_path):
     link.symlink_to(cache, target_is_directory=True)
     p = _run(link, home, harness)
     assert p.returncode != 0 and "plugin cache" in p.stderr, p.stdout + p.stderr
+
+
+def test_omp_dev_mode_never_drops_another_extension_under_an_orphan_marker(tmp_path):
+    home = tmp_path / "home"
+    (home / ".omp" / "agent").mkdir(parents=True)
+    clone = _tree(tmp_path / "c" / "skill-concierge")
+    marker = next(l.split("=", 1)[1].strip().strip('"') for l in
+                  (ROOT / "adapters" / "omp" / "install.sh").read_text().splitlines() if l.startswith("EXT_MARKER="))
+    (home / ".omp" / "agent" / "config.yml").write_text(
+        f"extensions:\n  {marker}\n  - /someone/else/ext.ts\n")
+    _run(clone, home, "omp")
+    text = (home / ".omp" / "agent" / "config.yml").read_text()
+    assert "- /someone/else/ext.ts" in text, text
+    assert _omp_entries(home) == [f"- {clone / 'adapters' / 'omp' / 'skill-concierge.ext.ts'}"]

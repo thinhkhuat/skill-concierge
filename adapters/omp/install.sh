@@ -293,8 +293,9 @@ while i < len(lines):
             out.append(lines[i + 1])
             i += 2
             found_ext = True
-        elif i + 1 < len(lines) and lines[i + 1].strip().startswith("- "):
-            # Our pair from a checkout that moved: drop it, the current entry is added below.
+        elif i + 1 < len(lines) and lines[i + 1].strip().endswith("/adapters/omp/skill-concierge.ext.ts"):
+            # Our pair from a checkout that moved: drop it, the current entry is added below. Only our own
+            # entry goes; another extension under an orphan marker stays, and the orphan marker alone drops.
             i += 2
         else:
             i += 1
