@@ -2,11 +2,17 @@
  * skill-concierge — Command Code Mod Adapter (ADR-0038).
  *
  * Integrates skill-concierge with Command Code (`cmd`) as a first-class citizen:
- * 1. `transformInput`: runs the semantic enforcer on every typed user prompt,
- *    injecting the SKILL-FIRST standing mandate and ranked top-k preview.
- *    `transformContext` does the same for prompts transformInput never sees:
- *    print mode (`cmd -p`) and image prompts.
- * 2. Prompt telemetry: logs turn boundaries and manual `/slash` invocations to the ledger.
+ * 1. `transformContext` is the one place a prompt is governed. It runs before every model
+ *    call in the TUI and in print mode (`cmd -p`), sees every prompt (typed, image, IDE
+ *    context), and carries `state.sessionId`. It picks the newest user message that is not
+ *    a tool-results message and skips it when Command Code itself generated it
+ *    (`meta.isMeta`, `isAutomated`, `isSummary`, a stop-hook, scheduled or mod source) or
+ *    when it holds no text. Otherwise it runs the semantic enforcer once per prompt (one
+ *    `turn` ledger row), prefixes the SKILL-FIRST mandate and ranked top-k preview, and
+ *    re-applies the cached menu on later model calls of the same turn (the tool loop).
+ * 2. `transformInput` never runs the enforcer. It records the raw typed text, so
+ *    `transformContext` can rank on it when IDE context or another mod prepended text to
+ *    the stored message, and logs a `manual` ledger row for a typed `/slash` command.
  * 3. Tool telemetry: observes `skill_loaded` and `tool_completed` to record skill
  *    and retriever usage in the shared invocation ledger.
  * 4. `afterToolCall`: on a skill load (`activate_skill`, or the skill-search
@@ -14,6 +20,11 @@
  *    "not for" lines as `additionalContext`, which Command Code appends as a
  *    separate text block to the tool result the model reads (ADR-0059; mod-builder
  *    reference/hooks-and-events.md, afterToolCall contract).
+ *
+ * Session id, in order: an explicit `ctx.sessionId`, `state.sessionId`, the id on the
+ * `run_start` event, `COMMANDCODE_SESSION_ID`. `sessions.leafId()` is a session-tree entry
+ * id that changes with every appended entry, so it is never used. Every ledger row of a
+ * session carries the same id.
  *
  * Fail-open design: all handlers catch exceptions and degrade to no-op.
  */
@@ -47,16 +58,20 @@ const ENFORCER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/enforcer.py");
 const LEDGER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/ledger.py");
 const EXCLUSIONS_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/skill_exclusions.py");
 
-function sessionIdOf(cmd: any, ctx?: any): string {
+// Latest id seen on ctx, state or the run_start event; the ledger rows that carry no ctx or
+// state (skill_loaded, tool_completed, a typed slash command) use it.
+let knownSid = "";
+
+function sessionIdOf(ctx?: any, state?: any): string {
   try {
-    if (ctx?.session?.leafId) return ctx.session.leafId();
-    if (cmd?.sessions?.leafId) return cmd.sessions.leafId();
-    if (ctx?.sessionId) return String(ctx.sessionId);
-    if (process.env.COMMANDCODE_SESSION_ID) return process.env.COMMANDCODE_SESSION_ID;
+    const explicit = ctx?.sessionId ? String(ctx.sessionId) : "";
+    const fromState = state?.sessionId ? String(state.sessionId) : "";
+    const sid = explicit || fromState;
+    if (sid) knownSid = sid;
+    return sid || knownSid || process.env.COMMANDCODE_SESSION_ID || "";
   } catch {
-    // fail-open: session id is telemetry only
+    return knownSid; // fail-open: session id is telemetry only
   }
-  return "";
 }
 
 function runLedger(payload: Record<string, unknown>): void {
@@ -125,17 +140,37 @@ function runExclusions(toolName: string, input: unknown, result: unknown): strin
 }
 
 const HOOK_OPEN = '<hook_context source="skill-concierge">';
-// Print mode (`cmd -p`) never calls transformInput; transformContext runs before every model call in
-// both modes. inputSeen holds the prompts transformInput already governed (TUI), so they are never
-// governed twice; governed caches the enforcer output per prompt, so a tool loop runs it once.
-const inputSeen = new Set<string>();
+const CACHE_CAP = 64;
+// typed: raw prompt texts transformInput saw, newest last; the value says the text is a slash command.
+// governed: enforcer output per prompt message, so a tool loop runs the enforcer once.
+const typed = new Map<string, boolean>();
 const governed = new Map<string, string | null>();
-let lastSid = "";
+
+/** Make `key` the newest entry and evict the oldest beyond CACHE_CAP. */
+function remember<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > CACHE_CAP) map.delete(map.keys().next().value as string);
+}
 
 function textOf(msg: any): string {
   if (typeof msg?.content === "string") return msg.content;
   if (!Array.isArray(msg?.content)) return "";
   return msg.content.filter((p: any) => p?.type === "text").map((p: any) => String(p.text ?? "")).join("\n");
+}
+
+/** A user-role message that carries tool results back to the model, not a prompt. */
+function isToolResults(msg: any): boolean {
+  return Array.isArray(msg?.content) && msg.content.some((p: any) => p?.type === "tool_result");
+}
+
+/** A user-role message Command Code made itself: stop-hook continuation, compaction summary,
+ *  cron/loop/goal wakeup, mod custom message. */
+function isHarnessGenerated(msg: any): boolean {
+  const meta = msg?.meta;
+  if (!meta) return false;
+  if (meta.isMeta || meta.isAutomated || meta.isSummary) return true;
+  return typeof meta.source === "string" && /^(stop_hook|scheduled-|mod:)/.test(meta.source);
 }
 
 function withPrefix(msg: any, prefix: string): any {
@@ -144,37 +179,22 @@ function withPrefix(msg: any, prefix: string): any {
 }
 
 export default function (cmd: any): void {
-  // ── 1. Per-turn enforcer + prompt telemetry via transformInput ──
-  // Session id is captured from the ModContext (second arg) when available,
-  // otherwise from cmd.sessions.leafId() / env — mirrors OMP's sessionIdOf
-  // pattern and restores chain-hint/ROUTE ledger linkage (ADR-0038/0042 parity).
   cmd.hooks({
+    // transformInput does not govern: it hands transformContext the raw typed text (IDE context
+    // or another mod may prepend text to the stored message) and logs a typed slash command.
     transformInput: ({ text }: { text: string }, ctx?: any) => {
-      const sid = sessionIdOf(cmd, ctx) || lastSid;
       try {
-        const trimmed = text.trim();
+        const trimmed = String(text ?? "").trim();
         if (!trimmed) return { action: "continue" };
-        inputSeen.add(trimmed);
-
-        // Log turn boundary (slash commands too, then pass them through untouched)
-        runLedger({
-          hook_event_name: "UserPromptSubmit",
-          session_id: sid,
-          prompt: trimmed,
-          harness: "commandcode",
-        });
-        if (trimmed.startsWith("/")) return { action: "continue" };
-
-        // Run semantic enforcer — pass session_id so enforcer's
-        // _last_used_skill + ledger offer/turn join stay linked (ZCode parity).
-        const enforcerCtx = runEnforcer(trimmed, sid);
-        if (enforcerCtx && enforcerCtx.trim()) {
-          // Prepend hook context so the model sees the mandate before the request
-          const transformed = `${HOOK_OPEN}\n${enforcerCtx.trim()}\n</hook_context>\n\n${text}`;
-          return {
-            action: "transform",
-            text: transformed,
-          };
+        const slash = trimmed.startsWith("/");
+        remember(typed, trimmed, slash);
+        if (slash) {
+          runLedger({
+            hook_event_name: "UserPromptSubmit",
+            session_id: sessionIdOf(ctx),
+            prompt: trimmed,
+            harness: "commandcode",
+          });
         }
       } catch {
         // fail-open
@@ -182,25 +202,45 @@ export default function (cmd: any): void {
       return { action: "continue" };
     },
 
-    // The same enforcer for prompts transformInput never saw (print mode, image prompts).
+    // The only place a prompt is governed; runs before every model call, in TUI and print mode.
     transformContext: ({ messages, state }: { messages: any[]; state?: any }, ctx?: any) => {
       try {
-        const sid = String(state?.sessionId ?? "") || sessionIdOf(cmd, ctx);
-        if (sid) lastSid = sid;
+        const sid = sessionIdOf(ctx, state);
+        // The newest user message that is not a tool-results message is the current turn's
+        // prompt. Never look further back: an earlier turn's prompt is not this turn's.
         let i = messages.length - 1;
-        while (i >= 0 && !(messages[i]?.role === "user" && textOf(messages[i]).trim())) i--;
+        while (i >= 0 && !(messages[i]?.role === "user" && !isToolResults(messages[i]))) i--;
         if (i < 0) return messages;
-        const text = textOf(messages[i]).trim();
-        if (text.startsWith(HOOK_OPEN) || text.startsWith("/") || inputSeen.has(text)) return messages;
-        const key = `${sid}\u0000${text}`;
+        const msg = messages[i];
+        if (isHarnessGenerated(msg)) return messages;
+        const text = textOf(msg).trim();
+        if (!text || text.includes(HOOK_OPEN)) return messages;
+
+        // The message itself is stable across the model calls of one turn, so it keys the cache.
+        const key = `${sid}\u0000${String(msg?.meta?.messageId ?? msg?.meta?.createdAt ?? "")}\u0000${text}`;
         if (!governed.has(key)) {
-          runLedger({ hook_event_name: "UserPromptSubmit", session_id: sid, prompt: text, harness: "commandcode" });
-          governed.set(key, runEnforcer(text, sid));
+          // IDE context or another mod may have prepended text: rank on what was typed.
+          let rankText = text;
+          let slash = false;
+          for (const t of [...typed.keys()].reverse()) {
+            if (text.endsWith(t)) {
+              rankText = t;
+              slash = typed.get(t) === true;
+              typed.delete(t);
+              break;
+            }
+          }
+          if (slash || rankText.startsWith("/")) {
+            remember(governed, key, null); // a slash command is never ranked, on any model call
+          } else {
+            runLedger({ hook_event_name: "UserPromptSubmit", session_id: sid, prompt: rankText, harness: "commandcode" });
+            remember(governed, key, runEnforcer(rankText, sid));
+          }
         }
         const enforcerCtx = governed.get(key);
         if (!enforcerCtx || !enforcerCtx.trim()) return messages;
         const out = messages.slice();
-        out[i] = withPrefix(messages[i], `${HOOK_OPEN}\n${enforcerCtx.trim()}\n</hook_context>\n\n`);
+        out[i] = withPrefix(msg, `${HOOK_OPEN}\n${enforcerCtx.trim()}\n</hook_context>\n\n`);
         return out;
       } catch {
         return messages; // fail-open
@@ -220,13 +260,22 @@ export default function (cmd: any): void {
     },
   });
 
-  // ── 2. Tool & Skill telemetry via Agent Events ──
+  // The agent loop announces the session id on run_start, before any model call.
+  cmd.on("run_start", (event: any) => {
+    try {
+      if (event?.sessionId) knownSid = String(event.sessionId);
+    } catch {
+      // fail-silent
+    }
+  });
+
+  // ── Tool & Skill telemetry via Agent Events ──
   // Session id threaded through ledger rows so analyze.py can join
   // offer/turn/auto across turns — ZCode/OMP parity (ADR-0042).
   cmd.on("skill_loaded", ({ name }: { name: string }) => {
     runLedger({
       hook_event_name: "PostToolUse",
-      session_id: sessionIdOf(cmd) || lastSid,
+      session_id: sessionIdOf(),
       tool_name: "activate_skill",
       tool_input: { name },
       harness: "commandcode",
@@ -243,7 +292,7 @@ export default function (cmd: any): void {
       ) {
         runLedger({
           hook_event_name: "PostToolUse",
-          session_id: sessionIdOf(cmd) || lastSid,
+          session_id: sessionIdOf(),
           tool_name: toolName,
           tool_input: event?.input || {},
           harness: "commandcode",
