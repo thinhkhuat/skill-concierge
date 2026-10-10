@@ -2187,21 +2187,32 @@ def check_cline():
             "detail": "plugin loader + Agent Plugin → this checkout", "fix": None}
 
 
-# OpenCode v2 surface (ADR-0085) — skill-concierge integrates as a NATIVE OpenCode
-# plugin: the package at adapters/opencode/plugin registered in the global
-# ~/.config/opencode/opencode.json `plugins` array (the plugin itself registers the
-# skill-search MCP server via ctx.mcp.transform — nothing on disk to check for MCP),
-# plus the re-rooted plugin skills under ~/.config/opencode/skills/. WARN-only — no
+# OpenCode v2 surface (ADR-0085, ADR-0089) — skill-concierge integrates as a NATIVE OpenCode
+# plugin: exactly one copy of adapters/opencode/plugin in the global opencode.json `plugins`
+# (the plugin registers the skill-search MCP server itself), plus the plugin's skills in the
+# owned ~/.config/opencode/skill-concierge-skills/ folder registered in `skills`. What counts as a
+# copy comes from adapters/opencode/oc_config.py, shared with the installer. WARN-only — no
 # OpenCode install is one 'opencode: not installed' row, never a failure.
 OPENCODE_HOME = Path(os.environ.get(
     "SKILL_OPENCODE_HOME",
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "opencode"))
 OPENCODE_JSON = OPENCODE_HOME / "opencode.json"
-OPENCODE_SKILLS = OPENCODE_HOME / "skills"
+OPENCODE_SKILLS = OPENCODE_HOME / "skill-concierge-skills"
+OPENCODE_LEGACY_SKILLS = OPENCODE_HOME / "skills"
+
+
+def _oc_config():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "oc_config", ROOT / "adapters" / "opencode" / "oc_config.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def check_opencode():
-    """OpenCode v2 install state — plugin entry, plugin package, re-rooted skills (ADR-0085).
+    """OpenCode v2 install state — one plugin entry, skills folder registered and filled, no old
+    copies in ~/.config/opencode/skills (ADR-0089).
 
     WARN-only — no OpenCode install is one 'opencode: not installed' row, never a failure.
     """
@@ -2210,33 +2221,51 @@ def check_opencode():
                 "detail": "opencode: not installed (no ~/.config/opencode) — optional harness, no action needed",
                 "fix": None}
     findings = []
+    fix = "run adapters/opencode/install.sh"
+    oc = _oc_config()
+    plugin_dir = ROOT / "adapters" / "opencode" / "plugin"
     # 1. Plugin package in the repo
     for f in ("index.ts", "package.json"):
-        if not (ROOT / "adapters" / "opencode" / "plugin" / f).exists():
+        if not (plugin_dir / f).exists():
             findings.append(f"plugin package incomplete (missing adapters/opencode/plugin/{f})")
-    # 2. Global config carries the plugin entry
+    # 2. Global config: exactly one copy of the plugin, the skills folder registered
     try:
         cfg = json.loads(OPENCODE_JSON.read_text(encoding="utf-8"))
-        entries = cfg.get("plugins", [])
-        if not isinstance(entries, list):
+        entries = cfg.get("plugins") or []
+        if not isinstance(cfg, dict) or not isinstance(entries, list):
             findings.append("opencode.json plugins is not a list")
-        elif not any(isinstance(e, (str, dict)) and (
-                e == str(ROOT / "adapters" / "opencode" / "plugin")
-                or (isinstance(e, dict) and e.get("package") == str(ROOT / "adapters" / "opencode" / "plugin")))
-                for e in entries):
-            findings.append("opencode.json missing the skill-concierge plugin entry (run adapters/opencode/install.sh)")
+        else:
+            copies = [oc.resolve(oc.entry_path(e), OPENCODE_JSON.parent)
+                      for e in entries if oc.is_copy(e, OPENCODE_JSON.parent)]
+            if plugin_dir not in copies:
+                findings.append(f"opencode.json missing the skill-concierge plugin entry ({fix})")
+            if len(copies) > 1:
+                # Every copy declares id "skill-concierge"; OpenCode fails all but the first.
+                findings.append(f"opencode.json lists {len(copies)} skill-concierge plugin entries "
+                                f"(OpenCode fails the duplicates; {fix})")
+            skills = oc.skills_entries(cfg, OPENCODE_JSON.parent)
+            if skills is None:
+                findings.append("opencode.json skills is not a list")
+            elif OPENCODE_SKILLS not in skills:
+                findings.append(f"opencode.json `skills` does not list {OPENCODE_SKILLS} ({fix})")
     except FileNotFoundError:
-        findings.append("opencode.json missing (no global config yet — run adapters/opencode/install.sh)")
-    except (OSError, UnicodeError, ValueError):
+        findings.append(f"opencode.json missing (no global config yet — {fix})")
+    except (OSError, UnicodeError, ValueError, AttributeError):
         findings.append("opencode.json unreadable/invalid JSON (JSONC comments must be removed)")
-    # 3. Re-rooted plugin skills (the opencode-personal discovery root)
-    if not OPENCODE_SKILLS.is_dir():
-        findings.append("skills root missing (~/.config/opencode/skills — run adapters/opencode/install.sh)")
+    # 3. The plugin's own skills, in the folder only the installer writes
+    want = sorted(d.name for d in (ROOT / "skills").glob("*") if (d / "SKILL.md").is_file())
+    missing = [n for n in want if not (OPENCODE_SKILLS / n / "SKILL.md").is_file()]
+    if missing:
+        findings.append(f"{len(missing)} of {len(want)} plugin skills missing from {OPENCODE_SKILLS} ({fix})")
+    if (OPENCODE_LEGACY_SKILLS / ".skill-concierge-managed.json").exists():
+        findings.append(f"old skill copies still listed in {OPENCODE_LEGACY_SKILLS}/.skill-concierge-managed.json "
+                        f"(often ~/.claude/skills, where Claude Code lists them twice; {fix}, which removes "
+                        "unedited copies and names any it must leave)")
     if findings:
         return {"id": "opencode", "label": "OpenCode integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None}
     return {"id": "opencode", "label": "OpenCode integration", "status": OK,
-            "detail": "plugin package + opencode.json entry + skills root all present",
+            "detail": f"one plugin entry + skills folder registered + {len(want)} skills present",
             "fix": None}
 
 

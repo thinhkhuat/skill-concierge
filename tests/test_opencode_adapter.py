@@ -45,7 +45,7 @@ def engine():
 
 def test_opencode_roots_default_on_and_scopes_present(engine):
     assert engine.OPENCODE_ROOTS is True
-    assert engine.OPENCODE_PERSONAL_ROOT == Path.home() / ".config" / "opencode" / "skills"
+    assert engine.OPENCODE_PERSONAL_ROOT == engine._OPENCODE_HOME / "skills"
     scopes = engine.visible_scopes()
     assert "opencode-personal" in scopes
     assert any(s.startswith("opencode-project:") for s in scopes)
@@ -210,3 +210,28 @@ def test_plugin_package_shape():
     assert "SKILL_CONCIERGE_HARNESS: HARNESS" in src or "SKILL_CONCIERGE_HARNESS" in src
     # v2 local-server env key is `environment` (an `env` field is silently ignored)
     assert "environment: row.env" in src
+    # v2 MCP tools default to Code Mode (reachable only via `execute`); the doctrine and the
+    # ledger name the native `skill-search_search_skills` tool, so the server must opt out.
+    assert "codemode: false" in src
+
+
+# ── The concierge's own OpenCode skills live in a folder only it owns ─────────────────────
+# ~/.config/opencode/skills is often a symlink to ~/.claude/skills (OpenCode reads that folder
+# anyway, as a documented compatibility source). Copying the plugin skills there put plain
+# `doctor`, `setup`, … into Claude Code's personal shelf. The copies now go to
+# ~/.config/opencode/skill-concierge-skills, registered in opencode.json `skills`.
+
+def test_concierge_skills_root_is_indexed_as_opencode_personal(engine):
+    root = engine.OPENCODE_CONCIERGE_ROOT
+    assert root == engine._OPENCODE_HOME / "skill-concierge-skills"
+    assert str(root) in [str(p) for p in engine.SKILL_DIRS]
+    assert engine._scope_for(str(root / "doctor" / "SKILL.md")) == "opencode-personal"
+
+
+def test_concierge_skills_root_is_a_twin_root(enforcer, tmp_path, monkeypatch):
+    own = tmp_path / "opencode" / "skill-concierge-skills"
+    (own / "doctor").mkdir(parents=True)
+    (own / "doctor" / "SKILL.md").write_text("---\nname: doctor\n---\n", encoding="utf-8")
+    monkeypatch.setattr(enforcer, "_OPENCODE_CONCIERGE_ROOT", own)
+    monkeypatch.setattr(enforcer, "_OPENCODE_PERSONAL_ROOT", tmp_path / "nope")
+    assert enforcer._invocable_twin("doctor") is True

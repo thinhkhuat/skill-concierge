@@ -144,6 +144,10 @@ _OPENCODE_HOME = Path(os.environ.get(
     "SKILL_OPENCODE_HOME", str(Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "opencode")))
 OPENCODE_PERSONAL_ROOT = _OPENCODE_HOME / "skills"                # OpenCode personal (global)
 OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"       # OpenCode project, CWD-relative
+# skill-concierge's own skills for OpenCode: adapters/opencode/install.sh copies them here and
+# registers the folder in opencode.json `skills`. A folder of its own, because
+# ~/.config/opencode/skills is often a symlink to ~/.claude/skills (Claude Code's shelf).
+OPENCODE_CONCIERGE_ROOT = _OPENCODE_HOME / "skill-concierge-skills"
 
 # Claude account-synced skills: Claude Code downloads skills from the user's claude.ai account
 # into ~/.claude/skills/synced/<bucket>/<name>/SKILL.md and lists them as
@@ -170,7 +174,7 @@ SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
 ) + (
     [CLINE_PERSONAL_ROOT, CLINE_PROJECT_ROOT] if CLINE_ROOTS else []
 ) + (
-    [OPENCODE_PERSONAL_ROOT, OPENCODE_PROJECT_ROOT] if OPENCODE_ROOTS else []
+    [OPENCODE_PERSONAL_ROOT, OPENCODE_PROJECT_ROOT, OPENCODE_CONCIERGE_ROOT] if OPENCODE_ROOTS else []
 )
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
@@ -1024,7 +1028,7 @@ def _scope_for(path: Path) -> str:
         return "dsh-personal"
     if p.startswith(str(CLINE_PERSONAL_ROOT) + os.sep):
         return "cline-personal"
-    if p.startswith(str(OPENCODE_PERSONAL_ROOT) + os.sep):
+    if p.startswith(str(OPENCODE_PERSONAL_ROOT) + os.sep) or p.startswith(str(OPENCODE_CONCIERGE_ROOT) + os.sep):
         return "opencode-personal"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:

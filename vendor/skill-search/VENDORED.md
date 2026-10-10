@@ -632,3 +632,10 @@ plugin-level customization layer and these engine patches.
   holds) — invocability is decided session-side by the enforcer's `opencode` branch. The flag
   joins `scripts/engine_env.py`'s `ENGINE_ENV_KEYS` and is pinned in the plugin `.mcp.json`.
   Covered by `tests/test_opencode_adapter.py`. Not upstream: re-apply on re-vendor.
+
+- **`skills_discovery.py` OpenCode concierge skills root (ADR-0089, 2026-10-09):** adds
+  `OPENCODE_CONCIERGE_ROOT` = `<opencode home>/skill-concierge-skills` to `SKILL_DIRS` (behind the same
+  `SKILL_OPENCODE_ROOTS` flag) and classifies paths under it as `opencode-personal`. The OpenCode installer
+  copies the plugin's own skills there and registers the folder in `opencode.json` `skills`, because
+  `~/.config/opencode/skills` is often a symlink to `~/.claude/skills`. Covered by
+  `tests/test_opencode_adapter.py`. Not upstream: re-apply on re-vendor.

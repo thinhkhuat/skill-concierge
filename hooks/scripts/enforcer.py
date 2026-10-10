@@ -240,6 +240,8 @@ _OPENCODE_PERSONAL_ROOT = Path(
                    str(Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "opencode"))
 ) / "skills"
 _OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"
+# skill-concierge's own OpenCode skills (adapters/opencode/install.sh), registered in opencode.json.
+_OPENCODE_CONCIERGE_ROOT = _OPENCODE_PERSONAL_ROOT.parent / "skill-concierge-skills"
 
 
 # The cross-harness convention root (ZCode, DSH, Cline and OpenCode read it).
@@ -631,6 +633,7 @@ def _invocable_twin(name: str) -> bool:
         # through a filesystem twin in OpenCode's own roots or one of its documented
         # compatibility roots (~/.claude/skills, ~/.agents/skills).
         return _has_skill_md(name, (_OPENCODE_PERSONAL_ROOT, _OPENCODE_PROJECT_ROOT,
+                                    _OPENCODE_CONCIERGE_ROOT,
                                     Path.home() / ".claude" / "skills", _AGENTS_SKILLS))
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False

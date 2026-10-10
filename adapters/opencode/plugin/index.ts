@@ -15,22 +15,25 @@
  * 2. `setup` body: fires the detached SessionStart-parity self-heal batch
  *    (auto_reindex / auto_overrides / auto_flywheel / auto_promote — each internally
  *    throttled and fail-silent).
- * 3. `ctx.session.hook("prompt")`: per admitted user prompt — logs the turn boundary to
- *    the shared invocation ledger and runs the semantic enforcer (bounded 10 s, the
- *    Claude Code UserPromptSubmit timeout parity); the resulting SKILL-FIRST block is
- *    stashed for the next agent-loop model call. The prompt text itself is NEVER edited
- *    (prompt-hook edits become the canonical persisted user input — governance text
- *    rides system parts instead).
- * 4. `ctx.session.hook("context")`: pushes the doctrine ONCE per session (SessionStart
- *    parity) and the pending per-turn enforcer block on the first agent-loop call after
- *    each admission (UserPromptSubmit additionalContext parity).
+ * 3. `ctx.session.hook("prompt")`: remembers each admitted prompt (minus a leading
+ *    `<system-context>` block another plugin may prepend) and starts a non-blocking
+ *    `ctx.session.get` to learn whether the session is a subagent's child (`parentID`). The
+ *    prompt text itself is NEVER edited.
+ * 4. `ctx.session.hook("context")`: pushes the doctrine ONCE per session (SessionStart parity;
+ *    a child session passes `agent_id`, so doctrine.py's ADR-0020 subagent rule applies) and,
+ *    on the first model call after each admission, logs the turn boundary and runs the
+ *    semantic enforcer (bounded 10 s, Claude Code's UserPromptSubmit timeout), pushing its
+ *    block as a system part. A child session gets neither: Claude Code fires no
+ *    UserPromptSubmit inside a subagent.
  * 5. `ctx.permission.hook("evaluate")`: action "skill" → delegates the user-ordered
  *    blocklist decision to hooks/scripts/skill_guard.py (the same denying gate Claude
  *    Code runs on PreToolUse(Skill), ADR-0046) and denies on its verdict. Fails OPEN on
  *    any internal error — a broken guard must never wedge skill invocation.
- * 6. `ctx.tool.hook("execute.after")`: PostToolUse parity — skill activations (the
+ * 6. `ctx.tool.hook("execute.after")`: PostToolUse parity — completed skill activations (the
  *    native `skill` tool) and retriever usage (`skill-search_search_skills` /
- *    `skill-search_get_skill`, the transform-registered effective ids) go to the ledger;
+ *    `skill-search_get_skill`, native tools because the server is registered with
+ *    `codemode: false`) go to the ledger, stamped `agent_id` inside a subagent; a refused or
+ *    failed call is skipped;
  *    a loaded skill's own "not for" lines echo back through skill_exclusions.py
  *    (ADR-0059), appended to the result's text content when the shape allows.
  *
@@ -95,7 +98,9 @@ function mcpServerConfig(): Record<string, unknown> | null {
     // field and the server then runs on the inherited process environment alone; found
     // live when the registered server fell back to the default 384-dim embedder). The
     // SKILL_OPENCODE_ROOTS pin rides .mcp.json like every other harness-root flag.
-    return { type: "local", command: ["/bin/bash", ...args], environment: row.env ?? {} };
+    // codemode: false keeps the tools on the native list (Claude Code parity): the doctrine
+    // and the ledger name `skill-search_search_skills`, which Code Mode would hide behind execute.
+    return { type: "local", command: ["/bin/bash", ...args], environment: row.env ?? {}, codemode: false };
   } catch {
     return null;
   }
@@ -170,6 +175,13 @@ function fireDetached(script: string): void {
   }
 }
 
+/** The user's own words: drops a leading `<system-context>…</system-context>` block another
+ * prompt-hook plugin (e.g. a context injector) prepended, so ranking and the ledger see the
+ * prompt Claude Code's UserPromptSubmit would carry. */
+function userText(raw: unknown): string {
+  return String(raw ?? "").replace(/^\s*<system-context>[\s\S]*?<\/system-context>\s*/, "").trim();
+}
+
 /** sessionID of an event-ish object (readonly on every OpenCode hook event). */
 function sidOf(event: any): string {
   try {
@@ -202,58 +214,79 @@ export default {
 
     // ── Per-session governance state (plugin lifetime spans sessions) ──
     const doctrineDone = new Set<string>();   // sessionID → doctrine pushed once
-    const pendingBlock = new Map<string, string>();  // sessionID → enforcer block awaiting the next model call
+    const pendingPrompts = new Map<string, string[]>();  // sessionID → prompts admitted since its last model call
+    // sessionID → parent sessionID (a subagent's child session) or null (top level). Looked up
+    // WITHOUT awaiting: awaiting ctx.session.get inside a session hook deadlocks the session
+    // (found live). The lookup starts at admission and lands before the first model call.
+    const parentOf = new Map<string, string | null>();
+    const lookUpParent = (sid: string) => {
+      if (parentOf.has(sid)) return;
+      try {
+        Promise.resolve(ctx.session.get({ sessionID: sid })).then(
+          (s: any) => parentOf.set(sid, typeof s?.parentID === "string" && s.parentID ? s.parentID : null),
+          () => { /* unknown stays unknown: governed as top level */ },
+        );
+      } catch {
+        // unknown stays unknown: governed as top level
+      }
+    };
+    /** Claude Code hook payloads carry agent_id only inside a subagent; ledger.py and
+     * doctrine.py key subagent scoping (ADR-0020) on it. */
+    const subagentField = (sid: string) => (parentOf.get(sid) ? { agent_id: sid } : {});
 
-    // ── 3. Prompt admission: ledger turn boundary + semantic enforcer ──
+    // ── 3. Prompt admission: remember the prompt, start the parent lookup ──
     await ctx.session.hook("prompt", (event: any) => {
       try {
-        const text = String(event?.prompt?.text ?? "").trim();
         const sid = sidOf(event);
+        const text = userText(event?.prompt?.text);
         if (!text || !sid) return;
-
-        // Turn boundary (ledger.py classifies UserPromptSubmit by hook_event_name).
-        runLedger({
-          hook_event_name: "UserPromptSubmit",
-          session_id: sid,
-          prompt: text,
-          harness: HARNESS,
-        });
-
-        // Semantic enforcer — bounded; null on timeout/error means NO injection
-        // (fail-open), never a blocked prompt.
-        const out = runHookJson(ENFORCER_SCRIPT, { prompt: text, session_id: sid }, 10_000);
-        const block = out?.hookSpecificOutput?.additionalContext;
-        if (typeof block === "string" && block.trim()) {
-          pendingBlock.set(sid, block.trim());
-        }
+        lookUpParent(sid);
+        pendingPrompts.set(sid, [...(pendingPrompts.get(sid) ?? []), text]);
       } catch {
         // fail-open: admission proceeds untouched
       }
     });
 
-    // ── 4. Model-call assembly: doctrine once per session + per-turn enforcer block ──
+    // ── 4. Model-call assembly: doctrine once per session + the per-turn enforcer block ──
+    // The turn is handled at its first model call, once the parent lookup has landed: a
+    // subagent's child session gets no doctrine, no menu and no turn row (Claude Code fires
+    // no UserPromptSubmit inside a subagent).
     await ctx.session.hook("context", (event: any) => {
       try {
         const sid = sidOf(event);
-        if (!sid || !Array.isArray(event?.system)) return;
+        if (!sid) return;
+        const child = !!parentOf.get(sid);
+        const system: any[] = Array.isArray(event?.system) ? event.system : [];
 
         if (!doctrineDone.has(sid)) {
           const out = runHookJson(
             DOCTRINE_SCRIPT,
-            { hook_event_name: "SessionStart", session_id: sid },
+            { hook_event_name: "SessionStart", session_id: sid, ...subagentField(sid) },
             5_000,
           );
           const doctrine = out?.hookSpecificOutput?.additionalContext;
           if (typeof doctrine === "string" && doctrine.trim()) {
-            event.system.push({ type: "text", text: doctrine.trim() });
+            system.push({ type: "text", text: doctrine.trim() });
           }
           doctrineDone.add(sid);   // pushed-or-not: never re-push within a session
         }
 
-        const block = pendingBlock.get(sid);
-        if (block) {
-          pendingBlock.delete(sid);
-          event.system.push({ type: "text", text: block });
+        const texts = pendingPrompts.get(sid);
+        if (!texts) return;
+        pendingPrompts.delete(sid);
+        if (child) return;
+
+        // Turn boundary per admitted prompt (ledger.py classifies UserPromptSubmit by
+        // hook_event_name); the menu answers the latest one, the prompt this model call serves.
+        for (const text of texts) {
+          runLedger({ hook_event_name: "UserPromptSubmit", session_id: sid, prompt: text, harness: HARNESS });
+        }
+        // Semantic enforcer — bounded; null on timeout/error means NO injection
+        // (fail-open), never a blocked prompt.
+        const out = runHookJson(ENFORCER_SCRIPT, { prompt: texts[texts.length - 1], session_id: sid }, 10_000);
+        const block = out?.hookSpecificOutput?.additionalContext;
+        if (typeof block === "string" && block.trim()) {
+          system.push({ type: "text", text: block.trim() });
         }
       } catch {
         // fail-open: the model call proceeds without governance text
@@ -293,45 +326,30 @@ export default {
         const sid = sidOf(event);
         if (!sid) return;
 
+        // A refused or failed call is not a use: Claude Code fires no PostToolUse for it
+        // (a blocklist-denied `skill` call arrives here with an error).
+        if (event?.status !== "completed" || event?.error || event?.result?.metadata?.error) return;
+        const base = { hook_event_name: "PostToolUse", session_id: sid, harness: HARNESS, ...subagentField(sid) };
+
         if (tool === "skill") {
           // Native skill activation. ledger.py's auto lane keys on tool_name + the `id`
           // input key (the OpenCode form of the Skill tool's name parameter).
-          const id = String(event?.input?.id ?? "");
-          const payload = {
-            hook_event_name: "PostToolUse",
-            session_id: sid,
-            tool_name: "skill",
-            tool_input: { id },
-            harness: HARNESS,
-          };
+          const payload = { ...base, tool_name: "skill", tool_input: { id: String(event?.input?.id ?? "") } };
           runLedger(payload);
-
-          // Exclusion echo: a loaded skill's own "not for" lines bounce back so a body
-          // that excludes the task forces an open re-rule. Appended to the result's text
-          // content only when the shape allows (kept whole, never replaced).
-          if (event?.status === "completed" && !event?.error) {
-            const echo = runExclusionsSync({ ...payload, tool_response: event?.result });
-            if (echo && Array.isArray(event?.result?.content)) {
-              event.result.content.push({ type: "text", text: echo });
-            }
+          // Exclusion echo: a loaded skill's own "not for" lines bounce back so a body that
+          // excludes the task forces an open re-rule, appended to the result (never replacing it).
+          const echo = runExclusionsSync({ ...payload, tool_response: event?.result });
+          if (echo && Array.isArray(event?.result?.content)) {
+            event.result.content.push({ type: "text", text: echo });
           }
         } else if (tool.endsWith("skill-search_search_skills")) {
-          runLedger({
-            hook_event_name: "PostToolUse", session_id: sid,
-            tool_name: tool, tool_input: {}, harness: HARNESS,
-          });
+          runLedger({ ...base, tool_name: tool, tool_input: {} });
         } else if (tool.endsWith("skill-search_get_skill")) {
-          const payload = {
-            hook_event_name: "PostToolUse",
-            session_id: sid,
-            tool_name: tool,
-            tool_input: { name: event?.input?.name },
-            harness: HARNESS,
-          };
+          const payload = { ...base, tool_name: tool, tool_input: { name: event?.input?.name } };
           runLedger(payload);   // ADR-0031 external-take leg: record the pulled name
-          if (event?.status === "completed" && !event?.error && Array.isArray(event?.result?.content)) {
-            const echo = runExclusionsSync({ ...payload, tool_response: event?.result });
-            if (echo) event.result.content.push({ type: "text", text: echo });
+          const echo = runExclusionsSync({ ...payload, tool_response: event?.result });
+          if (echo && Array.isArray(event?.result?.content)) {
+            event.result.content.push({ type: "text", text: echo });
           }
         }
         // Everything else is intentionally skipped — no ledger noise.
@@ -344,7 +362,8 @@ export default {
     return () => {
       try {
         doctrineDone.clear();
-        pendingBlock.clear();
+        pendingPrompts.clear();
+        parentOf.clear();
       } catch {
         // never throw from cleanup
       }

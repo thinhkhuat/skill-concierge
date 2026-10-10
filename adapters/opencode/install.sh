@@ -7,16 +7,22 @@
 #   2. Refuses an uncommitted version change on a git checkout (ADR-0069/0072
 #      installer discipline, fail-closed)
 #   3. Registers the plugin package path in the GLOBAL opencode.json `plugins`
-#      array — idempotent upsert, safe_write (symlink/mode-safe, backed up,
+#      array, replacing any other skill-concierge copy's entry (every copy has the
+#      plugin id "skill-concierge"; OpenCode fails all but the first), plus the
+#      skills folder below in `skills` — safe_write (symlink/mode-safe, backed up,
 #      refuses a concurrent write, preserves every unrelated key)
-#   4. Re-roots the plugin's own skills (skills/*/SKILL.md → plain names) into
-#      ~/.config/opencode/skills/ — the DSH/Cline precedent, so the index gets
-#      opencode-personal rows the enforcer can offer (content-compared; only
-#      THIS installer's previously-managed names are ever pruned — the
-#      operator's own skills there are never touched)
+#   4. Copies the plugin's own skills (skills/*/SKILL.md → plain names) into
+#      ~/.config/opencode/skill-concierge-skills/, a folder only this installer
+#      writes, so the index gets opencode-personal rows the enforcer can offer.
+#      Never ~/.config/opencode/skills: that is often a symlink to
+#      ~/.claude/skills. Copies older installers left there are removed when they
+#      still match some committed version of the repo's skill; edited ones stay.
+#      Run from a plugin-cache copy, it refuses to take over from a checkout
+#      OpenCode already runs (the cache copy is deleted on the next update).
 #   5. Fires a reindex through scripts/engine_env.py (SKILL_OPENCODE_ROOTS is
 #      pinned in .mcp.json) so the opencode-* points land
-#   6. Verifies: config parses + carries the entry, skills synced, launcher exec
+#   6. Verifies: exactly one plugin entry (this copy), skills folder registered,
+#      skills synced, launcher executable
 #
 # The MCP server is NOT written anywhere: the plugin itself registers it via
 # ctx.mcp.transform (Claude Code's .mcp.json auto-connect parity). A duplicate
@@ -64,7 +70,10 @@ echo "==> skill-concierge → OpenCode v2 sync (from: $ROOT)"
 PLUGIN_DIR="$ROOT/adapters/opencode/plugin"
 OPENCODE_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 OPENCODE_JSON="$OPENCODE_HOME/opencode.json"
-SKILLS_HOME="$OPENCODE_HOME/skills"
+# The plugin's own skills go to a folder only this installer writes, registered in opencode.json
+# `skills`. Never $OPENCODE_HOME/skills: it is often a symlink to ~/.claude/skills.
+SKILLS_HOME="$OPENCODE_HOME/skill-concierge-skills"
+LEGACY_SKILLS="$OPENCODE_HOME/skills"
 
 # ── 1. SSOT version ──────────────────────────────────────────────────────────
 VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$ROOT/.claude-plugin/plugin.json")"
@@ -98,38 +107,63 @@ fi
 mkdir -p "$OPENCODE_HOME"
 
 # ── 3. Register the plugin in the global opencode.json ──────────────────────
-# Upsert { "package": "<abs plugin dir>" } into plugins[]. Everything else is
-# preserved except the plugins array; write_registry backs up beside the file,
-# keeps the mode, and refuses a concurrent write (a live service session).
-PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$OPENCODE_JSON" "$PLUGIN_DIR" <<'PY'
+# One skill-concierge entry in `plugins` (every copy has the plugin id "skill-concierge"; OpenCode
+# fails all but the first) and the owned skills folder in `skills`. Every other key and entry is
+# preserved; write_registry backs up beside the file, keeps the mode, and refuses a concurrent
+# write (a live service session). What counts as a copy lives in oc_config.py, shared with doctor.
+PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$OPENCODE_JSON" "$PLUGIN_DIR" "$SKILLS_HOME" <<'PY'
 import json
 import sys
+from pathlib import Path
 
+import oc_config
 import safe_write
 
-cfg_path, plugin_dir = sys.argv[1], sys.argv[2]
-
-
-def entry_is_ours(e) -> bool:
-    if isinstance(e, str):
-        return e == plugin_dir
-    return isinstance(e, dict) and e.get("package") == plugin_dir
+cfg_path, plugin_dir, skills_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+cfg_dir = Path(cfg_path).parent
 
 
 def upsert(data):
-    plugins = data.setdefault("plugins", [])
+    if data.get("plugins") is None:
+        data["plugins"] = []
+    plugins = data["plugins"]
     if not isinstance(plugins, list):
         raise RuntimeError(f"plugins is {type(plugins).__name__}, not a list — fix {cfg_path} by hand")
-    if any(entry_is_ours(e) for e in plugins):
-        return
-    plugins.append({"package": plugin_dir})
+    ours = [i for i, e in enumerate(plugins) if oc_config.is_copy(e, cfg_dir)]
+    if oc_config.is_plugin_cache(plugin_dir):
+        # A versioned cache copy is deleted on the next plugin update; never let it take over
+        # from a checkout OpenCode already runs.
+        for i in ours:
+            other = oc_config.resolve(oc_config.entry_path(plugins[i]), cfg_dir)
+            if other.exists() and not oc_config.is_plugin_cache(other) and str(other) != plugin_dir:
+                raise SystemExit(f"!! OpenCode already runs skill-concierge from {other}. This copy "
+                                 f"({plugin_dir}) is a plugin cache that the next update deletes. Run "
+                                 f"{other.parent.parent.parent}/adapters/opencode/install.sh instead. "
+                                 "Nothing was changed.")
+    for i in reversed(ours[1:]):
+        print(f"    opencode.json plugins -= {oc_config.entry_path(plugins.pop(i))} (another skill-concierge copy)")
+    if ours:
+        old = plugins[ours[0]]
+        if oc_config.entry_path(old) != plugin_dir:
+            print(f"    opencode.json plugins: {oc_config.entry_path(old)} -> {plugin_dir}")
+        plugins[ours[0]] = {**(old if isinstance(old, dict) else {}), "package": plugin_dir}
+    else:
+        plugins.append({"package": plugin_dir})
+        print(f"    opencode.json plugins += {plugin_dir}")
+    if data.get("skills") is None:
+        data["skills"] = []
+    if not isinstance(data["skills"], list):
+        raise RuntimeError(f"skills is {type(data['skills']).__name__}, not a list — fix {cfg_path} by hand")
+    if Path(skills_dir) not in (oc_config.skills_entries(data, cfg_dir) or []):
+        data["skills"].append(skills_dir)
+        print(f"    opencode.json skills += {skills_dir}")
 
 
 try:
     safe_write.write_registry(cfg_path, upsert, "skill-concierge")
-    print(f"    opencode.json plugins += {plugin_dir}")
 except FileNotFoundError:
-    fresh = {"$schema": "https://opencode.ai/config.json", "plugins": [{"package": plugin_dir}]}
+    fresh = {"$schema": "https://opencode.ai/config.json", "plugins": [{"package": plugin_dir}],
+             "skills": [skills_dir]}
     safe_write.write_text(cfg_path, json.dumps(fresh, indent=2) + "\n")
     print(f"    opencode.json created with the plugin entry ({cfg_path})")
 except json.JSONDecodeError as e:
@@ -138,16 +172,17 @@ except json.JSONDecodeError as e:
     sys.exit(1)
 PY
 
-# ── 4. Re-root the plugin's own skills (DSH/Cline precedent) ────────────────
-PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT" "$SKILLS_HOME" <<'PY'
+# ── 4. Copy the plugin's own skills into the folder this installer owns ──────
+PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$ROOT" "$SKILLS_HOME" "$LEGACY_SKILLS" <<'PY'
 import json
 import shutil
 import sys
 from pathlib import Path
 
+import oc_config
 import safe_write
 
-repo, dest = Path(sys.argv[1]), Path(sys.argv[2])
+repo, dest, legacy = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 src = repo / "skills"
 if not src.is_dir():
     print("!! no skills/ dir in the repo — skipping the skills re-root", file=sys.stderr)
@@ -159,12 +194,19 @@ for d in sorted(src.iterdir()):
     if d.is_dir() and md.is_file():
         want[d.name] = md.read_text(encoding="utf-8")
 
+
+def managed_names(marker: Path) -> list | None:
+    try:
+        names = json.loads(marker.read_text(encoding="utf-8")).get("names")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return [n for n in names if isinstance(n, str) and n and "/" not in n and n not in (".", "..")] \
+        if isinstance(names, list) else None
+
+
 dest.mkdir(parents=True, exist_ok=True)
 marker = dest / ".skill-concierge-managed.json"
-try:
-    managed = set(json.loads(marker.read_text(encoding="utf-8")).get("names", []))
-except (OSError, ValueError):
-    managed = set()
+managed = set(managed_names(marker) or [])
 
 added = kept = removed = 0
 for name, body in want.items():
@@ -183,6 +225,31 @@ for name in sorted(managed - set(want)):
     removed += 1
 safe_write.write_text(marker, json.dumps({"names": sorted(managed)}, indent=2) + "\n")
 print(f"    skills re-rooted → {dest}: {added} added, {kept} kept, {removed} pruned")
+
+# Retire the copies older installers wrote into $OPENCODE_HOME/skills (often ~/.claude/skills,
+# where Claude Code then listed them as duplicate personal skills). A copy goes only when its
+# folder holds nothing but a SKILL.md equal to some version of the repo's own; an edited one stays.
+old_marker = legacy / ".skill-concierge-managed.json"
+old = managed_names(old_marker)
+if old is not None and legacy.resolve() != dest.resolve():
+    keep = []
+    for name in old:
+        d = legacy / name
+        if not d.exists():
+            continue
+        if (not d.is_symlink() and d.is_dir() and [p.name for p in d.iterdir()] == ["SKILL.md"]
+                and (d / "SKILL.md").read_text(encoding="utf-8") in oc_config.known_versions(repo, name)):
+            shutil.rmtree(d)
+            print(f"    retired old copy {d}")
+        else:
+            keep.append(name)
+            print(f"    !! left {d} in place: it is not an unedited copy of this plugin's skill "
+                  "(remove it by hand if unwanted, then remove its name from "
+                  f"{old_marker})")
+    if keep:
+        safe_write.write_text(old_marker, json.dumps({"names": keep}, indent=2) + "\n")
+    else:
+        old_marker.unlink()
 PY
 
 # ── 5. Reindex (opencode-* points; engine_env forwards .mcp.json pins) ──────
@@ -197,16 +264,22 @@ fi
 # ── 6. Verify ────────────────────────────────────────────────────────────────
 echo "==> verify:"
 VERIFY_OK=true
-if python3 - "$OPENCODE_JSON" "$PLUGIN_DIR" <<'PY'
+if PYTHONPATH="$SCRIPT_DIR" python3 - "$OPENCODE_JSON" "$PLUGIN_DIR" "$SKILLS_HOME" <<'PY'
 import json
 import sys
+from pathlib import Path
 
-cfg = json.load(open(sys.argv[1]))
-plugin_dir = sys.argv[2]
-ours = any(e == plugin_dir or (isinstance(e, dict) and e.get("package") == plugin_dir)
-           for e in cfg.get("plugins", []))
-print(f"    opencode.json carries the plugin entry: {'yes' if ours else 'NO'}")
-sys.exit(0 if ours else 1)
+import oc_config
+
+cfg_path, plugin_dir, skills_dir = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+cfg = json.load(open(cfg_path))
+cfg_dir = Path(cfg_path).parent
+copies = [oc_config.entry_path(e) for e in cfg.get("plugins") or [] if oc_config.is_copy(e, cfg_dir)]
+skills = oc_config.skills_entries(cfg, cfg_dir) or []
+ok = copies == [plugin_dir] and skills_dir in skills
+print(f"    opencode.json: plugin entries {len(copies)} (want 1, this copy), "
+      f"skills folder registered: {'yes' if skills_dir in skills else 'NO'}")
+sys.exit(0 if ok else 1)
 PY
 then :; else VERIFY_OK=false; fi
 
