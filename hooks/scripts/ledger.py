@@ -192,6 +192,10 @@ def main() -> int:
                 ev = {"t": t, "sid": sid, "ev": "get_skill",
                       "name": name if isinstance(name, str) else ""}
                 _log(ev, sub, harness)
+        elif evt == "ConciergeParentLookup":
+            # OpenCode (M7, ADR-0089): the subagent check for a session governed while it was pending
+            # has landed; child=true means a child session was governed as top level.
+            _log({"t": t, "sid": sid, "ev": "parent_lookup", "child": bool(d.get("child"))}, False, harness)
         elif evt == "ConciergeOffer":
             # ADR-0087: the Cline plugin hands back the offer row of the menu the model actually
             # saw on its first call (`seen`), or a late full-pass row kept apart as `offer_late`.

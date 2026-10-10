@@ -42,7 +42,17 @@ def _rows(tool_name: str, tmp_path: Path, is_error: bool = False) -> list[dict]:
     return [json.loads(l) for l in ledger.read_text().splitlines()] if ledger.exists() else []
 
 
-pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def _node_imports_ts() -> bool:
+    """Node 22.6+ strips TypeScript types on import; older versions error instead of skipping."""
+    node = shutil.which("node")
+    if node is None:
+        return False
+    out = subprocess.run([node, "--version"], capture_output=True, text=True).stdout.strip().lstrip("v")
+    major, minor = (int(x) for x in out.split(".")[:2])
+    return (major, minor) >= (22, 6)
+
+
+pytestmark = pytest.mark.skipif(not _node_imports_ts(), reason="needs node 22.6+ (imports .ts directly)")
 
 
 def test_a_search_skills_call_writes_a_search_row(tmp_path):
@@ -106,3 +116,9 @@ def _omp_rows(tmp_path: Path, is_error: bool) -> list[dict]:
 def test_omp_logs_a_successful_search_and_skips_a_failed_one(tmp_path):
     assert [r["ev"] for r in _omp_rows(tmp_path / "ok", False)] == ["search"]
     assert _omp_rows(tmp_path / "err", True) == []
+
+
+def test_a_landed_parent_lookup_becomes_a_parent_lookup_row(tmp_path):
+    row = _ledger({"hook_event_name": "ConciergeParentLookup", "session_id": "s", "harness": "opencode",
+                   "child": True}, tmp_path)[-1]
+    assert (row["ev"], row["sid"], row["child"], row["harness"]) == ("parent_lookup", "s", True, "opencode")

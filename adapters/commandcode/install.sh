@@ -15,12 +15,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-# A cache copy never wires a harness to itself (the 2026-10-09 OpenCode duplicate).
-case "$ROOT" in */plugins/cache/*)
-  echo "!! $ROOT is a plugin cache copy, which the next plugin update deletes; Command Code would then break." >&2
-  echo "   Clone the repo and run adapters/commandcode/install.sh from the clone. Nothing was changed." >&2
-  exit 1 ;;
-esac
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +28,13 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+# A cache copy never wires a harness to itself (the 2026-10-09 OpenCode duplicate). Checked after
+# --root and on the real path, so neither --root nor a symlink gets around it.
+case "$(cd "$ROOT" && pwd -P)" in */plugins/cache/*)
+  echo "!! $ROOT is a plugin cache copy, which the next plugin update deletes; Command Code would then break." >&2
+  echo "   Clone the repo and run adapters/commandcode/install.sh from the clone. Nothing was changed." >&2
+  exit 1 ;;
+esac
 
 echo "==> Installing skill-concierge for Command Code from: $ROOT"
 

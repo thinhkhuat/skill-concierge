@@ -59,3 +59,33 @@ def test_omp_dev_mode_keeps_one_entry_when_the_checkout_moves(tmp_path):
     _run(second, home, "omp")
     entries = _omp_entries(home)
     assert entries == [f"- {second / 'adapters' / 'omp' / 'skill-concierge.ext.ts'}"], entries
+
+
+def _run_args(installer_root: Path, home: Path, harness: str, *args: str):
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
+               SKILL_CONCIERGE_VENV=str(home / "no-venv"))
+    return subprocess.run(["bash", str(installer_root / "adapters" / harness / "install.sh"), *args],
+                          env=env, capture_output=True, text=True, timeout=180)
+
+
+@pytest.mark.parametrize("harness", ["commandcode", "dsh"])
+def test_root_pointing_at_a_cache_copy_refuses_and_a_clone_root_does_not(harness, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    clone = _tree(tmp_path / "clone" / "skill-concierge")
+    cache = _tree(home / ".claude" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "0.66.0")
+    p = _run_args(clone, home, harness, "--root", str(cache))
+    assert p.returncode != 0 and "plugin cache" in p.stderr, p.stderr
+    p = _run_args(cache, home, harness, "--root", str(clone))
+    assert "plugin cache" not in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("harness", ["cline", "commandcode", "dsh", "omp"])
+def test_a_symlink_to_a_cache_copy_refuses(harness, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    cache = _tree(home / ".claude" / "plugins" / "cache" / "skill-concierge" / "skill-concierge" / "0.66.0")
+    link = tmp_path / "looks-like-a-clone"
+    link.symlink_to(cache, target_is_directory=True)
+    p = _run(link, home, harness)
+    assert p.returncode != 0 and "plugin cache" in p.stderr, p.stdout + p.stderr

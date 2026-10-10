@@ -219,12 +219,23 @@ export default {
     // WITHOUT awaiting: awaiting ctx.session.get inside a session hook deadlocks the session
     // (found live). The lookup starts at admission and lands before the first model call.
     const parentOf = new Map<string, string | null>();
+    // Sessions governed while their lookup was pending. When the lookup lands, one ledger row says
+    // whether that session was a child after all, so analyze.py counts misgoverned child sessions
+    // (M7) instead of an upper bound.
+    const governedPending = new Set<string>();
     const lookUpParent = (sid: string) => {
       if (parentOf.has(sid)) return;
+      const landed = (parent: string | null) => {
+        parentOf.set(sid, parent);
+        if (governedPending.delete(sid)) {
+          runLedger({ hook_event_name: "ConciergeParentLookup", session_id: sid, harness: HARNESS,
+                      child: parent !== null });
+        }
+      };
       try {
         Promise.resolve(ctx.session.get({ sessionID: sid })).then(
-          (s: any) => parentOf.set(sid, typeof s?.parentID === "string" && s.parentID ? s.parentID : null),
-          () => { /* unknown stays unknown: governed as top level */ },
+          (s: any) => landed(typeof s?.parentID === "string" && s.parentID ? s.parentID : null),
+          () => landed(null),   // a failed lookup is settled as top level, never retried per prompt
         );
       } catch {
         // unknown stays unknown: governed as top level
@@ -278,6 +289,7 @@ export default {
         if (!texts) return;
         pendingPrompts.delete(sid);
         if (child) return;
+        if (lookupPending) governedPending.add(sid);
 
         // Turn boundary per admitted prompt (ledger.py classifies UserPromptSubmit by
         // hook_event_name); the menu answers the latest one, the prompt this model call serves.

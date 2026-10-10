@@ -40,7 +40,16 @@ elif name == "skill_exclusions.py":
 SCRIPTS = ["enforcer.py", "ledger.py", "skill_guard.py", "skill_exclusions.py", "doctrine.py",
            "auto_reindex.py", "auto_overrides.py", "auto_flywheel.py", "auto_promote.py"]
 
-pytestmark = pytest.mark.skipif(NODE is None, reason="node is required for the OpenCode plugin tests")
+def _node_imports_ts() -> bool:
+    """Node 22.6+ strips TypeScript types on import; older versions error instead of skipping."""
+    if NODE is None:
+        return False
+    out = subprocess.run([NODE, "--version"], capture_output=True, text=True).stdout.strip().lstrip("v")
+    return tuple(int(x) for x in out.split(".")[:2]) >= (22, 6)
+
+
+pytestmark = pytest.mark.skipif(not _node_imports_ts(),
+                                reason="needs node 22.6+ (the OpenCode plugin is imported as .ts)")
 
 
 @pytest.fixture()
@@ -127,6 +136,8 @@ def test_a_turn_governed_before_the_parent_lookup_lands_is_marked_parent_lookup_
              if r["hook_event_name"] == "UserPromptSubmit"}
     assert turns["slow"]["parent_lookup"] == "pending"   # the child was governed as top level once
     assert "parent_lookup" not in turns["s1"]
+    landed = [r for r in logged("ledger.py", wait_for=3) if r["hook_event_name"] == "ConciergeParentLookup"]
+    assert [(r["session_id"], r["child"]) for r in landed] == [("slow", True)]   # counted as misgoverned
 
 
 def test_two_prompts_before_one_model_call_both_get_turn_rows(fake):

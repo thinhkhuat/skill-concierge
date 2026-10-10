@@ -249,7 +249,7 @@ else
   # ── (b) No marketplace plugin -> dev mode (config.yml extensions entry). ──
   echo "  [•] No marketplace plugin -> dev mode (config.yml extensions entry)"
   # Dev mode writes this checkout's path into config.yml; a cache copy never does that.
-  case "$ROOT" in */plugins/cache/*)
+  case "$(cd "$ROOT" && pwd -P)" in */plugins/cache/*)
     echo "!! $ROOT is a plugin cache copy, which the next plugin update deletes; OMP would then break." >&2
     echo "   Clone the repo and run adapters/omp/install.sh from the clone. Nothing was changed." >&2
     exit 1 ;;
