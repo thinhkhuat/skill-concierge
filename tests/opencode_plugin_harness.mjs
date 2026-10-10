@@ -15,7 +15,12 @@ const ctx = {
   mcp: { transform: async (fn) => fn({ set: (name, cfg) => { servers[name] = cfg; } }) },
   session: {
     hook: async (name, fn) => { hooks[name] = fn; },
-    get: async ({ sessionID }) => ({ id: sessionID, ...(sessions[sessionID] ?? {}) }),
+    // sessions[sid].lookupMs delays the answer, so a model call can arrive before it lands (M7).
+    get: async ({ sessionID }) => {
+      const s = sessions[sessionID] ?? {};
+      if (s.lookupMs) await new Promise((r) => setTimeout(r, s.lookupMs));
+      return { id: sessionID, ...s };
+    },
   },
   permission: { hook: async (name, fn) => { hooks[name] = fn; } },
   tool: { hook: async (name, fn) => { hooks[name] = fn; } },

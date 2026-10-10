@@ -118,6 +118,17 @@ def test_subagent_child_session_gets_no_doctrine_menu_or_turn(fake):
     assert logged("doctrine.py")[0]["agent_id"] == "child"
 
 
+def test_a_turn_governed_before_the_parent_lookup_lands_is_marked_parent_lookup_pending(fake):
+    drive, logged = fake
+    drive([{"hook": "setup"}, prompt("slow", "first ask"), context("slow", pause=0),
+           prompt("s1", "second ask"), context("s1")],
+          sessions={"slow": {"parentID": "s0", "lookupMs": 400}})
+    turns = {r["session_id"]: r for r in logged("ledger.py", wait_for=2)
+             if r["hook_event_name"] == "UserPromptSubmit"}
+    assert turns["slow"]["parent_lookup"] == "pending"   # the child was governed as top level once
+    assert "parent_lookup" not in turns["s1"]
+
+
 def test_two_prompts_before_one_model_call_both_get_turn_rows(fake):
     drive, logged = fake
     out = drive([{"hook": "setup"}, prompt("s1", "first ask"), prompt("s1", "second ask"), context("s1")])

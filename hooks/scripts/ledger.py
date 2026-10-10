@@ -140,7 +140,11 @@ def main() -> int:
                 # the enforcer's `offer` event by (sid, q) — the enforcer logs q
                 # stripped, so an unstripped q here would break the join for any
                 # whitespace-bearing prompt and silently undercount hit@k.
-                _log({"t": t, "sid": sid, "ev": "turn", "q": s[:120]}, False, harness)
+                ev = {"t": t, "sid": sid, "ev": "turn", "q": s[:120]}
+                if d.get("parent_lookup") == "pending":
+                    # OpenCode: governed before its subagent check landed (M7, ADR-0089).
+                    ev["parent_lookup"] = "pending"
+                _log(ev, False, harness)
 
         elif evt == "PostToolUse":
             tool = d.get("tool_name", "")

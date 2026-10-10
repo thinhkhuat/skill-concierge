@@ -256,6 +256,9 @@ export default {
         const sid = sidOf(event);
         if (!sid) return;
         const child = !!parentOf.get(sid);
+        // The lookup has not landed: governed as top level, and the turn row says so, so the
+        // rate of possibly misgoverned child sessions is measured from real use (M7).
+        const lookupPending = !parentOf.has(sid);
         const system: any[] = Array.isArray(event?.system) ? event.system : [];
 
         if (!doctrineDone.has(sid)) {
@@ -279,7 +282,8 @@ export default {
         // Turn boundary per admitted prompt (ledger.py classifies UserPromptSubmit by
         // hook_event_name); the menu answers the latest one, the prompt this model call serves.
         for (const text of texts) {
-          runLedger({ hook_event_name: "UserPromptSubmit", session_id: sid, prompt: text, harness: HARNESS });
+          runLedger({ hook_event_name: "UserPromptSubmit", session_id: sid, prompt: text, harness: HARNESS,
+                      ...(lookupPending ? { parent_lookup: "pending" } : {}) });
         }
         // Semantic enforcer — bounded; null on timeout/error means NO injection
         // (fail-open), never a blocked prompt.

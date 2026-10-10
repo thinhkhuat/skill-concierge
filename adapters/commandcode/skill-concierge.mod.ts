@@ -4,6 +4,8 @@
  * Integrates skill-concierge with Command Code (`cmd`) as a first-class citizen:
  * 1. `transformInput`: runs the semantic enforcer on every typed user prompt,
  *    injecting the SKILL-FIRST standing mandate and ranked top-k preview.
+ *    `transformContext` does the same for prompts transformInput never sees:
+ *    print mode (`cmd -p`) and image prompts.
  * 2. Prompt telemetry: logs turn boundaries and manual `/slash` invocations to the ledger.
  * 3. Tool telemetry: observes `skill_loaded` and `tool_completed` to record skill
  *    and retriever usage in the shared invocation ledger.
@@ -122,6 +124,25 @@ function runExclusions(toolName: string, input: unknown, result: unknown): strin
   return null;
 }
 
+const HOOK_OPEN = '<hook_context source="skill-concierge">';
+// Print mode (`cmd -p`) never calls transformInput; transformContext runs before every model call in
+// both modes. inputSeen holds the prompts transformInput already governed (TUI), so they are never
+// governed twice; governed caches the enforcer output per prompt, so a tool loop runs it once.
+const inputSeen = new Set<string>();
+const governed = new Map<string, string | null>();
+let lastSid = "";
+
+function textOf(msg: any): string {
+  if (typeof msg?.content === "string") return msg.content;
+  if (!Array.isArray(msg?.content)) return "";
+  return msg.content.filter((p: any) => p?.type === "text").map((p: any) => String(p.text ?? "")).join("\n");
+}
+
+function withPrefix(msg: any, prefix: string): any {
+  if (typeof msg.content === "string") return { ...msg, content: prefix + msg.content };
+  return { ...msg, content: [{ type: "text", text: prefix }, ...msg.content] };
+}
+
 export default function (cmd: any): void {
   // ── 1. Per-turn enforcer + prompt telemetry via transformInput ──
   // Session id is captured from the ModContext (second arg) when available,
@@ -129,10 +150,11 @@ export default function (cmd: any): void {
   // pattern and restores chain-hint/ROUTE ledger linkage (ADR-0038/0042 parity).
   cmd.hooks({
     transformInput: ({ text }: { text: string }, ctx?: any) => {
-      const sid = sessionIdOf(cmd, ctx);
+      const sid = sessionIdOf(cmd, ctx) || lastSid;
       try {
         const trimmed = text.trim();
         if (!trimmed) return { action: "continue" };
+        inputSeen.add(trimmed);
 
         // Log turn boundary (slash commands too, then pass them through untouched)
         runLedger({
@@ -148,7 +170,7 @@ export default function (cmd: any): void {
         const enforcerCtx = runEnforcer(trimmed, sid);
         if (enforcerCtx && enforcerCtx.trim()) {
           // Prepend hook context so the model sees the mandate before the request
-          const transformed = `<hook_context source="skill-concierge">\n${enforcerCtx.trim()}\n</hook_context>\n\n${text}`;
+          const transformed = `${HOOK_OPEN}\n${enforcerCtx.trim()}\n</hook_context>\n\n${text}`;
           return {
             action: "transform",
             text: transformed,
@@ -158,6 +180,31 @@ export default function (cmd: any): void {
         // fail-open
       }
       return { action: "continue" };
+    },
+
+    // The same enforcer for prompts transformInput never saw (print mode, image prompts).
+    transformContext: ({ messages, state }: { messages: any[]; state?: any }, ctx?: any) => {
+      try {
+        const sid = String(state?.sessionId ?? "") || sessionIdOf(cmd, ctx);
+        if (sid) lastSid = sid;
+        let i = messages.length - 1;
+        while (i >= 0 && !(messages[i]?.role === "user" && textOf(messages[i]).trim())) i--;
+        if (i < 0) return messages;
+        const text = textOf(messages[i]).trim();
+        if (text.startsWith(HOOK_OPEN) || text.startsWith("/") || inputSeen.has(text)) return messages;
+        const key = `${sid}\u0000${text}`;
+        if (!governed.has(key)) {
+          runLedger({ hook_event_name: "UserPromptSubmit", session_id: sid, prompt: text, harness: "commandcode" });
+          governed.set(key, runEnforcer(text, sid));
+        }
+        const enforcerCtx = governed.get(key);
+        if (!enforcerCtx || !enforcerCtx.trim()) return messages;
+        const out = messages.slice();
+        out[i] = withPrefix(messages[i], `${HOOK_OPEN}\n${enforcerCtx.trim()}\n</hook_context>\n\n`);
+        return out;
+      } catch {
+        return messages; // fail-open
+      }
     },
 
     // Skill-exclusion echo (PostToolUse parity). Fires only on a skill load;
@@ -179,7 +226,7 @@ export default function (cmd: any): void {
   cmd.on("skill_loaded", ({ name }: { name: string }) => {
     runLedger({
       hook_event_name: "PostToolUse",
-      session_id: sessionIdOf(cmd),
+      session_id: sessionIdOf(cmd) || lastSid,
       tool_name: "activate_skill",
       tool_input: { name },
       harness: "commandcode",
@@ -196,7 +243,7 @@ export default function (cmd: any): void {
       ) {
         runLedger({
           hook_event_name: "PostToolUse",
-          session_id: sessionIdOf(cmd),
+          session_id: sessionIdOf(cmd) || lastSid,
           tool_name: toolName,
           tool_input: event?.input || {},
           harness: "commandcode",

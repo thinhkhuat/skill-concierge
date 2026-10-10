@@ -621,6 +621,11 @@ def main():
     print(f"events        : {len(events)}   turn-windows: {n}   manual: {len(manual)}")
     print(f"uptake        : {used}/{n}  {pct(used)}   (turn used a skill)")
     print(f"search called : {searched}/{n}  {pct(searched)}")
+    oc_turns = [e for e in events if e.get("ev") == "turn" and e.get("harness") == "opencode"]
+    if oc_turns:
+        pend = sum(1 for e in oc_turns if e.get("parent_lookup") == "pending")
+        print(f"opencode M7   : {pend}/{len(oc_turns)} turns governed before the subagent check landed "
+              "(each may be a child session governed as top level; ADR-0089)")
     print(f"dodge         : {dodge}/{n}  {pct(dodge)}   (no skill, no search)")
     print(f"substantive   : {n - dodge}/{n}  {pct(n - dodge)}   (used a skill OR searched — "
           f"ledger-side substantive compliance; transcript line-1 token = STRUCTURAL, see audit script)")

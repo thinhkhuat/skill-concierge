@@ -215,7 +215,7 @@ function runExclusions(payload: Record<string, unknown>): Promise<string | null>
 }
 
 /**
- * The ledger-shaped payload for a DSH skill load, or null for any other tool.
+ * The ledger-shaped payload for a DSH skill load or skill-search call, or null for any other tool.
  * DSH's `skill` tool (dsh-tool-skill: parameters `{name}`) maps onto the
  * Skill-tool lane; the get_skill MCP tool keeps its own name.
  */
@@ -224,6 +224,7 @@ function skillLoadPayload(exec: any): Record<string, unknown> | null {
   const args = exec?.arguments && typeof exec.arguments === "object" ? exec.arguments : {};
   if (name === "skill") return { tool_name: "Skill", tool_input: { skill: args.name } };
   if (/skill[-_]search.*get_skill$/.test(name)) return { tool_name: name, tool_input: args };
+  if (/skill[-_]search.*search_skills$/.test(name)) return { tool_name: name, tool_input: args };
   return null;
 }
 
@@ -331,6 +332,8 @@ export default function (ctx: any): void {
       const payload = { hook_event_name: "PostToolUse", session_id: sid, harness: "dsh",
                         ...(sub ? { agent_id: sid } : {}), ...load };   // ledger stamps subagent rows `sub`
       runLedger(payload);
+      // A search row only records that the MCP tool reached the model; there is no skill to echo.
+      if (/search_skills$/.test(String(load.tool_name))) return downstream;
       if (result?.isError || downstream?.kind === "block") return downstream;
       const echo = await runExclusions({ ...payload, tool_response: result?.content });
       if (!echo) return downstream;
