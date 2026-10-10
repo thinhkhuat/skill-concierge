@@ -385,3 +385,22 @@ def test_opencode_never_approves_a_permission_and_names_the_pending_one(opencode
     assert "bash" in note and "cat vendor/skill-search/x.py" in note
     assert not (work / "replied.txt").exists(), "a permission request was answered"
     assert (work / "messages.json").exists() and (work / "context.json").exists()
+
+
+def test_an_advisory_harness_still_reports_but_never_blocks(monkeypatch, capsys):
+    monkeypatch.setattr(smoke, "smoke", lambda h: ("FAIL", "no offer row", 1.0, None) if h == "codex"
+                        else ("PASS", "offer + search", 1.0, None))
+    assert smoke.main(["claude", "codex"]) == 1                       # strict by default
+    assert smoke.main(["claude", "codex", "--advisory", "codex"]) == 0
+    out = capsys.readouterr().out
+    assert "codex" in out and "FAIL" in out and "advisory: does not block" in out
+    assert "smoke: OK (advisory, not proven: codex)" in out
+    monkeypatch.setenv("SMOKE_ADVISORY", "codex,dsh")
+    assert smoke.main(["claude", "codex"]) == 0                       # the default comes from SMOKE_ADVISORY
+    assert smoke.main(["claude", "codex", "--advisory", ""]) == 1      # an explicit empty list is strict again
+
+
+def test_an_unknown_advisory_harness_is_an_error():
+    import pytest
+    with pytest.raises(SystemExit):
+        smoke.main(["claude", "--advisory", "codx"])

@@ -10,10 +10,12 @@ auto-promotion. PASS needs both rows a working install writes:
           by ledger.py, and an early-exit band never touches the index)
   search  the skill-search MCP tool reached the model and the post-tool hook logged it
 
-A missing CLI is FAIL. ZCode has no command line, so it is UNPROVEN. Exit 1 on any FAIL, or on an
-UNPROVEN harness not named in --accept-unproven. Stdlib only. Usage:
+A missing CLI is FAIL. ZCode has no command line, so it is UNPROVEN. Exit 1 on any FAIL or UNPROVEN
+harness, unless that harness is advisory: --advisory (default: $SMOKE_ADVISORY), comma-separated. An
+advisory harness still runs and still prints its FAIL or UNPROVEN row; it only stops blocking the run.
+--accept-unproven is the older name and adds to the same list. Stdlib only. Usage:
 
-  python3 scripts/smoke.py [--accept-unproven zcode] [harness ...]
+  python3 scripts/smoke.py [--advisory codex,dsh,zcode] [harness ...]
 """
 from __future__ import annotations
 
@@ -333,34 +335,42 @@ def smoke(harness: str) -> tuple[str, str, float, Path | None]:
     return status, detail, time.time() - t0, work
 
 
-def _run_all(harnesses: list[str], accepted: set[str]) -> int:
-    failed = False
+def _run_all(harnesses: list[str], advisory: set[str]) -> int:
+    failed, waived = False, []
     for h in harnesses:
         try:
             status, detail, secs, work = smoke(h)
         except Exception as e:   # one harness's surprise must not abort the table
             status, detail, secs, work = "FAIL", f"{type(e).__name__}: {e}", 0.0, None
-        bad = status == "FAIL" or (status == "UNPROVEN" and h not in accepted)
-        failed |= bad
+        if status != "PASS" and h in advisory:
+            waived.append(h)
+            detail += " (advisory: does not block)"
+        else:
+            failed |= status != "PASS"
         mark = {"PASS": "✓", "FAIL": "✗", "UNPROVEN": "?"}[status]
         print(f"  [{mark}] {h:<12} {status:<8} {secs:5.0f} s  {detail}")
         if work and status == "PASS":
             shutil.rmtree(work, ignore_errors=True)
         elif work:
             print(f"      evidence kept: {work}")
-    print("smoke: FAIL" if failed else "smoke: OK")
+    note = f" (advisory, not proven: {', '.join(waived)})" if waived else ""
+    print(("smoke: FAIL" if failed else "smoke: OK") + note)
     return 1 if failed else 0
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("harness", nargs="*", help=f"any of {', '.join(HARNESSES)} (default: all)")
-    ap.add_argument("--accept-unproven", default="", help="comma-separated harnesses allowed to stay UNPROVEN")
+    ap.add_argument("--advisory", default=os.environ.get("SMOKE_ADVISORY", ""),
+                    help="comma-separated harnesses whose FAIL or UNPROVEN does not block (default: $SMOKE_ADVISORY)")
+    ap.add_argument("--accept-unproven", default="", help="older name; adds to --advisory")
     args = ap.parse_args(argv)
     unknown = set(args.harness) - set(HARNESSES)
     if unknown:
         ap.error(f"unknown harness: {', '.join(sorted(unknown))}")
-    accepted = {h.strip() for h in args.accept_unproven.split(",") if h.strip()}
+    advisory = {h.strip() for h in f"{args.advisory},{args.accept_unproven}".split(",") if h.strip()}
+    if advisory - set(HARNESSES):
+        ap.error(f"unknown advisory harness: {', '.join(sorted(advisory - set(HARNESSES)))}")
     print("==> live smoke (one headless turn per harness)")
     previous = {}
     if threading.current_thread() is threading.main_thread():
@@ -368,7 +378,7 @@ def main(argv=None) -> int:
             if hasattr(signal, name):
                 previous[getattr(signal, name)] = signal.signal(getattr(signal, name), _exit_on_signal)
     try:
-        return _run_all(args.harness or list(HARNESSES), accepted)
+        return _run_all(args.harness or list(HARNESSES), advisory)
     finally:
         for sig, old in previous.items():
             signal.signal(sig, old)
