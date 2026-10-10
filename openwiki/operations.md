@@ -266,7 +266,7 @@ semantically current; that is what `/openwiki:wiki update` and `/graphify . --up
   ([caveats §7](../docs/caveats.md)). `package.json` carries the OMP extension hook
   (`omp.extensions`) and is versioned in lockstep even though `driftcheck` does not regex it.
 - **A repo edit does not go live by itself:** bump the manifests, push to GitHub, then
-  `/plugin update` + restart — the runtime reads a version-pinned cache. As of v0.13.1 the launcher
+  `adapters/install-all.sh` (every harness installer, then doctor) + restart — the runtime reads a version-pinned cache. As of v0.13.1 the launcher
   auto-resyncs the venv engine on an engine-code change; a **dependency** change still needs a
   `setup.sh` rerun (see [the stale-engine trap](#the-stale-engine-trap-post-update)).
 - **Drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced) checks the

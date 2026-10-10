@@ -37,6 +37,7 @@ The full tree is in the README's *Architecture* section. One line per area here;
 ```bash
 ./setup.sh                  # idempotent: venv + start the index owner + reindex + apply-overrides
 python3 scripts/doctor.py   # read-only health check (add --fix for safe repairs)
+adapters/install-all.sh     # release step, after the push: every harness installer, then doctor
 ```
 
 Run `doctor.py` (or the `skill-concierge:doctor` skill) before **and** after any change that

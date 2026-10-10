@@ -1632,12 +1632,12 @@ def check_omp():
         if enabled is False:
             findings.append(f"OMP plugin v{ver} installed but DISABLED")
         if ver and ssot and ver != ssot:
-            findings.append(f"OMP cache v{ver} != SSOT v{ssot} — run /plugin marketplace update")
+            findings.append(f"OMP cache v{ver} != SSOT v{ssot} — run adapters/omp/install.sh")
     mkt = _omp_marketplace_version()
     if mkt is None:
         findings.append("no OMP marketplace catalog clone (updates would be blind)")
     elif ssot and mkt != ssot:
-        findings.append(f"marketplace catalog stale (v{mkt} vs SSOT v{ssot})")
+        findings.append(f"marketplace catalog stale (v{mkt} vs SSOT v{ssot}) — run adapters/omp/install.sh")
     if ver:
         pinned = OMP_PLUGIN_CACHE / f"skill-concierge___skill-concierge___{ver}"
         if not pinned.is_dir():
@@ -1927,8 +1927,7 @@ def check_zcode():
                 f"the ZCode registry points at {install_path or 'an install record with no installPath'} "
                 "whose plugin manifest is unreadable or missing — re-run adapters/zcode/install.sh")
         elif cached_ver and ssot and cached_ver != ssot:
-            findings.append(f"ZCode cache v{cached_ver} != SSOT v{ssot} — update via "
-                            "Settings → Plugin Management (skill-concierge marketplace)")
+            findings.append(f"ZCode cache v{cached_ver} != SSOT v{ssot} — run adapters/zcode/install.sh")
         # Anchor the launcher check on the registry's OWN installPath when we have one — the
         # copy ZCode actually runs — rather than reconstructing a path from cached_ver, which
         # could point at a differently-named dir if the two ever disagree.

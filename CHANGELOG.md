@@ -3,6 +3,21 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.65.2] - 2026-10-10
+
+One command updates every harness after a release.
+
+### Added
+- **`adapters/install-all.sh`.** Runs every `adapters/*/install.sh`, then prints doctor's integration
+  rows. It finds installers by glob, so a new adapter is covered without editing it; one failed
+  installer does not stop the others, and the exit status is non-zero when any failed.
+
+### Fixed
+- **Doctor named a manual step that the installers already do.** A stale OMP or ZCode copy now says
+  `run adapters/omp/install.sh` or `run adapters/zcode/install.sh`, not `/plugin marketplace update`
+  or "Settings → Plugin Management". Both installers update those tools without a click (verified
+  for 0.65.0 → 0.65.1).
+
 ## [0.65.1] - 2026-10-09
 
 OpenCode v2 works end to end (ADR-0089). Thinh's OpenCode listed two `skill-concierge` server plugins, one `failed`;
