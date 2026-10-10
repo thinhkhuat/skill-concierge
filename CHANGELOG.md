@@ -3,6 +3,19 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.66.1] - 2026-10-10
+
+The installers' staging export could strand a folder or hang when a signal arrived at the wrong moment.
+
+### Fixed
+- **A kill between `mktemp` and the trap left the staging folder behind.** `adapters/lib/sync.sh` (Claude Code,
+  Codex, ZCode) and OMP's own export registered their cleanup trap after creating the folder. The trap is now set
+  first.
+- **A kill while bash forked `git archive | tar` hung the installer.** The first stage stayed blocked on a pipe the
+  shell itself held open, so cleanup never ran. Each pipeline now runs in its own subshell: 0 of 600 hangs on bash 5.3
+  and on macOS `/bin/bash` 3.2, against 8 and 10 of 400 before. This was the intermittent
+  `tests/test_installer_staging_cleanup.py` failure; evidence in `plans/reports/debugger-261010-staging-flake.md`.
+
 ## [0.66.0] - 2026-10-10
 
 A release now counts as done only when each harness has answered one real turn through the freshly installed
