@@ -74,6 +74,19 @@ the engine's own `skill-search --health`, so the two never drift.
    venv from the deployed source. For a duplicate MCP, run the printed `claude mcp remove`
    command. After any fix, **restart Claude Code** if the MCP wiring or engine changed.
 
+5. **Doctor is a precondition, not the proof.** A green doctor shows files and config exist. It does not show
+   that a harness runs the concierge: OpenCode's plugin failed to load, and Codex skipped the enforcer hook,
+   while doctor stayed green (ADR-0090). To prove a harness works, run the live smoke:
+
+   ```bash
+   python3 "$CLAUDE_PLUGIN_ROOT/scripts/smoke.py"
+   ```
+
+   It runs one real headless turn per harness and passes a harness only when its temp ledger holds an `offer`
+   row and a `search` row. It spends one model call per harness. A missing CLI is FAIL; ZCode has no command
+   line and shows UNPROVEN. A harness in `--advisory` (default `$SMOKE_ADVISORY`) still reports but does not block. Do not claim a harness works on doctor
+   alone.
+
 ## Symptom → check shortcuts
 
 - **`/mcp` shows skill-search not connected** → `Engine venv` / `MCP wiring`. Fix: run setup.
@@ -89,5 +102,9 @@ the engine's own `skill-search --health`, so the two never drift.
 - **skills you expect aren't offered / a new skill leaks its full description** → `Settings overrides`
   (now flags override **drift**). Fix: `--fix` (re-apply) — or nothing: the SessionStart
   `auto_overrides` hook self-heals the budget on drift (ADR-0025).
+
+- **Doctor is green but a harness shows no menu or no search** → run `scripts/smoke.py`. A Codex row that fails
+  with no offer row means Codex skipped a changed hook: open Codex and trust the skill-concierge hooks again
+  (`docs/caveats.md` §27).
 
 Full landmine reference: `docs/caveats.md`.

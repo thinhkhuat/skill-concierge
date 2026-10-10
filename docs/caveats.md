@@ -651,3 +651,87 @@ The first model call carries the full menu when it is ready within the 2 s, else
 - **Epoch:** Cline offer rows before and after 0.64.0 mean different things. See `docs/epoch-watch.md`, v0.64.0.
 
 **Hub host limit.** When the Cline CLI attaches to a running hub, here the VS Code extension's sidecar, the hub builds the session with `configExtensionCount: 0`, so no plugin runs. That sidecar also fails to start its plugin sandbox (`Cannot find module 'jiti'`). **Do:** run Cline with `CLINE_SESSION_BACKEND_MODE=local`, which makes the CLI run the session itself. Whether a standalone hub loads plugins is unverified.
+
+
+## §27 — Codex skips a hook whose definition changed, silently, until you trust it again (ADR-0090)
+
+**Symptom.** Codex turns carry no SKILL-FIRST menu and write no `offer` row, while `doctor` is green and the MCP tool
+works. `ledger.py` still runs, so `turn` rows keep appearing and hide the problem. Codex has not run the enforcer since
+0.59.0.
+
+**Cause.** Codex runs a plugin hook only while its definition (command, matcher, timeout) matches the hash you trusted,
+stored in `~/.codex/config.toml` under `[hooks.state]`. 0.59.0 raised the enforcer hook timeout from 5 s to 10 s
+(commit `88a01c0`), which changed the hash. Codex skips the hook and says nothing. Evidence:
+`plans/261010-1859-proof-of-life-and-release-hardening/_RESEARCH_ARTIFACTS/probe-codex.txt` (with a `python3` shim on
+PATH Codex started `ledger.py` and never `enforcer.py`; with `--dangerously-bypass-hook-trust` the enforcer ran).
+
+**Fix.** Open Codex and trust the skill-concierge hooks again. There is no command-line way to do it, and no installer
+may do it for you.
+
+**Guard.** `tests/test_hook_definitions_pinned.py` fails when any hook in `hooks/hooks.json` changes. Move its pin only
+together with a `CHANGELOG.md` line telling Codex users to trust the hooks again. `scripts/smoke.py` fails the Codex row
+when no `offer` row appears and prints this fix as its hint.
+
+## §28 — OpenCode: a fresh server connects MCP late, and `opencode run --server` can stall (ADR-0090)
+
+- **Fresh-server MCP race.** A freshly started `opencode serve` connects its MCP servers after the session's folder is
+  first used. A model call made before skill-search reports connected has no `search_skills` tool, so the turn writes an
+  `offer` row and no `search` row. `scripts/smoke.py` asks `GET /api/mcp` until skill-search is `connected`, then creates
+  the session. Long-running OpenCode services are not affected the same way. After the wait, 1 smoke run in 14 still ended
+  with the model reporting no `search_skills` tool; the cause is unproven. Re-run a red OpenCode row once before reading
+  it as a regression.
+- **`opencode run --server` stall.** It sometimes stalls before it creates a session (three stalls on 2026-10-09). The
+  HTTP API (`POST /api/session`, then `POST /api/session/<id>/prompt`) did not. **Do:** drive the HTTP API in any
+  script, as `_run_opencode` in `scripts/smoke.py` does. The smoke's server needs a free port: `SMOKE_OPENCODE_PORT`
+  (default 4473).
+- **`parent_lookup: "pending"`.** An OpenCode turn row with this field was governed before the plugin knew whether the
+  session was a subagent's. When the lookup lands, the plugin logs a `parent_lookup` row with `child` true or false, and
+  `scripts/analyze.py` prints `opencode M7`: the pending count and how many of those were child sessions governed as
+  top level. A failed lookup settles as top level. The pending count alone is an upper bound. Waiting for the lookup inside the session hook deadlocks OpenCode (ADR-0089), so
+  no wait was added.
+
+## §29 — Command Code print mode (`cmd -p`) skips `transformInput`
+
+`cmd -p` never calls a mod's `transformInput`, so a mod that governs only there runs no enforcer on headless turns and
+logs no turn (found 2026-10-06, fixed in 0.66.0). A first fix ran the enforcer in both hooks; with IDE context or
+another mod prepending text, a TUI prompt then got two turn rows and two menus. Now
+`adapters/commandcode/skill-concierge.mod.ts` governs only in `transformContext`, which runs before every model call in
+both modes, once per prompt (the menu is cached per message, so a tool loop runs the enforcer once). It leaves alone
+Command Code's own messages (`isMeta`, `isAutomated`, `isSummary`, stop-hook, scheduled and mod sources) and image-only
+prompts, and ranks on the raw typed text when IDE context is prepended. `transformInput` only logs a typed slash command
+as a manual row and records the typed text. The session id is `ctx.sessionId`, then `state.sessionId`, then the
+`run_start` event; `sessions.leafId()` is not a session id, it changes with every appended entry. **Do:** keep the
+governing in `transformContext`. Checks: `tests/test_commandcode_mod.py`, and the smoke's Command Code row (`cmd -p`).
+
+**Known limit.** A typed text is matched to the sent message by "ends with", newest first, and is used once. A
+short typed text that never reached a model call (for example a submit that failed on credits) can be matched to a
+later message that ends with the same words, and the turn is then ranked on that short text. Rare; accepted in
+0.66.0 (code review NEW-6).
+
+## §30 — The smoke must never touch live state (2026-10-10 incident)
+
+**What happened.** On 2026-10-10 smoke runs emptied the live 🔥 badges (`proven.json`) and the external-take counts
+(`external-takes.json`). Each run's empty log folder had no self-heal throttle stamps, so the session-start
+`auto_promote.py` ran and rebuilt the live digests from an empty temp ledger. Recomputed from the live ledger, 28 skills
+qualified for 🔥 and 2 external skills had takes; the live files said 0 and `{}`. They were restored the same evening
+from the live ledger. The damaged files are backed up in `~/_ARCHIVE/skill-concierge-smoke-wipe-261010/`.
+Review: `plans/reports/code-reviewer-261010-0660-review.md`.
+
+**Fixes, at the cause.**
+- `hooks/scripts/auto_promote.py` writes `proven.json` and `external-takes.json` beside the ledger it reads
+  (`LOGDIR.parent`). For the default ledger that is the durable home, so nothing changes there; a run on any other
+  ledger can never overwrite the live files.
+- `scripts/smoke.py` seeds fresh throttle stamps (`SELF_HEAL_STAMPS`) in each run's log folder, so the session-start
+  reindex, settings sync, flywheel and promotion stay idle during a smoke turn.
+
+**Do:** a hook whose output follows `SKILL_CONCIERGE_LOG` must not write global files computed from that folder's
+ledger. Any new session-start writer needs the same treatment before the smoke can run it.
+
+**Memory hooks too.** The harnesses also run other tools' hooks. Smoke turns once landed in live mnemosyne as session
+digests (`Session digest [sc-smoke-…]`). `scripts/smoke.py` now gives each run its own mnemosyne store
+(`MNEMOSYNE_DATA_DIR` and `MNEMOSYNE_HOME` point into the run's temp folder); a Claude Code smoke run after the
+change added no digest to the live store (4 before, 4 after, 2026-10-10).
+
+**Smoke prompt.** The smoke's prompt is neutral on purpose. An earlier prompt said "do not invoke any skill", which
+took the enforcer's negation exit before retrieval, so a broken index still passed. PASS now needs an offer row whose
+band is `offer`, `jev_skip`, `getaway` or `intent_skip`, the bands decided after the index lookup, with no outage fallback.

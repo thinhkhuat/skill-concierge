@@ -37,12 +37,24 @@ The full tree is in the README's *Architecture* section. One line per area here;
 ```bash
 ./setup.sh                  # idempotent: venv + start the index owner + reindex + apply-overrides
 python3 scripts/doctor.py   # read-only health check (add --fix for safe repairs)
-adapters/install-all.sh     # release step, after the push: every harness installer, then doctor
+python3 scripts/smoke.py    # live proof: one real headless turn per harness (offer row + search row)
+adapters/install-all.sh     # release step: every harness installer, then doctor, then the smoke
 ```
 
 Run `doctor.py` (or the `skill-concierge:doctor` skill) before **and** after any change that
-touches the engine, MCP wiring, or overrides. A green `status: OK` is the bar — claim "done"
-only with that proof in hand.
+touches the engine, MCP wiring, or overrides. A green `status: OK` is a precondition, not the
+proof that a harness works: `scripts/smoke.py` is ([ADR-0090](docs/adr/0090-live-smoke-is-the-release-proof.md)).
+It runs one headless turn per harness in its own temp ledger and passes only on an `offer` row (band `offer`, `jev_skip`, `getaway` or `intent_skip` with no outage fallback, so retrieval ran) **and** a
+`search` row; a missing CLI is FAIL, ZCode is UNPROVEN. A harness named in `--advisory` (default `$SMOKE_ADVISORY`) still prints its row but does not block.
+
+**Release order:** bump versions → `python3 scripts/driftcheck.py driftcheck.json` → commit →
+`adapters/install-all.sh` (installs the local commit, then runs the smoke) → push only when it ends green.
+A red smoke never reaches GitHub.
+
+**Hook definitions are pinned.** Codex skips a plugin hook whose definition changed until the user trusts
+it again, and nothing tells you. `tests/test_hook_definitions_pinned.py` fails when any hook in
+`hooks/hooks.json` changes; move its pin only with a `CHANGELOG.md` line telling Codex users to open Codex
+and trust the skill-concierge hooks again ([caveats §27](docs/caveats.md)).
 
 **Doc/version drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced). It
 checks the version across the mirror set (`plugin.json` ↔ `marketplace.json` ↔ `.codex-plugin/plugin.json` ↔ latest `CHANGELOG.md` heading ↔ `README.md` ↔ `openwiki/quickstart.md`), that

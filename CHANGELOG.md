@@ -3,6 +3,88 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.66.0] - 2026-10-10
+
+A release now counts as done only when each harness has answered one real turn through the freshly installed
+concierge ([ADR-0090](docs/adr/0090-live-smoke-is-the-release-proof.md)). Doctor checks files; the smoke checks that
+the concierge runs.
+
+**Codex: open Codex and trust the skill-concierge hooks again; Codex has skipped the changed enforcer hook since 0.59.0.**
+Codex runs a plugin hook only while its definition matches the hash you trusted. 0.59.0 raised the enforcer timeout from
+5 s to 10 s, so Codex stopped running `enforcer.py` and doctor stayed green. There is no command-line way to trust a hook.
+Nothing in this release changes a hook definition, so trusting once is enough.
+
+### Added
+- **`scripts/smoke.py`.** One live headless turn per harness, each in its own temp folder with its own
+  `SKILL_CONCIERGE_LOG`, so nothing reaches the live ledger. PASS needs an offer row whose band is `offer`,
+  `jev_skip`, `getaway` or `intent_skip` (all decided after the index lookup, so retrieval ran) with no outage fallback,
+  and a search row (`search_skills` reached the model). A turn row does not count, and an early-exit band
+  (`negation`, `harness_skip`, `selfref_skip`, `consult_route`) or an outage (`embed_timeout`, `embed_down`,
+  `qdrant_down`) fails. The prompt is neutral: an earlier
+  "do not invoke any skill" prompt took the enforcer's negation exit before retrieval, so a broken index passed.
+  A missing CLI is FAIL. ZCode has no command line
+  and reports UNPROVEN. A harness named in `--advisory` (default: `$SMOKE_ADVISORY`; `--accept-unproven` is the older
+  name) still prints its row but does not fail the run. On this machine `SMOKE_ADVISORY=codex,dsh,zcode` (Thinh's
+  order, `~/.config/harness-env.sh`) until Codex trusts the hooks again and DSH's DeepSeek key is fixed. OpenCode runs on a fresh private
+  `opencode serve` (`SMOKE_OPENCODE_PORT`, default 4473) driven over its HTTP API. Each CLI and `opencode serve` runs
+  in its own process group and is stopped as a group (SIGTERM, a grace period, SIGKILL). The smoke never approves an
+  OpenCode permission; a pending one is named in the FAIL. Each child runs without `SKILL_CONCIERGE_HARNESS`, `CLAUDECODE` and
+  `ANTHROPIC_API_KEY` (install settings stay), and on failure the
+  CLI's full output is kept in `<work>/output.txt`. Tests: `tests/test_smoke.py`.
+- **`adapters/install-all.sh` ends with the smoke.** Release order: bump versions, `driftcheck`, commit,
+  `adapters/install-all.sh` (installs the local commit, then runs the smoke), push only when it ends green.
+- **`tests/test_hook_definitions_pinned.py`.** Pins the command, matcher, type and timeout of every hook in
+  `hooks/hooks.json`. A change fails the test until the pin moves and a CHANGELOG line tells Codex users to trust the
+  hooks again. The pin hashes the whole `hooks` block, so a moved group or a new field also fails it.
+- **`tests/test_installer_cache_guard.py`, `tests/test_ledger_harness_rows.py`.** Cover the installer guard and the
+  ledger rows below.
+- **OpenCode turn rows carry `parent_lookup: "pending"`** when the turn was governed before the subagent check landed.
+  When the check lands for such a session, the plugin logs a `parent_lookup` row with `child` true or false, and
+  `scripts/analyze.py` prints `opencode M7`: how many pending turns there were and how many were child sessions
+  governed as top level. A failed lookup settles as top level.
+
+### Fixed
+- **Installers refuse a plugin-cache copy.** `adapters/cline/install.sh`, `adapters/commandcode/install.sh`,
+  `adapters/dsh/install.sh` and OMP dev mode in `adapters/omp/install.sh` exit 1 from `*/plugins/cache/*`; the next
+  plugin update deletes that copy and the harness would break. OMP dev mode now keeps one `extensions` entry when the
+  checkout moves instead of adding a second.
+  It drops only its own entry under its marker; another extension's entry under an orphan marker stays.
+- **Smoke turns stay out of live memory.** The harnesses also run mnemosyne's memory hooks, and smoke turns were saved
+  in the live store as session digests. Each smoke run now gets its own mnemosyne store (`MNEMOSYNE_DATA_DIR`,
+  `MNEMOSYNE_HOME`); a Claude Code smoke run afterwards added no digest to the live store.
+- **The cache-copy guards check the real path and `--root`.** The Command Code and DSH guards ran before `--root` was
+  parsed, so `--root` could wire a harness to a cache copy and a cache copy run with `--root <clone>` was refused. They
+  now run after argument parsing, and all four guards check the real path (`pwd -P`), so a symlink does not hide a
+  cache copy.
+- **Command Code governed a prompt twice, or not at all.** `cmd -p` never calls a mod's `transformInput`, so headless
+  turns had no offer and no turn row. With IDE context or another mod prepending text, a TUI prompt got two turn rows
+  and two menus. `adapters/commandcode/skill-concierge.mod.ts` now governs only in `transformContext` (print mode and
+  TUI alike), once per prompt. It skips Command Code's own messages (`isMeta`, `isAutomated`, `isSummary`, stop-hook,
+  scheduled and mod sources) and image-only prompts, and ranks on the raw typed text when IDE context is prepended.
+  `transformInput` only logs a manual slash row and records the typed text. The session id comes from
+  `state.sessionId` or the `run_start` event, no longer from `leafId`, which changes with every session entry. Test:
+  `tests/test_commandcode_mod.py`.
+- **DSH logged no search rows.** `adapters/dsh/skill-concierge.dsh.ts` dropped `search_skills` calls; it now forwards
+  them. DSH and OMP log no search row (or skill use) for a failed or blocked call, as Claude Code fires no PostToolUse
+  for one.
+- **Smoke runs emptied the live badges.** On 2026-10-10 smoke runs blanked the live 🔥 badges (`proven.json`) and the
+  external-take counts (`external-takes.json`). `hooks/scripts/auto_promote.py` now writes both beside the ledger it
+  reads (`LOGDIR.parent`; the default location is unchanged), and the smoke seeds fresh self-heal throttle stamps in each
+  run's log folder. `docs/caveats.md` §30.
+- **Two intermittent test failures, fixed at the cause.** `tests/test_owner_jev_relay.py` raced its fake provider (the
+  provider closed its socket after the reply was on the wire, so the client could reuse the connection first).
+  `scripts/trigger_filter.py::_enforcer` remembered "offline timeouts already set" by `id(module)`, and a freed module's
+  address is reused by the next one, so a fresh module skipped the setup. The flag now lives on the module. Evidence:
+  `plans/reports/debugger-261010-flaky-tests.md`.
+
+### Notes
+- **Codex re-trust is yours to do.** `doctor` cannot see it. The smoke's Codex row fails with a hint until you do.
+- **OpenCode fresh-server race.** A fresh `opencode serve` connects its MCP servers after the session's folder is first
+  used; a model call before that has no `search_skills` tool. The smoke waits for skill-search to report connected.
+  Long-running OpenCode services are not affected the same way. After the wait, 1 smoke run in 14 still ended with the
+  model reporting no `search_skills` tool; the cause is unproven, so re-run a red OpenCode row once.
+- **`opencode run --server` can stall** before it creates a session; the HTTP API did not (`docs/caveats.md` §28).
+
 ## [0.65.2] - 2026-10-10
 
 One command updates every harness after a release.

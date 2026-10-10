@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.65.2-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.66.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -104,6 +104,12 @@ Then **restart Claude Code** and confirm the server is live:
 ```bash
 /mcp        # should list  skill-concierge:skill-search  as connected
 ```
+
+`doctor` proves files and config exist. To prove a harness runs the concierge, run
+`python3 scripts/smoke.py`: one real headless turn per harness, each in its own temp folder and ledger, passing
+only when the run wrote both an `offer` row whose band shows retrieval ran (`offer`, `jev_skip`, `getaway` or `intent_skip`, with no outage fallback) and a `search` row (`search_skills` reached the
+model). A missing CLI is a FAIL; ZCode has no command line and shows UNPROVEN
+([ADR-0090](docs/adr/0090-live-smoke-is-the-release-proof.md)).
 
 If you previously registered a user-scope skill-search MCP, de-duplicate it so only the
 bundled one runs:
@@ -357,7 +363,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 |---------|--------------------------|---------------------|------------|
 | Claude Code | `~/.claude/skills`, `$CWD/.claude/skills`, `~/.claude/plugins/cache/**` (`personal`/`project`/`plugin`), `~/.claude/skills/synced/**` (`claude-synced`, default OFF) | `UserPromptSubmit` settings hook → `enforcer.py` + SessionStart doctrine | shared `.mcp.json` |
 | Codex | `~/.codex/skills`, `$CWD/.codex/skills`, `~/.codex/plugins/cache/**` (`codex-*`) | auto-discovered settings hooks (no `hooks` field; ADR-0033) | `.codex-plugin/mcp.json` (relative command; ADR-0035) |
-| Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformInput` (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038) | `adapters/commandcode/mcp.json` (absolute paths; ADR-0038) |
+| Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformContext`, once per prompt in print mode `cmd -p` and the TUI alike (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038, caveats §29) | `adapters/commandcode/mcp.json` (absolute paths; ADR-0038) |
 | Oh My Pi (OMP) | `~/.omp/agent/skills`, `$CWD/.omp/skills`, `~/.omp/agent/managed-skills`, `~/.omp/plugins/cache/plugins/**` (`omp-*`) | extension module `before_agent_start` (`adapters/omp/skill-concierge.ext.ts` via `package.json` `omp.extensions`; ADR-0039) | plugin `.mcp.json` imported natively (`${CLAUDE_PLUGIN_ROOT}` expanded by OMP); `adapters/omp/mcp.json` manual fallback only |
 | ZCode | `~/.zcode/skills`, `$CWD/.zcode/skills`, `$CWD/.agents/skills`, `~/.zcode/cli/plugins/cache/**` (registry-enumerated) (`zcode-*`) | **none needed** — ZCode natively runs the plugin `hooks/hooks.json` (ADR-0042) | plugin `.mcp.json` auto-connected (interpreter-form command, exec-bit-proof); `adapters/zcode/mcp.json` manual fallback only |
 | DeepSeek Harness (DSH) | `DSH_HOME/skills`, `$CWD/.dsh/skills` (`dsh-*`) | Cordis plugin `agent/pre-step` (`adapters/dsh/skill-concierge.dsh.ts`; ADR-0050) | Cordis `cordis.patch.yml` row via the `dsh-mcp-client` bridge (`mcp__skill-search__*`); `adapters/dsh/mcp.json` reference |
@@ -372,6 +378,11 @@ Claude's own account-synced skills would render as installed in a harness cache 
 `0.48.0`; `=1` (a separate, reviewed step) + a reindex adds the `claude-synced` scope
 (see AGENTS.md → Runtime flags).
 
+The Cline, Command Code, DSH and OMP (dev mode) installers write their own checkout path into the harness
+config, so they refuse to run from a plugin-cache copy (`*/plugins/cache/*`): the next plugin update deletes that
+copy. Clone the repo and run the installer from the clone
+([ADR-0090](docs/adr/0090-live-smoke-is-the-release-proof.md)).
+
 ### How a request flows
 
 SessionStart doctrine and self-heals, the per-turn `UserPromptSubmit` gate, on-demand
@@ -382,11 +393,19 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.65.2` — **published**. Per-version history, including every release since
+Current release: `0.66.0` — **published**. Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical
 reference.
+
+**Releasing and updating.** A repo edit does not reach a harness by itself. The release order is: bump the
+manifests, `python3 scripts/driftcheck.py driftcheck.json`, commit, run
+[`adapters/install-all.sh`](adapters/install-all.sh), and push only when it ends green. `install-all.sh` runs
+every `adapters/*/install.sh` (installing the local commit), then doctor, then
+[`scripts/smoke.py`](scripts/smoke.py). Doctor is a precondition; the smoke is the proof. Arguments pass through to
+the smoke, for example `--advisory zcode`; a harness named there (default: `$SMOKE_ADVISORY`) still reports its FAIL or
+UNPROVEN row but does not stop the release. Why: [ADR-0090](docs/adr/0090-live-smoke-is-the-release-proof.md).
 
 The deployment **self-guards against staleness**: doctor's `Engine freshness` check (ADR-0013)
 catches a stale MCP venv engine after a `/plugin update`, and three SessionStart hooks self-heal in
@@ -405,6 +424,7 @@ it diagnoses the venv, the local index owner, MCP wiring, overrides, and retriev
 | `/mcp` shows skill-search **not connected** (`-32000` / ENOENT) | The engine venv is missing. Run `bash setup.sh` once, then restart Claude Code. The launcher only execs a **stable** venv — it never builds on spawn ([ADR-0004](docs/adr/0004-bundled-mcp-launcher-stable-venv.md)). |
 | Two `skill-search` servers listed | A leftover user-scope MCP. Remove it: `claude mcp remove skill-search -s user`. |
 | `setup.sh` aborts at step 2 ("index owner did not come up") | See `~/.claude/skill-concierge/logs/index-owner.log` for the reason (port already held by something else, a crashed model load, …); no Docker daemon is involved. |
+| Codex turns show no SKILL-FIRST menu, `doctor` is green | Codex skips a hook whose definition changed until you trust it again. Open Codex and trust the skill-concierge hooks. [caveats §27](docs/caveats.md). |
 | Vendored eval prints recall@k ≈ `0.00` | **Not a bug.** The eval labels target a different skill universe — see [caveats §1](docs/caveats.md). |
 
 Full landmine list: [`docs/caveats.md`](docs/caveats.md).
@@ -448,6 +468,12 @@ Wired by the plugin manifest `.codex-plugin/plugin.json` and the matching MCP de
 
 Once registered once via `codex plugin marketplace add` + `codex plugin add skill-concierge@skill-concierge`, [`adapters/codex/install.sh`](adapters/codex/install.sh) keeps the cached copy in sync with this checkout's version; how it does that and what it refuses is explained in [`docs/repository-layout.md`](docs/repository-layout.md) (`adapters/`) and the installer's own header.
 
+**After an update that changes a hook:** Codex runs a plugin hook only while its definition matches the hash you
+trusted, and skips a changed one silently. Codex has skipped the changed enforcer hook since 0.59.0. Open Codex and
+trust the skill-concierge hooks again; no command line does it ([caveats §27](docs/caveats.md),
+[ADR-0090](docs/adr/0090-live-smoke-is-the-release-proof.md)). `tests/test_hook_definitions_pinned.py` makes every such
+change deliberate, and the smoke's Codex row fails with this hint until you have trusted them.
+
 **To uninstall:**
 1. Remove the plugin and its cache with Codex's own CLI: `codex plugin remove skill-concierge@skill-concierge`. The plugin's enforcement hooks are auto-discovered from the plugin, so they go with it; the installer writes no hooks file under `~/.codex/` (the repo's `.codex/hooks.json` is the openwiki commit gate, used only inside a checkout).
 2. Optionally drop the marketplace source: `codex plugin marketplace remove skill-concierge`.
@@ -460,7 +486,7 @@ Installed by [`adapters/commandcode/install.sh`](adapters/commandcode/install.sh
 
 | File | Purpose | Installer step |
 |------|---------|----------------|
-| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformInput` | (step 1) |
+| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformContext` | (step 1) |
 | `~/.commandcode/settings.json` | Hook entries (SessionStart, skill-concierge skills array) | (step 2, inline python) |
 | `~/.commandcode/mcp.json` | Skill-search MCP server (absolute paths) | (step 3, inline python) |
 | `~/.commandcode/skills/` | Skill discovery root (indexed by the engine) | set by settings.json ref |

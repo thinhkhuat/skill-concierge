@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.65.2` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md)) · OpenCode v2: native plugin ([`adapters/opencode/plugin/index.ts`](../adapters/opencode/plugin/index.ts); [ADR-0085](../docs/adr/0085-opencode-octa-harness-parity.md))
+- **Version:** `0.66.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md)) · OpenCode v2: native plugin ([`adapters/opencode/plugin/index.ts`](../adapters/opencode/plugin/index.ts); [ADR-0085](../docs/adr/0085-opencode-octa-harness-parity.md))
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -83,13 +83,17 @@ Then **restart Claude Code** and confirm the server is live:
 Or run the **`skill-concierge:setup`** skill (same bootstrap, self-verifying). If a green
 `status: OK` is not what you get, run **`skill-concierge:doctor`** (or `python3 scripts/doctor.py`)
 — it diagnoses the venv, the local index owner, MCP wiring, overrides, and retrieval health, and
-`--fix` auto-repairs the common failures. Full setup/ops detail: **[operations.md](operations.md)**.
+`--fix` auto-repairs the common failures. A green doctor shows files and config exist; to prove a harness runs the
+concierge, run `python3 scripts/smoke.py` ([operations.md](operations.md#live-proof--smokepy)). Full setup/ops
+detail: **[operations.md](operations.md)**.
 
 **In Codex** (v0.24.0+, ADR-0033): add the repo as a plugin marketplace
 (`codex plugin marketplace add https://github.com/thinhkhuat/skill-concierge.git`), install
 with `codex plugin add skill-concierge@skill-concierge`, then verify the MCP with
 `codex mcp list` (should list `skill-search`). The local index owner,
-index, and ledger are SHARED with the Claude Code install — one concierge, every harness.
+index, and ledger are SHARED with the Claude Code install — one concierge, every harness. Codex skips a plugin hook
+whose definition changed until you trust it again: after such an update, open Codex and trust the skill-concierge
+hooks ([caveats §27](../docs/caveats.md)).
 How [`adapters/codex/install.sh`](../adapters/codex/install.sh) keeps the cached copy current, and
 what it refuses to do, is explained in [operations.md](operations.md#versioning--deploy-discipline)
 and the installer's header.

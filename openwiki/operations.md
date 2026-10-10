@@ -58,6 +58,21 @@ utterances. It never builds or refreshes the keep-off map — that is consent-on
 venv or the owner from scratch — heavy bootstrap is handed off to `setup.sh`.
 [ADR-0007](../docs/adr/0007-maintenance-skills-setup-doctor.md), [ADR-0013](../docs/adr/0013-doctor-engine-freshness-check.md).
 
+## Live proof — `smoke.py`
+
+Doctor is a precondition; [`scripts/smoke.py`](../scripts/smoke.py) is the proof that a harness works
+([ADR-0090](../docs/adr/0090-live-smoke-is-the-release-proof.md)). It runs one real headless turn per harness, each in
+its own empty temp folder with its own `SKILL_CONCIERGE_LOG`, so nothing reaches the live ledger. A harness passes
+only when that ledger holds an `offer` row whose band is `offer`, `jev_skip`, `getaway` or `intent_skip` with no outage fallback (retrieval ran; an early-exit band such as `negation` fails) and a `search` row (`search_skills` reached the model);
+a `turn` row alone proves less and does not count. A missing CLI is FAIL. ZCode has no command line and is UNPROVEN.
+A harness named in `--advisory` (default `$SMOKE_ADVISORY`) still reports its row but does not block the release. OpenCode runs on a fresh private `opencode serve` (`SMOKE_OPENCODE_PORT`, default
+4473) driven over its HTTP API, and waits for skill-search to report connected first
+([caveats §28](../docs/caveats.md)). The pass rule is `verdict()` in the script, tested by
+[`tests/test_smoke.py`](../tests/test_smoke.py); this page does not repeat it.
+
+`adapters/install-all.sh` ends with the smoke, so a release is the same command every time. The smoke spends one
+model call per harness. It never touches live state: each run seeds its own throttle stamps and `auto_promote.py` writes beside the ledger it reads ([caveats §30](../docs/caveats.md)).
+
 ## Telemetry — `analyze.py`
 
 The standing per-epoch watch items (what to monitor, triggers, env-first actions) live in
@@ -265,8 +280,11 @@ semantically current; that is what `/openwiki:wiki update` and `/graphify . --up
   alone — the downstream update keys on the version, so a mismatch is a silent no-op
   ([caveats §7](../docs/caveats.md)). `package.json` carries the OMP extension hook
   (`omp.extensions`) and is versioned in lockstep even though `driftcheck` does not regex it.
-- **A repo edit does not go live by itself:** bump the manifests, push to GitHub, then
-  `adapters/install-all.sh` (every harness installer, then doctor) + restart — the runtime reads a version-pinned cache. As of v0.13.1 the launcher
+- **A repo edit does not go live by itself.** The release order is: bump the manifests →
+  `python3 scripts/driftcheck.py driftcheck.json` → commit → `adapters/install-all.sh` (every harness installer,
+  then doctor, then the live smoke; it installs the local commit) → push only when it ends green → restart. The
+  runtime reads a version-pinned cache. Why the smoke, and why the push waits:
+  [ADR-0090](../docs/adr/0090-live-smoke-is-the-release-proof.md). As of v0.13.1 the launcher
   auto-resyncs the venv engine on an engine-code change; a **dependency** change still needs a
   `setup.sh` rerun (see [the stale-engine trap](#the-stale-engine-trap-post-update)).
 - **Drift guard:** `python3 scripts/driftcheck.py driftcheck.json` (exit 0 = synced) checks the
@@ -302,6 +320,14 @@ semantically current; that is what `/openwiki:wiki update` and `/graphify . --up
   YAML parser; `doctor`'s DSH row flags a patch file DSH cannot load. Re-run the installer after
   changing it; DSH picks the plugin up at its next start
   ([ADR-0050](../docs/adr/0050-dsh-hexa-harness-parity.md) §5, ADR-0059 §4).
+- **Four installers refuse a plugin-cache copy.** Cline, Command Code, DSH and OMP (dev mode) write their own
+  checkout path into the harness config, so they exit 1 when run from `*/plugins/cache/*`; the next plugin update
+  deletes that copy. Run them from a clone
+  ([`tests/test_installer_cache_guard.py`](../tests/test_installer_cache_guard.py)).
+- **Codex skips a changed hook until you trust it again.** A hook definition change in `hooks/hooks.json` needs a
+  `CHANGELOG.md` line telling Codex users to open Codex and trust the skill-concierge hooks;
+  [`tests/test_hook_definitions_pinned.py`](../tests/test_hook_definitions_pinned.py) enforces that
+  ([caveats §27](../docs/caveats.md)).
 - **Codex and Claude Code plugin caches are also copies, refreshed only by their own installer**
   ([`adapters/codex/install.sh`](../adapters/codex/install.sh) and
   [`adapters/claude-code/install.sh`](../adapters/claude-code/install.sh)). What each does, what it
