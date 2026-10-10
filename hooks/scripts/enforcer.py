@@ -2264,7 +2264,7 @@ def _jev_route(prompt: str, transcript_path: str, sink: dict | None = None) -> d
             questions = _jev_rerank_questions(shortlist)
             if tdl - time.time() < JEV_RERANK_MIN_S:   # a doomed call would still be billed: hand over now
                 raise TimeoutError("tier time spent before the rerank")
-            rerank, _, _ = _jev_call_capped(rstate, questions, tier, key,
+            rerank, rvia, ranswered = _jev_call_capped(rstate, questions, tier, key,
                                   max(0.05, min(tier["timeout"], tdl - time.time())))
             verdict, rows, conf, best = _jev_decide(rerank, shortlist)
             if verdict == "skip" and rstate is not state:
@@ -2277,7 +2277,7 @@ def _jev_route(prompt: str, transcript_path: str, sink: dict | None = None) -> d
                                           "err": "HistorySkip", "hist": hist_ev}}
                     return {"result": None, "event": {**_jev_err("HistorySkip", t0), "model": tier["model"],
                                                       "hist": hist_ev, **src}}
-                rerank, _, _ = _jev_call_capped(state, questions, tier, key,
+                rerank, rvia, ranswered = _jev_call_capped(state, questions, tier, key,
                                       max(0.05, min(tier["timeout"], tdl - time.time())))
                 verdict, rows, conf, best = _jev_decide(rerank, shortlist)
         except (OSError, ValueError, KeyError, TypeError, IndexError, UnicodeError,
@@ -2296,7 +2296,8 @@ def _jev_route(prompt: str, transcript_path: str, sink: dict | None = None) -> d
             # which tier answered (`rmodel` = the exact id Jev returned: a new dated snapshot under the same
             # pin shows here), and the env-tunable settings, which leave no commit for the epoch windows to see
             "model": tier["model"], "rmodel": answered, "tier": i, "floor": JEV_FITS_FLOOR,
-            "to": tier["timeout"], **({"prov": tier["name"]} if "name" in tier else {}), **src,
+            # `via`/`rmodel` are the wide call's; the rerank that set the verdict reports its own here
+            "rerank": {"via": rvia, "model": ranswered}, "to": tier["timeout"], **({"prov": tier["name"]} if "name" in tier else {}), **src,
             **({"fell": fell} if fell else {}), **({"hist": hist_ev} if hist_ev else {}),
             **({"pulled": [n for (n, _d, _p) in pulled]} if pulled else {})}}
     if wide_menu is not None:   # ADR-0087 safety net: no tier finished its rerank; the wide menu stands

@@ -3,6 +3,15 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.66.3] - 2026-10-10
+
+### Fixed
+- **The Jev router event now reports the rerank call's own transport and model.** One routed turn makes two Jev
+  calls, a wide pass and a rerank, but the event's `via` and `rmodel` came from the wide call only, so a relay-versus-
+  direct switch or a new dated snapshot on the rerank was invisible. The event's new `rerank` field holds
+  `{"via", "model"}` for the rerank that set the verdict (the re-ask, when history forced one). `via` and `rmodel`
+  keep their meaning, so earlier ledger rows stay comparable. Telemetry only: routing is unchanged.
+
 ## [0.66.2] - 2026-10-10
 
 Corrects a claim made in 0.66.0: smoke turns did not fully stay out of live memory.

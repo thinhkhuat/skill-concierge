@@ -118,6 +118,20 @@ def test_a_fast_failure_moves_the_turn_to_the_next_tier(tmp_path, monkeypatch, f
     assert seen[0][1] == "ts-key" and seen[1][1] == "fw-key"
 
 
+def test_the_event_reports_the_rerank_calls_own_transport_and_model(tmp_path, monkeypatch):
+    mod = _load(tmp_path, monkeypatch, TYPESAFE_API_KEY="ts-key")
+
+    def fake(state, questions, tier, key, timeout):
+        if any(q.startswith("wide::") for q in questions):
+            return WIDE, "relay", "jev-wide-snapshot"
+        return RERANK, "direct", "jev-rerank-snapshot"
+    monkeypatch.setattr(mod, "_jev_call", fake)
+    ev = mod._jev_route("commit the work now please", "")["event"]
+    assert ev["stage"] == "full"
+    assert ev["via"] == "relay" and ev["rmodel"] == "jev-wide-snapshot"
+    assert ev["rerank"] == {"via": "direct", "model": "jev-rerank-snapshot"}
+
+
 def test_a_model_mismatch_falls_through_too(tmp_path, monkeypatch):
     mod = _bench(tmp_path, monkeypatch)
     _calls(mod, monkeypatch, {"jev-1.13.0": mod.JevModelMismatch("x"),
