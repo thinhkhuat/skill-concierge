@@ -11,6 +11,11 @@ All notable changes to **skill-concierge**. Format loosely follows
   direct switch or a new dated snapshot on the rerank was invisible. The event's new `rerank` field holds
   `{"via", "model"}` for the rerank that set the verdict (the re-ask, when history forced one). `via` and `rmodel`
   keep their meaning, so earlier ledger rows stay comparable. Telemetry only: routing is unchanged.
+- **The live smoke no longer turns a finished harness into a 0 s FAIL.** Cleanup signals each turn's process
+  group, and macOS can answer that with `PermissionError` (EPERM) for a group it will not let us signal. Only
+  `ProcessLookupError` was caught, so the error escaped and the table recorded `omp FAIL 0 s PermissionError` for
+  a turn that had run; OMP alone passed on the next run. Both signal calls in `scripts/smoke.py` now treat EPERM
+  as nothing left to stop.
 
 ## [0.66.2] - 2026-10-10
 

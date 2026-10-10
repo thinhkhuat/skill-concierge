@@ -147,7 +147,7 @@ def _stop_group(p: subprocess.Popen) -> None:
 
     try:
         os.killpg(p.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):   # macOS: EPERM for a group we may not signal
         pass
     deadline = time.time() + KILL_GRACE
     while alive() and time.time() < deadline:
@@ -155,7 +155,7 @@ def _stop_group(p: subprocess.Popen) -> None:
     if alive():
         try:
             os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
     try:
         p.wait(timeout=KILL_GRACE)

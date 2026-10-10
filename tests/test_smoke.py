@@ -406,3 +406,16 @@ def test_an_unknown_advisory_harness_is_an_error():
     import pytest
     with pytest.raises(SystemExit):
         smoke.main(["claude", "--advisory", "codx"])
+
+
+def test_stop_group_survives_a_group_it_may_not_signal(monkeypatch):
+    """macOS answers killpg with EPERM for a group it will not let us signal (zombie-only members, or a member
+    outside our reach); cleanup must not raise, or one finished harness turns into a 0 s FAIL row."""
+    p = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    p.wait()
+
+    def eperm(pgid, sig):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(smoke.os, "killpg", eperm)
+    monkeypatch.setattr(smoke, "KILL_GRACE", 0.1)
+    smoke._stop_group(p)   # must return, not raise
