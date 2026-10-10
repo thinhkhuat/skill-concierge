@@ -22,6 +22,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# A cache copy never wires a harness to itself (the 2026-10-09 OpenCode duplicate).
+case "$ROOT" in */plugins/cache/*)
+  echo "!! $ROOT is a plugin cache copy, which the next plugin update deletes; Cline would then break." >&2
+  echo "   Clone the repo and run adapters/cline/install.sh from the clone. Nothing was changed." >&2
+  exit 1 ;;
+esac
 CLINE_DIR="$HOME/.cline"
 CLINE_HOOKS="$CLINE_DIR/hooks"
 CLINE_PLUGINS="$CLINE_DIR/plugins"

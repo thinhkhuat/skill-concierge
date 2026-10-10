@@ -248,6 +248,12 @@ PY
 else
   # ── (b) No marketplace plugin -> dev mode (config.yml extensions entry). ──
   echo "  [•] No marketplace plugin -> dev mode (config.yml extensions entry)"
+  # Dev mode writes this checkout's path into config.yml; a cache copy never does that.
+  case "$ROOT" in */plugins/cache/*)
+    echo "!! $ROOT is a plugin cache copy, which the next plugin update deletes; OMP would then break." >&2
+    echo "   Clone the repo and run adapters/omp/install.sh from the clone. Nothing was changed." >&2
+    exit 1 ;;
+  esac
   if [ ! -f "$EXT_ENTRY" ]; then
     echo "  [!] Error: extension source not found at $EXT_ENTRY" >&2
     exit 1
@@ -287,6 +293,9 @@ while i < len(lines):
             out.append(lines[i + 1])
             i += 2
             found_ext = True
+        elif i + 1 < len(lines) and lines[i + 1].strip().startswith("- "):
+            # Our pair from a checkout that moved: drop it, the current entry is added below.
+            i += 2
         else:
             i += 1
         continue
