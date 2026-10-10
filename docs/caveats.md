@@ -728,9 +728,14 @@ Review: `plans/reports/code-reviewer-261010-0660-review.md`.
 ledger. Any new session-start writer needs the same treatment before the smoke can run it.
 
 **Memory hooks too.** The harnesses also run other tools' hooks. Smoke turns once landed in live mnemosyne as session
-digests (`Session digest [sc-smoke-…]`). `scripts/smoke.py` now gives each run its own mnemosyne store
-(`MNEMOSYNE_DATA_DIR` and `MNEMOSYNE_HOME` point into the run's temp folder); a Claude Code smoke run after the
-change added no digest to the live store (4 before, 4 after, 2026-10-10).
+digests (`Session digest [sc-smoke-…]`). `scripts/smoke.py` gives each run its own mnemosyne store
+(`MNEMOSYNE_DATA_DIR` and `MNEMOSYNE_HOME` point into the run's temp folder), but that only reaches hooks that read
+the environment: Codex's memory hook pins its own database path (`hooks-dev/mnemosyne/codex-memory.py`), and Codex and
+OpenCode smoke turns still landed in live memory in 0.66.0 and 0.66.1. Since 0.66.2 the smoke also sets
+`MNEMOSYNE_NO_CAPTURE=1`, which the three mnemosyne capture hooks honor (`session-digest.py`, `opencode-digest.py`,
+`codex-memory.py`); Codex, OpenCode and Cline smoke runs then added no row to the live store (36 before, 36 after).
+The 36 smoke rows written earlier were removed on 2026-10-10 with Thinh's yes (backup:
+`~/_ARCHIVE/skill-concierge-smoke-wipe-261010/mnemosyne-before-smoke-row-cleanup-261010.db`).
 
 **Smoke prompt.** The smoke's prompt is neutral on purpose. An earlier prompt said "do not invoke any skill", which
 took the enforcer's negation exit before retrieval, so a broken index still passed. PASS now needs an offer row whose

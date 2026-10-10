@@ -3,6 +3,17 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.66.2] - 2026-10-10
+
+Corrects a claim made in 0.66.0: smoke turns did not fully stay out of live memory.
+
+### Fixed
+- **Smoke turns still reached live mnemosyne through Codex and OpenCode.** 0.66.0 pointed each run's mnemosyne store
+  at its temp folder, which only reaches hooks that read the environment. Codex's memory hook pins its own database
+  path, so Codex and OpenCode smoke turns kept landing in live memory as digests. The smoke now also sets
+  `MNEMOSYNE_NO_CAPTURE=1`, which the mnemosyne capture hooks in `hooks-dev/mnemosyne` honor; Codex, OpenCode and Cline
+  smoke runs then added no row to the live store. The 36 smoke rows written before the fix were removed.
+
 ## [0.66.1] - 2026-10-10
 
 The installers' staging export could strand a folder or hang when a signal arrived at the wrong moment.

@@ -125,6 +125,9 @@ def _child_env(work: Path, **extra: str) -> dict:
     # Memory hooks the harnesses run (mnemosyne's session digest, recall) write to this run's own store,
     # not the live one: smoke turns once landed in live memory as session digests.
     env["MNEMOSYNE_DATA_DIR"] = env["MNEMOSYNE_HOME"] = str(work / "mnemosyne")
+    # Hooks that pin their own store path (Codex's memory hook) ignore the redirect above; they honor
+    # this opt-out instead (hooks-dev/mnemosyne: session-digest.py, opencode-digest.py, codex-memory.py).
+    env["MNEMOSYNE_NO_CAPTURE"] = "1"
     env.update(extra)
     return env
 

@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.66.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.66.2-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -393,7 +393,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.66.1` — **published**. Per-version history, including every release since
+Current release: `0.66.2` — **published**. Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical
