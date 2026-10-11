@@ -71,3 +71,6 @@ tmp/
 
 # opencode local harness state (e.g. .ckignore scout-block override)
 .opencode/
+
+# HarnessKit session logs — tool state, not source.
+.harnesskit/

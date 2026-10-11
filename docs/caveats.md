@@ -740,3 +740,24 @@ The 36 smoke rows written earlier were removed on 2026-10-10 with Thinh's yes (b
 **Smoke prompt.** The smoke's prompt is neutral on purpose. An earlier prompt said "do not invoke any skill", which
 took the enforcer's negation exit before retrieval, so a broken index still passed. PASS now needs an offer row whose
 band is `offer`, `jev_skip`, `getaway` or `intent_skip`, the bands decided after the index lookup, with no outage fallback.
+
+## §31 — A stale copy in an unsupported harness can downgrade the shared engine (2026-10-10 incident)
+
+**What happened.** On 2026-10-10 at 22:47:46 the index owner logged `venv stamp downgraded ('0.66.1' -> '0.29.0') by
+an older harness copy: keeping the running owner`, and doctor's "Owner log" row turned FAIL. The writer was a
+skill-concierge v0.29.0 plugin installed on 2026-08-27 in the GitHub Copilot CLI
+(`~/.copilot/installed-plugins/skill-concierge/skill-concierge`, enabled in `~/.copilot/settings.json`) and mirrored
+by VS Code (`~/Library/Application Support/Code/agentPlugins/…skill-concierge-skill-concierge/`). Copilot is none of
+the eight harnesses the installers and the smoke cover, so no release ever updated it. Its `bin/skill-search-mcp`
+predates the launcher's downgrade check, and `setup.sh` stamps the venv without one, so either can stamp an old
+version into the shared venv and reinstall the old engine. The owner's guard held: it kept serving, the stamp was back
+at 0.66.1 eight seconds later, and doctor's "Engine freshness" row stayed OK. What started the old copy at 22:47 is
+unproven.
+
+**Fix.** With Thinh's yes, both copies were archived to `~/_ARCHIVE/stale-skill-concierge-0.29.0-copilot-261010/`
+(with backups of Copilot's `config.json` and `settings.json`), the Copilot plugin was removed with
+`copilot plugin uninstall skill-concierge`, and the owner log was backed up there and truncated.
+
+**Do:** when doctor's "Owner log" row reports a downgrade, find the copy by its version:
+`grep -l '"version": "<old>"' ~/.copilot/installed-plugins/*/*/.claude-plugin/plugin.json "$HOME/Library/Application Support/Code/agentPlugins"/*/*/.claude-plugin/plugin.json`,
+then the other harness folders. Remove the copy through its harness's own command, then truncate the log.
