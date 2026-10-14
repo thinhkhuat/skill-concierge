@@ -57,12 +57,13 @@ def fake(tmp_path):
 
     def drive(calls, mod=None, env_root=True):
         """Run `calls` through the mod at `mod` (default: the checkout layout). With env_root, the
-        mod gets SKILL_CONCIERGE_ROOT; without it, only what the mod finds itself. The harness's
+        mod gets SKILL_CONCIERGE_ROOT (this fake checkout, or the path given); without it, only
+        what the mod finds itself. The harness's
         stderr (its `NOTICE:` lines) is left on drive.stderr."""
         e = {**os.environ, "STUB_LOG": str(log)}
         e.pop("SKILL_CONCIERGE_ROOT", None)
         if env_root:
-            e["SKILL_CONCIERGE_ROOT"] = str(root)
+            e["SKILL_CONCIERGE_ROOT"] = str(root if env_root is True else env_root)
         e.pop("COMMANDCODE_SESSION_ID", None)
         r = subprocess.run([NODE, str(HARNESS), str(mod or root / "adapters" / "commandcode" / MOD.name)],
                            input=json.dumps({"calls": calls}),
@@ -304,3 +305,15 @@ def test_render_carries_any_root_exactly_and_refuses_a_reworded_source():
     assert mod_root.baked_root("export default () => {}") is None
     with pytest.raises(ValueError):
         mod_root.render("const INSTALLED_ROOT = '';", "/a/clone")
+
+
+def test_a_skill_concierge_root_without_hook_scripts_falls_through_to_the_installed_root(fake, tmp_path):
+    """A set but useless env value (a moved or half-deleted clone) must not block a working install."""
+    drive, logged = fake
+    useless = tmp_path / "old-clone"
+    useless.mkdir()
+    copy = _installed_copy(tmp_path, _mod_root().render(MOD.read_text(), str(drive.root)))
+    res = drive([context([user("fix the login bug")])], mod=copy, env_root=useless)[0]
+    assert len(menus(res)) == 1
+    assert len(logged("enforcer.py", 1)) == 1
+    assert "NOTICE:" not in drive.stderr, drive.stderr
