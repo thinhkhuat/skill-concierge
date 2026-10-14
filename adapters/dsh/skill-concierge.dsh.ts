@@ -37,16 +37,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 /**
  * Resolve the plugin root directory.
  *
- * Ladder (mirrors Command Code / OMP adapters):
+ * Ladder (mirrors the OMP adapter; DSH loads this module from the checkout):
  * 1. Explicit env `SKILL_CONCIERGE_ROOT`
  * 2. Sibling directory if this module is inside the repo
- * 3. Fallback to the standard checkout path
  */
 function resolvePluginRoot(): string {
   if (process.env.SKILL_CONCIERGE_ROOT && existsSync(process.env.SKILL_CONCIERGE_ROOT)) {
@@ -55,10 +53,6 @@ function resolvePluginRoot(): string {
   const candidate = resolve(__dirname, "../..");
   if (existsSync(join(candidate, "hooks/scripts/enforcer.py"))) {
     return candidate;
-  }
-  const defaultPath = join(homedir(), "in-PROD/MY-WORKBENCH/skill-concierge");
-  if (existsSync(defaultPath)) {
-    return defaultPath;
   }
   return candidate;
 }

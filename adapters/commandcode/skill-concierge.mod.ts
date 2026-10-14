@@ -32,31 +32,30 @@
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { homedir } from "node:os";
 
-// Resolve plugin root:
+// The checkout this copy was installed from. adapters/commandcode/install.sh copies this file
+// to ~/.commandcode/mods/, where its own location says nothing about the checkout, and writes
+// the checkout path into this line as it copies (adapters/commandcode/mod_root.py). Empty here.
+const INSTALLED_ROOT = "";
+
+// Resolve plugin root, the first that holds hooks/scripts/enforcer.py:
 // 1. Explicit env `SKILL_CONCIERGE_ROOT`
-// 2. Sibling directory relative to this mod if inside the repo
-// 3. Fallback to standard checkout path
+// 2. The checkout the installer wrote into INSTALLED_ROOT
+// 3. The repo this file sits in (adapters/commandcode → ../..), when run from the checkout
+// None → "", and the mod tells the user once a session starts (see the default export).
 function resolvePluginRoot(): string {
-  if (process.env.SKILL_CONCIERGE_ROOT && existsSync(process.env.SKILL_CONCIERGE_ROOT)) {
-    return process.env.SKILL_CONCIERGE_ROOT;
+  for (const c of [process.env.SKILL_CONCIERGE_ROOT ?? "", INSTALLED_ROOT, resolve(__dirname, "../..")]) {
+    if (c && existsSync(join(c, "hooks/scripts/enforcer.py"))) return c;
   }
-  const candidate = resolve(__dirname, "../..");
-  if (existsSync(join(candidate, "hooks/scripts/enforcer.py"))) {
-    return candidate;
-  }
-  const defaultPath = join(homedir(), "in-PROD/MY-WORKBENCH/skill-concierge");
-  if (existsSync(defaultPath)) {
-    return defaultPath;
-  }
-  return candidate;
+  return "";
 }
 
 const PLUGIN_ROOT = resolvePluginRoot();
-const ENFORCER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/enforcer.py");
-const LEDGER_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/ledger.py");
-const EXCLUSIONS_SCRIPT = join(PLUGIN_ROOT, "hooks/scripts/skill_exclusions.py");
+// "" with no root, so existsSync never matches a relative path against the session's cwd.
+const script = (name: string) => (PLUGIN_ROOT ? join(PLUGIN_ROOT, "hooks/scripts", name) : "");
+const ENFORCER_SCRIPT = script("enforcer.py");
+const LEDGER_SCRIPT = script("ledger.py");
+const EXCLUSIONS_SCRIPT = script("skill_exclusions.py");
 
 // Latest id seen on ctx, state or the run_start event; the ledger rows that carry no ctx or
 // state (skill_loaded, tool_completed, a typed slash command) use it.
@@ -179,6 +178,16 @@ function withPrefix(msg: any, prefix: string): any {
 }
 
 export default function (cmd: any): void {
+  if (!PLUGIN_ROOT) {
+    // Every handler below would no-op without a word: say so once, where the user sees it.
+    try {
+      cmd.ui?.notify?.("skill-concierge: cannot find its checkout (hooks/scripts/enforcer.py), so it "
+        + "does nothing this session. Re-run adapters/commandcode/install.sh from your clone, or set "
+        + "SKILL_CONCIERGE_ROOT to it.");
+    } catch {
+      // fail-open
+    }
+  }
   cmd.hooks({
     // transformInput does not govern: it hands transformContext the raw typed text (IDE context
     // or another mod may prepend text to the stored message) and logs a typed slash command.

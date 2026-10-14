@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.68.3-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.68.4-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -426,7 +426,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.68.3` — **published**. Per-version history, including every release since
+Current release: `0.68.4` — **published**. Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical
@@ -519,7 +519,7 @@ Installed by [`adapters/commandcode/install.sh`](adapters/commandcode/install.sh
 
 | File | Purpose | Installer step |
 |------|---------|----------------|
-| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformContext` | (step 1) |
+| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformContext`; a copy that carries the checkout path in its `INSTALLED_ROOT` line, so rerun the installer after you move the clone | (step 1) |
 | `~/.commandcode/settings.json` | Hook entries (SessionStart, skill-concierge skills array) | (step 2, inline python) |
 | `~/.commandcode/mcp.json` | Skill-search MCP server (absolute paths) | (step 3, inline python) |
 | `~/.commandcode/skills/` | Skill discovery root (indexed by the engine) | set by settings.json ref |

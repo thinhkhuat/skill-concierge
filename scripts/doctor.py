@@ -1758,35 +1758,68 @@ def check_codex():
                       "descriptor and hooks present",
             "fix": None, "version": cached_ver, "plugin_installed": plugin_installed}
 
+def _cc_mod_root():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "mod_root", ROOT / "adapters" / "commandcode" / "mod_root.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def check_commandcode():
     """Command Code harness install state — mod + settings + MCP surface (ADR-0038).
 
     Command Code integrates skill-concierge through a TypeScript mod, SessionStart hooks,
     and an MCP server entry — all installed by adapters/commandcode/install.sh into
     ~/.commandcode/. There is no version manifest or plugin cache; the installed mod
-    references the dev path (or $SKILL_CONCIERGE_ROOT) directly. Three presence signals:
+    carries the checkout path it was installed from (its INSTALLED_ROOT line,
+    adapters/commandcode/mod_root.py). Three presence signals:
       1. mod file at ~/.commandcode/mods/skill-concierge.ts
       2. SessionStart hooks in ~/.commandcode/settings.json referencing skill-concierge
       3. MCP skill-search entry in ~/.commandcode/mcp.json
-    WARN-only — absent Command Code is one row, never a failure.
+    WARN for a gap, and absent Command Code is one WARN row. FAIL only when the installed
+    mod's root cannot reach hooks/scripts/enforcer.py: that mod runs and does nothing.
     """
     if not CCMD_DIR.exists():
         return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
                 "detail": "commandcode: not installed (no ~/.commandcode) — optional harness, no action needed",
                 "fix": None}
     findings = []
+    unreachable = None
     # 1. Mod presence
     if not CCMD_MOD.exists():
         findings.append("no skill-concierge mod at ~/.commandcode/mods/skill-concierge.ts")
     else:
         # The installer COPIES the mod, so a repo change (e.g. the 0.49.0 exclusion echo) never
         # reaches Command Code until install.sh reruns — a stale copy is silent otherwise.
+        # The copy carries its checkout path, so compare against this checkout's file rendered
+        # for that path, and check the path still reaches the hook scripts (GitHub issue #1:
+        # a copy that resolved its root to $HOME passed every byte check and spawned nothing).
         src = ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts"
         try:
-            if src.exists() and CCMD_MOD.read_bytes() != src.read_bytes():
+            mod_root = _cc_mod_root()
+            installed = CCMD_MOD.read_text(encoding="utf-8")
+            baked = mod_root.baked_root(installed)
+            reaches = lambda r: bool(r) and (Path(r) / "hooks" / "scripts" / "enforcer.py").is_file()
+            # The mod's own order: SKILL_CONCIERGE_ROOT, then the root the installer wrote.
+            resolves = reaches(os.environ.get("SKILL_CONCIERGE_ROOT", "")) or reaches(baked)
+            if baked is None and not resolves:
+                # The pre-fix ladder's last resort was one maintainer's checkout path.
+                unreachable = ("the installed mod predates its INSTALLED_ROOT line and, without "
+                               "SKILL_CONCIERGE_ROOT, finds no hook scripts outside the maintainer's "
+                               "checkout — re-run adapters/commandcode/install.sh from your clone")
+            elif baked is None:
+                findings.append("installed mod predates its INSTALLED_ROOT line (a stale copy) — "
+                                "re-run adapters/commandcode/install.sh")
+            elif not resolves:
+                unreachable = (f"the installed mod cannot reach hooks/scripts/enforcer.py under "
+                               f"{baked or '(no installed root)'}, so it does nothing in Command Code "
+                               "— re-run adapters/commandcode/install.sh from your clone")
+            elif src.exists() and installed != mod_root.render(src.read_text(encoding="utf-8"), baked):
                 findings.append("installed mod differs from adapters/commandcode/skill-concierge.mod.ts "
                                 "(a stale copy) — re-run adapters/commandcode/install.sh")
-        except OSError:
+        except (OSError, UnicodeDecodeError, ValueError):
             pass
     # 2. SessionStart hooks referencing skill-concierge: our marker string inside a hook command
     settings = None
@@ -1842,6 +1875,9 @@ def check_commandcode():
                     "skills dir, e.g. to ~/.claude/_quarantine/")
         except OSError:
             continue
+    if unreachable:
+        return {"id": "commandcode", "label": "Command Code integration", "status": FAIL,
+                "detail": "; ".join([unreachable, *findings]), "fix": None}
     if findings:
         return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None}

@@ -44,15 +44,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { homedir } from "node:os";
 
 /** Harness stamp every spawned hook script runs under. */
 const HARNESS = "opencode";
 
-// Resolve plugin root — identical ladder to the OMP / Command Code adapters:
+// Resolve plugin root — the OMP adapter's ladder (OpenCode loads this module from the checkout):
 // 1. Explicit env `SKILL_CONCIERGE_ROOT`
 // 2. The repo checkout this module lives in (adapters/opencode/plugin → ../../..)
-// 3. The standard workbench checkout
 function resolvePluginRoot(): string {
   if (process.env.SKILL_CONCIERGE_ROOT && existsSync(process.env.SKILL_CONCIERGE_ROOT)) {
     return process.env.SKILL_CONCIERGE_ROOT;
@@ -60,10 +58,6 @@ function resolvePluginRoot(): string {
   const candidate = resolve(__dirname, "../../..");
   if (existsSync(join(candidate, "hooks/scripts/enforcer.py"))) {
     return candidate;
-  }
-  const defaultPath = join(homedir(), "in-PROD/MY-WORKBENCH/skill-concierge");
-  if (existsSync(defaultPath)) {
-    return defaultPath;
   }
   return candidate;
 }

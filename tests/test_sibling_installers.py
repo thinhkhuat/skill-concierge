@@ -15,10 +15,12 @@ installers were replaced with the pre-fix (5e9fe05) content exercises the regres
 is named for. The two closing tests (Cline, DSH) are smoke coverage for adapters this file does
 not own — they are expected to pass unchanged against both the old and the new checkout, since
 neither adapter's script differs between the two."""
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -495,6 +497,8 @@ def test_apostrophe_and_double_quote_in_root_path(tmp_path):
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "hooks" / "scripts").mkdir(parents=True)
+    (root / "hooks" / "scripts" / "enforcer.py").touch()
     (root / "bin").mkdir()
     launcher = root / "bin" / "skill-search-mcp"
     launcher.touch()
@@ -528,6 +532,8 @@ def test_commandcode_verify_failure_exits_nonzero(tmp_path):
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "hooks" / "scripts").mkdir(parents=True)
+    (root / "hooks" / "scripts" / "enforcer.py").touch()
     # No bin/skill-search-mcp created — the MCP launcher check must fail verify.
     home = tmp_path / "home"
     home.mkdir()
@@ -597,18 +603,20 @@ def test_commandcode_malformed_mcp_json_stops_before_any_write(tmp_path):
     assert not (cmd / "mods" / "skill-concierge.ts").exists(), "the mod must not be installed"
 
 
-# The project-scope override path is keyed on a fixed slug for this one machine's checkout
-# location, independent of --root, so a fixture only needs to place the file at that fixed
-# path under the redirected $HOME to exercise it.
-_PROJECT_SLUG = "users-thinhkhuat-in-prod-my-workbench-skill-concierge"
+# The project-scope override lives in projects/<slug of the root's physical path>, the name
+# Command Code gives that checkout's project dir (adapters/commandcode/project_slug.py).
+def _project_slug(root):
+    r = subprocess.run([sys.executable, str(ROOT / "adapters" / "commandcode" / "project_slug.py"),
+                        str(root)], capture_output=True, text=True, check=True)
+    return r.stdout.strip()
 
 
 @pytest.mark.parametrize("target,content", [
     ("mcp.json", "[]"),
     ("mcp.json", '{"mcpServers": null}'),
     ("settings.json", "[]"),
-    (f"projects/{_PROJECT_SLUG}/mcp.json", "[]"),
-    (f"projects/{_PROJECT_SLUG}/mcp.json", '{"mcpServers": null}'),
+    ("projects/{slug}/mcp.json", "[]"),
+    ("projects/{slug}/mcp.json", '{"mcpServers": null}'),
 ])
 def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target, content):
     """Valid JSON of the wrong shape (a top-level array, or a null where an object is
@@ -629,7 +637,7 @@ def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target,
     home = tmp_path / "home"
     cmd = home / ".commandcode"
     cmd.mkdir(parents=True)
-    target_path = cmd / target
+    target_path = cmd / target.format(slug=_project_slug(root))
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(content)
 
@@ -672,7 +680,7 @@ def test_commandcode_nested_wrong_shape_leaves_every_file_byte_identical(tmp_pat
     mcp = cmd / "mcp.json"
     mcp_good = json.dumps({"mcpServers": {"keep": "me"}})
     mcp.write_text(mcp_good)
-    project_dir = cmd / "projects" / _PROJECT_SLUG
+    project_dir = cmd / "projects" / _project_slug(root)
     project_dir.mkdir(parents=True)
     project_mcp = project_dir / "mcp.json"
     project_mcp_good = json.dumps({"mcpServers": {"also-keep": "me"}})
@@ -700,6 +708,8 @@ def test_commandcode_write_keeps_a_symlinked_settings_json_a_symlink_and_a_0600_
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "hooks" / "scripts").mkdir(parents=True)
+    (root / "hooks" / "scripts" / "enforcer.py").touch()
     (root / "bin").mkdir()
     launcher = root / "bin" / "skill-search-mcp"
     launcher.touch()
@@ -789,3 +799,109 @@ def test_dsh_installer_tolerates_an_apostrophe_in_root_path(tmp_path):
     assert "SyntaxError" not in (r.stdout + r.stderr)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "No DSH profiles found" in (r.stdout + r.stderr)
+
+
+# ── GitHub issue #1 (Command Code): the installed mod copy must reach its checkout ──────────
+
+def _commandcode_root(tmp_path, name="repo", hooks=True):
+    root = tmp_path / name
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    (root / "bin").mkdir()
+    (root / "bin" / "skill-search-mcp").touch()
+    (root / "bin" / "skill-search-mcp").chmod(0o755)
+    if hooks:
+        (root / "hooks" / "scripts").mkdir(parents=True)
+        (root / "hooks" / "scripts" / "enforcer.py").touch()
+    return root
+
+
+def _run_commandcode(tmp_path, root, home):
+    return subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                          env=installer_env(tmp_path, home), capture_output=True, text=True, timeout=120)
+
+
+def test_commandcode_installed_mod_carries_its_checkout_root(tmp_path):
+    root = _commandcode_root(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    r = _run_commandcode(tmp_path, root, home)
+    assert r.returncode == 0 and "verify: OK" in r.stdout, r.stdout + r.stderr
+    assert "mod reaches its hook scripts: yes" in r.stdout, r.stdout
+    installed = (home / ".commandcode" / "mods" / "skill-concierge.ts").read_text()
+    src = (root / "adapters" / "commandcode" / "skill-concierge.mod.ts").read_text()
+    assert f"const INSTALLED_ROOT = {json.dumps(str(root))};" in installed
+    diff = [(a, b) for a, b in zip(src.splitlines(), installed.splitlines()) if a != b]
+    assert diff == [('const INSTALLED_ROOT = "";', f"const INSTALLED_ROOT = {json.dumps(str(root))};")]
+
+
+def test_commandcode_refuses_a_root_without_hook_scripts_before_any_write(tmp_path):
+    """The byte check alone passed an installed copy that could not find its hooks (issue #1).
+    A root without them is refused before the mod or any config file is written."""
+    root = _commandcode_root(tmp_path, hooks=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    r = _run_commandcode(tmp_path, root, home)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no hooks/scripts/enforcer.py under" in r.stderr and "Nothing was changed" in r.stderr, r.stderr
+    assert not (home / ".commandcode").exists() or not any((home / ".commandcode").rglob("*.*")), \
+        "nothing may be written for a root the mod could not use"
+
+
+def test_commandcode_project_override_follows_the_root_not_one_machine(tmp_path):
+    """The local-scope MCP override goes to the project dir Command Code keeps for THIS root."""
+    root = _commandcode_root(tmp_path, name="MyClone")
+    home = tmp_path / "home"
+    project = home / ".commandcode" / "projects" / _project_slug(root)
+    project.mkdir(parents=True)
+    r = _run_commandcode(tmp_path, root, home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    mcp = json.loads((project / "mcp.json").read_text())
+    assert mcp["mcpServers"]["skill-search"]["command"] == f"{root}/bin/skill-search-mcp"
+
+
+# Command Code's own copy of the library, found from its `cmd` launcher (<pkg>/dist/index.mjs).
+_CMD = shutil.which("cmd")
+_SLUGIFY = (Path(os.path.realpath(_CMD)).parent.parent / "node_modules" / "@sindresorhus" / "slugify"
+            / "index.js") if _CMD else None
+if _SLUGIFY is not None and not _SLUGIFY.is_file():
+    _SLUGIFY = None
+
+
+@pytest.mark.skipif(_SLUGIFY is None or shutil.which("node") is None,
+                    reason="needs Command Code's own @sindresorhus/slugify and node")
+def test_project_slug_matches_command_codes_own_slugify():
+    paths = ["/Users/someone/in-PROD/MY-WORKBENCH/skill-concierge", "/home/a/MyClone",
+             "/private/var/folders/x/T/sc_smoke-commandcode.ab12", "/tmp/root's \"repo\"",
+             "/Users/a/APIsV2/XMLHttpRequest2Go", "/srv/R&D/Code 42/__x__", "/a/b-/--c"]
+    js = ("const s = (await import(process.argv[1])).default;"
+          "process.stdout.write(JSON.stringify(JSON.parse(process.argv[2]).map(p => s(p))));")
+    r = subprocess.run(["node", "--input-type=module", "-e", js, _SLUGIFY.as_uri(), json.dumps(paths)],
+                       capture_output=True, text=True, check=True)
+    spec = importlib.util.spec_from_file_location(
+        "project_slug", ROOT / "adapters" / "commandcode" / "project_slug.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert [mod.slug(p) for p in paths] == json.loads(r.stdout)
+
+
+def test_zcode_mcp_fallback_points_at_this_checkouts_launcher(tmp_path):
+    repo = _make_repo(tmp_path, "repo", "2.0.0")
+    deployed = (tmp_path / "home" / ".zcode" / "cli" / "plugins" / "cache" /
+                "skill-concierge" / "skill-concierge" / "1.9.0")
+    home = _seed_zcode_home(tmp_path, installed_version="1.9.0", install_path=deployed)
+    (deployed / ".claude-plugin").mkdir(parents=True)
+    (deployed / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "1.9.0"}))
+    (repo / "adapters" / "zcode").mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "adapters" / "zcode" / "mcp.json", repo / "adapters" / "zcode" / "mcp.json")
+    config = home / ".zcode" / "cli" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"mcp": {"servers": {}}}))
+    r = _run_zcode(tmp_path, repo, home, "--mcp-fallback")
+    assert r.returncode == 0, r.stdout + r.stderr
+    server = json.loads(config.read_text())["mcp"]["servers"]["skill-search"]
+    assert server["args"] == [f"{repo}/bin/skill-search-mcp"]
+    assert server["env"]["SKILL_TRIGGERS"] == f"{home}/.claude/skill-concierge/triggers.json"

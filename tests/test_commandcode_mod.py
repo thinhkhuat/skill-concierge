@@ -55,13 +55,20 @@ def fake(tmp_path):
     for name in SCRIPTS:
         (root / "hooks" / "scripts" / name).write_text(STUB)
 
-    def drive(calls):
-        e = {**os.environ, "STUB_LOG": str(log), "SKILL_CONCIERGE_ROOT": str(root)}
+    def drive(calls, mod=None, env_root=True):
+        """Run `calls` through the mod at `mod` (default: the checkout layout). With env_root, the
+        mod gets SKILL_CONCIERGE_ROOT; without it, only what the mod finds itself. The harness's
+        stderr (its `NOTICE:` lines) is left on drive.stderr."""
+        e = {**os.environ, "STUB_LOG": str(log)}
+        e.pop("SKILL_CONCIERGE_ROOT", None)
+        if env_root:
+            e["SKILL_CONCIERGE_ROOT"] = str(root)
         e.pop("COMMANDCODE_SESSION_ID", None)
-        r = subprocess.run([NODE, str(HARNESS), str(root / "adapters" / "commandcode" / MOD.name)],
+        r = subprocess.run([NODE, str(HARNESS), str(mod or root / "adapters" / "commandcode" / MOD.name)],
                            input=json.dumps({"calls": calls}),
                            capture_output=True, text=True, timeout=120, env=e)
         assert r.returncode == 0, r.stderr
+        drive.stderr = r.stderr
         return json.loads(r.stdout)
 
     def logged(name, expect=0):
@@ -76,6 +83,7 @@ def fake(tmp_path):
         time.sleep(0.4)
         return read()
 
+    drive.root = root
     return drive, logged
 
 
@@ -228,3 +236,71 @@ def test_caches_are_bounded(fake):
     drive([context([first])] + others + [context([first])])
     prompts = [r["prompt"] for r in logged("enforcer.py", 67)]
     assert prompts.count("the first prompt") == 2, "the oldest cached prompt must be evicted after 64 newer ones"
+
+
+# ── The installed copy (GitHub issue #1) ──────────────────────────────────────────────────────
+# install.sh copies the mod to ~/.commandcode/mods/, where `__dirname` says nothing about the
+# checkout. The copy must find its hook scripts from the root the installer writes into it.
+
+def _mod_root():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "mod_root", ROOT / "adapters" / "commandcode" / "mod_root.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _installed_copy(tmp_path, text):
+    mods = tmp_path / "home" / ".commandcode" / "mods"
+    mods.mkdir(parents=True)
+    dst = mods / "skill-concierge.ts"
+    dst.write_text(text)
+    return dst
+
+
+def test_installed_copy_runs_the_enforcer_without_skill_concierge_root(fake, tmp_path):
+    drive, logged = fake
+    copy = _installed_copy(tmp_path, _mod_root().render(MOD.read_text(), str(drive.root)))
+    res = drive([context([user("fix the login bug")])], mod=copy, env_root=False)[0]
+    assert len(menus(res)) == 1 and "MENU for: fix the login bug" in menus(res)[0]
+    assert [r["prompt"] for r in logged("enforcer.py", 1)] == ["fix the login bug"]
+    assert "NOTICE:" not in drive.stderr, drive.stderr
+
+
+def test_installed_copy_without_a_root_says_so_and_spawns_nothing(fake, tmp_path):
+    drive, logged = fake
+    copy = _installed_copy(tmp_path, MOD.read_text())   # not rendered: INSTALLED_ROOT is ""
+    msgs = [user("fix the login bug")]
+    res = drive([context(msgs)], mod=copy, env_root=False)[0]
+    assert res == msgs, "with no root the mod must pass the prompt through untouched"
+    assert "NOTICE: skill-concierge: cannot find its checkout" in drive.stderr, drive.stderr
+    assert logged("enforcer.py") == [] and logged("ledger.py") == []
+
+
+def test_skill_concierge_root_still_wins_over_the_installed_root(fake, tmp_path):
+    """Both roots work; their enforcers log under different names, so the order is observable."""
+    drive, logged = fake
+    baked = tmp_path / "baked"
+    (baked / "hooks" / "scripts").mkdir(parents=True)
+    for name in SCRIPTS:
+        (baked / "hooks" / "scripts" / name).write_text(
+            STUB.replace("name = os.path.basename(__file__)", "name = 'baked-' + os.path.basename(__file__)"))
+    copy = _installed_copy(tmp_path, _mod_root().render(MOD.read_text(), str(baked)))
+    drive([context([user("fix the login bug")])], mod=copy, env_root=True)
+    assert len(logged("enforcer.py", 1)) == 1, "SKILL_CONCIERGE_ROOT must be tried first"
+    assert logged("baked-enforcer.py") == []
+    drive([context([user("fix the login bug")])], mod=copy, env_root=False)
+    assert len(logged("baked-enforcer.py", 1)) == 1, "without the env var, the installed root runs"
+
+
+def test_render_carries_any_root_exactly_and_refuses_a_reworded_source():
+    mod_root = _mod_root()
+    for root in ["/a/clone", "/tmp/root's \"repo\"", "C:\\Users\\x\\sc", "/home/người/sc"]:
+        out = mod_root.render(MOD.read_text(), root)
+        assert mod_root.baked_root(out) == root
+        assert out.count("\n") == MOD.read_text().count("\n"), "render changes one line, adds none"
+    assert mod_root.baked_root(MOD.read_text()) == ""
+    assert mod_root.baked_root("export default () => {}") is None
+    with pytest.raises(ValueError):
+        mod_root.render("const INSTALLED_ROOT = '';", "/a/clone")

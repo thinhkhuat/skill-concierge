@@ -6,6 +6,7 @@
 //   {"event": "<name>", "payload": {...}}      an agent event on the mod bus (run_start, skill_loaded, ...)
 // stdout: one JSON array, one entry per call: the hook's return value (null for events).
 // `cmd.sessions.leafId()` answers a fresh tree-entry id on every call, like Command Code's.
+// `cmd.ui.notify(message)` writes `NOTICE: <message>` to stderr, one line per notice.
 // usage: node commandcode_mod_harness.mjs <skill-concierge.mod.ts>
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -20,6 +21,7 @@ const cmd = {
   hooks: (h) => Object.assign(hooks, h),
   on: (name, fn) => { (handlers[name] ??= []).push(fn); },
   sessions: { leafId: () => `tree-entry-${++leaf}` },
+  ui: { notify: (message) => process.stderr.write(`NOTICE: ${message}\n`) },
 };
 mod(cmd);
 

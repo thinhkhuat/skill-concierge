@@ -2,7 +2,8 @@
 # skill-concierge — Command Code installer / synchronizer (ADR-0038).
 #
 # Idempotently wires skill-concierge into Command Code (`cmd`) on this machine:
-# 1. Installs the Mod adapter into ~/.commandcode/mods/skill-concierge.ts
+# 1. Installs the Mod adapter into ~/.commandcode/mods/skill-concierge.ts, with this checkout's
+#    path written into its INSTALLED_ROOT line (adapters/commandcode/mod_root.py)
 # 2. Configures SessionStart hooks in ~/.commandcode/settings.json
 # 3. Configures extra skills location in ~/.commandcode/settings.json
 # 4. Configures skill-search MCP server in ~/.commandcode/mcp.json
@@ -42,7 +43,8 @@ CMD_DIR="$HOME/.commandcode"
 MODS_DIR="$CMD_DIR/mods"
 SETTINGS_FILE="$CMD_DIR/settings.json"
 MCP_FILE="$CMD_DIR/mcp.json"
-REPO_PROJECT_SLUG="users-thinhkhuat-in-prod-my-workbench-skill-concierge"
+# Command Code keeps a project's local-scope files in projects/<slug of its physical cwd>.
+REPO_PROJECT_SLUG="$(python3 "$SCRIPT_DIR/project_slug.py" "$ROOT")"
 LOCAL_PROJECT_DIR="$CMD_DIR/projects/$REPO_PROJECT_SLUG"
 
 # ── 0. Preflight: every JSON file this run rewrites must parse AND have the
@@ -91,12 +93,13 @@ MOD_DST="$MODS_DIR/skill-concierge.ts"
 # preflight above but wrong at a NESTED level (e.g. "hooks.SessionStart": null, or an entry
 # whose own "hooks" list holds something that is not an object) can no longer crash mid-run
 # after earlier steps already wrote their part.
-PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" <<'PY'
+PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
+import mod_root
 import safe_write
 
 root = sys.argv[1]
@@ -219,7 +222,10 @@ try:
                         if has_project else None)
     if not mod_src.is_file():
         raise FileNotFoundError(f"mod source not found at {mod_src}")
-    mod_bytes = mod_src.read_bytes()
+    if not (Path(root) / "hooks/scripts/enforcer.py").is_file():
+        raise FileNotFoundError(f"no hooks/scripts/enforcer.py under {root}: the mod would do nothing")
+    # The copy leaves the checkout, so it carries the checkout path (mod_root.py).
+    mod_bytes = mod_root.render(mod_src.read_text(encoding="utf-8"), root).encode("utf-8")
 except Exception as e:
     print(f"  [!] computing the new configuration failed: {e}", file=sys.stderr)
     print("  [!] Nothing was changed. Fix or move the file(s) above, then re-run.", file=sys.stderr)
@@ -241,24 +247,36 @@ PY
 
 # ── 5. Verify (ZCode parity: adapters/zcode/install.sh §6) ──────────────────
 echo "==> verify:"
-python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" <<'PYEOF'
+PYTHONPATH="$SCRIPT_DIR" python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
+
+import mod_root
 root = Path(sys.argv[1])
 mod_src = root / "adapters/commandcode/skill-concierge.mod.ts"
 mod_dst = Path(sys.argv[2])
 settings_path = Path(sys.argv[3])
 mcp_path = Path(sys.argv[4])
 bad = False
-# 5a. Mod present and byte-identical to this checkout's file (the enforcer/ledger
-#     scripts drift check in ZCode is manual; here we ensure the shipped
-#     mod — the in-generation enforcement organ — matches what we installed).
+# 5a. Mod present and identical to this checkout's file rendered for this root (the
+#     enforcer/ledger scripts drift check in ZCode is manual; here we ensure the shipped
+#     mod — the in-generation enforcement organ — matches what we installed), and the root
+#     it carries reaches the hook scripts. Byte identity alone passed a copy that resolved
+#     its root to $HOME and spawned nothing (GitHub issue #1).
 try:
-    if mod_dst.read_text(encoding="utf-8") == mod_src.read_text(encoding="utf-8"):
-        print("    mod byte-identical to this checkout's file: yes")
+    installed = mod_dst.read_text(encoding="utf-8")
+    if installed == mod_root.render(mod_src.read_text(encoding="utf-8"), str(root)):
+        print("    mod identical to this checkout's file, rendered for this root: yes")
     else:
         print("    !! mod differs from this checkout's file — reinstall or re-run this script", flush=True)
+        bad = True
+    baked = mod_root.baked_root(installed)
+    if baked and (Path(baked) / "hooks/scripts/enforcer.py").is_file():
+        print(f"    mod reaches its hook scripts: yes ({baked})")
+    else:
+        print(f"    !! mod cannot reach hooks/scripts/enforcer.py under {baked or '(no root)'} "
+              "— it would do nothing in Command Code", flush=True)
         bad = True
 except Exception as e:
     print(f"    !! mod read failed: {e}", flush=True)
@@ -308,7 +326,7 @@ if bad:
     sys.exit(1)
 print("    verify: OK")
 PYEOF
-# Doctor's harness-specific row (WARN-only, so we surface it but don't fail on it).
+# Doctor's harness-specific row, shown for information; verify above already decided the exit code.
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Command Code integration" || true
 echo "==> Done. Installed mod + SessionStart hooks + MCP wiring verified."
 echo "    Restart/Reload Command Code to load the new mod (mod loads at session start)."

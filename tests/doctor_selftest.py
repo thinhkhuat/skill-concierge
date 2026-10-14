@@ -439,6 +439,7 @@ def _selftest():
     # Two outcomes: absent CC -> WARN "not installed"; all surface present -> OK.
     _saved_ccmd = {k: _g[k] for k in ("CCMD_DIR", "CCMD_MOD", "CCMD_SETTINGS", "CCMD_MCP",
                                       "_CCMD_SETTINGS_HOOK_MARKER", "CCMD_SKILLS_ROOTS")}
+    _saved_cc_env = os.environ.pop("SKILL_CONCIERGE_ROOT", None)   # the mod (and doctor) try it first
     try:
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -453,7 +454,12 @@ def _selftest():
             _g["CCMD_DIR"].mkdir(parents=True)
             (_g["CCMD_DIR"] / "mods").mkdir()
             _mod_src = ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts"
-            _g["CCMD_MOD"].write_bytes(_mod_src.read_bytes())   # an installed copy == the repo adapter
+            # An installed copy is the repo adapter with its checkout path written in (install.sh).
+            _cc_checkout = base / "checkout"
+            (_cc_checkout / "hooks" / "scripts").mkdir(parents=True)
+            (_cc_checkout / "hooks" / "scripts" / "enforcer.py").touch()
+            _cc_installed = _cc_mod_root().render(_mod_src.read_text(encoding="utf-8"), str(_cc_checkout))
+            _g["CCMD_MOD"].write_text(_cc_installed, encoding="utf-8")
             _g["CCMD_SETTINGS"].write_text(json.dumps({
                 "hooks": {
                     "PreToolUse": [{"hooks": []}],
@@ -468,9 +474,30 @@ def _selftest():
             assert row["status"] == OK, row
             # Negative control: a stale copy of the mod (the installer COPIES it) -> WARN naming it.
             _g["CCMD_MOD"].write_text("export default function(cmd) { /* an older mod */ }")
+            row = check_commandcode()   # pre-fix copy, no SKILL_CONCIERGE_ROOT: the issue #1 state
+            assert row["status"] == FAIL and "predates its INSTALLED_ROOT line" in row["detail"], row
+            os.environ["SKILL_CONCIERGE_ROOT"] = str(_cc_checkout)
+            try:
+                row = check_commandcode()   # ...which the env var still rescues: only stale
+                assert row["status"] == WARN and "stale copy" in row["detail"], row
+            finally:
+                os.environ.pop("SKILL_CONCIERGE_ROOT", None)
+            # Negative control (GitHub issue #1): a copy whose root has no hook scripts runs and does
+            # nothing in Command Code -> FAIL. The unrendered repo file and a moved checkout both are.
+            _g["CCMD_MOD"].write_text(_mod_src.read_text(encoding="utf-8"), encoding="utf-8")
             row = check_commandcode()
-            assert row["status"] == WARN and "stale copy" in row["detail"], row
-            _g["CCMD_MOD"].write_bytes(_mod_src.read_bytes())
+            assert row["status"] == FAIL and "(no installed root)" in row["detail"], row
+            _g["CCMD_MOD"].write_text(_cc_mod_root().render(_mod_src.read_text(encoding="utf-8"),
+                                                            str(base / "moved")), encoding="utf-8")
+            row = check_commandcode()
+            assert row["status"] == FAIL and "cannot reach hooks/scripts/enforcer.py" in row["detail"], row
+            # ...unless SKILL_CONCIERGE_ROOT reaches a checkout: the mod tries it first.
+            os.environ["SKILL_CONCIERGE_ROOT"] = str(_cc_checkout)
+            try:
+                assert check_commandcode()["status"] != FAIL
+            finally:
+                os.environ.pop("SKILL_CONCIERGE_ROOT", None)
+            _g["CCMD_MOD"].write_text(_cc_installed, encoding="utf-8")
             # Negative control: an event outside CC's four (PreCompact is what the palate
             # writer copies in from Claude) -> WARN naming it.
             _g["CCMD_SETTINGS"].write_text(json.dumps({
@@ -506,6 +533,8 @@ def _selftest():
             assert row["status"] == OK, row
     finally:
         _g.update(_saved_ccmd)
+        if _saved_cc_env is not None:
+            os.environ["SKILL_CONCIERGE_ROOT"] = _saved_cc_env
     # DSH patch-file shapes DSH cannot load (both shipped before 0.49.0) vs the fixed shape.
     _broken = "# header\n[]\n# skill-concierge skill-search MCP server\n- id: skill-concierge\n  name: x\n"
     _bd = " | ".join(_dsh_patch_defects(_broken))

@@ -33,12 +33,11 @@
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { homedir } from "node:os";
 
-// Resolve plugin root — identical ladder to the Command Code adapter:
+// Resolve plugin root — the Command Code adapter's ladder without its installed root (OMP loads
+// this module from inside its tree: the plugin cache or the checkout):
 // 1. Explicit env `SKILL_CONCIERGE_ROOT`
 // 2. Sibling directory relative to this module if inside the repo
-// 3. Fallback to the standard checkout path
 function resolvePluginRoot(): string {
   if (process.env.SKILL_CONCIERGE_ROOT && existsSync(process.env.SKILL_CONCIERGE_ROOT)) {
     return process.env.SKILL_CONCIERGE_ROOT;
@@ -46,10 +45,6 @@ function resolvePluginRoot(): string {
   const candidate = resolve(__dirname, "../..");
   if (existsSync(join(candidate, "hooks/scripts/enforcer.py"))) {
     return candidate;
-  }
-  const defaultPath = join(homedir(), "in-PROD/MY-WORKBENCH/skill-concierge");
-  if (existsSync(defaultPath)) {
-    return defaultPath;
   }
   return candidate;
 }

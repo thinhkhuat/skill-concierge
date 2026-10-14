@@ -3,6 +3,25 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.68.4] - 2026-10-14
+
+### Fixed
+- **Command Code works on any machine without `SKILL_CONCIERGE_ROOT`** ([#1](https://github.com/thinhkhuat/skill-concierge/issues/1)).
+  The installer copies the mod to `~/.commandcode/mods/`, where the copy resolved its root to `$HOME` or to one
+  maintainer's checkout path, so on every other machine it ran no enforcer, ledger or exclusion echo, and said nothing.
+  The installer now writes the checkout path into the copy's `INSTALLED_ROOT` line (`adapters/commandcode/mod_root.py`).
+  The mod tries `SKILL_CONCIERGE_ROOT`, then that line, then its own location, and shows a notice in Command Code when
+  none holds `hooks/scripts/enforcer.py`. Rerun `adapters/commandcode/install.sh` after you move your clone.
+- **Install verify and doctor catch a mod that cannot reach its hooks.** The installer refuses a root without
+  `hooks/scripts/enforcer.py` before writing anything, and verify fails when the installed copy's root cannot reach it.
+  Doctor's Command Code row is FAIL in that case, including a pre-fix copy with no `SKILL_CONCIERGE_ROOT`; before, both
+  checks compared bytes only and passed.
+- **The Command Code project folder follows your clone.** The local MCP override went to a folder named after one
+  machine's path; `adapters/commandcode/project_slug.py` now names it with Command Code's own slug rules.
+- **No adapter names one machine's checkout.** The DSH, OMP and OpenCode adapters drop the same hardcoded fallback, and
+  ZCode's `--mcp-fallback` writes this checkout's launcher and your home's triggers path. `tests/test_no_personal_paths.py`
+  fails if such a path returns to shipped code.
+
 ## [0.68.3] - 2026-10-12
 
 ### Changed

@@ -149,14 +149,18 @@ PY
 
 # ── 5. Optional manual MCP fallback merge ────────────────────────────────────
 if [ "$MCP_FALLBACK" = "1" ]; then
-  PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT/adapters/zcode/mcp.json" "$CONFIG_FILE" <<'PY'
+  PYTHONPATH="$SCRIPT_DIR/../lib" python3 - "$ROOT/adapters/zcode/mcp.json" "$CONFIG_FILE" "$ROOT" <<'PY'
 import json, shutil, sys, time
 from pathlib import Path
 
 import safe_write
 
-src, cfg_path = Path(sys.argv[1]), Path(sys.argv[2])
+src, cfg_path, root = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 server = json.loads(src.read_text(encoding="utf-8"))["mcpServers"]["skill-search"]
+# The descriptor's launcher and triggers paths are the maintainer's; this machine uses its own.
+server["args"] = [f"{root}/bin/skill-search-mcp"]
+if "SKILL_TRIGGERS" in server.get("env", {}):
+    server["env"]["SKILL_TRIGGERS"] = str(Path.home() / ".claude/skill-concierge/triggers.json")
 if not cfg_path.exists():
     print(f"!! No ZCode config at {cfg_path} — nothing to merge into", file=sys.stderr)
     sys.exit(1)
