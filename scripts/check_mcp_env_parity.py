@@ -19,9 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # (descriptor, keys whose value may differ from .mcp.json, note on a key .mcp.json lacks)
 DESCRIPTORS = [
     (".codex-plugin/mcp.json", (), " — the Claude file is the source of truth"),
-    # Command Code and OMP expand the standard path rather than a literal ${HOME}.
-    ("adapters/commandcode/mcp.json", ("SKILL_SERVER_RECORDS",), ""),
-    ("adapters/omp/mcp.json", ("SKILL_SERVER_RECORDS",), ""),
+    ("adapters/commandcode/mcp.json", (), ""),
+    ("adapters/omp/mcp.json", (), ""),
     ("adapters/zcode/mcp.json", (), ""),
     ("adapters/dsh/mcp.json", (), ""),
 ]

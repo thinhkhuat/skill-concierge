@@ -252,6 +252,9 @@ plugin), and (b) put it in `~/.claude/settings.json` env → `os.environ` → `m
 wins over `.mcp.json` regardless of the whitelist. The machine-local `SKILL_TRIGGERS` path (the
 gitignored ~733K `eval/triggers.json`) lives in settings.json env for exactly this reason —
 absent elsewhere it degrades gracefully to description+body. [ADR-0026](adr/0026-llm-utterance-trigger-layer.md), CHANGELOG [0.16.1].
+*Since 0.68.5:* `.mcp.json` pins `SKILL_TRIGGERS` and `SKILL_SERVER_RECORDS` as `${HOME}/…`, not one machine's
+absolute path, so the forwarded value is right on every machine; every reader expands `${HOME}` (the engine,
+`scripts/build_triggers.py`, doctor).
 
 ## §15 — Plugin skill `name:` fields are bare
 

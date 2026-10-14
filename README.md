@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.68.4-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.68.5-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -396,7 +396,7 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 |---------|--------------------------|---------------------|------------|
 | Claude Code | `~/.claude/skills`, `$CWD/.claude/skills`, `~/.claude/plugins/cache/**` (`personal`/`project`/`plugin`), `~/.claude/skills/synced/**` (`claude-synced`, default OFF) | `UserPromptSubmit` settings hook → `enforcer.py` + SessionStart doctrine | shared `.mcp.json` |
 | Codex | `~/.codex/skills`, `$CWD/.codex/skills`, `~/.codex/plugins/cache/**` (`codex-*`) | auto-discovered settings hooks (no `hooks` field; ADR-0033) | `.codex-plugin/mcp.json` (relative command; ADR-0035) |
-| Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformContext`, once per prompt in print mode `cmd -p` and the TUI alike (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038, caveats §29) | `adapters/commandcode/mcp.json` (absolute paths; ADR-0038) |
+| Command Code | `~/.commandcode/skills`, `$CWD/.commandcode/skills` (`commandcode-*`) | mod adapter `transformContext`, once per prompt in print mode `cmd -p` and the TUI alike (`adapters/commandcode/skill-concierge.mod.ts`; ADR-0038, caveats §29) | `~/.commandcode/mcp.json`, written by `install.sh` with this checkout's launcher (`adapters/commandcode/mcp.json` is a reference; ADR-0038) |
 | Oh My Pi (OMP) | `~/.omp/agent/skills`, `$CWD/.omp/skills`, `~/.omp/agent/managed-skills`, `~/.omp/plugins/cache/plugins/**` (`omp-*`) | extension module `before_agent_start` (`adapters/omp/skill-concierge.ext.ts` via `package.json` `omp.extensions`; ADR-0039) | plugin `.mcp.json` imported natively (`${CLAUDE_PLUGIN_ROOT}` expanded by OMP); `adapters/omp/mcp.json` manual fallback only |
 | ZCode | `~/.zcode/skills`, `$CWD/.zcode/skills`, `$CWD/.agents/skills`, `~/.zcode/cli/plugins/cache/**` (registry-enumerated) (`zcode-*`) | **none needed** — ZCode natively runs the plugin `hooks/hooks.json` (ADR-0042) | plugin `.mcp.json` auto-connected (interpreter-form command, exec-bit-proof); `adapters/zcode/mcp.json` manual fallback only |
 | DeepSeek Harness (DSH) | `DSH_HOME/skills`, `$CWD/.dsh/skills` (`dsh-*`) | Cordis plugin `agent/pre-step` (`adapters/dsh/skill-concierge.dsh.ts`; ADR-0050) | Cordis `cordis.patch.yml` row via the `dsh-mcp-client` bridge (`mcp__skill-search__*`); `adapters/dsh/mcp.json` reference |
@@ -426,7 +426,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.68.4` — **published**. Per-version history, including every release since
+Current release: `0.68.5` — **published**. Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical

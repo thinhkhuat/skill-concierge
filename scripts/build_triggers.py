@@ -29,7 +29,8 @@ from skill_search import ports  # noqa: E402  (needs ROOT on sys.path first)
 # Canonical utterance corpus lives in the OPERATOR home (0.37.0: single copy — the repo
 # is public, the corpus is personal; the pre-0.37.0 ROOT/eval default is retired).
 _TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
-OUT = Path(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE)))
+# .mcp.json pins "${HOME}/..."; expand it as the engine does (server.py _LLM_TRIG_PATH).
+OUT = Path(os.path.expandvars(os.environ.get("SKILL_TRIGGERS", str(_TRIGGERS_DURABLE))))
 QDRANT = ports.qdrant_url(default_port=6333).rstrip("/")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 

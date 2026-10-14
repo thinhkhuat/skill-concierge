@@ -904,4 +904,3 @@ def test_zcode_mcp_fallback_points_at_this_checkouts_launcher(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     server = json.loads(config.read_text())["mcp"]["servers"]["skill-search"]
     assert server["args"] == [f"{repo}/bin/skill-search-mcp"]
-    assert server["env"]["SKILL_TRIGGERS"] == f"{home}/.claude/skill-concierge/triggers.json"

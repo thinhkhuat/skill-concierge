@@ -3,6 +3,18 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.68.5] - 2026-10-14
+
+### Fixed
+- **The shipped MCP descriptors no longer name one machine's home directory.** `.mcp.json` and the Codex, Command Code,
+  OMP, ZCode and DSH descriptors pinned `SKILL_TRIGGERS` and `SKILL_SERVER_RECORDS` to `/Users/thinhkhuat/…`, and every
+  reindex path forwards those values, so on any other machine the engine looked for its trigger corpus and wrote its
+  server records under a home that does not exist. They now pin `${HOME}/…`, which the engine expands itself; the pin
+  stays, so doctor still reads the records folder the server writes (caveats §17). `scripts/build_triggers.py` and
+  doctor expand `${HOME}` the same way. The adapter descriptors' launcher path is a `/path/to/skill-concierge`
+  placeholder: their installers write the real one. Same paths as before on the maintainer's machine; the index is
+  unchanged. `tests/test_no_personal_paths.py` now also covers these JSON files.
+
 ## [0.68.4] - 2026-10-14
 
 ### Fixed

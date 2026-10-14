@@ -118,7 +118,7 @@ DSH_TUI_PATCH = DSH_DIR / "profiles" / "tui" / "cordis.patch.yml"
 # revalidation defect D4).
 _TRIGGERS_DURABLE = Path.home() / ".claude" / "skill-concierge" / "triggers.json"
 _trig_env = os.environ.get("SKILL_TRIGGERS")
-TRIGGERS = Path(_trig_env) if _trig_env else (
+TRIGGERS = Path(os.path.expandvars(_trig_env)) if _trig_env else (
     _TRIGGERS_DURABLE if _TRIGGERS_DURABLE.exists() else ROOT / "eval" / "triggers.json")
 COLLECTION = os.environ.get("SKILL_COLLECTION", "claude_skills")
 MULTIVECTOR = os.environ.get("SKILL_MULTIVECTOR", "1") != "0"   # multi-vector trigger layer (default on)

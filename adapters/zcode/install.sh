@@ -157,10 +157,8 @@ import safe_write
 
 src, cfg_path, root = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 server = json.loads(src.read_text(encoding="utf-8"))["mcpServers"]["skill-search"]
-# The descriptor's launcher and triggers paths are the maintainer's; this machine uses its own.
+# The descriptor's launcher is a placeholder; this machine runs this checkout's.
 server["args"] = [f"{root}/bin/skill-search-mcp"]
-if "SKILL_TRIGGERS" in server.get("env", {}):
-    server["env"]["SKILL_TRIGGERS"] = str(Path.home() / ".claude/skill-concierge/triggers.json")
 if not cfg_path.exists():
     print(f"!! No ZCode config at {cfg_path} — nothing to merge into", file=sys.stderr)
     sys.exit(1)
