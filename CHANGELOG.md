@@ -31,6 +31,13 @@ All notable changes to **skill-concierge**. Format loosely follows
 
 ### Fixed
 
+- **Doctor's own self-test is hermetic for the Command Code row again.** `check_commandcode` reads the package-clone
+  root from `CCMD_REGISTRY`, which is derived from `CCMD_DIR` at import time; the self-test re-pointed `CCMD_DIR` but
+  not `CCMD_REGISTRY`, so the row kept reading the machine's real `~/.commandcode/mods/.registry`. On any machine that
+  took the package route, the fixture's own drop-in plus the live clone made the row WARN however the fixture was
+  built, and `scripts/doctor.py --selftest` failed for reasons that had nothing to do with the code under test. The
+  fixture now re-points the registry too, and pins the three shapes: drop-in only → OK, package clone only → OK, both →
+  the double-governance finding.
 - **The installer no longer lets two mod routes govern every prompt twice.** `cmd mods add -g thinhkhuat/skill-concierge`
   clones the repo under `~/.commandcode/mods/.registry` and loads the mods declared in `package.json`
   `commandcode.mods`; the drop-in copies `install.sh` wrote beside that clone registered the SAME mods a second time,

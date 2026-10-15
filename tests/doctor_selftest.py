@@ -438,7 +438,8 @@ def _selftest():
     # --- Command Code harness check (ADR-0038): fixture-driven, never touches the real ~/.commandcode ---
     # Two outcomes: absent CC -> WARN "not installed"; all surface present -> OK.
     _saved_ccmd = {k: _g[k] for k in ("CCMD_DIR", "CCMD_MOD", "CCMD_SETTINGS", "CCMD_MCP",
-                                      "_CCMD_SETTINGS_HOOK_MARKER", "CCMD_SKILLS_ROOTS")}
+                                      "CCMD_REGISTRY", "_CCMD_SETTINGS_HOOK_MARKER",
+                                      "CCMD_SKILLS_ROOTS")}
     _saved_cc_env = os.environ.pop("SKILL_CONCIERGE_ROOT", None)   # the mod (and doctor) try it first
     try:
         with tempfile.TemporaryDirectory() as d:
@@ -447,6 +448,12 @@ def _selftest():
             _g["CCMD_MOD"] = _g["CCMD_DIR"] / "mods" / "skill-concierge.ts"
             _g["CCMD_SETTINGS"] = _g["CCMD_DIR"] / "settings.json"
             _g["CCMD_MCP"] = _g["CCMD_DIR"] / "mcp.json"
+            # The package-clone root is derived from CCMD_DIR at import time, so it has to be
+            # re-pointed here as well: `_ccmd_package_mod` rglobs it, and while it still named the
+            # machine's real ~/.commandcode/mods/.registry this check read LIVE state — its own
+            # fixture could not isolate it, and a machine with a `cmd mods add` clone (every machine
+            # that took the package route) made the row WARN however the fixture was built.
+            _g["CCMD_REGISTRY"] = _g["CCMD_DIR"] / "mods" / ".registry"
             # Command Code absent entirely -> WARN "commandcode: not installed", never FAIL.
             row = check_commandcode()
             assert row["status"] == WARN and "not installed" in row["detail"], row
@@ -472,6 +479,31 @@ def _selftest():
             }))
             row = check_commandcode()
             assert row["status"] == OK, row
+            # The package route (`cmd mods add -g`) loads its mods from the registry clone. Alone it
+            # is a fine install; beside the drop-in copy it is the double-governance finding, which
+            # install.sh now prevents by preferring the clone and retiring the drop-in copy.
+            _cc_pkg = _g["CCMD_REGISTRY"] / "git" / "github.com" / "thinhkhuat" / "skill-concierge"
+            (_cc_pkg / "adapters" / "commandcode").mkdir(parents=True)
+            (_cc_pkg / "hooks" / "scripts").mkdir(parents=True)
+            (_cc_pkg / "hooks" / "scripts" / "enforcer.py").touch()
+            # `_ccmd_package_mod` only counts a clone that is PACKAGE-SHAPED (a package.json at its
+            # root, the shape `cmd mods add` clones), and a clone whose version differs from the SSOT
+            # is a staleness finding of its own — so the version here is this checkout's.
+            _ssot = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
+            (_cc_pkg / "package.json").write_text(json.dumps({
+                "name": "skill-concierge", "version": _ssot,
+                "commandcode": {"mods": ["./adapters/commandcode/skill-concierge.mod.ts"]},
+            }), encoding="utf-8")
+            (_cc_pkg / "adapters" / "commandcode" / "skill-concierge.mod.ts").write_text(
+                _cc_installed, encoding="utf-8")
+            row = check_commandcode()
+            assert row["status"] == WARN and "would govern every prompt twice" in row["detail"], row
+            _g["CCMD_MOD"].unlink()                       # the installer retires the drop-in instead
+            row = check_commandcode()
+            assert row["status"] == OK and "package-provided" in row["detail"], row
+            # ...and back to a drop-in-only machine for the assertions below, which are about it.
+            shutil.rmtree(_g["CCMD_REGISTRY"] / "git")
+            _g["CCMD_MOD"].write_text(_cc_installed, encoding="utf-8")
             # Negative control: a stale copy of the mod (the installer COPIES it) -> WARN naming it.
             _g["CCMD_MOD"].write_text("export default function(cmd) { /* an older mod */ }")
             row = check_commandcode()   # pre-fix copy, no SKILL_CONCIERGE_ROOT: the issue #1 state
