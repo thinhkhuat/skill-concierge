@@ -104,11 +104,11 @@ def _rows(logdir: Path) -> list[dict]:
 
 
 # The session-start self-heal scripts throttle on stamps in the log folder. An empty one would let
-# all five run unthrottled against live state (a reindex, settings sync, LLM trigger generation,
-# promotion, the colon-name bridge shelf), so each run's log folder starts with fresh stamps: they
-# are not what this tests.
+# all six run unthrottled against live state (a reindex, settings sync, LLM trigger generation,
+# promotion, the colon-name bridge shelf, the Command Code agent mirror), so each run's log folder
+# starts with fresh stamps: they are not what this tests.
 SELF_HEAL_STAMPS = (".auto-reindex-stamp", ".auto-overrides-stamp", ".auto-flywheel-stamp",
-                    ".auto-promote-stamp", ".auto-bridge-stamp")
+                    ".auto-promote-stamp", ".auto-bridge-stamp", ".auto-agent-bridge-stamp")
 
 
 def _workdir(harness: str) -> Path:

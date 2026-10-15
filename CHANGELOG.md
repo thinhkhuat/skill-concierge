@@ -3,6 +3,52 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.71.0] - 2026-10-16
+
+### Added
+
+- **The Command Code agent bridge ([ADR-0094](docs/adr/0094-commandcode-agent-tool-name-bridge.md)).** Command Code resolves a
+  subagent's frontmatter `tools:` line against its OWN tool ids and drops every Claude Code name in silence: a
+  `fullstack-developer` delegate written to write files and run builds launched with little more than `glob` + `grep`
+  (proved live — the delegate was blocked mid-port). It also reads a **missing** `tools:` key as "no tools at all", where
+  Claude Code reads it as "inherit every tool", so five agents in the corpus had an empty tool set.
+  `scripts/cmd_agent_bridge.py` mirrors the Claude agent corpus into the directory Command Code actually scans
+  (`~/.commandcode/agents`), translating each copy: `tools:`/`disallowedTools:` ids through one explicit table
+  (`Read`→`read_file`, `Bash`→`shell_command`, `MultiEdit`→`edit_file`, …; `SendMessage`/`Task(<agent>)` dropped and
+  named, never invented), an omitted `tools:` key written out as `"*"`, a non-Command-Code `model:` reset to `inherit`
+  with a warning, and unambiguous body tool tokens renamed. Delegation and peer-messaging idioms cannot be mechanically
+  re-expressed — Command Code subagents cannot spawn subagents and have no peer-messaging tool — so those copies carry
+  ONE explicit adapter note and their author's sentences are left intact. Sources are never edited (every source is
+  hashed into `_agent_bridge.json`; `verify` proves it), `clean` deletes only what its manifest names, and files created
+  inside Command Code itself are preserved and reported. `hooks/scripts/auto_agent_bridge.py` refreshes the mirror at
+  SessionStart (throttled, fail-open, inline). Tests: `tests/test_commandcode_agent_bridge.py`.
+- **The installer now owns the agent directory.** `adapters/commandcode/install.sh` replaces the
+  `~/.commandcode/agents` symlink (to `~/.claude/agents`) with a real, bridge-written directory, because the builder
+  refuses to write through a symlink that points into the shared Claude corpus — and because Command Code's
+  first-definition-of-a-name-wins rule means no project-scoped copy can shadow the personal file. The swap records the
+  target, never touches it, and rolls back (dropping only the mirror's own files, then re-linking) if the build or the
+  check fails. A verify row asserts the directory is no longer a symlink and that the mirror passes its own check.
+
+### Fixed
+
+- **The installer no longer lets two mod routes govern every prompt twice.** `cmd mods add -g thinhkhuat/skill-concierge`
+  clones the repo under `~/.commandcode/mods/.registry` and loads the mods declared in `package.json`
+  `commandcode.mods`; the drop-in copies `install.sh` wrote beside that clone registered the SAME mods a second time,
+  and doctor reported it ("each registers its own hooks and would govern every prompt twice"). The installer now
+  prefers the package clone whenever it exists: it writes no drop-in, removes a superseded one an earlier install left,
+  and its own verify accepts either route (the drop-in when it is the live one, the clone otherwise) — so the finding
+  cannot come back on the next release run. Test:
+  `tests/test_sibling_installers.py::test_commandcode_package_route_skips_the_dropin_and_retires_a_superseded_one`.
+- **A bridged skill's reference that leaves the corpus now works instead of being reported.**
+  `ak-agentkit/references/task-taxonomy.md` cites `../../../rules/primary-workflow.md`, which resolves to
+  `~/.claude/rules/` from the source and to nothing at all from a shelf under `~/.commandcode/`.
+  `scripts/cmd_skill_bridge.py` rewrites such a reference to the absolute path it resolved to (this keeps the
+  shelf out of Claude Code's config tree, per ADR-0093, without losing the reference), and its before/after link
+  check now compares reference by reference — the previous check passed a whole file as soon as any single
+  reference resolved, which is why this one had stopped appearing in the build's warnings. `MANIFEST_VERSION`
+  is 2, so an existing shelf rebuilds instead of reading as "up to date" — the fingerprint covers the sources,
+  not the rewriting logic. Tests: `tests/test_commandcode_bridge.py`.
+
 ## [0.70.0] - 2026-10-15
 
 ### Added

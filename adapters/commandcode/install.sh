@@ -87,6 +87,18 @@ MOD_SRC="$ROOT/adapters/commandcode/skill-concierge.mod.ts"
 MOD_DST="$MODS_DIR/skill-concierge.ts"
 BRIDGE_MOD_SRC="$ROOT/adapters/commandcode/skill-bridge.mod.ts"
 BRIDGE_MOD_DST="$MODS_DIR/skill-bridge.ts"
+# The agent mirror. Command Code reads subagent definitions from this directory and resolves their
+# `tools:` names against its own ids, which drops every Claude Code name silently; the mirror is what
+# makes a delegate keep the tools it was written with. It is built further down, after the symlink
+# below has been replaced.
+AGENTS_DIR="$CMD_DIR/agents"
+# The user's OTHER install route: `cmd mods add -g thinhkhuat/skill-concierge` clones the repo under
+# mods/.registry and loads the mods declared in package.json `commandcode.mods` from there. Writing
+# the drop-in copies beside that clone registers the same mods twice, so every prompt is governed
+# twice (doctor reports it as a finding). The package route therefore wins when it exists: the
+# drop-in is skipped and any superseded copy this script wrote earlier is removed.
+REGISTRY_MOD="$(find "$MODS_DIR/.registry" -type f \
+  -path '*/adapters/commandcode/skill-concierge.mod.ts' -print -quit 2>/dev/null || true)"
 
 # ── 1-4. Compute every JSON transform in memory first; a failure anywhere in this step
 # exits before a single byte is written or the mod is copied. Only once every transform has
@@ -99,7 +111,7 @@ BRIDGE_MOD_DST="$MODS_DIR/skill-bridge.ts"
 # The colon-name skill bridge shelf is built here too, AFTER the checkout is validated: a root
 # whose mod cannot reach its hooks is refused with nothing written at all, and a corpus the
 # builder cannot handle stops the run before the config writes rather than after them.
-PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" "$BRIDGE_MOD_SRC" "$BRIDGE_MOD_DST" <<'PY'
+PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" "$BRIDGE_MOD_SRC" "$BRIDGE_MOD_DST" "$REGISTRY_MOD" <<'PY'
 import json
 import os
 import subprocess
@@ -117,6 +129,7 @@ mod_src = Path(sys.argv[5])
 mod_dst = Path(sys.argv[6])
 bridge_mod_src = Path(sys.argv[7])
 bridge_mod_dst = Path(sys.argv[8])
+registry_mod = sys.argv[9]
 has_project = project_mcp_path.parent.is_dir()
 
 SERVER_ENV = {
@@ -193,12 +206,13 @@ def with_session_start_hooks(settings, root):
         # remove duplicate skill-concierge entries
         if any(name in cmd_str for name in
                ("hooks/scripts/doctrine.py", "auto_reindex.py", "auto_overrides.py",
-                "auto_flywheel.py", "auto_promote.py", "auto_bridge.py")):
+                "auto_flywheel.py", "auto_promote.py", "auto_bridge.py", "auto_agent_bridge.py")):
             continue
         filtered_start.append(entry)
 
     # Add standard skill-concierge SessionStart hooks pointing to current root.
-    # auto_bridge.py regenerates the colon-name bridge shelf before Command Code discovers skills.
+    # auto_bridge.py regenerates the colon-name bridge shelf before Command Code discovers skills;
+    # auto_agent_bridge.py refreshes the agent mirror before the first delegate can be spawned.
     sc_scripts = [
         f'python3 "{root}/hooks/scripts/doctrine.py"',
         f'python3 "{root}/hooks/scripts/auto_reindex.py"',
@@ -206,6 +220,7 @@ def with_session_start_hooks(settings, root):
         f'python3 "{root}/hooks/scripts/auto_flywheel.py"',
         f'python3 "{root}/hooks/scripts/auto_promote.py"',
         f'python3 "{root}/hooks/scripts/auto_bridge.py"',
+        f'python3 "{root}/hooks/scripts/auto_agent_bridge.py"',
     ]
     for script in sc_scripts:
         filtered_start.append({"hooks": [{"type": "command", "command": script, "timeout": 10}]})
@@ -281,18 +296,78 @@ print("  [✓] Configured user-scope MCP: skill-search")
 if project_mcp_data is not None:
     atomic_write(project_mcp_path, project_mcp_data)
     print(f"  [✓] Configured local project-override MCP: {project_mcp_path}")
-mod_dst.parent.mkdir(parents=True, exist_ok=True)
-mod_dst.write_bytes(mod_bytes)
-os.chmod(mod_dst, 0o755)
-print(f"  [✓] Installed mod: {mod_dst}")
-bridge_mod_dst.write_bytes(bridge_mod_bytes)
-os.chmod(bridge_mod_dst, 0o755)
-print(f"  [✓] Installed mod: {bridge_mod_dst} (registers the colon-name bridge shelf)")
+if registry_mod:
+    # The package route is installed, so the drop-in copies must NOT be: both would load and every
+    # prompt would be governed twice. Removing a superseded drop-in is the other half of that.
+    print(f"  [i] the package route is installed ({registry_mod}) — skipping the drop-in copies so "
+          "the mods load once, from the package clone")
+    for stale in (mod_dst, bridge_mod_dst):
+        if stale.exists():
+            stale.unlink()
+            print(f"  [i] removed the superseded drop-in: {stale.name}")
+else:
+    mod_dst.parent.mkdir(parents=True, exist_ok=True)
+    mod_dst.write_bytes(mod_bytes)
+    os.chmod(mod_dst, 0o755)
+    print(f"  [✓] Installed mod: {mod_dst}")
+    bridge_mod_dst.write_bytes(bridge_mod_bytes)
+    os.chmod(bridge_mod_dst, 0o755)
+    print(f"  [✓] Installed mod: {bridge_mod_dst} (registers the colon-name bridge shelf)")
 PY
+
+# ── 4b. Own the personal agent directory, then mirror the agent corpus into it ──────────
+# Command Code resolves an agent's `tools:` names against its own ids and drops every Claude Code
+# name in silence, so a delegate written to write files and run builds launches with little more than
+# glob+grep. The mirror translates each agent's frontmatter (`tools:`, `model:`) and its delegation
+# idioms into a copy Command Code reads, and it has to live in the directory Command Code scans:
+# $HOME/.commandcode/agents. On this machine that path is a symlink to ~/.claude/agents — the shared
+# corpus every harness reads — and the builder refuses to write through a symlink, so the symlink is
+# replaced by a real directory first. THE TARGET IS NEVER TOUCHED, and if the build or the check
+# fails the symlink is put back before this script exits, so the machine ends where it started.
+# Runs LAST, after every config write: a failure here leaves a fully working, unmirrored install.
+AGENT_SWAP_TARGET=""
+if [ -L "$AGENTS_DIR" ]; then
+  AGENT_SWAP_TARGET="$(readlink "$AGENTS_DIR")"
+  rm -f "$AGENTS_DIR"
+  mkdir -p "$AGENTS_DIR"
+  echo "  [i] $AGENTS_DIR was a symlink to $AGENT_SWAP_TARGET (left untouched): now a real directory"
+elif [ ! -d "$AGENTS_DIR" ]; then
+  mkdir -p "$AGENTS_DIR"
+fi
+
+agent_restore() {
+  # Undo only what this step did: drop the files the mirror's own manifest names, remove the
+  # directory, then re-link. Never a recursive delete — the directory may hold agents created in
+  # Command Code itself, and deleting a stranger's work is worse than leaving a mirror in place.
+  python3 "$ROOT/scripts/cmd_agent_bridge.py" clean --quiet >/dev/null 2>&1 || true
+  rmdir "$AGENTS_DIR" >/dev/null 2>&1 || true
+  if [ -n "$AGENT_SWAP_TARGET" ]; then
+    ln -sfn "$AGENT_SWAP_TARGET" "$AGENTS_DIR"
+  fi
+  return 0
+}
+
+if ! AGENT_NOTE=$(python3 "$ROOT/scripts/cmd_agent_bridge.py" build); then
+  echo "  [!] the agent mirror could not be built" >&2
+  agent_restore
+  echo "  [!] $AGENTS_DIR was restored exactly as it was; nothing changed for Command Code" >&2
+  exit 1
+fi
+if ! python3 "$ROOT/scripts/cmd_agent_bridge.py" verify >/dev/null; then
+  echo "  [!] the agent mirror failed its own verification" >&2
+  python3 "$ROOT/scripts/cmd_agent_bridge.py" verify || true
+  agent_restore
+  echo "  [!] $AGENTS_DIR was restored exactly as it was" >&2
+  exit 1
+fi
+AGENT_NOTE_HEAD=$(printf '%s' "$AGENT_NOTE" | head -1)
+echo "  [✓] Agent mirror: $AGENT_NOTE_HEAD"
+echo "      (each translated agent, tool id and rewrite is listed by:"
+echo "       python3 scripts/cmd_agent_bridge.py list)"
 
 # ── 5. Verify (ZCode parity: adapters/zcode/install.sh §6) ──────────────────
 echo "==> verify:"
-PYTHONPATH="$SCRIPT_DIR" python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" "$BRIDGE_MOD_DST" <<'PYEOF'
+PYTHONPATH="$SCRIPT_DIR" python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" "$BRIDGE_MOD_DST" "$AGENTS_DIR" "$REGISTRY_MOD" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -304,24 +379,45 @@ mod_dst = Path(sys.argv[2])
 settings_path = Path(sys.argv[3])
 mcp_path = Path(sys.argv[4])
 bad = False
-# 5a. Mod present and identical to this checkout's file rendered for this root (the
-#     enforcer/ledger scripts drift check in ZCode is manual; here we ensure the shipped
-#     mod — the in-generation enforcement organ — matches what we installed), and the root
-#     it carries reaches the hook scripts. Byte identity alone passed a copy that resolved
-#     its root to $HOME and spawned nothing (GitHub issue #1).
+# 5a. ONE mod route is live and it reaches the hook scripts. Either the drop-in copy (identical to
+#     this checkout's file rendered for this root, its INSTALLED_ROOT line pointing at a checkout
+#     that has hooks/scripts/enforcer.py — byte identity alone once passed a copy that resolved its
+#     root to $HOME and spawned nothing, GitHub issue #1), or the package clone `cmd mods add` made,
+#     whose mods resolve against their own clone. Both at once is the double-governance finding, and
+#     the commit step above is what prevents it.
+registry_mod = sys.argv[7]
+dropin_present = mod_dst.is_file()
 try:
-    installed = mod_dst.read_text(encoding="utf-8")
-    if installed == mod_root.render(mod_src.read_text(encoding="utf-8"), str(root)):
-        print("    mod identical to this checkout's file, rendered for this root: yes")
+    if dropin_present:
+        installed = mod_dst.read_text(encoding="utf-8")
+        if installed == mod_root.render(mod_src.read_text(encoding="utf-8"), str(root)):
+            print("    mod identical to this checkout's file, rendered for this root: yes")
+        else:
+            print("    !! mod differs from this checkout's file — reinstall or re-run this script",
+                  flush=True)
+            bad = True
+        baked = mod_root.baked_root(installed)
+        if baked and (Path(baked) / "hooks/scripts/enforcer.py").is_file():
+            print(f"    mod reaches its hook scripts: yes ({baked})")
+        else:
+            print(f"    !! mod cannot reach hooks/scripts/enforcer.py under {baked or '(no root)'} "
+                  "— it would do nothing in Command Code", flush=True)
+            bad = True
+        if registry_mod:
+            print(f"    !! the drop-in AND the package clone ({registry_mod}) are both present — "
+                  "every prompt would be governed twice", flush=True)
+            bad = True
+    elif registry_mod:
+        clone_root = Path(registry_mod).parents[2]        # adapters/commandcode/<mod> -> clone root
+        if (clone_root / "hooks/scripts/enforcer.py").is_file():
+            print(f"    mod route: the package clone reaches its hook scripts ({clone_root})")
+        else:
+            print(f"    !! the package clone at {clone_root} cannot reach "
+                  "hooks/scripts/enforcer.py — its mod would do nothing", flush=True)
+            bad = True
+        print("    drop-in copies absent, as intended, so the mods load once")
     else:
-        print("    !! mod differs from this checkout's file — reinstall or re-run this script", flush=True)
-        bad = True
-    baked = mod_root.baked_root(installed)
-    if baked and (Path(baked) / "hooks/scripts/enforcer.py").is_file():
-        print(f"    mod reaches its hook scripts: yes ({baked})")
-    else:
-        print(f"    !! mod cannot reach hooks/scripts/enforcer.py under {baked or '(no root)'} "
-              "— it would do nothing in Command Code", flush=True)
+        print("    !! no skill-concierge mod: neither the drop-in copy nor a package clone", flush=True)
         bad = True
 except Exception as e:
     print(f"    !! mod read failed: {e}", flush=True)
@@ -333,7 +429,8 @@ try:
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     cmds = []
     sc_hook_scripts = ("doctrine.py", "auto_reindex.py", "auto_overrides.py",
-                       "auto_flywheel.py", "auto_promote.py", "auto_bridge.py")
+                       "auto_flywheel.py", "auto_promote.py", "auto_bridge.py",
+                       "auto_agent_bridge.py")
     for block in (settings.get("hooks", {}).get("SessionStart") or []):
         for h in (block.get("hooks") or []):
             c = h.get("command", "")
@@ -366,20 +463,28 @@ try:
 except Exception as e:
     print(f"    !! mcp.json read failed: {e}", flush=True)
     bad = True
-# 5d. The colon-name bridge: this mod is installed, and the shelf it registers still passes the
-#     builder's own check (every copy legal, named like its directory, source hashes unchanged).
-#     Without the mod the shelf is inert — built copies that Command Code is never told about.
+# 5d. The colon-name bridge mod is live on whichever route is in use — the drop-in copy beside the
+#     other mod, or the package clone's own file (the package manifest declares both mods). Without
+#     it the shelf is inert: built copies that Command Code is never told about.
 bridge_mod_dst = Path(sys.argv[5])
 try:
+    bridge_live = None
     if bridge_mod_dst.is_file():
-        print(f"    bridge mod installed: yes ({bridge_mod_dst.name})")
-        if "addSkillsPath" in bridge_mod_dst.read_text(encoding="utf-8"):
+        bridge_live = bridge_mod_dst
+    elif registry_mod:
+        clone_bridge = Path(registry_mod).parent / "skill-bridge.mod.ts"
+        if clone_bridge.is_file():
+            bridge_live = clone_bridge
+    if bridge_live is not None:
+        print(f"    bridge mod live: yes ({bridge_live})")
+        if "addSkillsPath" in bridge_live.read_text(encoding="utf-8"):
             print("    bridge mod registers a skills path: yes")
         else:
             print("    !! bridge mod does not call addSkillsPath — nothing would load", flush=True)
             bad = True
     else:
-        print(f"    !! bridge mod missing at {bridge_mod_dst}", flush=True)
+        print("    !! bridge mod missing: neither the drop-in nor a package clone provides one",
+              flush=True)
         bad = True
 except Exception as e:
     print(f"    !! bridge mod read failed: {e}", flush=True)
@@ -399,14 +504,46 @@ try:
 except Exception as e:
     print(f"    !! bridge verify could not run: {e}", flush=True)
     bad = True
+# 5e. The agent mirror: the destination is a REAL directory (never the shared Claude corpus symlink),
+#     it carries this bridge's manifest, and the bridge's own check passes — the row that proves a
+#     delegate launches with the tools its author wrote, not with whatever Command Code failed to
+#     translate. Without the mirror those agents still load, silently missing most of their tools.
+agents_dir = Path(sys.argv[6])
+try:
+    if agents_dir.is_symlink():
+        print(f"    !! {agents_dir} is still a symlink to {agents_dir.resolve()} — the mirror cannot "
+              "be written there without editing the shared agent corpus", flush=True)
+        bad = True
+    elif not (agents_dir / "_agent_bridge.json").is_file():
+        print(f"    !! no agent mirror manifest at {agents_dir / '_agent_bridge.json'}", flush=True)
+        bad = True
+    else:
+        import subprocess
+        r = subprocess.run([sys.executable, str(root / "scripts/cmd_agent_bridge.py"), "verify"],
+                           capture_output=True, text=True, timeout=120)
+        line = (r.stdout or "").strip().splitlines()
+        if r.returncode == 0:
+            print(f"    {line[-1] if line else 'agent mirror: verified'}")
+        else:
+            print("    !! agent mirror verification failed:", flush=True)
+            for ln in (r.stdout + r.stderr).strip().splitlines()[:5]:
+                print(f"       {ln}", flush=True)
+            bad = True
+except Exception as e:
+    print(f"    !! agent mirror check could not run: {e}", flush=True)
+    bad = True
 if bad:
     print("    verify: FAILED — see lines above", flush=True)
     sys.exit(1)
 print("    verify: OK")
 PYEOF
+
 # Doctor's harness-specific row, shown for information; verify above already decided the exit code.
 python3 "$ROOT/scripts/doctor.py" 2>/dev/null | grep -i "Command Code integration" || true
-echo "==> Done. Installed mod + SessionStart hooks + MCP wiring verified."
+echo "==> Done. Installed mod + SessionStart hooks + MCP wiring + agent mirror verified."
 echo "    Restart/Reload Command Code to load the new mod (mod loads at session start)."
+echo "    Subagents now load from the bridge mirror in $AGENTS_DIR (sources in ~/.claude/agents"
+echo "    are never modified); inspect what was translated with:"
+echo "    python3 scripts/cmd_agent_bridge.py list"
 echo "    Then confirm: 'cmd mods list' shows skill-concierge with no warnings, and"
 echo "    a session's enforcer ledger rows carry harness=commandcode with a session_id."

@@ -40,14 +40,17 @@ INSTALL_SH = {
 # ── Fixture repo (the checkout the installer deploys FROM) ──────────────────────────────────
 
 def _stage_bridge_assets(root):
-    """The colon-name bridge assets a real checkout has and adapters/commandcode/install.sh reads:
-    the second mod source it installs, and the builder it runs to materialize the bridge shelf.
-    A fixture root stands in for a checkout, so it carries both."""
+    """The bridge assets a real checkout has and adapters/commandcode/install.sh READS: the second
+    mod source it installs, and the two builders it runs — the colon-name one for the skill shelf and
+    the agent one for the agent mirror. A fixture root stands in for a checkout, so it carries all
+    three. (The SessionStart hook the installer wires up for the mirror is only named in
+    `settings.json`, never read, so it needs no fixture.)"""
     (root / "adapters" / "commandcode").mkdir(parents=True, exist_ok=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-bridge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-bridge.mod.ts")
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     shutil.copy(ROOT / "scripts" / "cmd_skill_bridge.py", root / "scripts" / "cmd_skill_bridge.py")
+    shutil.copy(ROOT / "scripts" / "cmd_agent_bridge.py", root / "scripts" / "cmd_agent_bridge.py")
 
 
 def _make_repo(tmp_path, name, version):
@@ -532,6 +535,50 @@ def test_apostrophe_and_double_quote_in_root_path(tmp_path):
     settings = json.loads((home / ".commandcode" / "settings.json").read_text())
     assert any(str(root) in h.get("command", "")
                for b in settings["hooks"]["SessionStart"] for h in b["hooks"])
+
+
+def test_commandcode_package_route_skips_the_dropin_and_retires_a_superseded_one(tmp_path):
+    """`cmd mods add -g thinhkhuat/skill-concierge` clones the repo under mods/.registry and loads the
+    same mods from package.json `commandcode.mods`. A drop-in copy beside that clone registers them a
+    second time — doctor's "would govern every prompt twice" finding — so the installer must prefer
+    the package route: write no drop-in, and remove the one an earlier install left behind."""
+    root = tmp_path / "repo"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "9.9.9"}))
+    (root / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
+    (root / "hooks" / "scripts").mkdir(parents=True)
+    (root / "hooks" / "scripts" / "enforcer.py").touch()
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "skill-search-mcp"
+    launcher.touch()
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    mods = home / ".commandcode" / "mods"
+    mods.mkdir(parents=True)
+    # an earlier install's drop-in copies, and the package clone the user's other route made
+    (mods / "skill-concierge.ts").write_text("// superseded drop-in\n")
+    (mods / "skill-bridge.ts").write_text("// superseded drop-in\n")
+    clone = mods / ".registry" / "git" / "github.com" / "thinhkhuat" / "skill-concierge"
+    (clone / "adapters" / "commandcode").mkdir(parents=True)
+    (clone / "adapters" / "commandcode" / "skill-concierge.mod.ts").write_text("// package mod\n")
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-bridge.mod.ts",
+                clone / "adapters" / "commandcode" / "skill-bridge.mod.ts")
+    (clone / "hooks" / "scripts").mkdir(parents=True)
+    (clone / "hooks" / "scripts" / "enforcer.py").touch()
+
+    env = installer_env(tmp_path, home)
+    r = subprocess.run(["bash", str(INSTALL_SH["commandcode"]), "--root", str(root)],
+                        env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "the package route is installed" in r.stdout, r.stdout
+    assert not (mods / "skill-concierge.ts").exists(), "no drop-in beside the package clone"
+    assert not (mods / "skill-bridge.ts").exists(), "and none for the bridge mod either"
+    assert "package clone reaches its hook scripts" in r.stdout, r.stdout
+    assert "governed twice" not in r.stdout, r.stdout
+    assert "Installed mod:" not in r.stdout, r.stdout
 
 
 def test_commandcode_verify_failure_exits_nonzero(tmp_path):

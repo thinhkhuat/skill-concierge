@@ -334,6 +334,40 @@ def test_a_reference_that_would_break_in_the_copy_is_reported(corpus, tmp_path) 
         "the before/after link check must name the regression, not only the rewrite pass"
 
 
+def test_a_reference_that_leaves_the_corpus_is_kept_by_absolute_path(corpus, tmp_path) -> None:
+    """A skill citing a file ABOVE the corpus root (`~/.claude/rules/…` via `../../`) resolves where it
+    lives and cannot survive a copy at a different depth. The bridge rewrites such a reference to the
+    absolute path it resolved to — a warning would leave the copy broken, and moving the shelf under
+    `~/.claude/` would put Command Code's derived data in Claude Code's config tree."""
+    (tmp_path / "rules").mkdir()
+    (tmp_path / "rules" / "primary-workflow.md").write_text("rules\n")
+    missing = "../../../../rules/nowhere.md"           # escapes the corpus AND resolves nowhere
+    _skill(corpus / "ak-cites", "ak:cites",
+           f"See `../../rules/primary-workflow.md`.\nSee `{missing}`.\n")
+    _shelf, rep = _build(corpus, tmp_path)
+    text = (tmp_path / "shelf" / "ak-cites" / "SKILL.md").read_text()
+    assert os.path.normpath(str(tmp_path / "rules" / "primary-workflow.md")) in text, \
+        "the reference that leaves the corpus is absolute in the copy"
+    assert missing in text, "a reference that never resolved is left exactly as written"
+    assert not any("resolved in the source but not in the copy" in w for w in rep["warnings"]), \
+        rep["warnings"]
+
+
+def test_a_file_with_one_resolving_reference_still_reports_the_broken_one(corpus, tmp_path) -> None:
+    """The before/after check compares reference by reference. A file carrying BOTH a reference that
+    still resolves and one that does not must report the broken one — an early version passed the
+    whole file as soon as any single reference resolved, which hid the `ak-agentkit` case."""
+    _skill(corpus / "legal-helper", "legal-helper", "x\n")
+    (corpus / "legal-helper" / "notes.md").write_text("n\n")
+    _skill(corpus / "ak-mixed", "ak:mixed", "one: ./references/own.md\ntwo: ../legal-helper/notes.md\n")
+    (corpus / "ak-mixed" / "references").mkdir()
+    (corpus / "ak-mixed" / "references" / "own.md").write_text("own\n")
+    _shelf, rep = _build(corpus, tmp_path)
+    assert any("ak-mixed" in w and "legal-helper/notes.md" in w
+               and "resolved in the source but not in the copy" in w for w in rep["warnings"]), \
+        rep["warnings"]
+
+
 # ── the mod half ──────────────────────────────────────────────────────────────
 
 def _node_imports_ts() -> bool:

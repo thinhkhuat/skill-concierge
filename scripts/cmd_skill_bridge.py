@@ -30,7 +30,10 @@ Rewrites applied to a copy, never to a source:
     and a `name: ak:<slug>` template placeholder are never touched;
   • relative references to a sibling skill (`../ak-brainstorm/references/x.md`) are re-resolved
     against the shelf, so a skill nested under a grouping directory (`ak-document-skills/ak-pptx`)
-    keeps working after being flattened to the shelf's top level.
+    keeps working after being flattened to the shelf's top level;
+  • a reference that leaves the corpus altogether (a skill citing `~/.claude/rules/…` through
+    `../../`) is rewritten to the absolute path it resolved to, because a copy at a different depth
+    cannot carry it and the shelf has to stay out of Claude Code's config tree (ADR-0093).
 
 Commands: `build` (default), `verify`, `clean`, `list`. Stdlib only, Python 3.9+.
 """
@@ -49,7 +52,11 @@ from pathlib import Path
 SHELF_ENV = "SKILL_CONCIERGE_BRIDGE_SHELF"
 SHELF_DEFAULT = Path.home() / ".commandcode" / "skill-concierge-bridge"
 MANIFEST_NAME = "_bridge.json"
-MANIFEST_VERSION = 1
+# Bumped whenever a rewrite rule changes, because the fingerprint covers the SOURCES, not this
+# script: without it, a fix to the rewriting logic would leave every existing shelf untouched
+# ("up to date") until some skill happened to change. 2 = references that leave the corpus are
+# rewritten to their resolved absolute path instead of being reported as unreachable.
+MANIFEST_VERSION = 2
 MAX_NAME = 64
 
 # Command Code's own discovery rules, as the docs state them: "Use lowercase letters, numbers,
@@ -289,6 +296,15 @@ def rewrite_colons(text: str, prefixes) -> str:
 _REL_RE = re.compile(r"(?<![\w./-])((?:\.\./)+)([A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._/-]*)?)")
 
 
+def _in_roots(target: str, roots) -> bool:
+    """True when a resolved path lives under one of the corpus roots the bridge scans."""
+    for root in roots or ():
+        root = str(root).rstrip(os.sep)
+        if target == root or target.startswith(root + os.sep):
+            return True
+    return False
+
+
 def rewrite_relpaths(text: str, ctx: dict) -> str:
     """Re-resolve a relative reference to a BRIDGED sibling skill against the shelf copy.
 
@@ -313,6 +329,13 @@ def rewrite_relpaths(text: str, ctx: dict) -> str:
         if any(target == d or target.startswith(d + os.sep) for d in all_dirs):
             ctx["dangling"].append(f"{ctx['dash']}/{ctx['file_rel']}: `{raw}` points at a skill "
                                    "this bridge did not copy; it cannot resolve from the shelf")
+        # A reference that leaves the corpus entirely — the corpus has these (a skill citing
+        # `../../../rules/primary-workflow.md` under `~/.claude/rules/`) — resolved where the SOURCE
+        # lived and cannot survive a copy at a different depth. Because it EXISTS, the fix is not a
+        # warning but the path it resolved to: an absolute one always works from the shelf. This is
+        # what keeps the shelf out of the Claude config tree (ADR-0093) without losing the reference.
+        if not _in_roots(target, ctx.get("roots", ())) and os.path.exists(target):
+            return target
         return raw
 
     return _REL_RE.sub(sub, text)
@@ -406,6 +429,7 @@ def build(roots, shelf=None, force=False, quiet=False) -> dict:
     entries, entries_report, dangling = [], [], []
     bridged = [(str(p["skill_dir"]), str(shelf / d)) for d, p in sorted(plan.items())]
     all_dirs = [str(r["skill_dir"]) for r in records]
+    corpus_roots = [str(Path(r).expanduser()) for r in roots]
     # Every skill's final name, so a nested SKILL.md inside a copy declares its OWN name rather
     # than its parent's. A skill Command Code can already load keeps the name it has.
     name_map = {str(r["skill_dir"]): r["dash"] for r in records if is_legal(r["dash"])}
@@ -413,7 +437,8 @@ def build(roots, shelf=None, force=False, quiet=False) -> dict:
         dst = shelf / dash
         if dst.exists():
             shutil.rmtree(dst)                  # regenerate from scratch: the shelf is derived data
-        ctx = {"bridged": bridged, "all_dirs": all_dirs, "dangling": [], "name_map": name_map}
+        ctx = {"bridged": bridged, "all_dirs": all_dirs, "dangling": [], "name_map": name_map,
+               "roots": corpus_roots}
         _copy_tree(p["skill_dir"], dst, p, prefixes, ctx)
         dangling.extend(ctx["dangling"])
         src_md = p["skill_dir"] / "SKILL.md"
@@ -554,14 +579,17 @@ def _link_regressions(shelf: Path, plan) -> list:
                 ktext = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            krefs = _rel_ref(ktext)
             for raw in _rel_ref(stext):
-                if not os.path.exists(os.path.normpath(os.path.join(str(src.parent), raw))):
+                src_target = os.path.normpath(os.path.join(str(src.parent), raw))
+                if not os.path.exists(src_target):
                     continue                       # already broken before the bridge
-                if not any(os.path.exists(os.path.normpath(os.path.join(str(md.parent), r)))
-                           for r in krefs):
-                    out.append(f"{dash}/{md.relative_to(shelf / dash)}: `{raw}` resolved in the "
-                               "source but not in the copy")
+                if raw not in ktext:
+                    continue                       # the copy rewrote this reference (shelf-relative
+                    #                                or absolute) — a rewrite is a fix, not a loss
+                if os.path.exists(os.path.normpath(os.path.join(str(md.parent), raw))):
+                    continue                       # still resolves verbatim in the copy
+                out.append(f"{dash}/{md.relative_to(shelf / dash)}: `{raw}` resolved in the "
+                           "source but not in the copy")
     return out
 
 
