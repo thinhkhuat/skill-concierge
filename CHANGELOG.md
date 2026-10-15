@@ -3,6 +3,19 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.69.0] - 2026-10-15
+
+### Added
+
+- **Command Code package install ([ADR-0092](docs/adr/0092-commandcode-package-install.md)).** The root `package.json` now carries the
+  packaging manifest `{"commandcode": {"mods": ["./adapters/commandcode/skill-concierge.mod.ts"]}}` and the `cmd-mod` keyword, so
+  `cmd mods add -g thinhkhuat/skill-concierge` loads the Command Code mod straight from the registry clone
+  (`~/.commandcode/mods/.registry/git/<host>/<owner>/<repo>`) and `cmd mods update` pulls the newest code — no installer copy for the mod
+  itself. The drop-in copy route is unchanged and stays the way to wire the SessionStart hooks and the MCP entry. doctor's `Command Code
+  integration` row reports which mod source is loaded (drop-in or package), fails a registry clone that cannot reach
+  `hooks/scripts/enforcer.py`, warns when the clone's version lags the SSOT, and flags the double-load (both sources loaded — every prompt
+  would be governed twice). Pin test: `tests/test_commandcode_mod.py::test_package_cloned_repo_layout_reaches_hook_scripts`.
+
 ## [0.68.5] - 2026-10-14
 
 ### Fixed

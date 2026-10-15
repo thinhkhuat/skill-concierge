@@ -303,7 +303,13 @@ semantically current; that is what `/openwiki:wiki update` and `/graphify . --up
   ([ADR-0059](../docs/adr/0059-harness-complete-offer-isolation-echo-everywhere.md)) — does not
   take effect there until that installer reruns (since `0.49.0`, `doctor`'s Command Code row warns
   when the installed mod differs from the repo copy, rendered with the checkout path the copy carries;
-  it fails when that path no longer reaches `hooks/scripts/enforcer.py`, e.g. after the clone moved). Cline's plugin mode loads the code plugin from the checkout through
+  it fails when that path no longer reaches `hooks/scripts/enforcer.py`, e.g. after the clone moved).
+  The same mod can instead load as a Command Code package (`cmd mods add -g
+  thinhkhuat/skill-concierge`; the packaging manifest lives in this repo's
+  [`package.json`](../package.json), ADR-0092): the clone under `~/.commandcode/mods/.registry/`
+  refreshes with `cmd mods update`, and doctor's Command Code row accepts either source and
+  flags both loaded at once. SessionStart hooks and the MCP entry are still installer-wired. Cline's
+  plugin mode loads the code plugin from the checkout through
   `~/.cline/plugins/skill-concierge.ts`, so a change takes effect at the next Cline session; the Agent
   Plugin in `~/.agents/plugins/skill-concierge/` is a generated copy that is re-synced at each Cline
   session start, and `doctor` flags drift

@@ -90,6 +90,7 @@ CCMD_DIR = Path.home() / ".commandcode"
 CCMD_MOD = CCMD_DIR / "mods" / "skill-concierge.ts"
 CCMD_SETTINGS = CCMD_DIR / "settings.json"
 CCMD_MCP = CCMD_DIR / "mcp.json"
+CCMD_REGISTRY = CCMD_DIR / "mods" / ".registry"
 _CCMD_SETTINGS_HOOK_MARKER = "skill-concierge"  # SessionStart commands contain this string
 # Command Code accepts exactly four hook events (its dist constant Ry). Any other key in
 # settings.json is skipped with kind "unknown_event" and surfaces in the TUI as
@@ -1767,19 +1768,51 @@ def _cc_mod_root():
     return mod
 
 
+def _ccmd_package_mod():
+    """A package-provided skill-concierge mod under ~/.commandcode/mods/.registry, or None.
+
+    `cmd mods add owner/repo` clones the whole repo into .registry/git/<host>/<owner>/<repo>/
+    and loads mods straight from the clone (the packaging docs; no drop-in copy is made), so
+    any skill-concierge.mod.ts inside a package-shaped tree there is a loaded mod."""
+    if not CCMD_REGISTRY.is_dir():
+        return None
+    try:
+        candidates = sorted(CCMD_REGISTRY.rglob("skill-concierge.mod.ts"))
+    except OSError:
+        return None
+    for p in candidates:
+        root = p.parent.parent.parent          # <repo>: commandcode → adapters → repo root
+        if p.parent.name == "commandcode" and p.parent.parent.name == "adapters" \
+                and (root / "package.json").is_file():
+            return p
+    return None
+
+
+def _ccmd_registry_version(pkg_mod):
+    """package.json version of the registry tree that ships `pkg_mod`, or None."""
+    try:
+        return json.loads((pkg_mod.parent.parent.parent / "package.json")
+                          .read_text(encoding="utf-8")).get("version") or None
+    except JSON_READ_ERRORS:
+        return None
+
+
 def check_commandcode():
     """Command Code harness install state — mod + settings + MCP surface (ADR-0038).
 
     Command Code integrates skill-concierge through a TypeScript mod, SessionStart hooks,
-    and an MCP server entry — all installed by adapters/commandcode/install.sh into
-    ~/.commandcode/. There is no version manifest or plugin cache; the installed mod
-    carries the checkout path it was installed from (its INSTALLED_ROOT line,
-    adapters/commandcode/mod_root.py). Three presence signals:
-      1. mod file at ~/.commandcode/mods/skill-concierge.ts
+    and an MCP server entry. The mod loads from one of two places: the drop-in
+    ~/.commandcode/mods/skill-concierge.ts (install.sh copies it with the checkout path in
+    its INSTALLED_ROOT line, adapters/commandcode/mod_root.py), or a package-provided mod
+    inside the registry clone `cmd mods add` makes under ~/.commandcode/mods/.registry
+    (the packaging manifest commandcode.mods in package.json declares it). SessionStart
+    hooks and MCP stay installer-wired in either case. Presence signals:
+      1. one skill-concierge mod (drop-in and/or under .registry — BOTH loading registers
+         its governance hooks twice, so that is a finding, not OK behavior)
       2. SessionStart hooks in ~/.commandcode/settings.json referencing skill-concierge
       3. MCP skill-search entry in ~/.commandcode/mcp.json
-    WARN for a gap, and absent Command Code is one WARN row. FAIL only when the installed
-    mod's root cannot reach hooks/scripts/enforcer.py: that mod runs and does nothing.
+    WARN for a gap, and absent Command Code is one WARN row. FAIL only when a loaded
+    mod root cannot reach hooks/scripts/enforcer.py: that mod runs and does nothing.
     """
     if not CCMD_DIR.exists():
         return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
@@ -1787,10 +1820,17 @@ def check_commandcode():
                 "fix": None}
     findings = []
     unreachable = None
-    # 1. Mod presence
-    if not CCMD_MOD.exists():
-        findings.append("no skill-concierge mod at ~/.commandcode/mods/skill-concierge.ts")
-    else:
+    dropin = CCMD_MOD.exists()
+    pkg_mod = _ccmd_package_mod()
+    if dropin and pkg_mod is not None:
+        findings.append("both the drop-in mod (~/.commandcode/mods/skill-concierge.ts) and a "
+                        f"package-provided mod ({pkg_mod}) load — each registers its own hooks "
+                        "and would govern every prompt twice; drop one (cmd mods remove "
+                        "thinhkhuat/skill-concierge, or delete the drop-in file)")
+    if not dropin and pkg_mod is None:
+        findings.append("no skill-concierge mod at ~/.commandcode/mods/skill-concierge.ts "
+                        "or under ~/.commandcode/mods/.registry")
+    if dropin:
         # The installer COPIES the mod, so a repo change (e.g. the 0.49.0 exclusion echo) never
         # reaches Command Code until install.sh reruns — a stale copy is silent otherwise.
         # The copy carries its checkout path, so compare against this checkout's file rendered
@@ -1821,6 +1861,21 @@ def check_commandcode():
                                 "(a stale copy) — re-run adapters/commandcode/install.sh")
         except (OSError, UnicodeDecodeError, ValueError):
             pass
+    if pkg_mod is not None:
+        # The registry clone IS the full repo, and the packaging manifest points at
+        # adapters/commandcode/ inside it, so two dirs up from the mod file must hold
+        # hooks/scripts — the resolver's own last rung (skill-concierge.mod.ts). A partial
+        # or moved clone makes the mod a silent no-op, same as GitHub issue #1's drop-in.
+        pkg_root = pkg_mod.parent.parent.parent
+        if not (pkg_root / "hooks" / "scripts" / "enforcer.py").is_file():
+            unreachable = (f"the package-provided mod ({pkg_mod}) cannot reach hooks/scripts/"
+                           "enforcer.py two dirs above it — the registry clone is incomplete; "
+                           "run cmd mods update")
+        else:
+            reg_ver = _ccmd_registry_version(pkg_mod)
+            ssot = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+            if reg_ver and ssot and reg_ver != ssot:
+                findings.append(f"package registry clone v{reg_ver} != SSOT v{ssot} — run cmd mods update")
     # 2. SessionStart hooks referencing skill-concierge: our marker string inside a hook command
     settings = None
     hook_found = False
@@ -1881,8 +1936,9 @@ def check_commandcode():
     if findings:
         return {"id": "commandcode", "label": "Command Code integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": None}
+    mod_kind = "package-provided" if pkg_mod is not None else "drop-in"
     return {"id": "commandcode", "label": "Command Code integration", "status": OK,
-            "detail": "Mod + SessionStart hooks + skill-search MCP all present",
+            "detail": f"Mod ({mod_kind}) + SessionStart hooks + skill-search MCP all present",
             "fix": None}
 
 

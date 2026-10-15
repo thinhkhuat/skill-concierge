@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.68.5-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.69.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -426,7 +426,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.68.5` — **published**. Per-version history, including every release since
+Current release: `0.69.0` — **published** (this repo; GitHub `main` carries it). Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical
@@ -515,17 +515,17 @@ change deliberate, and the smoke's Codex row fails with this hint until you have
 
 ### Command Code
 
-Installed by [`adapters/commandcode/install.sh`](adapters/commandcode/install.sh) — creates four things:
+Installed by [`adapters/commandcode/install.sh`](adapters/commandcode/install.sh). The mod itself can also load as a **Command Code package** with no installer copy: `cmd mods add -g thinhkhuat/skill-concierge` clones this repo into `~/.commandcode/mods/.registry/git/` and loads `adapters/commandcode/skill-concierge.mod.ts` straight from it (the packaging manifest `commandcode.mods` in [`package.json`](package.json)); `cmd mods update` then pulls the newest code. SessionStart hooks and the MCP entry are **not** wired by the package install — run [`adapters/commandcode/install.sh`](adapters/commandcode/install.sh) for those, or wire them once by hand. Doctor's `Command Code integration` row accepts either mod source and flags both loaded at once (they would govern every prompt twice).
 
 | File | Purpose | Installer step |
 |------|---------|----------------|
-| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformContext`; a copy that carries the checkout path in its `INSTALLED_ROOT` line, so rerun the installer after you move the clone | (step 1) |
+| `~/.commandcode/mods/skill-concierge.ts` | Mod adapter — per-turn enforcer via `transformContext`; a copy that carries the checkout path in its `INSTALLED_ROOT` line, so rerun the installer after you move the clone. Alternative: a package-provided mod under `~/.commandcode/mods/.registry/` (no copy; SessionStart hooks and the MCP entry still need the installer) | (step 1), or `cmd mods add -g thinhkhuat/skill-concierge` |
 | `~/.commandcode/settings.json` | Hook entries (SessionStart, skill-concierge skills array) | (step 2, inline python) |
 | `~/.commandcode/mcp.json` | Skill-search MCP server (absolute paths) | (step 3, inline python) |
 | `~/.commandcode/skills/` | Skill discovery root (indexed by the engine) | set by settings.json ref |
 
 **To uninstall:**
-1. Remove the mod: `rm -f ~/.commandcode/mods/skill-concierge.ts`
+1. Remove the mod: the drop-in with `rm -f ~/.commandcode/mods/skill-concierge.ts`, or the package install with `cmd mods remove thinhkhuat/skill-concierge`.
 2. Remove the settings entries: edit `~/.commandcode/settings.json` to delete the `hooks` block that references skill-concierge scripts and the `skills` array entry for skill-concierge root. Alternatively restore from a backup or delete the file if empty.
 3. Remove the MCP server: edit `~/.commandcode/mcp.json` to delete the `skill-search` server entry.
 4. Remove skill files: `rm -rf ~/.commandcode/skills/skill-concierge/`

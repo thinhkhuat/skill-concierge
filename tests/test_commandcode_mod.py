@@ -295,6 +295,28 @@ def test_skill_concierge_root_still_wins_over_the_installed_root(fake, tmp_path)
     assert len(logged("baked-enforcer.py", 1)) == 1, "without the env var, the installed root runs"
 
 
+# ── The package install (cmd mods add) ────────────────────────────────────────────────────────
+# `cmd mods add owner/repo` loads the mod from the package's own clone under
+# ~/.commandcode/mods/.registry/git/<owner>/<repo>/adapters/commandcode/. That copy carries no
+# INSTALLED_ROOT line and gets no SKILL_CONCIERGE_ROOT env; the resolver's last rung,
+# resolve(__dirname, "../.."), then points at the clone root — the registry clone is the full
+# repo and ships hooks/. This test pins that the shipped file lives exactly two dirs under the
+# clone root, which the package manifest in package.json also declares.
+
+def test_package_cloned_repo_layout_reaches_hook_scripts(fake, tmp_path):
+    drive, logged = fake
+    registry = (tmp_path / "home" / ".commandcode" / "mods" / ".registry"
+                / "git" / "github.com" / "thinhkhuat" / "skill-concierge")
+    (registry / "adapters" / "commandcode").mkdir(parents=True)
+    shutil.copy(MOD, registry / "adapters" / "commandcode" / MOD.name)
+    shutil.copytree(drive.root / "hooks", registry / "hooks")
+    pkg = registry / "adapters" / "commandcode" / MOD.name
+    res = drive([context([user("fix the login bug")])], mod=pkg, env_root=False)[0]
+    assert len(menus(res)) == 1 and "MENU for: fix the login bug" in menus(res)[0]
+    assert [r["prompt"] for r in logged("enforcer.py", 1)] == ["fix the login bug"]
+    assert "NOTICE:" not in drive.stderr, drive.stderr
+
+
 def test_render_carries_any_root_exactly_and_refuses_a_reworded_source():
     mod_root = _mod_root()
     for root in ["/a/clone", "/tmp/root's \"repo\"", "C:\\Users\\x\\sc", "/home/người/sc"]:
