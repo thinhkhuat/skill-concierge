@@ -1,7 +1,7 @@
 {
   "name": "skill-concierge",
   "private": true,
-  "version": "0.69.0",
+  "version": "0.70.0",
   "keywords": ["cmd-mod"],
   "omp": {
     "extensions": [
@@ -10,7 +10,8 @@
   },
   "commandcode": {
     "mods": [
-      "./adapters/commandcode/skill-concierge.mod.ts"
+      "./adapters/commandcode/skill-concierge.mod.ts",
+      "./adapters/commandcode/skill-bridge.mod.ts"
     ]
   }
 }

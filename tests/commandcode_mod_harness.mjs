@@ -7,6 +7,9 @@
 // stdout: one JSON array, one entry per call: the hook's return value (null for events).
 // `cmd.sessions.leafId()` answers a fresh tree-entry id on every call, like Command Code's.
 // `cmd.ui.notify(message)` writes `NOTICE: <message>` to stderr, one line per notice.
+// `cmd.addSkillsPath(path)` writes `SKILLS_PATH: <path>` to stderr, one line per registration, so
+// a factory-time call (the bridge mod makes no other call) is assertable without changing the
+// stdout array shape.
 // usage: node commandcode_mod_harness.mjs <skill-concierge.mod.ts>
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -22,6 +25,7 @@ const cmd = {
   on: (name, fn) => { (handlers[name] ??= []).push(fn); },
   sessions: { leafId: () => `tree-entry-${++leaf}` },
   ui: { notify: (message) => process.stderr.write(`NOTICE: ${message}\n`) },
+  addSkillsPath: (path) => { process.stderr.write(`SKILLS_PATH: ${path}\n`); },
 };
 mod(cmd);
 

@@ -85,6 +85,8 @@ PY
 
 MOD_SRC="$ROOT/adapters/commandcode/skill-concierge.mod.ts"
 MOD_DST="$MODS_DIR/skill-concierge.ts"
+BRIDGE_MOD_SRC="$ROOT/adapters/commandcode/skill-bridge.mod.ts"
+BRIDGE_MOD_DST="$MODS_DIR/skill-bridge.ts"
 
 # ── 1-4. Compute every JSON transform in memory first; a failure anywhere in this step
 # exits before a single byte is written or the mod is copied. Only once every transform has
@@ -93,9 +95,14 @@ MOD_DST="$MODS_DIR/skill-concierge.ts"
 # preflight above but wrong at a NESTED level (e.g. "hooks.SessionStart": null, or an entry
 # whose own "hooks" list holds something that is not an object) can no longer crash mid-run
 # after earlier steps already wrote their part.
-PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" <<'PY'
+#
+# The colon-name skill bridge shelf is built here too, AFTER the checkout is validated: a root
+# whose mod cannot reach its hooks is refused with nothing written at all, and a corpus the
+# builder cannot handle stops the run before the config writes rather than after them.
+PYTHONPATH="$SCRIPT_DIR/../lib:$SCRIPT_DIR" python3 - "$ROOT" "$SETTINGS_FILE" "$MCP_FILE" "$LOCAL_PROJECT_DIR/mcp.json" "$MOD_SRC" "$MOD_DST" "$BRIDGE_MOD_SRC" "$BRIDGE_MOD_DST" <<'PY'
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -108,6 +115,8 @@ mcp_path = Path(sys.argv[3])
 project_mcp_path = Path(sys.argv[4])
 mod_src = Path(sys.argv[5])
 mod_dst = Path(sys.argv[6])
+bridge_mod_src = Path(sys.argv[7])
+bridge_mod_dst = Path(sys.argv[8])
 has_project = project_mcp_path.parent.is_dir()
 
 SERVER_ENV = {
@@ -184,17 +193,19 @@ def with_session_start_hooks(settings, root):
         # remove duplicate skill-concierge entries
         if any(name in cmd_str for name in
                ("hooks/scripts/doctrine.py", "auto_reindex.py", "auto_overrides.py",
-                "auto_flywheel.py", "auto_promote.py")):
+                "auto_flywheel.py", "auto_promote.py", "auto_bridge.py")):
             continue
         filtered_start.append(entry)
 
     # Add standard skill-concierge SessionStart hooks pointing to current root.
+    # auto_bridge.py regenerates the colon-name bridge shelf before Command Code discovers skills.
     sc_scripts = [
         f'python3 "{root}/hooks/scripts/doctrine.py"',
         f'python3 "{root}/hooks/scripts/auto_reindex.py"',
         f'python3 "{root}/hooks/scripts/auto_overrides.py"',
         f'python3 "{root}/hooks/scripts/auto_flywheel.py"',
         f'python3 "{root}/hooks/scripts/auto_promote.py"',
+        f'python3 "{root}/hooks/scripts/auto_bridge.py"',
     ]
     for script in sc_scripts:
         filtered_start.append({"hooks": [{"type": "command", "command": script, "timeout": 10}]})
@@ -214,6 +225,27 @@ def atomic_write(path, data):
     safe_write.write_text(path, json.dumps(data, indent=2) + "\n")
 
 
+def build_bridge_shelf(root):
+    """Materialize the colon-name bridge shelf (`scripts/cmd_skill_bridge.py build`).
+
+    Command Code validates a skill's frontmatter `name` strictly — lowercase letters, numbers and
+    single hyphens, <=64 chars, and the skill's own directory must carry that name — and SKIPS any
+    skill that breaks a rule, so a corpus naming itself `ak:fix` / `ck:copywriting` loads in Claude
+    Code and never loads in Command Code. The builder writes one normalized copy per such skill
+    into a shelf the skill-bridge mod registers with `cmd.addSkillsPath()`. Sources are never
+    touched (each is hashed into the shelf manifest, and `verify` proves it).
+
+    Run only after the checkout has been validated, and before any config write, so a refusal here
+    leaves the machine exactly as it was. The builder CLI stays the single entry point."""
+    r = subprocess.run([sys.executable, str(Path(root) / "scripts" / "cmd_skill_bridge.py"),
+                        "build", "--quiet"],
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise RuntimeError("cmd_skill_bridge.py build failed: "
+                           + (r.stdout + r.stderr).strip()[:400])
+    return (r.stdout + r.stderr).strip()
+
+
 # ── Compute (nothing written yet) ──
 try:
     settings = with_session_start_hooks(load_object(settings_path), root)
@@ -222,16 +254,26 @@ try:
                         if has_project else None)
     if not mod_src.is_file():
         raise FileNotFoundError(f"mod source not found at {mod_src}")
+    if not bridge_mod_src.is_file():
+        raise FileNotFoundError(f"bridge mod source not found at {bridge_mod_src}")
     if not (Path(root) / "hooks/scripts/enforcer.py").is_file():
         raise FileNotFoundError(f"no hooks/scripts/enforcer.py under {root}: the mod would do nothing")
     # The copy leaves the checkout, so it carries the checkout path (mod_root.py).
     mod_bytes = mod_root.render(mod_src.read_text(encoding="utf-8"), root).encode("utf-8")
+    # The bridge mod carries no path at all: its shelf comes from SKILL_CONCIERGE_BRIDGE_SHELF or
+    # the same default the builder uses, so a copy is a true copy (and runs from the checkout too).
+    bridge_mod_bytes = bridge_mod_src.read_bytes()
+    # Checkout validated and every config transform computed: now the shelf, the one thing that
+    # reads the skills corpus rather than this checkout's own files.
+    bridge_note = build_bridge_shelf(root)
 except Exception as e:
     print(f"  [!] computing the new configuration failed: {e}", file=sys.stderr)
     print("  [!] Nothing was changed. Fix or move the file(s) above, then re-run.", file=sys.stderr)
     sys.exit(1)
 
 # ── Commit (every write below only runs once every computation above succeeded) ──
+if bridge_note:
+    print(f"  [✓] Colon-name bridge shelf: {bridge_note.splitlines()[-1]}")
 atomic_write(settings_path, settings)
 print("  [✓] Updated settings: SessionStart hooks + extra skills path")
 atomic_write(mcp_path, mcp_data)
@@ -243,11 +285,14 @@ mod_dst.parent.mkdir(parents=True, exist_ok=True)
 mod_dst.write_bytes(mod_bytes)
 os.chmod(mod_dst, 0o755)
 print(f"  [✓] Installed mod: {mod_dst}")
+bridge_mod_dst.write_bytes(bridge_mod_bytes)
+os.chmod(bridge_mod_dst, 0o755)
+print(f"  [✓] Installed mod: {bridge_mod_dst} (registers the colon-name bridge shelf)")
 PY
 
 # ── 5. Verify (ZCode parity: adapters/zcode/install.sh §6) ──────────────────
 echo "==> verify:"
-PYTHONPATH="$SCRIPT_DIR" python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" <<'PYEOF'
+PYTHONPATH="$SCRIPT_DIR" python3 - "$ROOT" "$MOD_DST" "$SETTINGS_FILE" "$MCP_FILE" "$BRIDGE_MOD_DST" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -288,7 +333,7 @@ try:
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     cmds = []
     sc_hook_scripts = ("doctrine.py", "auto_reindex.py", "auto_overrides.py",
-                       "auto_flywheel.py", "auto_promote.py")
+                       "auto_flywheel.py", "auto_promote.py", "auto_bridge.py")
     for block in (settings.get("hooks", {}).get("SessionStart") or []):
         for h in (block.get("hooks") or []):
             c = h.get("command", "")
@@ -320,6 +365,39 @@ try:
         bad = True
 except Exception as e:
     print(f"    !! mcp.json read failed: {e}", flush=True)
+    bad = True
+# 5d. The colon-name bridge: this mod is installed, and the shelf it registers still passes the
+#     builder's own check (every copy legal, named like its directory, source hashes unchanged).
+#     Without the mod the shelf is inert — built copies that Command Code is never told about.
+bridge_mod_dst = Path(sys.argv[5])
+try:
+    if bridge_mod_dst.is_file():
+        print(f"    bridge mod installed: yes ({bridge_mod_dst.name})")
+        if "addSkillsPath" in bridge_mod_dst.read_text(encoding="utf-8"):
+            print("    bridge mod registers a skills path: yes")
+        else:
+            print("    !! bridge mod does not call addSkillsPath — nothing would load", flush=True)
+            bad = True
+    else:
+        print(f"    !! bridge mod missing at {bridge_mod_dst}", flush=True)
+        bad = True
+except Exception as e:
+    print(f"    !! bridge mod read failed: {e}", flush=True)
+    bad = True
+try:
+    import subprocess
+    r = subprocess.run([sys.executable, str(root / "scripts/cmd_skill_bridge.py"), "verify"],
+                       capture_output=True, text=True, timeout=120)
+    line = (r.stdout or "").strip().splitlines()
+    if r.returncode == 0:
+        print(f"    {line[-1] if line else 'bridge shelf: verified'}")
+    else:
+        print("    !! bridge shelf verification failed:", flush=True)
+        for ln in (r.stdout + r.stderr).strip().splitlines()[:5]:
+            print(f"       {ln}", flush=True)
+        bad = True
+except Exception as e:
+    print(f"    !! bridge verify could not run: {e}", flush=True)
     bad = True
 if bad:
     print("    verify: FAILED — see lines above", flush=True)

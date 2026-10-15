@@ -39,6 +39,9 @@ _PY_WRITE_RE = re.compile(r'\.write_text\(|\.write_bytes\(|\bos\.replace\(|\bshu
 ALLOWED_RAW_PY_WRITES = {
     ("commandcode", "mod_dst.write_bytes(mod_bytes)"):
         "copies the mod's own .ts SOURCE file, not a JSON/YAML config the harness reads as settings",
+    ("commandcode", "bridge_mod_dst.write_bytes(bridge_mod_bytes)"):
+        "the second mod's own .ts SOURCE copy (the colon-name bridge, which registers a skills "
+        "path); the shelf it registers is written by scripts/cmd_skill_bridge.py, not here",
     ("dsh", '.write_text(patch_text + "\\n", encoding="utf-8")'):
         "writes the .new SCRATCH candidate beside cordis.patch.yml, before DSH's own parser "
         "validates it — the live file is only ever repointed through safe_write.write_text",

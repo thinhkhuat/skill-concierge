@@ -3,6 +3,27 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.70.0] - 2026-10-15
+
+### Added
+
+- **The Command Code colon-name skill bridge ([ADR-0093](docs/adr/0093-commandcode-colon-name-skill-bridge.md)).** Command Code
+  validates a skill's frontmatter `name` strictly — lowercase letters, numbers and single hyphens, ≤64 characters, and the skill's own
+  directory must carry that name — and SKIPS any skill that breaks a rule, so the agentkit corpus (`ak:fix`, `ak:plan`, …) and personal
+  skills like `ck:copywriting` load in Claude Code and never load in Command Code. `scripts/cmd_skill_bridge.py` now copies every such
+  skill into the shelf `~/.commandcode/skill-concierge-bridge/<normalized>/`, rewriting each COPY's declared name (and its in-body
+  `<prefix>:<slug>` references, incl. the `/ak:cook` slash form, plus sibling relative paths for the flatter layout); the new
+  `adapters/commandcode/skill-bridge.mod.ts` registers that shelf with `cmd.addSkillsPath()`, the only ModApi seam that reaches Command
+  Code's own catalogue. Sources are never edited: each is hashed into the shelf manifest, `verify` proves it, and `clean` removes only
+  copies the manifest names. On this machine that is **117 skills** — 107 colon names, 3 space/uppercase, 1 underscore, 2 name/directory
+  mismatches and the 4 children of the `ak-document-skills` family — now loadable as `/ak-fix`, the name the concierge menu, index and
+  ledger have always used. `hooks/scripts/auto_bridge.py` refreshes the shelf at session start (throttled like its siblings; the builder's
+  fingerprint check makes a no-change run a ~0.3 s no-op), `install.sh` builds it after validating the checkout and before any config
+  write, `package.json` `commandcode.mods` ships both mods to a `cmd mods add` install, and `tests/test_commandcode_bridge.py` pins the
+  whole contract. One reference a copy cannot carry — `ak-agentkit/references/task-taxonomy.md` reaching `~/.claude/rules/…` — is reported
+  as a build warning, never hidden. Verified live: in a `cmd -p` session the model's catalogue carries `ak-fix`, `ck-copywriting`,
+  `defense-in-depth-validation`, `rg-history` and `reclaude`, and no entry with a colon.
+
 ## [0.69.0] - 2026-10-15
 
 ### Added

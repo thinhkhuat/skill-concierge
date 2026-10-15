@@ -39,6 +39,17 @@ INSTALL_SH = {
 
 # ── Fixture repo (the checkout the installer deploys FROM) ──────────────────────────────────
 
+def _stage_bridge_assets(root):
+    """The colon-name bridge assets a real checkout has and adapters/commandcode/install.sh reads:
+    the second mod source it installs, and the builder it runs to materialize the bridge shelf.
+    A fixture root stands in for a checkout, so it carries both."""
+    (root / "adapters" / "commandcode").mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "adapters" / "commandcode" / "skill-bridge.mod.ts",
+                root / "adapters" / "commandcode" / "skill-bridge.mod.ts")
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "scripts" / "cmd_skill_bridge.py", root / "scripts" / "cmd_skill_bridge.py")
+
+
 def _make_repo(tmp_path, name, version):
     """A minimal git-committed checkout: just enough for install.sh's own reads (SSOT version,
     launcher, enforcer) plus a real git history so `git archive HEAD` works."""
@@ -497,6 +508,7 @@ def test_apostrophe_and_double_quote_in_root_path(tmp_path):
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "hooks" / "scripts").mkdir(parents=True)
     (root / "hooks" / "scripts" / "enforcer.py").touch()
     (root / "bin").mkdir()
@@ -532,6 +544,7 @@ def test_commandcode_verify_failure_exits_nonzero(tmp_path):
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "hooks" / "scripts").mkdir(parents=True)
     (root / "hooks" / "scripts" / "enforcer.py").touch()
     # No bin/skill-search-mcp created — the MCP launcher check must fail verify.
@@ -553,6 +566,7 @@ def test_commandcode_refuses_a_malformed_settings_json_instead_of_resetting_it(t
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "bin").mkdir()
     launcher = root / "bin" / "skill-search-mcp"
     launcher.touch()
@@ -580,6 +594,7 @@ def test_commandcode_malformed_mcp_json_stops_before_any_write(tmp_path):
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "bin").mkdir()
     launcher = root / "bin" / "skill-search-mcp"
     launcher.touch()
@@ -630,6 +645,7 @@ def test_commandcode_wrong_shape_json_refuses_before_any_write(tmp_path, target,
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "bin").mkdir()
     launcher = root / "bin" / "skill-search-mcp"
     launcher.touch()
@@ -668,6 +684,7 @@ def test_commandcode_nested_wrong_shape_leaves_every_file_byte_identical(tmp_pat
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "bin").mkdir()
     launcher = root / "bin" / "skill-search-mcp"
     launcher.touch()
@@ -708,6 +725,7 @@ def test_commandcode_write_keeps_a_symlinked_settings_json_a_symlink_and_a_0600_
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "hooks" / "scripts").mkdir(parents=True)
     (root / "hooks" / "scripts" / "enforcer.py").touch()
     (root / "bin").mkdir()
@@ -810,6 +828,7 @@ def _commandcode_root(tmp_path, name="repo", hooks=True):
     (root / "adapters" / "commandcode").mkdir(parents=True)
     shutil.copy(ROOT / "adapters" / "commandcode" / "skill-concierge.mod.ts",
                 root / "adapters" / "commandcode" / "skill-concierge.mod.ts")
+    _stage_bridge_assets(root)
     (root / "bin").mkdir()
     (root / "bin" / "skill-search-mcp").touch()
     (root / "bin" / "skill-search-mcp").chmod(0o755)
