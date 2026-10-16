@@ -3,6 +3,25 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.71.2] - 2026-10-16
+
+### Fixed
+
+- **A Claude tier alias in a source `model:` now resolves against the user's own model pool
+  ([ADR-0095](docs/adr/0095-agent-bridge-model-alias-resolves-against-the-users-pool.md), superseding that one clause
+  of [ADR-0094](docs/adr/0094-commandcode-agent-tool-name-bridge.md)).** A live Command Code delegation warned
+  `unknown model "opus", did you mean "claude-opus-5"?` — the harness suggesting a catalogue id rather than the
+  user's actual model set. The bridge is not a dictionary and never guesses: an alias (`opus`/`sonnet`/`haiku`/
+  `fable`, with or without the `claude-` prefix) resolves to the same-family id among the models the user has
+  actually pre-picked in `~/.commandcode/config.json` (default model → `featureModels` → `reasoningEffort` keys →
+  `starredModels`), and a family the user does not currently configure goes to `inherit` with a note saying why —
+  a catalogue guess or a session-default downgrade would both be blind ends. `inherit` and every real `/model` id
+  pass through untouched. `AGENT_BRIDGE_CONFIG` overrides the config path; the test pool is a fixture, and
+  `tests/conftest.py` forces a nonexistent path so nothing in the suite reads the machine's real config.
+  `EMITTER_VERSION` bumps to 3 so the session-start hook regenerates the mirror without a force flag.
+  Tests: `tests/test_commandcode_agent_bridge.py` (alias resolution, the no-blind-translate negative, the
+  build-flow bite).
+
 ## [0.71.1] - 2026-10-16
 
 ### Fixed

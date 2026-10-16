@@ -27,9 +27,11 @@ is written where Command Code already looks.
 Rewrites applied to a copy, never to a source:
   • `tools:` (and `disallowedTools:`) ids are translated through TOOL_MAP; an id with no Command Code
     counterpart is dropped from the allowlist and REPORTED — never invented, never silently kept;
-  • `model:` is kept when it is `inherit` or a plausible Command Code id, and reset to `inherit` with a
-    warning otherwise (a Claude alias such as `sonnet` is not a Command Code id and would be dropped
-    by the harness, silently changing the model);
+  • `model:` is kept when it is `inherit` or a real `/model` id. A Claude tier alias (`opus`,
+    `sonnet`, `haiku`, `fable`) resolves to the same-family model the USER currently configures —
+    from `~/.commandcode/config.json` (`AGENT_BRIDGE_CONFIG` overrides) — and to `inherit` when the
+    user configures no model of that family: a catalogue guess would be a blind translate, and the
+    session default could silently downgrade the tier;
   • a body that relies on delegation (`Task(<agent>)`) or peer messaging (`SendMessage`,
     `shutdown_request`) gets ONE explicit adapter note saying Command Code subagents cannot spawn
     subagents and have no peer-messaging tool, so that work happens inline. The note is inserted, not
@@ -62,7 +64,7 @@ MANIFEST_VERSION = 1
 # earned it: add_key moved from "after `description:`" to "last entry of the block", and the
 # sources were unchanged, so without this constant the incremental path kept the corrupt copies
 # (invalid YAML at `bad indentation of a mapping entry`) for whole sessions.
-EMITTER_VERSION = 2
+EMITTER_VERSION = 3
 TEXT_SUFFIX = ".md"
 
 # Command Code ignores a custom agent whose name one of these owns.
@@ -130,6 +132,17 @@ PEER_IDIOMS = ("SendMessage", "shutdown_request", "teammate", "teammates")
 MODEL_OK_RE = re.compile(r"^(inherit|[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*"
                          r"|claude-[a-z0-9][a-z0-9.-]*|gpt-[a-z0-9][a-z0-9.-]*"
                          r"|zai-org/[A-Za-z0-9._-]+|deepseek-[a-z0-9.-]+|gemini-[a-z0-9.-]+)$")
+
+# A Claude tier alias an o.g. definition may pin (`model: sonnet`). Command Code forbids bare
+# aliases: its /model ids spell out family and version (`claude-opus-4-8`). The alias resolves
+# against the models the user ACTUALLY configures — the same-family id among the config's own ids —
+# never the newest catalogue entry (the harness suggestion knows the catalogue, not this user's
+# plan and taste), and never a silent tier downgrade onto the session default.
+MODEL_ALIAS_RE = re.compile(r"^(?:claude-)?(opus|sonnet|haiku|fable)$", re.IGNORECASE)
+ALIAS_FAMILY = {"opus": "claude-opus", "sonnet": "claude-sonnet",
+                "haiku": "claude-haiku", "fable": "claude-fable"}
+CONFIG_ENV = "AGENT_BRIDGE_CONFIG"
+CONFIG_DEFAULT = Path.home() / ".commandcode" / "config.json"
 
 ADAPTER_NOTE = (
     "[command-code adapter] This prompt was mirrored for Command Code by "
@@ -277,8 +290,47 @@ def translate_tools(tokens) -> tuple:
     return mapped, dropped, notes
 
 
-def translate_model(text: str) -> tuple:
-    """(text, note) with `model:` reset to `inherit` when it is not a Command Code id."""
+def configured_models(config_path=None) -> list:
+    """The model ids the USER currently predefines, in priority order.
+
+    Read from the Command Code config (`~/.commandcode/config.json`, `${CONFIG_ENV}` overrides):
+    the default model, the feature models, the effort keys, then the starred models. Every entry
+    came through the /model picker on this machine, so every entry already resolved there — the
+    list is a pool of real ids, never invented. Empty when the config is missing or unreadable."""
+    path = Path(config_path or os.environ.get(CONFIG_ENV) or CONFIG_DEFAULT).expanduser()
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return []
+    if not isinstance(cfg, dict):
+        return []
+    feature = cfg.get("featureModels") or {}
+    effort = cfg.get("reasoningEffort") or {}
+    starred = cfg.get("starredModels")
+    ordered = [cfg.get("model"),
+               feature.get("planning") if isinstance(feature, dict) else None,
+               feature.get("implementation") if isinstance(feature, dict) else None,
+               *(list(effort) if isinstance(effort, dict) else []),
+               *(starred if isinstance(starred, list) else [])]
+    out = []
+    for item in ordered:
+        if isinstance(item, str):
+            value = item.strip()
+            if value and value not in out:
+                out.append(value)
+    return out
+
+
+def translate_model(text: str, config_models=None) -> tuple:
+    """(text, note): `model:` survives only when Command Code can read it.
+
+    `inherit` and a real `/model` id pass through as written. A Claude tier alias (`opus`,
+    `sonnet`, `haiku`, `fable`) translates to the same-family model from the USER's own configured
+    pool (`~/.commandcode/config.json`); an explicit `config_models` list overrides the pool for
+    tests. A family the user currently configures no model of does NOT translate — pinning a
+    catalogue guess or downgrading onto the session default would both be blind ends — so the
+    field goes to `inherit` with a note, and any model floor belongs to the dispatcher. Any other
+    unresolvable value goes to `inherit` too."""
     found = fm_value(text, "model")
     if not found:
         return text, None
@@ -286,11 +338,24 @@ def translate_model(text: str) -> tuple:
     if kind != "scalar":
         return rewrite_key(text, "model", "inherit"), "model list is not a Command Code value: -> inherit"
     value = payload.strip().strip("'\"")
+    alias = MODEL_ALIAS_RE.match(value)
+    if alias:
+        family = ALIAS_FAMILY[alias.group(1).lower()]
+        pool = configured_models() if config_models is None else list(config_models)
+        target = next((m for m in pool if m.startswith(family)), None)
+        if target:
+            return (rewrite_key(text, "model", target),
+                    f"`model: {value}` -> `{target}` (the {family}-class model the user currently "
+                    "configures)")
+        return (rewrite_key(text, "model", "inherit"),
+                f"`model: {value}`: no {family}-class model in the user's current Command Code config "
+                "— a catalogue guess would be a blind translate and the session default could "
+                "silently downgrade the tier: -> inherit")
     if MODEL_OK_RE.match(value):
         return text, None
     return (rewrite_key(text, "model", "inherit"),
-            f"model `{value}` is not a Command Code /model id (a Claude alias is not one) and would "
-            "be dropped by the harness: -> inherit")
+            f"model `{value}` is not a Command Code /model id and would be dropped by the "
+            "harness: -> inherit")
 
 
 def rename_body_tools(text: str) -> tuple:
@@ -752,9 +817,17 @@ def _selftest() -> int:
     ok &= parse_tools(fm_value("---\ntools: \"*\"\n---\n", "tools")) == ["*"]
     # a bare `*` is a YAML alias (Command Code patches exactly this), so the mirror quotes it
     ok &= 'tools: "*"' in rewrite_key("---\ntools: *\n---\n", "tools", '"*"')
-    # model: a Claude alias is not a Command Code id; inherit and a real id survive
-    _o, note = translate_model(fm)
-    ok &= note is not None and "-> inherit" in note
+    # model: a real id and `inherit` survive as written; a tier alias resolves to the same-family
+    # model of the user's OWN config pool (passed explicitly here, the list is never machine-run),
+    # and an unconfigured family falls back to inherit with a note — never a catalogue guess
+    resolved, _note = translate_model(fm, ["claude-sonnet-5-5", "claude-haiku-5-5"])
+    ok &= resolved == fm.replace("model: sonnet", "model: claude-sonnet-5-5")
+    ok &= translate_model(fm.replace("model: sonnet", "model: Sonnet"),
+                          ["claude-sonnet-5-5"])[0] == fm.replace("model: sonnet", "model: claude-sonnet-5-5")
+    unresolved = translate_model(fm, ["zai-org/GLM-5.2"])[1]
+    ok &= unresolved is not None and "-> inherit" in unresolved and "sonnet-class" in unresolved
+    ok &= translate_model(fm.replace("model: sonnet", "model: claude-opus"),
+                          ["claude-opus-4-8"])[0] == fm.replace("model: sonnet", "model: claude-opus-4-8")
     ok &= translate_model("---\nmodel: inherit\n---\n")[1] is None
     ok &= translate_model("---\nmodel: claude-opus-4-8\n---\n")[1] is None
     ok &= translate_model("---\nname: a\n---\n")[1] is None            # absent: nothing to say

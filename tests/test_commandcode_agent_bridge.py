@@ -196,18 +196,63 @@ def test_an_omitted_tools_key_is_written_out_and_an_existing_one_is_never_duplic
     assert mod.add_key(existing, "tools", '"*"') == existing
 
 
-@pytest.mark.parametrize("value,expected_note", [("inherit", False), ("claude-opus-4-8", False),
-                                                 ("zai-org/glm-5.2", False), ("sonnet", True),
-                                                 ("opus", True)])
-def test_a_model_is_kept_only_when_command_code_could_resolve_it(value, expected_note) -> None:
-    mod = _builder()
+@pytest.fixture()
+def cc_config(tmp_path, monkeypatch):
+    """A named, hermetic Command Code model pool, wired through the bridge's own env override.
+
+    Every id in it is one the user actually picked in /model; the deliberate omission is a whole
+    family (`fable`), which is how the no-blind-translate path is exercised.
+    """
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "model": "z-ai/glm-5.3-flash",
+        "featureModels": {"planning": "meta/muse-spark-1.3-contributor",
+                          "implementation": "deepseek/deepseek-v4.1-flash"},
+        "reasoningEffort": {"claude-haiku-5-5": "high"},
+        "starredModels": ["claude-sonnet-5-5", "claude-opus-4-8", "moonshotai/Kimi-K3"],
+    }), encoding="utf-8")
+    monkeypatch.setenv("AGENT_BRIDGE_CONFIG", str(cfg))
+    return cfg
+
+
+@pytest.mark.parametrize("value", ["inherit", "claude-opus-4-8", "zai-org/glm-5.2", "gpt-5-6"])
+def test_a_model_id_the_harness_knows_is_never_touched(value, cc_config) -> None:
     text = f"---\nname: p\nmodel: {value}\n---\nbody\n"
-    out, note = mod.translate_model(text)
-    assert (note is not None) == expected_note
-    if expected_note:
-        assert "model: inherit\n" in out
-    else:
-        assert f"model: {value}\n" in out
+    out, note = _builder().translate_model(text)
+    assert note is None and f"model: {value}\n" in out
+
+
+@pytest.mark.parametrize("alias,family_id", [("sonnet", "claude-sonnet-5-5"),
+                                             ("Sonnet", "claude-sonnet-5-5"),
+                                             ("haiku", "claude-haiku-5-5"),
+                                             ("opus", "claude-opus-4-8"),
+                                             ("claude-opus", "claude-opus-4-8")])
+def test_a_tier_alias_resolves_to_the_familys_currently_configured_model(alias, family_id, cc_config) -> None:
+    """The user's own pool only: the default model, the feature models, the effort keys, the
+    starred models. The alias never invents a catalogue id the user's plan may not grant."""
+    text = f"---\nname: p\nmodel: {alias}\n---\nbody\n"
+    out, note = _builder().translate_model(text)
+    assert f"model: {family_id}\n" in out, f"`{alias}` must land on the user's pinned {family_id}"
+    assert note is not None and family_id in note, "the resolution says what it resolved to"
+
+
+def test_a_family_the_user_does_not_configure_is_never_translated_blindly(cc_config) -> None:
+    """No fable-class model in the pool, so the field must not become one: not the newest catalogue
+    fable, not the session default underneath it — both would change what the author pinned."""
+    text = "---\nname: p\nmodel: fable\n---\nbody\n"
+    out, note = _builder().translate_model(text)
+    assert "model: inherit\n" in out
+    assert "claude-fable-5" not in out, "a catalogue guess is a blind translate"
+    assert "z-ai/glm-5.3-flash" not in out, "the session default would silently downgrade the tier"
+    assert note is not None and "fable-class" in note and "-> inherit" in note
+
+
+def test_an_alias_with_no_config_at_all_falls_back_to_inherit(monkeypatch, tmp_path) -> None:
+    """No readable config means no pool, so resolution cannot meet its own standard: inherit."""
+    monkeypatch.setenv("AGENT_BRIDGE_CONFIG", str(tmp_path / "absent.json"))
+    text = "---\nname: p\nmodel: opus\n---\nbody\n"
+    out, note = _builder().translate_model(text)
+    assert "model: inherit\n" in out and note is not None and "-> inherit" in note
 
 
 def test_an_absent_model_is_not_invented() -> None:
@@ -256,6 +301,15 @@ def test_build_mirrors_every_agent_with_translated_frontmatter(corpus, tmp_path)
     assert "model: inherit\n" in (dest / "pinned.md").read_text()
     assert not (dest / "explore.md").exists(), "a reserved agent id is ignored by Command Code"
     assert json.loads((dest / mod.MANIFEST_NAME).read_text())["entries"], "the manifest is written"
+
+
+def test_the_build_flow_translates_a_pinned_alias_through_the_pool(cc_config, corpus, tmp_path) -> None:
+    """The env-configured pool governs the emitted bytes, not just the pure function."""
+    mod = _builder()
+    dest = tmp_path / "mirror"
+    assert mod.build([corpus], dest, quiet=True)["status"] == "built"
+    mirrored = (dest / "pinned.md").read_text()
+    assert "model: claude-sonnet-5-5\n" in mirrored and "model: sonnet" not in mirrored
 
 
 def test_no_source_file_is_ever_modified(corpus, tmp_path) -> None:
