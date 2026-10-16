@@ -1,7 +1,8 @@
 """The Command Code agent bridge — the fix for "this delegate loads in Claude Code and starts with
 almost no tools in cmd".
 
-The corpus is shared on purpose: `~/.commandcode/agents` is a symlink to `~/.claude/agents`, so the
+The corpus is shared on purpose: `~/.commandcode/agents` starts as a symlink to `~/.claude/agents`,
+so the
 same agent file is read by every harness, and its `tools:` line is written the Claude Code way
 (`Read`, `Write`, `Bash`, `TodoWrite`, `Task(Explore)`). Command Code resolves those names against
 its OWN tool ids and drops every one it does not know, in silence — a `fullstack-developer` delegate
