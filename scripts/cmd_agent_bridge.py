@@ -56,6 +56,13 @@ DEST_ENV = "AGENT_BRIDGE_DEST"
 DEST_DEFAULT = Path.home() / ".commandcode" / "agents"
 MANIFEST_NAME = "_agent_bridge.json"
 MANIFEST_VERSION = 1
+# Bump when a code change alters the bytes this emitter writes. It rides in the build fingerprint,
+# so the next (no-force) build — the session-start hook included — regenerates the mirror instead
+# of honouring the fingerprint and leaving yesterday's bytes in place. The live incident that
+# earned it: add_key moved from "after `description:`" to "last entry of the block", and the
+# sources were unchanged, so without this constant the incremental path kept the corrupt copies
+# (invalid YAML at `bad indentation of a mapping entry`) for whole sessions.
+EMITTER_VERSION = 2
 TEXT_SUFFIX = ".md"
 
 # Command Code ignores a custom agent whose name one of these owns.
@@ -212,7 +219,15 @@ def rewrite_key(text: str, key: str, value: str) -> str:
 # ── translations ──────────────────────────────────────────────────────────────
 
 def add_key(text: str, key: str, value: str) -> str:
-    """Add a frontmatter key that is absent, right after `description:` when there is one.
+    """Add a frontmatter key that is absent, as the block's LAST entry.
+
+    Appending, not position-shopping, is the point: a key line may never interrupt a block
+    scalar. `description: >` and its indented continuation lines are one value, and a `tools:`
+    line between them is a second mapping at the wrong indent — YAML the harness refuses with
+    `bad indentation of a mapping entry`, live for whole sessions on agent-validator.md,
+    vn-author-agent.md and vn-editor-agent.md. The line before the closing fence is always a
+    complete entry, so appending there is always well-formed, and mapping key order carries no
+    meaning.
 
     Used only for the omitted-`tools:` case, where the absence itself is the defect: Claude Code
     reads a missing `tools` as "inherit every tool", Command Code reads it as "no tools at all", so
@@ -224,12 +239,7 @@ def add_key(text: str, key: str, value: str) -> str:
         return f"---\n{key}: {value}\n---\n\n" + text
     start, end = bounds
     lines = text.split("\n")
-    at = end
-    for i in range(start, end):
-        if re.match(r"^description:", lines[i]):
-            at = i + 1
-            break
-    lines[at:at] = [f"{key}: {value}"]
+    lines[end:end] = [f"{key}: {value}"]
     return "\n".join(lines)
 
 
@@ -399,7 +409,7 @@ def build(roots, dest=None, force=False, quiet=False) -> dict:
 
     fingerprint = hashlib.sha1(json.dumps(
         [[r["name"], _sha256(r["path"])] for r in records] + [str(Path(r).expanduser()) for r in roots]
-        + [MANIFEST_VERSION], sort_keys=True).encode()).hexdigest()
+        + [MANIFEST_VERSION, EMITTER_VERSION], sort_keys=True).encode()).hexdigest()
     if not force and old and old.get("fingerprint") == fingerprint and _mirror_intact(dest, old):
         report = {"status": "unchanged", "dest": str(dest), "counts": _counts(old),
                   "entries": sorted(e.get("file", "") for e in old.get("entries", [])),
@@ -788,6 +798,21 @@ def _selftest() -> int:
         # a source with no `tools:` key is mirrored WITH one — the omission would cost every tool
         ok &= 'tools: "*"' in (dest / "a.md").read_text()
         ok &= any("no `tools:` key" in w for w in rep["warnings"])
+        # that added key lands LAST: a folded `description: >` block's continuation lines may
+        # never be split by a key (the harness refuses such YAML for whole sessions)
+        folded = src / "folded.md"
+        folded.write_text("---\nname: folded\ndescription: >\n"
+                          "  Rigorous validation agent. Use proactively for review.\n"
+                          "model: inherit\n---\n\nValidate the plan.\n")
+        build([src], dest, quiet=True)
+        mtext = (dest / "folded.md").read_text()
+        start, close = frontmatter_bounds(mtext)
+        lines_ = mtext.split("\n")
+        keys_ = [i for i in range(start, close) if re.match(r"^\S", lines_[i]) and ":" in lines_[i]]
+        ok &= lines_[keys_[-1]].startswith("tools:")
+        folded.unlink()
+        build([src], dest, quiet=True)
+        ok &= not (dest / "folded.md").exists()
         # a same-name file the bridge does not own is preserved, never clobbered
         (src / "native.md").write_text("---\nname: native\n---\nx\n")
         (dest / "native.md").write_text("hand-written in Command Code\n")

@@ -3,6 +3,25 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.71.1] - 2026-10-16
+
+### Fixed
+
+- **The agent bridge no longer emits invalid YAML for every agent with a folded `description: >`
+  block.** `cmd_agent_bridge.py` appended the missing `tools: "*"` right after the `description:`
+  line — but for agent-validator.md, vn-author-agent.md and vn-editor-agent.md that line opens a
+  folded multi-line scalar, so the appended key sat between the opener and its indented
+  continuation lines: a mapping at the wrong indent that Command Code's YAML parser refuses with
+  `bad indentation of a mapping entry (4:3)`, printed for every session. An added key now closes
+  the frontmatter block (mapping key order carries no meaning to the reader), and the mirror is
+  44-for-44 through the real parser. The three files were regenerated live: the loader errors are
+  gone from a fresh session, and the frontmatter parses with the folded description intact.
+- A fix that changes the bytes the emitter writes now propagates through the ordinary no-force
+  path: `EMITTER_VERSION` rides in the build fingerprint, so the next build — the session-start
+  hook including — regenerates a mirror emitted by older logic instead of honouring the stale
+  fingerprint. Previously the incremental build reported "mirror up to date" and kept the corrupt
+  copies until a source edit or a manual `--force`.
+
 ## [0.71.0] - 2026-10-16
 
 ### Added

@@ -20,6 +20,7 @@ wrote. Each is a test here.
 """
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -140,14 +141,56 @@ def test_a_block_list_tools_value_collapses_to_one_line() -> None:
     assert out.count("tools:") == 1 and "model: inherit" in out
 
 
+def test_a_folded_description_is_never_split_by_an_added_tool_key(tmp_path) -> None:
+    """The live incident. agent-validator.md, vn-author-agent.md and vn-editor-agent.md open
+    `description` as a folded multi-line scalar (`description: >`); the indented continuation
+    lines belong to that scalar, so a `tools: "*"` line inserted between the opener and them
+    becomes a second mapping at the wrong indent — YAML the harness refuses, `bad indentation of
+    a mapping entry (4:3)`, printed for every session. An added key may only land where a
+    mapping key is legal: after the last complete entry of the block. The fold is built from a
+    dedicated source, because only that shape reproduces the split."""
+    mod = _builder()
+    src = tmp_path / "folded"
+    src.mkdir()
+    (src / "folded.md").write_text(
+        "---\nname: folded\n"
+        "description: >\n"
+        "  Rigorous validation agent. Use proactively for review.\n"
+        "model: inherit\n"
+        "---\n\nValidate the plan.\n", encoding="utf-8")
+    dest = tmp_path / "mirror"
+    mod.build([src], dest, quiet=True)
+    mirrored = (dest / "folded.md").read_text(encoding="utf-8")
+    start, close = mod.frontmatter_bounds(mirrored)
+    lines = mirrored.split("\n")
+    col0 = [i for i in range(start, close) if re.match(r"^\S", lines[i]) and ":" in lines[i]]
+    assert col0, "the generated frontmatter must still carry mapping keys"
+    assert lines[col0[-1]].startswith("tools:"), (
+        f"an added key closes the frontmatter block: found {lines[col0[-1]]!r} as the last entry")
+    desc = next(i for i in col0 if lines[i].startswith("description:"))
+    assert lines[desc].rstrip().endswith(">") and lines[desc + 1].startswith("  "), (
+        "a folded scalar's continuation follows its opener directly, never another key")
+    block = "\n".join(lines[start:close])
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - the structural assertion above already bites
+        yaml = None
+    if yaml is not None:
+        parsed = yaml.safe_load(block)
+        assert parsed["description"] == "Rigorous validation agent. Use proactively for review.\n"
+        assert parsed["tools"] == "*", "the omission still says * out loud"
+    assert mod.verify(dest)["ok"], "the mirror exactly as emitted must verify clean"
+
+
 def test_an_omitted_tools_key_is_written_out_and_an_existing_one_is_never_duplicated() -> None:
     """Claude Code reads a missing `tools:` as "inherit every tool"; Command Code reads it as "no
     tools at all", so the omission itself is the defect and the mirror has to say `*`."""
     mod = _builder()
     text = "---\nname: n\ndescription: d\nmodel: inherit\n---\nbody\n"
     out = mod.add_key(text, "tools", '"*"')
-    assert out.split("\n")[:5] == ['---', "name: n", "description: d", 'tools: "*"',
-                                   "model: inherit"]
+    # appended, never position-shopped: a key line may not interrupt a block scalar
+    assert out.split("\n")[:5] == ['---', "name: n", "description: d", "model: inherit",
+                                   'tools: "*"']
     existing = "---\nname: n\ntools: Read\n---\nbody\n"
     assert mod.add_key(existing, "tools", '"*"') == existing
 
@@ -247,6 +290,23 @@ def test_a_second_build_is_a_no_op_and_a_changed_source_rebuilds(corpus, tmp_pat
     assert mod.build([corpus], dest, quiet=True)["status"] == "unchanged"
     _agent(corpus, "worker", "Read, Bash")                 # the source changed
     assert mod.build([corpus], dest, quiet=True)["status"] == "built"
+
+
+def test_an_emitter_version_bump_rebuilds_without_force(corpus, tmp_path) -> None:
+    """A fix that changes the bytes the emitter writes must reach the mirror through the ordinary
+    no-force path — the session-start hook is that path, and it cannot know about code fixes. The
+    live incident: add_key's placement changed and the sources did not, so without this hook the
+    incremental build kept the invalid-YAML copies for whole sessions."""
+    mod = _builder()
+    dest = tmp_path / "mirror"
+    mod.EMITTER_VERSION = 7
+    rep = mod.build([corpus], dest, quiet=True)
+    assert rep["status"] == "built"
+    assert mod.build([corpus], dest, quiet=True)["status"] == "unchanged"
+    mod.EMITTER_VERSION = 8
+    rep = mod.build([corpus], dest, quiet=True)
+    assert rep["status"] == "built", "an emitter-version bump must free a rebuild"
+    assert mod.build([corpus], dest, quiet=True)["status"] == "unchanged"
 
 
 def test_a_removed_source_leaves_no_stale_mirror_file(corpus, tmp_path) -> None:

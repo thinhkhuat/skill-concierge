@@ -1,7 +1,7 @@
 {
   "name": "skill-concierge",
   "private": true,
-  "version": "0.71.0",
+  "version": "0.71.1",
   "keywords": ["cmd-mod"],
   "omp": {
     "extensions": [
