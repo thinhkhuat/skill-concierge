@@ -3,6 +3,28 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.71.3] - 2026-10-16
+
+### Added
+
+- **The agent-model guard ([ADR-0096](docs/adr/0096-agent-model-guard-denies-a-bare-alias-in-the-call.md)): a bare
+  Claude alias in an agent-tool call's `model` argument is denied at generation time, with the exact fix in the
+  denial.** The attribution that closed it: the original vn-editor-agent error named the agent FILE, but the
+  dispatcher (`cli.mjs::describeUnknownSubagentModel`) validates a call-arg model against its shipped `/model`
+  catalog and blames `e.definition.filePath` regardless of where the value came from — the file never configured
+  `opus`, the call did, and no config seam exists to teach the dispatcher aliases. `hooks/scripts/agent_model_guard.py`
+  (PreToolUse, `matcher: "agent"`, wired idempotently by the installer beside the user's own hooks) refuses the bare
+  alias before the dispatcher can mis-attribute it and names the exact id the user's config pool resolves it to — the
+  same resolution ADR-0095 gives the definition layer, imported from the bridge so the two can never disagree. A real
+  id, `inherit`, an absent model, or any other tool passes silently; fail-open on any internal error;
+  `AGENT_MODEL_GUARD=0` kills it. A same-day second live incident grew the gate a second leg: a session spawned
+  `subagent_type: "pstack-architect"` — a SKILL — and got the dispatcher's bare `Unknown subagent_type:` with no
+  hint; the guard now replicates Command Code's registry view exactly (bundled + mirror filenames + frontmatter
+  `name:` + project dir, so a legal type is never denied) and denies an unregistered type with the `/skill:<name>`
+  form when the port installs such a skill, else with `/agents`.
+  Tests: `tests/test_agent_model_guard.py` (33, including the exact original failing
+  tool_input, the no-catalogue-guess negative, and the registry-fidelity negative).
+
 ## [0.71.2] - 2026-10-16
 
 ### Fixed

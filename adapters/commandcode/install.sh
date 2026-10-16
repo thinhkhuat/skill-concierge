@@ -236,6 +236,35 @@ def with_session_start_hooks(settings, root):
     return settings
 
 
+def with_agent_model_guard(settings, root):
+    """PreToolUse(agent) deny gate for a bare Claude tier alias in a call's `model` arg.
+
+    Command Code's dispatcher validates a call-arg model against its SHIPPED /model catalog
+    and refuses a bare alias with a message that blames the agent FILE even though the value
+    came from the call (the live vn-editor-agent incident, 2026-10-16). No config seam exists
+    in the dispatcher, so this hook is the deterministic prevention: it denies before the
+    dispatcher runs and names the exact id the user's config pool resolves the alias to — the
+    same resolution cmd_agent_bridge.py uses. Idempotent: the guard's own stale entries are
+    dropped and replaced; every other PreToolUse entry (the user's own hooks) is untouched."""
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f'"hooks" must be an object, found {type(hooks).__name__}')
+    pre = hooks.setdefault("PreToolUse", [])
+    if not isinstance(pre, list):
+        raise ValueError('"hooks.PreToolUse" must be an array, '
+                         f'found {type(pre).__name__}')
+    ours = [e for e in pre if not isinstance(e, dict) or any(
+        "agent_model_guard.py" in (h or {}).get("command", "")
+        for h in (e.get("hooks") or []) if isinstance(h, dict))]
+    for stale in ours:
+        pre.remove(stale)
+    pre.append({"matcher": "agent",
+                "hooks": [{"type": "command",
+                           "command": f'python3 "{root}/hooks/scripts/agent_model_guard.py"',
+                           "timeout": 10}]})
+    return settings
+
+
 def atomic_write(path, data):
     safe_write.write_text(path, json.dumps(data, indent=2) + "\n")
 
@@ -264,6 +293,7 @@ def build_bridge_shelf(root):
 # ── Compute (nothing written yet) ──
 try:
     settings = with_session_start_hooks(load_object(settings_path), root)
+    settings = with_agent_model_guard(settings, root)
     mcp_data = with_skill_search_server(load_object(mcp_path), root)
     project_mcp_data = (with_skill_search_server(load_object(project_mcp_path), root)
                         if has_project else None)

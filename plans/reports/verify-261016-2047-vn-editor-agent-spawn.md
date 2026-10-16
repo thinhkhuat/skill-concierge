@@ -138,3 +138,32 @@ not resolve on disk: the literal `445/53` appears in no today-dated file (search
 `skill-concierge/plans`, `MY-WORKBENCH/plans`, `~/.commandcode/plans`); the only hits are a
 2026-07-09 index-split plan and scratch HTML. Name the file or check it points at and this addendum
 closes.
+
+---
+
+## Addendum 2 — 2026-10-16, the attribution session (agent-model guard), same home
+
+**Where the original error actually came from.** Not the file it names. Command Code's dispatcher
+(`cli.mjs::describeUnknownSubagentModel`, verified live in the shipped `cli.mjs` this turn) validates an
+agent-tool call's `model` ARGUMENT against `resolveCatalog().catalog.models` and, on a miss, renders the
+refusal with `e.definition.filePath` — the agent FILE — regardless of where the value came from:
+
+```
+;if(o.includes(canonicalizeModelId({model:n,catalog:e.catalog})))return;const{name:r,filePath:s}=e.definition,
+a=suggestKnownModelId({model:n,knownModelIds:o});return`Sub-agent "${r}"${s?` (${s})`:""} is configured with
+an unknown model "${n}"...
+```
+
+The live delegation carried `model: "opus"` in the CALL — a bare Claude tier alias, not a catalog id — so the
+refusal fired while the file was blameless (it carries no `model:` line; the mirror is byte-faithful). The
+file-blaming text is why two sessions chased the definition layer and why the first validation run's probe —
+which deliberately re-ran the dispatcher-layer input — reproduced the refusal after a correct fix. The probe
+was not a fix failure; it was the other layer.
+
+**The fix that closes the class** ([ADR-0096](../docs/adr/0096-agent-model-guard-denies-a-bare-alias-in-the-call.md)):
+`hooks/scripts/agent_model_guard.py` — a PreToolUse hook on the `agent` tool (matcher `agent`, wired
+idempotently by the installer beside the user's own hooks) that denies a bare alias BEFORE the dispatcher can
+mis-attribute it and names the exact id the user's own config pool resolves it to (the ADR-0095 resolution,
+imported from the bridge). A real id, `inherit`, an absent model, or any other tool passes silently; fail-open;
+`AGENT_MODEL_GUARD=0` kills it. The exact original failing tool_input denies with the fix in the reason;
+`tests/test_agent_model_guard.py`, 25 tests.
