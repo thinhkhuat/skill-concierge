@@ -674,6 +674,9 @@ class _FakeEmbedResp:
 def test_check_embed_parity_reports_a_clean_timeout_instead_of_hanging(dr, monkeypatch, tmp_path):
     """The in-process model-load subprocess must be bounded — a stuck load reports a
     WARN row instead of hanging doctor forever."""
+    # Pin the backend: this test exercises the fastembed cosine probe, and with a
+    # non-fastembed default the check takes the model-name branch instead.
+    monkeypatch.setattr(dr, "BACKEND", "fastembed")
     monkeypatch.setattr(dr, "_owner_health", lambda: {"status": "ok", "model": "test-model"})
     monkeypatch.setattr(dr.urllib.request, "urlopen",
                         lambda req, timeout=10: _FakeEmbedResp(json.dumps({"vector": [0.1, 0.2]}).encode()))
@@ -689,6 +692,28 @@ def test_check_embed_parity_reports_a_clean_timeout_instead_of_hanging(dr, monke
     row = dr.check_embed_parity()
     assert row["status"] == "warn"
     assert "timed out" in row["detail"]
+
+
+def test_embed_parity_compares_models_when_the_backend_has_no_in_process_fallback(dr, monkeypatch):
+    """On a non-fastembed backend both the owner's /embed and the query path call the same
+    backend, so the cosine probe is meaningless — but the owner can still come up on a model
+    other than the one the MCP is configured for. mpnet and embeddinggemma-2 both emit 768
+    dims, so nothing else can catch that. Mismatched model must FAIL."""
+    monkeypatch.setattr(dr, "BACKEND", "ollama")
+    monkeypatch.setattr(dr, "MODEL", "embeddinggemma-2:270m")
+    monkeypatch.setattr(dr, "_owner_health", lambda: {"status": "ok", "model": "some-other-model"})
+    row = dr.check_embed_parity()
+    assert row["status"] == "fail"
+    assert "some-other-model" in row["detail"]
+
+
+def test_embed_parity_passes_when_the_owner_serves_the_configured_model(dr, monkeypatch):
+    monkeypatch.setattr(dr, "BACKEND", "ollama")
+    monkeypatch.setattr(dr, "MODEL", "embeddinggemma-2:270m")
+    monkeypatch.setattr(dr, "_owner_health", lambda: {"status": "ok", "model": "embeddinggemma-2:270m"})
+    row = dr.check_embed_parity()
+    assert row["status"] == "ok"
+    assert "not applicable on backend ollama" in row["detail"]
 
 
 # ---------- MCP launcher autostart ----------

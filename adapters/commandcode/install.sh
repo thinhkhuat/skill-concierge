@@ -265,6 +265,52 @@ def with_agent_model_guard(settings, root):
     return settings
 
 
+def with_tool_hooks(settings, root):
+    """PreToolUse/PostToolUse entries the plugin declares in hooks/hooks.json.
+
+    Command Code's hook allowlist is PreToolUse/PostToolUse/Stop/SessionStart and has no
+    UserPromptSubmit, so the mod carries the per-turn enforcer — but nothing carried the
+    PostToolUse ledger. Observed consequence: a search_skills call ran and returned real
+    results while skill-invocation-ledger.log held no `search` row at all, so "did this
+    harness actually call the retriever" was unanswerable and the smoke reported it as a
+    missing call. Registering these three is what makes that observable again.
+
+    Parity with hooks/hooks.json:
+      PreToolUse  Skill                                        -> skill_guard.py
+      PostToolUse Skill|mcp__.*skill[-_]search__(search_skills|get_skill) -> ledger.py
+      PostToolUse Skill|mcp__.*skill[-_]search__get_skill      -> skill_exclusions.py
+
+    Idempotent: our own entries are dropped and replaced; every other entry, including the
+    user's own hooks, is left exactly as it was."""
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f'"hooks" must be an object, found {type(hooks).__name__}')
+    # Command Code's PostToolUse tool_name is "codemode" for every MCP call, so the
+    # plugin's own `Skill|mcp__.*skill[-_]search__(...)` matcher never matches here and
+    # the hook stays silent. Match the lanes Command Code can actually deliver; ledger.py
+    # resolves which retriever call the codemode blob made.
+    ours = (("PreToolUse", "Skill", "skill_guard.py"),
+            ("PostToolUse", r"codemode|Skill|activate_skill|skill|read", "ledger.py"),
+            ("PostToolUse", r"codemode|Skill|activate_skill|skill", "skill_exclusions.py"))
+    for event, matcher, script in ours:
+        bucket = hooks.setdefault(event, [])
+        if not isinstance(bucket, list):
+            raise ValueError(f'"hooks.{event}" must be an array, found {type(bucket).__name__}')
+        for stale in [e for e in bucket if isinstance(e, dict) and any(
+                script in (h or {}).get("command", "")
+                for h in (e.get("hooks") or []) if isinstance(h, dict))]:
+            bucket.remove(stale)
+        # Stamp the harness: a settings hook inherits the shell env, not the mod's, and
+        # ledger.py only auto-detects zcode/dsh -- an unstamped row cannot be attributed
+        # to Command Code in analyze.py.
+        bucket.append({"matcher": matcher,
+                       "hooks": [{"type": "command",
+                                  "command": f'SKILL_CONCIERGE_HARNESS=commandcode '
+                                             f'python3 "{root}/hooks/scripts/{script}"',
+                                  "timeout": 10}]})
+    return settings
+
+
 def atomic_write(path, data):
     safe_write.write_text(path, json.dumps(data, indent=2) + "\n")
 
@@ -294,6 +340,7 @@ def build_bridge_shelf(root):
 try:
     settings = with_session_start_hooks(load_object(settings_path), root)
     settings = with_agent_model_guard(settings, root)
+    settings = with_tool_hooks(settings, root)
     mcp_data = with_skill_search_server(load_object(mcp_path), root)
     project_mcp_data = (with_skill_search_server(load_object(project_mcp_path), root)
                         if has_project else None)

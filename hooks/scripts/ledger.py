@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -74,6 +75,8 @@ GET_TOOLS = ("skill-search__get_skill", "skill_search__get_skill",
 # `id` is OpenCode's native skill-tool input key ({"id": "<skill>"}) — the others are the
 # Claude Code Skill tool / command / subagent shapes seen live.
 _NAME_KEYS = ("skill", "command", "name", "skill_name", "subagent_type", "id")
+# The skill name a codemode get_skill call carries in its source (Command Code lane below).
+_CODEMODE_NAME_RE = "['\"]name['\"]\\s*:\\s*['\"]([^'\"]+)"
 
 
 def _native_harness() -> str:
@@ -178,6 +181,24 @@ def main() -> int:
                     if isinstance(path, str) and path.startswith("skill://") else ""
                 ev = {"t": t, "sid": sid, "ev": "auto", "name": name}
                 _log(ev, sub, harness)
+            elif tool == "codemode":
+                # Command Code routes every MCP call through its script tool: PostToolUse
+                # fires with tool_name "codemode" and the tool actually invoked appears only
+                # inside tool_input.code -- observed live 2026-10-23 as
+                # await tools["mcp__skill-search__search_skills"]({query: ...}).
+                # Matching on tool_name alone makes this harness's search and get_skill
+                # pulls invisible to the ledger, so "did this harness call the retriever"
+                # becomes unanswerable and a smoke reports a missing call that really did
+                # happen. One code blob can hold several calls, so emit a row per kind.
+                ti = d.get("tool_input", {})
+                code = ti.get("code", "") if isinstance(ti, dict) else ""
+                code = code if isinstance(code, str) else ""
+                if any(s in code for s in SEARCH_TOOLS):
+                    _log({"t": t, "sid": sid, "ev": "search"}, sub, harness)
+                if any(s in code for s in GET_TOOLS):
+                    m = re.search(_CODEMODE_NAME_RE, code)
+                    _log({"t": t, "sid": sid, "ev": "get_skill",
+                          "name": m.group(1) if m else ""}, sub, harness)
             elif tool.endswith(SEARCH_TOOLS):
                 _log({"t": t, "sid": sid, "ev": "search"}, sub, harness)
             elif tool.endswith(GET_TOOLS):
