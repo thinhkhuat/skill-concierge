@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.72.1] - 2026-10-23
+
+### Fixed
+
+- **Command Code never logged `search_skills` calls.** It routes every MCP call through its
+  script tool, so `PostToolUse` fires with `tool_name: "codemode"` and the tool actually
+  invoked appears only inside `tool_input.code`. The plugin's matcher
+  (`Skill|mcp__.*skill[-_]search__(search_skills|get_skill)`) is matched against
+  `tool_name` and so never matched, and `adapters/commandcode/install.sh` registered no
+  `PostToolUse` hook at all. A call ran and returned real results while
+  `skill-invocation-ledger.log` held no `search` row, so the live smoke reported a missing
+  call that had actually happened. `ledger.py` now classifies the codemode lane and the
+  adapter registers the tool hooks with matchers covering the lanes Command Code delivers,
+  stamped `SKILL_CONCIERGE_HARNESS` so the rows are attributable in `analyze.py`.
+- `test_check_embed_parity_reports_a_clean_timeout_instead_of_hanging` pinned the wrong
+  thing: it exercised the fastembed cosine probe without pinning `BACKEND`, so it fell into
+  the non-fastembed branch added in 0.72.0. It now pins the backend it means to test, and
+  two cases cover the new branch (owner/model mismatch FAILs; match passes).
+
+
 ## [0.72.0] - 2026-10-22
 
 ### Changed
