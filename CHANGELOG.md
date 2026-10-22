@@ -3,6 +3,41 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.72.0] - 2026-10-22
+
+### Changed
+
+- **Default embedder is now `embeddinggemma-2:270m` via Ollama**, replacing
+  `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` (fastembed). Chosen on a
+  30-query graded recall trial over the real catalogue (91 graded judgments, EN/VI/code):
+  recall@1 0.300 → 0.467, recall@6 0.700 → 0.900, NDCG@6 0.419 → 0.576 on the installed
+  pool, with the largest gain on code-skill queries (NDCG@6 0.258 → 0.564). Full evidence
+  and the down path: `plans/reports/recall-trial-261022-2250-embedder-cutover.md`.
+- The embedder remains pure configuration. Both `SKILL_EMBED_BACKEND` and `SKILL_EMBED_MODEL`
+  are settable in `.mcp.json` and the adapter manifests; the previous embedder is a two-line
+  change plus a rebuild. Matryoshka truncation to 128 dimensions was measured and **rejected**
+  — never better than 768, and it costs 30% of English NDCG.
+
+### Fixed
+
+- **`setup.sh` hardcoded `SKILL_EMBED_BACKEND=fastembed`** while reading only the model from
+  config, so the backend was not actually selectable despite `.mcp.json` being the declared
+  single source of truth for the embedder. Both values now resolve from config/env.
+- **`setup.sh` started the index owner without forwarding the embedder at all.** The owner
+  silently fell back to its own bare-start default. Invisible rather than harmless: mpnet and
+  embeddinggemma-2 both emit 768 dimensions, so the owner's dimension guard cannot detect a
+  wrong model — correctness rests on model-name equality, so every start path must carry the
+  same value.
+
+### Upgrade notes
+
+A **full rebuild is mandatory** (`./setup.sh`, or `--rebuild`). An incremental reindex is
+refused when the embedder changed: old and new vectors live in unrelated spaces and a mixed
+index returns silently wrong rankings. The `ollama` backend also needs a running Ollama with
+the model pulled (`ollama pull embeddinggemma-2:270m`); the `fastembed` backend remains
+in-process and daemon-free for anyone switching back.
+
+
 ## [0.71.3] - 2026-10-16
 
 ### Added

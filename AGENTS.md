@@ -51,6 +51,10 @@ It runs one headless turn per harness in its own temp ledger and passes only on 
 `adapters/install-all.sh` (installs the local commit, then runs the smoke) → push only when it ends green.
 A red smoke never reaches GitHub.
 
+**Never bump versions while an index rebuild is in flight.** The bump rewrites the venv stamp,
+and the index owner reads a stamp change as a restart signal and exits — dropping the in-flight
+writer's store connection and leaving a partial collection. Finish or abort the rebuild first.
+
 **Hook definitions are pinned.** Codex skips a plugin hook whose definition changed until the user trusts
 it again, and nothing tells you. `tests/test_hook_definitions_pinned.py` fails when any hook in
 `hooks/hooks.json` changes; move its pin only with a `CHANGELOG.md` line telling Codex users to open Codex

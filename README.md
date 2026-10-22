@@ -1,6 +1,6 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.71.3-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.72.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
@@ -224,8 +224,46 @@ the built index can't diverge from the model the server uses):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SKILL_QDRANT_URL` | `http://localhost:6333` | the local index owner's Qdrant-compatible REST endpoint — the name and port are kept for compatibility (no rename, no config change; [ADR-0070](docs/adr/0070-local-index-owner-replaces-qdrant-and-docker-embed-shim.md)) |
-| `SKILL_EMBED_BACKEND` | `fastembed` | embedding backend |
-| `SKILL_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` | embedding model |
+| `SKILL_EMBED_BACKEND` | `ollama` | embedding backend: `ollama` or `fastembed` |
+| `SKILL_EMBED_MODEL` | `embeddinggemma-2:270m` | embedding model, resolved by the chosen backend |
+
+### Choosing an embedder
+
+The embedder is pure configuration — nothing in the engine special-cases a model. Any
+backend/model pair the engine supports can be selected by editing those two values, then
+rebuilding (the index cannot mix models; see below).
+
+Current default is **`embeddinggemma-2:270m` via Ollama**, chosen over the previous
+`paraphrase-multilingual-mpnet-base-v2` (fastembed). A 30-query graded recall trial ranked
+it higher on recall@1, recall@6, MRR, precision@6 and NDCG@6 in all three query groups, but
+**independent adversarial review found the inference is not decision-grade**: the English
+advantage largely dissolves once correct-but-ungraded answers are scored, no comparison
+reaches significance (best McNemar p = 0.109), and document coverage is confounded with the
+embedder — mpnet truncates at roughly 200 words while embeddinggemma-2 reads the whole body.
+
+What survives the review is the operational case: these skill bodies average 517 words and
+mpnet demonstrably ignores most of each one, so a model that reads them is an advantage on
+*this* corpus. Treat the change as an operational choice, not a measured quality win.
+Full evidence, corrections and the down path:
+[`plans/reports/recall-trial-261022-2250-embedder-cutover.md`](plans/reports/recall-trial-261022-2250-embedder-cutover.md).
+
+**Down path (switch back to the previous embedder):**
+
+```bash
+# 1. set both values back in .mcp.json (and the adapter manifests you use)
+#    SKILL_EMBED_BACKEND = fastembed
+#    SKILL_EMBED_MODEL   = sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+./setup.sh          # idempotent; rebuilds the index at the new dimension/model
+```
+
+Two things follow from switching:
+
+- **A full rebuild is mandatory.** `build_index` refuses an incremental reindex when the
+  embedder changed, because the old and new vectors live in unrelated spaces and a mixed
+  index returns silently wrong rankings. There is no partial-migration path by design.
+- **`ollama` needs a running Ollama with the model pulled** (`ollama pull embeddinggemma-2:270m`).
+  The `fastembed` backend is in-process and needs no daemon. That daemon dependency is the
+  real cost of this default, not the ~5ms of per-query latency.
 
 ### Setup overrides (environment)
 
@@ -426,7 +464,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.71.3` — **published** (this repo; GitHub `main` carries it). Per-version history, including every release since
+Current release: `0.72.0` — **published** (this repo; GitHub `main` carries it). Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical

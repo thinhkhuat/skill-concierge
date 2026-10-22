@@ -146,8 +146,8 @@ MCP_SERVER_ENTRY = f"""# skill-concierge skill-search MCP server (ADR-0050, v{ve
         args: ["{root}/bin/skill-search-mcp"]
         env:
           SKILL_QDRANT_URL: http://localhost:6333
-          SKILL_EMBED_BACKEND: fastembed
-          SKILL_EMBED_MODEL: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+          SKILL_EMBED_BACKEND: ollama
+          SKILL_EMBED_MODEL: embeddinggemma-2:270m
           SKILL_TOP_K: "6"
           SKILL_LLM_TRIGGERS: "1"
           TRIGGERS_MAX: "16"

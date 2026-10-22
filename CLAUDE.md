@@ -7,6 +7,7 @@ Claude-specific quick reference:
 
 - **Verify before "done":** run the `skill-concierge:doctor` skill (or `python3 scripts/doctor.py`); a green `status: OK` is a precondition. The proof that a harness works is `python3 scripts/smoke.py` (one live headless turn per harness; PASS needs an offer row and a search row; ADR-0090).
 - **Release order:** bump versions → `python3 scripts/driftcheck.py driftcheck.json` → commit → `adapters/install-all.sh` (installs the local commit, then runs the smoke) → push only when green. Changing a hook in `hooks/hooks.json` fails `tests/test_hook_definitions_pinned.py` until a CHANGELOG line tells Codex users to trust the hooks again ([caveats §27](docs/caveats.md)).
+- **Never bump versions while an index rebuild is in flight.** The bump rewrites the venv stamp, and the index owner reads a stamp change as a restart signal and exits — dropping the in-flight writer's store connection and leaving a partial collection. Finish or abort the rebuild first.
 - **Bootstrap / repair:** the `skill-concierge:setup` skill, or `./setup.sh` (idempotent; no Docker — starts the local index owner, ADR-0070).
 - **Versioning:** bump `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.codex-plugin/plugin.json`, root `package.json` and `adapters/opencode/plugin/package.json` together, plus a `CHANGELOG.md` entry. After the push, run `adapters/install-all.sh`: it runs every harness installer, then doctor.
 - **Don't commit tool state:** `.ijfw/`, `ijfw/`, `.handoff/`, `logs/`, and `graphify-out/` are gitignored scratch, not source.
