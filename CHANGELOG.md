@@ -28,11 +28,17 @@ All notable changes to **skill-concierge**. Format loosely follows
 ### Changed
 
 - **Default embedder is now `embeddinggemma-2:270m` via Ollama**, replacing
-  `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` (fastembed). Chosen on a
-  30-query graded recall trial over the real catalogue (91 graded judgments, EN/VI/code):
-  recall@1 0.300 → 0.467, recall@6 0.700 → 0.900, NDCG@6 0.419 → 0.576 on the installed
-  pool, with the largest gain on code-skill queries (NDCG@6 0.258 → 0.564). Full evidence
-  and the down path: `plans/reports/recall-trial-261022-2250-embedder-cutover.md`.
+  `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` (fastembed). A 30-query
+  graded recall trial (91 graded judgments, EN/VI/code) ranked it higher on recall@1,
+  recall@6, MRR, precision@6 and NDCG@6 in all three query groups. **Independent adversarial
+  review found that inference is not decision-grade**: the English advantage largely
+  dissolves once correct-but-ungraded answers are scored, no comparison reaches significance
+  (best McNemar p = 0.109), and document coverage is confounded with the embedder — mpnet
+  truncates at roughly 200 words while embeddinggemma-2 reads the whole body. What survives
+  is the operational case: these skill bodies average 517 words and mpnet ignores most of
+  each one, so a model that reads them is an advantage on this corpus. Treat the change as
+  an operational choice, not a measured quality win. Full evidence, corrections and the down
+  path: `plans/reports/recall-trial-261022-2250-embedder-cutover.md`.
 - The embedder remains pure configuration. Both `SKILL_EMBED_BACKEND` and `SKILL_EMBED_MODEL`
   are settable in `.mcp.json` and the adapter manifests; the previous embedder is a two-line
   change plus a rebuild. Matryoshka truncation to 128 dimensions was measured and **rejected**
