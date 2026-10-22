@@ -56,7 +56,8 @@ read_mcp() { "$PYTHON" -c "import json,sys
 print(json.load(open(sys.argv[1]))['mcpServers']['skill-search']['env'].get(sys.argv[2],''))" "$ROOT/.mcp.json" "$1"; }
 QURL="${SKILL_QDRANT_URL:-$(read_mcp SKILL_QDRANT_URL)}"
 MODEL="${SKILL_EMBED_MODEL:-$(read_mcp SKILL_EMBED_MODEL)}"
-echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  model=$MODEL"
+BACKEND="${SKILL_EMBED_BACKEND:-$(read_mcp SKILL_EMBED_BACKEND)}"
+echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  backend=$BACKEND  model=$MODEL"
 
 # One-time migration to the canonical home (~/.claude/skill-concierge, ADR-0025): fold the
 # ledger/telemetry in from its old location. The venv is NOT migrated — it is rebuilt below (a
@@ -153,7 +154,12 @@ fi
 # or the 6363 default — .mcp.json carries no embed-port key) — QURL/EPORT are plain bash
 # vars, never exported by default, so without this the owner would fall back to its
 # hardcoded 6333/6363 defaults whenever .mcp.json configures a non-default store port.
-env SKILL_QDRANT_URL="$QURL" EMBED_SHIM_PORT="$EPORT" "$VENV/bin/python" -c 'import subprocess,sys
+# Forward the embedder too: the owner caches its model at load, and a bare start would
+# fall back to its own default. mpnet and EG2-768 share a 768-dim output, so a mismatch
+# here is invisible to the owner's dimension guard.
+env SKILL_QDRANT_URL="$QURL" EMBED_SHIM_PORT="$EPORT" \
+  SKILL_EMBED_BACKEND="$BACKEND" SKILL_EMBED_MODEL="$MODEL" \
+  "$VENV/bin/python" -c 'import subprocess,sys
 subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
                   start_new_session=True, stdin=subprocess.DEVNULL,
                   stdout=open(sys.argv[1], "ab"), stderr=subprocess.STDOUT)' \
@@ -172,7 +178,7 @@ echo "[3/4] build/refresh the multilingual index @ $QURL"
 # scripts/engine_env.py — the one key list every reindex path shares (ADR-0026 forwarding
 # class). Real env wins; empty values are never exported ("" would read as ON).
 env_run() {
-  env SKILL_QDRANT_URL="$QURL" SKILL_EMBED_BACKEND=fastembed SKILL_EMBED_MODEL="$MODEL" \
+  env SKILL_QDRANT_URL="$QURL" SKILL_EMBED_BACKEND="$BACKEND" SKILL_EMBED_MODEL="$MODEL" \
     "$PYTHON" "$ROOT/scripts/engine_env.py" --root "$ROOT" --exec "$@"
 }
 env_run "$VENV/bin/skill-search" --reindex

@@ -891,6 +891,22 @@ def check_embed_parity():
     if not health or health.get("status") != "ok":
         return None                      # check_owner already reports a down owner
     model = health.get("model") or MODEL
+    # The in-process fallback this cosine probe exists for is a FASTEMBED-only split: with
+    # any other backend both the owner's /embed and the query path call the same embed_batch,
+    # so they cannot disagree, and probing fastembed's TextEmbedding is testing a path nothing
+    # takes. The live risk on those backends is the owner loading a model other than the one
+    # the MCP is configured for — which silently yields wrong rankings with no error, because
+    # two models of equal dimension cannot be told apart by a size check. Compare those.
+    if BACKEND != "fastembed":
+        if model != MODEL:
+            return {"id": "embed_parity", "label": "Embed parity", "status": FAIL,
+                    "detail": f"owner is serving {model!r} but the MCP is configured for "
+                              f"{MODEL!r} — different models cannot be mixed; restart the owner",
+                    "fix": None}
+        return {"id": "embed_parity", "label": "Embed parity", "status": OK,
+                "detail": f"not applicable on backend {BACKEND}: owner and query both call "
+                          f"the same backend; owner model matches configured {MODEL!r}",
+                "fix": None}
     owner = []
     try:
         for text in PARITY_TEXTS:

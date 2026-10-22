@@ -1038,9 +1038,8 @@ def _bind(port: int, kind: str) -> list:
 def _load(owner: Owner) -> None:
     owner.store = Store(DB_PATH)
     if not NO_MODEL:
-        os.environ.setdefault("SKILL_EMBED_BACKEND", "fastembed")
-        os.environ.setdefault("SKILL_EMBED_MODEL",
-                              "sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+        os.environ.setdefault("SKILL_EMBED_BACKEND", "ollama")
+        os.environ.setdefault("SKILL_EMBED_MODEL", "embeddinggemma-2:270m")
         from skill_search.server import EMBED_MODEL, embed
         owner.dim = len(embed("dimension probe"))
         bad = {c.name: c.dim for c in owner.store.colls.values() if c.dim != owner.dim}
