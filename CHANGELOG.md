@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.73.0] - 2026-10-25
+
+### Added
+
+- **EmbeddingGemma-2 task-instruction prefixes.** The index and query paths now apply the
+  prefixes the model was trained with (model card, *1. Task Instruction Prefixes*): a document
+  becomes `title: {title} | text: {content}` and a query becomes `task: search result | query: {q}`.
+  Trigger points take the same titled-document form as their base point. Measured on this
+  catalogue (30 graded probes, installed pool, one arm per convention): recall@1 **0.267 → 0.433**,
+  recall@6 **0.533 → 0.733**, MRR **0.402 → 0.552**, precision@6 **0.094 → 0.144**, NDCG@6
+  **0.325 → 0.466**, with NDCG up in all three query groups (EN, VI, code). Trial artifacts under
+  `~/.cache/skill-search/trials/eg2-prefix-261024/`.
+  The gate is the configured `EMBED_MODEL`, not a new flag: any other embedder — mpnet included —
+  gets the text unchanged, so the embedder remains a real config switch. Index and query apply the
+  same convention; mixing them degrades rankings silently, the same failure class as the fastembed
+  pooling pin. Applying a prefix changes every content hash, so this release re-embeds the whole
+  collection (`embedded: 45920, skipped: 0`).
+  Moving trigger phrases into query space instead was measured **worse than no prefix at all**
+  (recall@1 0.233 vs 0.267) and is deliberately not the shipped form.
+
 ## [0.72.1] - 2026-10-23
 
 ### Fixed
