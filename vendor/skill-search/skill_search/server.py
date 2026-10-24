@@ -613,6 +613,56 @@ def embed(text: str) -> list[float]:
     return embed_batch([text])[0]
 
 
+# ---------------------------------------------------------------------------
+# EmbeddingGemma-2 task-instruction prefixes. The model card (huggingface/google/
+# embeddinggemma-2, "1. Task Instruction Prefixes") states EmbeddingGemma 2 "is
+# trained with short task instruction prefixes prepended to text inputs. Using the
+# right prefix improves quality; omitting it still works but reduces precision."
+# Asymmetric retrieval pairs a QUERY prefix with a DOCUMENT prefix; a document with
+# a real title is formatted `title: {title} | text: {content}`.
+#
+# This is a property of the model, not of the retriever, so it is gated on the
+# configured EMBED_MODEL: any other embedder (mpnet included) gets the text
+# unchanged. Index and query must use the same convention -- mixing prefixed
+# queries with unprefixed documents degrades rankings SILENTLY, the same failure
+# class as the fastembed pooling pin above. Measured on this catalogue (30 graded
+# probes, installed pool): prefixes raise recall@1 0.267 -> 0.433 and NDCG@6
+# 0.325 -> 0.466. Trial artifacts: ~/.cache/skill-search/trials/eg2-prefix-261024/.
+# ---------------------------------------------------------------------------
+_QUERY_PREFIX = "task: search result | query: {}"
+
+
+def _eg2() -> bool:
+    """True when the configured embedder is an EmbeddingGemma model."""
+    return "embeddinggemma" in EMBED_MODEL.lower()
+
+
+def _doc_embed_text(text: str) -> str:
+    """Titled-document form. `_skill_text` is `name\\ndescription\\nbody`, so line 1
+    is the title and everything after it is the content."""
+    if not _eg2():
+        return text
+    nl = text.find("\n")
+    title = text[:nl] if nl >= 0 else text
+    rest = text[nl + 1:] if nl >= 0 else ""
+    return f"title: {title} | text: {rest}"
+
+
+def _trigger_embed_text(name: str, phrase: str) -> str:
+    """A trigger phrase is a corpus item belonging to `name`, so it takes the same
+    titled-document form as its base point. Putting it in query space instead was
+    measured WORSE than no prefix at all (recall@1 0.233 vs 0.267)."""
+    if not _eg2():
+        return phrase
+    return f"title: {name} | text: {phrase}"
+
+
+def _query_embed_text(query: str) -> str:
+    if not _eg2():
+        return query
+    return _QUERY_PREFIX.format(query)
+
+
 # Query vectors come from the index owner's warm model when it serves THIS model, so the
 # machine holds one model copy instead of one per MCP server; otherwise the in-process
 # model, as before. Reindex keeps embedding in-process (tens of thousands of texts).
@@ -650,6 +700,7 @@ def _store_answers() -> bool:
 def embed_queries(texts: list[str]) -> list[list[float]]:
     """Query vectors: the owner's /embed when it serves this model, else in-process.
     When the store is down as well there is nothing to search, so no model is loaded."""
+    texts = [_query_embed_text(t) for t in texts]
     if EMBED_BACKEND == "fastembed":
         if _owner_serves_model():
             try:
@@ -1028,7 +1079,7 @@ def build_index(force: bool = False) -> dict:
     # maintains the trigger layer — no separate overlay/reapply needed).
     desired: dict[str, tuple] = {}
     for s in skills:
-        text = _skill_text(s)
+        text = _doc_embed_text(_skill_text(s))
         h = _content_hash(text)
         scope = s.get("scope", "personal")
         # ADR-0031: catalog points carry tier=external so the per-turn enforcer can
@@ -1044,6 +1095,7 @@ def build_index(force: bool = False) -> dict:
             **synced})
         if MULTIVECTOR:
             for i, ph in enumerate(_trigger_phrases(s)):
+                ph = _trigger_embed_text(s["name"], ph)
                 ph_h = _content_hash(ph)
                 desired[_point_id(f"{s['name']}::trig::{i}")] = (ph, ph_h, {
                     "name": s["name"], "description": s["description"],
