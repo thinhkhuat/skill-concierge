@@ -2240,6 +2240,35 @@ def _cline_leftovers():
     return left
 
 
+def _checkout_root(path):
+    """The checkout root of a path shaped `<root>/adapters/<harness>/<file>`, else None.
+
+    A harness may be wired to ANY copy of this plugin — the dev checkout (RULES [52]: the dev
+    surface is the source of truth), a release tag, or the plugin cache. Doctor runs from one
+    copy and must not call another copy's wiring stale: identity comes from the path shape, and
+    freshness from that checkout's own version.
+    """
+    parts = Path(path).parts if path is not None else ()
+    return Path(*parts[:-3]) if len(parts) >= 4 and parts[-3] == "adapters" else None
+
+
+def _checkin_findings(path, what):
+    """Findings for a harness path that names a plugin copy: gone, cache-hosted, or off-version."""
+    if not path.exists():
+        return [f"{what} is missing ({path})"]
+    findings = []
+    oc = _oc_config()
+    if oc.is_plugin_cache(path):
+        findings.append(f"{what} is in the plugin cache ({path}), which the next plugin update "
+                        "replaces or deletes — point it at a checkout")
+    checkout = _checkout_root(path)
+    theirs = _descriptor_version(checkout / ".claude-plugin" / "plugin.json") if checkout else None
+    ours = _descriptor_version(ROOT / ".claude-plugin" / "plugin.json")
+    if theirs and ours and theirs != ours:
+        findings.append(f"{what} points at checkout v{theirs}, this one is v{ours}")
+    return findings
+
+
 def check_cline():
     """Cline install state — plugin loader + generated Agent Plugin (ADR-0086)."""
     if not CLINE_DIR.exists():
@@ -2258,22 +2287,32 @@ def check_cline():
             detail += " (only leftovers of the removed file-hook vehicle: " + ", ".join(leftovers) + ")"
         return {"id": "cline", "label": "Cline integration", "status": WARN, "detail": detail, "fix": fix}
     findings = [f"{x} still installed (a turn is governed twice)" for x in leftovers]
-    plugin_ts = (ROOT / "adapters" / "cline" / "skill-concierge.cline-plugin.ts").resolve()
     m = re.search(r'from\s+("(?:[^"\\]|\\.)*")', loader)
     try:
         named = json.loads(m.group(1)) if m else "?"    # the installer writes a JSON string
     except ValueError:
         named = "?"
     target = Path(named).resolve() if m else None
-    if target != plugin_ts:
-        findings.append(f"plugin loader points at {named}, not this checkout")
-    elif not target.exists():
-        findings.append("plugin loader target is missing")
+    checkout = (_checkout_root(target)
+                if target is not None
+                and target.parts[-1:] == ("skill-concierge.cline-plugin.ts",) else None)
+    src = checkout or ROOT
+    fix = f"bash {src / 'adapters' / 'cline' / 'install.sh'}"
+    if checkout is None:
+        findings.append(f"plugin loader names no skill-concierge module ({named}); {fix}")
+    else:
+        findings.extend(_checkin_findings(target, "plugin loader"))
+    agent_py = src / "adapters" / "cline" / "agent_plugin.py"
     if not (CLINE_AGENT_DIR / "plugin.json").is_file():
         findings.append("Agent Plugin ~/.agents/plugins/skill-concierge missing")
+    elif not agent_py.is_file():
+        findings.append(f"Agent Plugin checker missing ({agent_py}); {fix}")
     else:
         try:
-            r = subprocess.run([sys.executable, str(ROOT / "adapters" / "cline" / "agent_plugin.py"),
+            # Check against the checkout the loader names, not this one: the Agent Plugin is
+            # generated from that checkout, so its own builder is the only one that can say
+            # whether the copy matches.
+            r = subprocess.run([sys.executable, str(agent_py),
                                 "check", str(CLINE_AGENT_DIR)], capture_output=True, text=True, timeout=30)
             if r.returncode != 0:
                 stale = r.stdout.split()
@@ -2291,7 +2330,7 @@ def check_cline():
         return {"id": "cline", "label": "Cline integration", "status": WARN,
                 "detail": "; ".join(findings), "fix": fix}
     return {"id": "cline", "label": "Cline integration", "status": OK,
-            "detail": "plugin loader + Agent Plugin → this checkout", "fix": None}
+            "detail": f"plugin loader + Agent Plugin → {src}", "fix": None}
 
 
 # OpenCode v2 surface (ADR-0085, ADR-0089) — skill-concierge integrates as a NATIVE OpenCode
@@ -2344,12 +2383,17 @@ def check_opencode():
         else:
             copies = [oc.resolve(oc.entry_path(e), OPENCODE_JSON.parent)
                       for e in entries if oc.is_copy(e, OPENCODE_JSON.parent)]
-            if plugin_dir not in copies:
+            if not copies:
                 findings.append(f"opencode.json missing the skill-concierge plugin entry ({fix})")
             if len(copies) > 1:
                 # Every copy declares id "skill-concierge"; OpenCode fails all but the first.
                 findings.append(f"opencode.json lists {len(copies)} skill-concierge plugin entries "
                                 f"(OpenCode fails the duplicates; {fix})")
+            # Any checkout of this plugin is a valid entry; what fails is a copy the next update
+            # deletes, a version that no longer matches, or a path that has gone away.
+            for copy in copies:
+                findings.extend(f"{f} ({fix})"
+                                for f in _checkin_findings(copy, "opencode.json plugin entry"))
             skills = oc.skills_entries(cfg, OPENCODE_JSON.parent)
             if skills is None:
                 findings.append("opencode.json skills is not a list")
