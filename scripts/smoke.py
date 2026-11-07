@@ -61,7 +61,13 @@ SCRUBBED_ENV = ("SKILL_CONCIERGE_HARNESS", "CLAUDECODE", "ANTHROPIC_API_KEY")
 # (executable, argv before the prompt). The prompt is the last argument.
 CLI = {
     "claude": ("claude", ["claude", "-p"]),
-    "codex": ("codex", ["codex", "exec", "--skip-git-repo-check"]),
+    # `--dangerously-bypass-hook-trust`: Codex skips a plugin's hooks until a human approves them,
+    # and a version bump makes that approval stale — a headless run can never approve, so the check
+    # would report "no offer row" for a plugin that is installed and enabled. The flag is Codex's
+    # own documented escape hatch for automation that already vets the hook source, which this repo
+    # does (the hooks are its own). Persisted trust is still the right thing for interactive Codex.
+    "codex": ("codex", ["codex", "exec", "--skip-git-repo-check",
+                        "--dangerously-bypass-hook-trust"]),
     "omp": ("omp", ["omp", "-p"]),
     "commandcode": ("cmd", ["cmd", "-p"]),
     "cline": ("cline", ["cline", "--json"]),

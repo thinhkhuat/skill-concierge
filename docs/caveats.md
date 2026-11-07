@@ -848,7 +848,7 @@ env -i HOME=$HOME PATH=/usr/bin:/bin /bin/bash bin/skill-search-mcp   # then cal
 **Watch:** the launcher only fills missing values. A stale explicit export outranks the file
 by design, so a shell that already sourced an old setting can still pin the wrong endpoint.
 
-## 1. Hermes Agent: a connected MCP server is not a visible tool, and its shelf has no symlink
+## §35 — Hermes Agent: a connected MCP server is not a visible tool, and its shelf has no symlink
 
 Three landmines, all measured on 2026-11-08 (ADR-0100).
 
@@ -870,3 +870,25 @@ Three landmines, all measured on 2026-11-08 (ADR-0100).
    blocklist guard must never raise or overrun: Hermes abandons a slow `pre_tool_call` and treats
    abandonment as a BLOCK, so the guard's subprocess is bounded at 2 s and every exception returns
    "no directive".
+
+## §36 — A harness can be installed, current, and still switched off in its own lock
+
+Measured 2026-11-08 while adding Hermes (ADR-0100): OMP's live smoke reported "no offer row" with
+the plugin installed and enabled everywhere the eye checks — `omp plugin list` showed
+`skill-concierge@skill-concierge (0.77.0) (user)`, `installed_plugins.json` held the 0.77.0 cache
+entry, doctor's OMP row reported only a stale catalog. The switch was
+`~/.omp/plugins/omp-plugins.lock.json`:
+
+```json
+"skill-concierge": {"version": "0.76.4", "enabledFeatures": null, "enabled": false}
+```
+
+`enabled: false` there means the extension never loads, whatever the registry says. `omp plugin
+enable skill-concierge` flips it (the row's `⦸` marker becomes `●`), and the next headless turn
+wrote `offer`, `turn`, `get_skill` and `search` rows stamped `omp`.
+
+The lesson generalizes: **an "installed" harness is not a "running" one.** Before reading a
+harness's silent turn as a code defect, check its OWN activation lock — OMP's
+`omp-plugins.lock.json`, Codex's `[hooks.state]` trusted hashes in `config.toml` (a version bump
+makes them stale, and only a human approval or `--dangerously-bypass-hook-trust` gets past it),
+and Hermes's `plugins.enabled`. All three are per-harness files that a fresh install rewrites.
