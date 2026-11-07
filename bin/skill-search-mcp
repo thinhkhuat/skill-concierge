@@ -62,7 +62,7 @@ if [ -r "$_ENGINE_ENV_FILE" ]; then
   # interpreter isolated from the caller's PYTHONPATH; the parser is inline so no temp file is
   # written on the MCP startup path.
   _engine_env_exports="$(ENGINE_ENV_PATH="$_ENGINE_ENV_FILE" "$VENV/bin/python" -I -c '
-import json, os, shlex, sys
+import json, os, re, shlex, sys
 path = os.environ.get("ENGINE_ENV_PATH", "")
 try:
     conf = json.load(open(path, encoding="utf-8"))
@@ -71,8 +71,16 @@ except Exception:
 if not isinstance(conf, dict):
     sys.exit(0)
 for k, v in conf.items():
-    # Engine keys only, shell-safe names only, non-empty strings only.
-    if not (isinstance(k, str) and k.isidentifier() and k.isupper()):
+    # Engine keys only, SHELL-safe names only, non-empty strings only.
+    #
+    # ASCII-only on purpose. str.isidentifier() is true for "ÉCOLE", but bash rejects
+    # "export ÉCOLE=x" with "not a valid identifier", and under set -euo pipefail that
+    # aborts the whole launcher — the opposite of the fail-open contract above. A POSIX
+    # shell variable name is [A-Za-z_][A-Za-z0-9_]*, so check exactly that instead of
+    # trusting the wider Unicode identifier rule.
+    # NOTE: no apostrophes in this block — it lives inside a single-quoted shell string.
+    if not (isinstance(k, str) and k.isupper()
+            and re.fullmatch(r"[A-Z_][A-Z0-9_]*", k)):
         continue
     if not (isinstance(v, str) and v):
         continue
@@ -80,8 +88,11 @@ for k, v in conf.items():
         continue
     print(f"export {k}={shlex.quote(v)}")
 ' 2>/dev/null || true)"
+  # Also guard the eval itself: belt-and-braces, because this block must never be the
+  # reason an MCP server fails to start. If the emitted text is somehow unacceptable to
+  # this shell, drop it and let the engine use the values it already had.
   if [ -n "$_engine_env_exports" ]; then
-    eval "$_engine_env_exports"
+    eval "$_engine_env_exports" 2>/dev/null || true
   fi
 fi
 

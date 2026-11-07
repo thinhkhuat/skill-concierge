@@ -1,8 +1,9 @@
 # Embedder provenance — blueprint and implementation plan
 
 Date: 2026-11-07
-Status: sketch chosen, pre-implementation
-Supersedes nothing. Related ADR to be written: ADR-0098.
+Status: IMPLEMENTED AND SHIPPED (v0.76.0–v0.76.2). Every 'Done when' below is met.
+ADRs: 0098 (provenance stamp), 0099 (launcher reads the machine-local engine file).
+Superseded detail: the 'Open questions' at the foot were resolved — see the closing note there.
 
 ## The problem, stated for the next person
 
@@ -179,9 +180,9 @@ delete `claude_skills__rtx_staging` and the staging manifest/sidecar files.
 - The defect is covered by tests that fail without the fix.
 - The record exists in ADR, caveats, changelog and VENDORED.
 
-## Open questions
+## Open questions — RESOLVED
 
-- Whether option 1 (in-place rebuild) means a `force=True` wipe or the incremental
-  migration above. The wipe loses the 703 cross-root points unless run three
-  times; the incremental path gets to the same end state without a dark window.
-  Recommended: incremental. Flagged because the user said "do the #1".
+- ~~Whether option 1 means a `force=True` wipe or the incremental migration.~~ **Resolved:
+  incremental**, run from all three roots (`skill-concierge`, `VGP`, `skills-dev`). The wipe
+  would have dropped 703 cross-root points. Executed 2026-11-07: 45,857 + 655 + 48 points,
+  0 deleted, ending at `stale_points 0 / 46,564`.

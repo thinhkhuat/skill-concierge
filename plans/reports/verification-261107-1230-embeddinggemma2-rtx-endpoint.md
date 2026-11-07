@@ -25,7 +25,11 @@ A backend swap does not rewrite stored vectors. `skill_search/server.py` guards 
 
 Symptom: retrieval works and returns sensible hits, but query and stored vectors come from two different numeric formats.
 
-**This is live right now, not a historical note.** The index owner is still answering queries from the Mac-built collection. Every search served today crosses engines: the query embeds on rtx, the candidate vectors were built locally. The hits are sane and the scores look normal, but nobody should read current hit quality as a clean rtx measurement. A clean measurement requires the swap, or querying `claude_skills__rtx_staging` directly.
+**HISTORICAL — superseded later the same day.** At the time of writing the index owner was still
+answering from the Mac-built collection. That was fixed in v0.76.0–v0.76.2: the live index is now
+46,564 points, all stamped `af259f8576f7` (the GPU host), `stale_points 0`, verified at
+`cos = 1.000000` against rtx. The staging collection described below has been deleted. Read the
+sections that follow as the record of how the defect was found, not as current state.
 
 ## What was built
 
@@ -43,7 +47,12 @@ Provenance verified at 8 points spanning all sampled scopes (personal, plugin, c
 
 My staging script set `NEXT_SKILLS_PATH`, but the engine reads `SKILL_CONCIERGE_NEXT_SKILLS` — the override silently missed and the staging build rewrote the live `~/.claude/skill-concierge/next-skills.json` (59.6 KB, valid JSON, 43 scopes, 1,836 skills). This is what every reindex writes anyway, so it is benign. Backed up to `next-skills.json.bak-261107-1230`. The manifest was NOT touched (`SKILL_META_PATH` is the correct name); the staging manifest went to its own file.
 
-## Open decision — the swap
+## Open decision — the swap (RESOLVED 2026-11-07)
+
+> **Resolved:** none of the three options below was taken. The index was repaired in place by the
+> provenance stamp (ADR-0098), which turns a backend swap into an ordinary content change, and the
+> migration ran incrementally from all three roots. Staging was then deleted. The options are kept
+> as the record of what was considered.
 
 Staging cannot be swapped in by me. The index owner's HTTP surface has `GET|PUT|DELETE /collections/{c}` and no rename/alias route, so the only available swap is `DELETE claude_skills` then rename staging's name — and the owner has no rename. That is a destructive operation and the user was AFK when asked.
 
@@ -53,11 +62,12 @@ Paths forward, for the user's call:
 2. **Script the swap at the SQLite/store layer.** The owner keeps collections in `index.sqlite` (`collections` table, name/dim/distance). A rename there plus a process restart would swap without a rebuild — needs careful verification the store has no other name-keyed state.
 3. **Leave it mixed.** Retrieval works today; the mismatch is silent and permanent.
 
-## Unresolved questions
+## Unresolved questions — ALL CLOSED
 
-- Whether to swap staging in, and by which of the three routes above.
-- Whether to commit the trail learning at `skill-concierge/.trail/learnings/2026-11-07-an-embedder-swap-leaves-the-stored-thinh.md`. No commit order was given in this session.
-- The doctor WARN about 4 MCP servers on the old engine build (pids 99240, 42732, 69168, 56656) needs a Claude Code restart. Not caused by this work; the peer session reported it first.
+- ~~Whether to swap staging in.~~ Closed: repaired in place via ADR-0098; staging deleted.
+- ~~Whether to commit the trail learning.~~ Closed: committed in `46cbf97`.
+- ~~The doctor WARN about 4 MCP servers on the old engine build.~~ Closed: those sessions were
+  terminated 2026-11-07; all live MCP servers now run the current build.
 
 ## Artifacts
 

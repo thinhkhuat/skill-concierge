@@ -3,6 +3,32 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.76.3] - 2026-11-07
+
+### Fixed
+
+- **The MCP launcher can no longer be stopped by a malformed `engine-env.json` (ADR-0099).**
+  The loader filtered keys with Python's `str.isidentifier()`, which accepts Unicode: a key
+  like `ÉCOLE` passed the filter, the block emitted `export ÉCOLE=x`, and bash answered
+  "not a valid identifier" — which under `set -euo pipefail` aborted the whole launcher,
+  the exact opposite of the fail-open behaviour ADR-0099 promises. Found by an independent
+  audit, not by the author. The filter now matches a POSIX shell name exactly
+  (`[A-Z_][A-Z0-9_]*`, ASCII only) and the `eval` is itself guarded, so a config file can
+  never be the reason an MCP server fails to start. Verified end to end: the real launcher
+  completes an MCP initialize handshake under a config file containing `ÉCOLE`, `bad key`,
+  `1NUM` and an empty value, and still loads all four real keys from a healthy file.
+
+### Changed
+
+- **Two documents corrected where the shipped code had moved past them.** The provenance
+  plan read "Status: sketch chosen, pre-implementation" although every done-condition was
+  met, and its open questions were resolved; the verification report still asserted the
+  index was Mac-built "live right now" and listed three questions that had since closed.
+  `vendor/skill-search/VENDORED.md` also claimed `SKILL_EMBED_TOKEN` "joins ENGINE_ENV_KEYS
+  so every reindex path forwards it" — true of the list, false in effect, since the key is
+  deliberately kept out of `.mcp.json` and the list only forwards what that file or the
+  process already carries. All three now state what is true, with the history kept.
+
 ## [0.76.2] - 2026-11-07
 
 ### Fixed

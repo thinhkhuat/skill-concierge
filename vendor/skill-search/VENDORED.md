@@ -47,8 +47,13 @@ upstream is re-vendored:
 - **Bearer token for a protected embedder (v0.74.0, ADR-0097, 2026-11-07):** `server.py` reads
   `SKILL_EMBED_TOKEN` and sends it as `Authorization: Bearer …` on both Ollama paths — the batch
   `/api/embed` and the legacy single-item `/api/embeddings` — through one `_embed_headers()` helper.
-  Empty is the default and sends **no** header, so a bare local Ollama is untouched. The key joins
-  `scripts/engine_env.py`'s `ENGINE_ENV_KEYS` so every reindex path forwards it. It exists because the
+  Empty is the default and sends **no** header, so a bare local Ollama is untouched. The key is
+  listed in `scripts/engine_env.py`'s `ENGINE_ENV_KEYS`, but that list only forwards values the
+  process environment or `.mcp.json` already carry — and this key is deliberately kept OUT of
+  `.mcp.json`. Until v0.76.1/.2 it therefore reached a reindex only through a shell that had
+  sourced `~/.config/harness-env.sh`, so background runs fell back to `localhost` with no token.
+  Fixed by reading `~/.claude/skill-concierge/engine-env.json` in both `scripts/engine_env.py`
+  and `bin/skill-search-mcp` (ADRs 0098, 0099; caveats §33, §34). It exists because the
   engine previously had no way to authenticate: pointing `SKILL_OLLAMA_URL` at a bearer-gated proxy
   returned 401 on every embed and the reindex failed. Covered by
   `vendor/skill-search/tests/test_embed_token.py`. Not upstream: re-apply on re-vendor.
