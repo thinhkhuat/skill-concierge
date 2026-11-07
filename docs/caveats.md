@@ -843,7 +843,7 @@ tool's own report:
 env -i HOME=$HOME PATH=/usr/bin:/bin /bin/bash bin/skill-search-mcp   # then call health over stdio
 ```
 
-`provenance.current` there must equal the identity the configured embedder produces.
+`embedder_provenance.current` there must equal the identity the configured embedder produces.
 
 **Watch:** the launcher only fills missing values. A stale explicit export outranks the file
 by design, so a shell that already sourced an old setting can still pin the wrong endpoint.

@@ -30,8 +30,17 @@ through the configured embedder, and nothing said so.
 ## Decision
 
 The launcher loads the same machine-local file `engine_env.py` reads, before `exec`-ing the
-engine. Precedence matches exactly: an explicitly exported variable wins; the file fills
-what is missing. The engine reads its settings at import time, so the loader must run in the
+engine. Precedence matches: an explicitly exported variable wins, the machine-local file
+next, the shipped `.mcp.json` descriptor last.
+
+**That ordering is not automatic and the first version got it wrong.** A `.mcp.json` value
+arrives in the launcher's `os.environ` already, so "anything in the environment wins" made
+a descriptor default beat the machine file — the exact split-brain this ADR claims to
+close, in the opposite direction from `engine_env.py`. The launcher therefore reads
+`.mcp.json` itself and treats a value that MATCHES it as a descriptor default, not an
+export; only a value that differs from the descriptor counts as an operator decision.
+The key filter is likewise `engine_env.ENGINE_ENV_KEYS`, not a name-shape test, so both
+consumers admit the same keys from the same file. The engine reads its settings at import time, so the loader must run in the
 launcher, before the exec — not inside the engine.
 
 Fail-open on every input: an absent, unreadable or malformed file leaves the engine on the
@@ -56,7 +65,7 @@ one file. The failure mode this closes was invisible: retrieval kept working, so
 the wrong embedder looked identical to a correct one.
 
 Verified by driving the real launcher over stdio in an empty environment and reading the
-`health` tool's own report: `provenance.current` is the GPU-host identity,
+`health` tool's own report: `embedder_provenance.current` is the GPU-host identity,
 `stale_points 0`, `status ok`.
 
 ## Watch out

@@ -3,6 +3,39 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.76.4] - 2026-11-07
+
+### Fixed
+
+- **The launcher and `engine_env.py` now agree on which keys pass and which source wins
+  (ADR-0099).** Two defects an independent audit found in v0.76.3, both real:
+  **(a)** the launcher filtered keys by shell-name SHAPE, so a non-engine key (`FOO=bar`)
+  reached the engine from the launcher while `engine_env.py` dropped it — two consumers of
+  one file admitting different keys. It now reads `ENGINE_ENV_KEYS` from that one file.
+  **(b)** a `.mcp.json` value arrives in the launcher's `os.environ` already, so treating
+  "anything in the environment" as an explicit export let a shipped descriptor default beat
+  the machine-local file — the exact split-brain ADR-0099 exists to close, in the opposite
+  direction from `engine_env.py`. The launcher now reads `.mcp.json` and counts a value that
+  MATCHES it as a descriptor default, so only a genuinely different export wins. Latent until
+  now only because the two files hold identical values for the keys they share; editing the
+  model in `engine-env.json` — the natural swap — would have split them.
+  `vendor/skill-search/tests/test_launcher_engine_env.py` covers both, plus the fail-open
+  contract and the Unicode-key case; each test was confirmed to fail with its fix reverted.
+- **Two engine patches that shipped without a `VENDORED.md` entry are now recorded**
+  (AGENTS.md requires every direct edit to the vendored engine be listed, or a re-vendor
+  drops it silently): the EmbeddingGemma-2 task-instruction prefixes (`fa9f1fa`, which is
+  index-shaping and needs a rebuild to deploy) and the embedder-as-a-real-config-switch fix
+  (`e23345a`).
+
+### Changed
+
+- **Documentation corrected where it disagreed with the code.** ADR-0098's cost line
+  multiplied a 128-document probe's latency by the whole corpus and called the result the
+  full build's duration (33.4 min, not the measured 20.2 min at 26.4 ms/doc). Three documents
+  named a health key `provenance.current` that does not exist; it is
+  `embedder_provenance.current`. ADR-0099's "precedence matches exactly" was false when
+  written and is true only as of this release.
+
 ## [0.76.3] - 2026-11-07
 
 ### Fixed
@@ -47,7 +80,7 @@ All notable changes to **skill-concierge**. Format loosely follows
   isolated Python with an inline program, restricted to uppercase-identifier keys with
   non-empty string values, and fails open so a bad file can never block MCP startup.
   Verified by driving the real launcher over stdio in an empty environment: `health` reports
-  `provenance.current` as the GPU-host identity, `stale_points 0`, `status ok`.
+  `embedder_provenance.current` as the GPU-host identity, `stale_points 0`, `status ok`.
 
 ## [0.76.1] - 2026-11-07
 

@@ -70,8 +70,10 @@ Measured on this machine: rebuilding from the plugin directory alone came up
 ## Consequences
 
 - Every point grows by one short string; the first reindex after this ships
-  re-embeds the whole index once (46,560 points, ~20 min at 43 ms/doc through the
-  GPU host). After that, a swap re-embeds only the points it needs to.
+  re-embeds the whole index once. Measured: 45,857 points in 1,211 s (20.2 min) through the
+  GPU host — 26.4 ms/doc. (A separate 128-document ingestion probe measured 43.2 ms/doc at
+  the start of a run; multiplying that probe by the full corpus overstates the build, which
+  is why the two numbers are stated apart.) After that, a swap re-embeds only what changed.
 - `health()` now answers "is the stored index from the embedder serving queries",
   which is the question whose absence let the 2026-11-07 cutover pass unnoticed.
 - The dimension guard stays. It catches an incompatible collection before any

@@ -61,7 +61,10 @@ if [ -r "$_ENGINE_ENV_FILE" ]; then
   # Parse in Python (never `eval` a config file) and emit shell-quoted exports. -I keeps the
   # interpreter isolated from the caller's PYTHONPATH; the parser is inline so no temp file is
   # written on the MCP startup path.
-  _engine_env_exports="$(ENGINE_ENV_PATH="$_ENGINE_ENV_FILE" "$VENV/bin/python" -I -c '
+  _engine_env_exports="$(ENGINE_ENV_PATH="$_ENGINE_ENV_FILE" \
+    ENGINE_ENV_KEYS_SRC="$ROOT/scripts/engine_env.py" \
+    ENGINE_MCP_JSON="$ROOT/.mcp.json" \
+    "$VENV/bin/python" -I -c '
 import json, os, re, shlex, sys
 path = os.environ.get("ENGINE_ENV_PATH", "")
 try:
@@ -70,9 +73,33 @@ except Exception:
     sys.exit(0)
 if not isinstance(conf, dict):
     sys.exit(0)
+# ENGINE KEYS ONLY — the same allowlist scripts/engine_env.py applies, read from that one
+# file so the list has a single owner. Filtering on name shape alone let an arbitrary key
+# through: audit finding, FOO=bar reached the engine from the launcher while engine_env.py
+# dropped it, so two consumers of one file disagreed.
+try:
+    _src = open(os.environ["ENGINE_ENV_KEYS_SRC"], encoding="utf-8").read()
+    # ENGINE_ENV_KEYS is a multi-line tuple; DOTALL so the quoted run is not cut at the first
+    # newline, and anchored on the assignment so a later tuple in the file cannot be grabbed.
+    _m = re.search(r"ENGINE_ENV_KEYS\s*=\s*\((.*?)\)", _src, re.S)
+    _allowed = set(re.findall(r"\"([A-Z0-9_]+)\"", _m.group(1))) if _m else None
+    _allowed = _allowed or None
+except Exception:
+    _allowed = None          # fail-open: fall back to the SKILL_-prefixed shape below
+# Which keys came from the SHIPPED DESCRIPTOR rather than from a real export? .mcp.json
+# injects its env into this process before we run, so os.environ cannot tell the two apart
+# on its own — and treating a descriptor default as an explicit export made the launcher and
+# engine_env.py pick OPPOSITE winners for a key present in both files (audit finding: the
+# split-brain ADR-0099 claims to close). Read the descriptor and classify.
+try:
+    _desc = json.load(open(os.environ["ENGINE_MCP_JSON"], encoding="utf-8"))
+    _desce = (_desc.get("mcpServers", {}).get("skill-search", {}) or {}).get("env", {}) or {}
+except Exception:
+    _desce = {}
 for k, v in conf.items():
-    # Engine keys only, SHELL-safe names only, non-empty strings only.
-    #
+    # Engine keys only (allowlist when readable), SHELL-safe names only, non-empty strings.
+    if _allowed is not None and k not in _allowed:
+        continue
     # ASCII-only on purpose. str.isidentifier() is true for "ÉCOLE", but bash rejects
     # "export ÉCOLE=x" with "not a valid identifier", and under set -euo pipefail that
     # aborts the whole launcher — the opposite of the fail-open contract above. A POSIX
@@ -84,7 +111,8 @@ for k, v in conf.items():
         continue
     if not (isinstance(v, str) and v):
         continue
-    if k in os.environ:          # an explicit export outranks the file
+    if k in os.environ and not (k in _desce and os.environ[k] == _desce[k]):
+        continue                 # a real export outranks the file; a descriptor default does not
         continue
     print(f"export {k}={shlex.quote(v)}")
 ' 2>/dev/null || true)"

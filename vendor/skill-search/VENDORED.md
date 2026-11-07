@@ -33,6 +33,21 @@ at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it survives re
 ## Engine-code patches (DIRECT edits to the vendored source — re-apply after re-vendoring)
 Unlike the plugin-level layer above, these modify the vendored engine and must be re-applied if
 upstream is re-vendored:
+- **EmbeddingGemma-2 task-instruction prefixes (fa9f1fa, 2026-11-06):** `server.py` prepends the
+  prefixes the model card specifies — documents and trigger phrases embed as
+  `title: {title} | text: {content}`, queries as `task: search result | query: {q}`. Gated on the
+  configured `EMBED_MODEL`, not a new flag: any other embedder (mpnet included) gets the text
+  unchanged, so a model swap stays a config change. Measured on this catalogue over 30 graded
+  probes: recall@1 0.267→0.433, recall@6 0.533→0.733, MRR 0.402→0.552, NDCG@6 0.325→0.466, up in
+  EN, VI and code. **Index-shaping:** documents embed differently, so deploying it requires a
+  rebuild. Covered by `vendor/skill-search/tests/test_eg2_prefixes.py`. Not upstream: re-apply on
+  re-vendor. *(This entry was added late — the commit shipped without it.)*
+- **Embedder is a real config switch (e23345a, 2026-11-06):** `setup.sh` no longer hardcodes
+  `SKILL_EMBED_BACKEND=fastembed` and no longer starts the index owner without forwarding the
+  embedder, which had made the owner fall back to its own bare-start default. Both matter because
+  `paraphrase-multilingual-mpnet-base-v2` and `embeddinggemma-2` both emit 768 dimensions, so the
+  owner's dimension guard cannot distinguish a wrong model from a right one. Not upstream:
+  re-apply on re-vendor. *(Added late.)*
 - **Embedder provenance stamp (ADR-0098, 2026-11-07):** `server.py` gains `embedder_identity()`,
   `current_embed_identity()` and `EMBED_ENDPOINT`; every point payload carries
   `"provenance": <12-hex>`; `_existing_points()` reads it back and `_point_changed()` gains a third
