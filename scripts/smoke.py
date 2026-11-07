@@ -87,14 +87,14 @@ HINTS = {"codex": "Codex skips a hook whose definition changed until it is trust
 # real turn wrote `turn`, `offer` (band `offer`, Jev whole-shelf n=504), `auto` and `search`, all
 # stamped `harness: hermes`. What does not transfer is the isolation model this check depends on.
 # Remove "hermes" here once the check can drive a dedicated gateway profile (ADR-0100 caveat 5).
-DEFAULT_ADVISORY = "hermes,commandcode"
+DEFAULT_ADVISORY = "hermes"
 # Why each entry is here, so a future reader can retire it on evidence:
 #   hermes       — gateway-hosted; the run's private ledger folder cannot see its rows (above).
-#   commandcode  — in this environment its configured model is refused by the provider before a
-#                  turn starts: "403 meta/muse-spark-1.3-contributor is not available in your
-#                  region per Meta's Geographic Use Policy". The harness fails closed at exit 4, so
-#                  the check proves nothing about our code either way. Retire it when a model that
-#                  answers in this region is configured; `--strict` restores the hard gate now.
+# commandcode was waived for a provider refusal, not a code one — its configured model was
+# refused before any turn started ("403 meta/muse-spark-1.3-contributor is not available in your
+# region"). Retired 2026-11-08 when the default model moved to deepseek/deepseek-v4.1-flash at max
+# effort: the same check then produced offer + search rows stamped `commandcode`, so it is held to
+# the full gate again.
 OPENCODE_CMD = ["opencode"]
 OPENCODE_PORT = int(os.environ.get("SMOKE_OPENCODE_PORT", "4473"))
 

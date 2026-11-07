@@ -3,6 +3,16 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [Unreleased]
+
+### Fixed
+
+- **Command Code is held to the full smoke gate again.** Its advisory entry existed for a provider
+  refusal, not a code one: the configured model was refused before any turn started (`403
+  meta/muse-spark-1.3-contributor … not available in your region`). The default model is now
+  `deepseek/deepseek-v4.1-flash` at `max` effort, the same check writes `offer` and `search` rows
+  stamped `commandcode`, and `smoke.DEFAULT_ADVISORY` is back to `hermes` alone.
+
 ## [0.77.0] - 2026-11-08
 
 ### Added
