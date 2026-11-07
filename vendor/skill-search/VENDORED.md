@@ -33,6 +33,14 @@ at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it survives re
 ## Engine-code patches (DIRECT edits to the vendored source — re-apply after re-vendoring)
 Unlike the plugin-level layer above, these modify the vendored engine and must be re-applied if
 upstream is re-vendored:
+- **Bearer token for a protected embedder (v0.74.0, ADR-0097, 2026-11-07):** `server.py` reads
+  `SKILL_EMBED_TOKEN` and sends it as `Authorization: Bearer …` on both Ollama paths — the batch
+  `/api/embed` and the legacy single-item `/api/embeddings` — through one `_embed_headers()` helper.
+  Empty is the default and sends **no** header, so a bare local Ollama is untouched. The key joins
+  `scripts/engine_env.py`'s `ENGINE_ENV_KEYS` so every reindex path forwards it. It exists because the
+  engine previously had no way to authenticate: pointing `SKILL_OLLAMA_URL` at a bearer-gated proxy
+  returned 401 on every embed and the reindex failed. Covered by
+  `vendor/skill-search/tests/test_embed_token.py`. Not upstream: re-apply on re-vendor.
 - **Multi-vector MAX-pool retrieval (v0.10.0, ADR-0012):** `server.py` (`search_skills` groups query;
   `build_index` base + per-trigger layer) and `skills_discovery.py`. Gated by `SKILL_MULTIVECTOR`.
 - **Plugin self-prefix guard (v0.10.2):** `skills_discovery._namespaced_name` skips the plugin-id prefix

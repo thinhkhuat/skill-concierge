@@ -125,6 +125,7 @@ The keep-off map (`~/.claude/skill-concierge/keep-off.json`) is consent-only and
 
 | Flag | Default | Effect | ADR |
 |---|---|---|---|
+| `SKILL_EMBED_TOKEN` | unset = (empty) | Bearer token sent to `SKILL_OLLAMA_URL` on both Ollama paths. Unset sends no header, so a bare local Ollama is unchanged. Index-shaping (it decides which endpoint answers), so it is in `ENGINE_ENV_KEYS`. Read it from the environment, never `.mcp.json`. | [0097](docs/adr/0097-embedder-bearer-token-for-a-protected-endpoint.md) |
 | `SKILL_BODY_TRIGGERS` | ON | Phrases from a skill body's decision sections join the trigger layer. Index-shaping. | [0016](docs/adr/0016-body-derived-trigger-points.md) |
 | `SKILL_LLM_TRIGGERS` | OFF in code, ON in the shipped `.mcp.json` (`TRIGGERS_MAX` 16) | Flywheel utterances from `triggers.json` join the trigger layer after the operator-curated `triggers-curated.json` phrases, which apply whatever this flag is set to. Index-shaping. | [0026](docs/adr/0026-llm-utterance-trigger-layer.md), [0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md) |
 | `SKILL_TRIGGER_PURITY` | unset = `shadow` | Not on/off: `shadow` logs body-derived workflow-summary triggers it would drop and keeps them; `active` drops them (needs a full reindex); `off` skips the check. Index-shaping. | [0023](docs/adr/0023-trigger-purity-lint.md) |

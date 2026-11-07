@@ -3,6 +3,25 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.74.0] - 2026-11-07
+
+### Added
+
+- **The embedder can authenticate: `SKILL_EMBED_TOKEN`.** `server.py` sends
+  `Authorization: Bearer …` on both Ollama paths (`/api/embed` and the legacy single-item
+  `/api/embeddings`) through one `_embed_headers()` helper. Unset is the default and sends
+  **no** header, so a bare local Ollama behaves exactly as before — no configuration, no new
+  risk. The key joins `ENGINE_ENV_KEYS`, so every reindex path forwards it: a credential that
+  decides which endpoint answers shapes the index (ADR-0026). Read it from the process
+  environment, never `.mcp.json`, which is tracked in git.
+  Why: a bearer-gated HTTPS embedding endpoint (`https://rtx.thinhkhuat.com`, Caddy in front
+  of Ollama on the GPU host, 768-dim `embeddinggemma-2:270m`) answers `401` to an
+  unauthenticated `/api/embed`, and the engine had no way to present a credential — so pointing
+  `SKILL_OLLAMA_URL` at it made every embed, and the reindex, fail. Keeping the same model when
+  changing only the URL leaves the dimension unchanged, so an existing collection stays valid.
+  Covered by `vendor/skill-search/tests/test_embed_token.py`, recorded in `VENDORED.md` as a
+  direct patch to vendored source ([ADR-0097](docs/adr/0097-embedder-bearer-token-for-a-protected-endpoint.md)).
+
 ## [0.73.0] - 2026-10-25
 
 ### Added

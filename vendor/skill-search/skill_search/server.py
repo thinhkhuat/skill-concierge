@@ -78,6 +78,11 @@ EMBED_BACKEND   = os.environ.get("SKILL_EMBED_BACKEND", "fastembed").lower()
 _DEFAULT_MODEL  = {"ollama": "embeddinggemma", "fastembed": "BAAI/bge-small-en-v1.5"}
 EMBED_MODEL     = os.environ.get("SKILL_EMBED_MODEL") or _DEFAULT_MODEL.get(EMBED_BACKEND, "embeddinggemma")
 OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
+# Bearer token for a protected OLLAMA_URL. Empty (the default) sends no Authorization
+# header at all, so a plain local Ollama behaves exactly as before. Set it when the
+# embedder sits behind an authenticating proxy (e.g. a Caddy gate in front of the GPU
+# host): a proxy answers 401 to an unauthenticated /api/embed and the reindex fails.
+EMBED_TOKEN     = os.environ.get("SKILL_EMBED_TOKEN", "")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
@@ -575,9 +580,16 @@ def _fastembed_model():
     return _fe_model
 
 
+def _embed_headers() -> dict:
+    """Auth for the embedder, or none. A bare local Ollama needs no header; a proxy in
+    front of a remote host needs the bearer."""
+    return {"Authorization": f"Bearer {EMBED_TOKEN}"} if EMBED_TOKEN else {}
+
+
 def _ollama_embed_one(text: str) -> list[float]:
     resp = requests.post(f"{OLLAMA_URL}/api/embeddings",
-                         json={"model": EMBED_MODEL, "prompt": text}, timeout=30)
+                         json={"model": EMBED_MODEL, "prompt": text},
+                         headers=_embed_headers(), timeout=30)
     resp.raise_for_status()
     return resp.json()["embedding"]
 
@@ -587,7 +599,8 @@ def _ollama_embed_batch(texts: list[str]) -> list[list[float]]:
     this works across Ollama versions (fail loud only if BOTH paths fail)."""
     try:
         resp = requests.post(f"{OLLAMA_URL}/api/embed",
-                             json={"model": EMBED_MODEL, "input": texts}, timeout=120)
+                             json={"model": EMBED_MODEL, "input": texts},
+                             headers=_embed_headers(), timeout=120)
         resp.raise_for_status()
         embs = resp.json().get("embeddings")
         if embs and len(embs) == len(texts):
