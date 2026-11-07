@@ -3,6 +3,50 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.77.0] - 2026-11-08
+
+### Added
+
+- **Hermes Agent is the ninth harness (ADR-0100).** A Hermes **user plugin**
+  (`adapters/hermes/plugin/`, `plugin.yaml` + `register(ctx)`) carries every Claude Code gate:
+  `pre_llm_call` on the first turn injects the SKILL-FIRST order, on every turn runs the enforcer
+  and writes the turn row; `pre_tool_call` turns a blocklisted skill into Hermes's
+  `{"action": "block"}` before it executes; `post_tool_call` logs skill loads in the Skill lane;
+  `transform_tool_result` appends the skill's own "not for" lines to the body it just read (Hermes
+  discards a `post_tool_call` return, so the echo needs the transform surface); `on_session_start`
+  fires the self-heal batch. Verified live: a real `hermes chat` turn wrote `turn`, `offer`
+  (band `offer`, Jev whole-shelf, n=504), `auto` and `search` rows, all stamped `harness: hermes`.
+- **Two Hermes discovery roots behind `SKILL_HERMES_ROOTS` (ADR-0100).** `hermes-personal`
+  (`$HERMES_HOME/skills` — its own category tree on this machine, **not** a symlink to
+  `~/.claude/skills`) and `hermes-plugin` (`$HERMES_HOME/plugins/<plugin>/skills/<name>/`, what
+  `ctx.register_skill` serves as `<plugin>:<name>`); both need the two-depth scan Hermes's category
+  dirs require. 83 shelf skills and the plugin shelf became retrievable on the first reindex. The
+  plugin shelf is filtered by `plugins.enabled`, read with a tolerant stdlib scanner (no YAML
+  dependency in the engine), so a disabled plugin's skills stay out exactly as a disabled Claude
+  plugin's do. `SKILL_HERMES_ROOTS=0` reverts byte-identically.
+- **`adapters/hermes/install.sh`** — symlinks the plugin at this checkout (never a copy; a previous
+  copy is archived under `~/_ARCHIVE/`), runs `hermes plugins enable` (idempotent, hot-reloads the
+  hooks into a running gateway), and writes both config values through `hermes config set` rather
+  than editing `config.yaml` (Hermes's own invariant: a stray indent breaks the live gateway).
+  Verified lossless on a 71-key config.
+- **Doctor's `Hermes integration` row and a `hermes` smoke row** (`hermes -z`), so the harness is
+  held to the same live release proof as every other one (ADR-0090) — as an **advisory** entry
+  (`smoke.DEFAULT_ADVISORY`): `hermes` is a client of the running gateway daemon, so its hooks write
+  to the gateway's own ledger and the run's private folder never sees the rows. The enforcement is
+  proven live (a real turn wrote `turn`, `offer` with the Jev whole-shelf ranking, `auto` and
+  `search`, all stamped `harness: hermes`); the isolation model is what does not transfer.
+
+### Fixed
+
+- **An MCP server that connects is not an MCP tool the model can see.** Measured live 2026-11-08:
+  `hermes mcp test skill-search` discovered all 5 tools while a real `hermes chat` turn answered
+  "`mcp_skill_search_search_skills` … is not available" and spent 44 s flailing. On a profile that
+  enumerates a surface's tools, a server's tools stay invisible until `mcp-skill-search` joins
+  `platform_toolsets.<surface>`. The installer now extends every surface that already carries an
+  `mcp-<server>` entry, and doctor fails the row when no surface carries it.
+- **`check_mcp_env_parity.py`'s status line named a fixed harness list** and would have gone stale on
+  the ninth adapter; it now derives the list from its own `DESCRIPTORS`.
+
 ## [0.76.4] - 2026-11-07
 
 ### Fixed

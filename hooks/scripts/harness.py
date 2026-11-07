@@ -19,12 +19,17 @@ _ALIASES = {
     "dsh": "dsh", "deepseek-harness": "dsh", "oh-dsh": "dsh", "ohdsh": "dsh",
     "cline": "cline", "cline-cli": "cline",
     "opencode": "opencode", "open-code": "opencode",
+    "hermes": "hermes", "hermes-agent": "hermes", "hermesagent": "hermes",
 }
 # Install-path markers, first match wins within one path. `.commandcode` matters to doctrine:
 # Command Code runs its SessionStart hooks without SKILL_CONCIERGE_HARNESS (caveats §23).
+# `.hermes` covers both the plugin (`~/.hermes/plugins/skill-concierge/`) and the source checkout
+# (`~/.hermes/hermes-agent/`); the adapter sets SKILL_CONCIERGE_HARNESS=hermes on every call, so
+# this marker is the fallback for a hand-wired install, not the primary signal.
 _MARKERS = (("omp", ".omp"), ("codex", ".codex"), ("zcode", ".zcode"),
             ("commandcode", ".commandcode"), ("dsh", ".dsh"), ("dsh", ".ohdsh"),
-            ("cline", ".cline"), ("opencode", ".opencode"), ("claude", ".claude"))
+            ("cline", ".cline"), ("opencode", ".opencode"), ("hermes", ".hermes"),
+            ("claude", ".claude"))
 
 
 def running_harness(script: str) -> str:

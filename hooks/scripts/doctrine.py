@@ -229,6 +229,26 @@ def _harness_adapt(doctrine: str) -> str:
             "/skill-concierge:skill-search",
             "skill-search_search_skills"
         ))
+    if harness == "hermes":
+        # Hermes Agent (ADR-0100): its native MCP client registers every server tool as
+        # `mcp_<server>_<tool>` with each run of non-alphanumerics folded to one `_`
+        # (native-mcp docs "Tool Naming Convention"; `skill-search` + `search_skills` ->
+        # `mcp_skill_search_search_skills`). Hermes DOES have interactive skill slash commands
+        # (`/name` for filesystem skills, `/plugin:name` for plugin-bundled ones), but
+        # skill-concierge is a Python PLUGIN here and registers no skill of its own, so
+        # `/skill-concierge:skill-search` names nothing: both hints become the search tool.
+        # The rule-5 `get_skill("<name>")` hint is left as written (no harness rewrites it; the
+        # bridged form is `mcp_skill_search_get_skill` and the short name resolves to it).
+        return _drop_duplicate_or_line(doctrine.replace(
+            "mcp__plugin_skill-concierge_skill-search__search_skills",
+            "mcp_skill_search_search_skills"
+        ).replace(
+            "/skill-concierge:skill-search",
+            "mcp_skill_search_search_skills"
+        ).replace(
+            "/skill-search",
+            "mcp_skill_search_search_skills"
+        ))
     if harness == "omp":
         return _drop_duplicate_or_line(doctrine.replace(
             "mcp__plugin_skill-concierge_skill-search__search_skills",
@@ -413,6 +433,27 @@ def _selftest() -> int:
             os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
         else:
             os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_z
+
+    # Hermes Agent (ADR-0100): the native MCP client mints `mcp_<server>_<tool>`, so the plugin's
+    # search tool is `mcp_skill_search_search_skills`; the plugin registers no skill, so no slash
+    # form survives. Pin all three, plus the rule-5 hint and the dropped `or:` duplicate.
+    _saved_h = os.environ.get("SKILL_CONCIERGE_HARNESS")
+    os.environ["SKILL_CONCIERGE_HARNESS"] = "hermes"
+    try:
+        _adapted = _harness_adapt(_sample)
+    finally:
+        if _saved_h is None:
+            os.environ.pop("SKILL_CONCIERGE_HARNESS", None)
+        else:
+            os.environ["SKILL_CONCIERGE_HARNESS"] = _saved_h
+    if "mcp_skill_search_search_skills" not in _adapted:
+        bad.append("hermes adapt: search tool must be the bridged mcp_skill_search_search_skills")
+    if "/skill-concierge:skill-search" in _adapted or "/skill-search" in _adapted:
+        bad.append("hermes adapt: no slash-command form — the plugin registers no skill")
+    if 'get_skill("<name>")' not in _adapted:
+        bad.append("hermes adapt: rule 5 must keep get_skill(\"<name>\")")
+    if _adapted.count("mcp_skill_search_search_skills") != 1:
+        bad.append("hermes adapt: the search tool must be named once (duplicate `or:` bullet dropped)")
 
     if bad:
         print("doctrine --selftest FAIL:")

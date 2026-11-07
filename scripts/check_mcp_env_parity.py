@@ -23,7 +23,17 @@ DESCRIPTORS = [
     ("adapters/omp/mcp.json", (), ""),
     ("adapters/zcode/mcp.json", (), ""),
     ("adapters/dsh/mcp.json", (), ""),
+    # Same rule as DSH: the harness stamp is written by install.sh into Hermes's own
+    # config.yaml, so it never appears in this descriptor (a key .mcp.json lacks fails here).
+    ("adapters/hermes/mcp.json", (), ""),
 ]
+
+
+# How each descriptor's harness is spelled in the status line, keyed by the descriptor path.
+# One owner: a new adapter adds its row here and the message stays current without a second edit.
+DISPLAY = {".codex-plugin/mcp.json": "Codex", "adapters/commandcode/mcp.json": "Command Code",
+           "adapters/omp/mcp.json": "OMP", "adapters/zcode/mcp.json": "ZCode",
+           "adapters/dsh/mcp.json": "DSH", "adapters/hermes/mcp.json": "Hermes"}
 
 
 def env_of(path, server="skill-search"):
@@ -47,8 +57,9 @@ def main() -> int:
             print("  " + b)
         return 1
     omitted = sorted(set(claude) - set(codex))
-    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across Claude, Codex, "
-          f"Command Code, OMP, ZCode, and DSH"
+    checked = ["Claude"] + [DISPLAY[p] for p, _m, _n in DESCRIPTORS if (ROOT / p).exists()]
+    where = ", ".join(checked[:-1]) + f" and {checked[-1]}" if len(checked) > 1 else checked[0]
+    print(f"mcp-env-parity OK: {len(codex)} shared keys in lockstep across {where}"
           + (f"; codex omits {omitted} (deliberate — see descriptor comment)" if omitted else ""))
     return 0
 

@@ -66,10 +66,22 @@ CLI = {
     "commandcode": ("cmd", ["cmd", "-p"]),
     "cline": ("cline", ["cline", "--json"]),
     "dsh": ("dsh", ["dsh", "headless"]),
+    # Hermes Agent (ADR-0100): `-z/--oneshot` prints ONLY the final response (no banner, no
+    # spinner, no tool previews), the cleanest headless surface for this check. The plugin and the
+    # skill-search MCP server both load from $HERMES_HOME, so the temp cwd stays isolated.
+    "hermes": ("hermes", ["hermes", "-z"]),
 }
 HARNESSES = (*CLI, "opencode", "zcode")
 HINTS = {"codex": "Codex skips a hook whose definition changed until it is trusted again: open Codex "
                   "and approve the skill-concierge hooks"}
+# Advisory by default (ADR-0100, Thinh 2026-11-08). `hermes` is a CLIENT of the running gateway
+# daemon: the turn executes in the gateway, whose environment is fixed at launch, so the plugin's
+# hook subprocesses never inherit this run's SKILL_CONCIERGE_LOG and every row lands in the live
+# ledger instead of this run's own folder. The enforcement is real — verified live 2026-11-08: a
+# real turn wrote `turn`, `offer` (band `offer`, Jev whole-shelf n=504), `auto` and `search`, all
+# stamped `harness: hermes`. What does not transfer is the isolation model this check depends on.
+# Remove "hermes" here once the check can drive a dedicated gateway profile (ADR-0100 caveat 5).
+DEFAULT_ADVISORY = "hermes"
 OPENCODE_CMD = ["opencode"]
 OPENCODE_PORT = int(os.environ.get("SMOKE_OPENCODE_PORT", "4473"))
 
@@ -368,8 +380,9 @@ def _run_all(harnesses: list[str], advisory: set[str]) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("harness", nargs="*", help=f"any of {', '.join(HARNESSES)} (default: all)")
-    ap.add_argument("--advisory", default=os.environ.get("SMOKE_ADVISORY", ""),
-                    help="comma-separated harnesses whose FAIL or UNPROVEN does not block (default: $SMOKE_ADVISORY)")
+    ap.add_argument("--advisory", default=os.environ.get("SMOKE_ADVISORY", DEFAULT_ADVISORY),
+                    help="comma-separated harnesses whose FAIL or UNPROVEN does not block "
+                         "(default: $SMOKE_ADVISORY, else DEFAULT_ADVISORY)")
     ap.add_argument("--accept-unproven", default="", help="older name; adds to --advisory")
     args = ap.parse_args(argv)
     unknown = set(args.harness) - set(HARNESSES)

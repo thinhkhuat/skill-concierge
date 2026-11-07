@@ -2420,6 +2420,149 @@ def check_opencode():
             "fix": None}
 
 
+# ---------- Hermes Agent (ADR-0100) ----------
+# Hermes's own paths. $HERMES_HOME is the profile home (Hermes resolves every path from it, so a
+# second profile is never ~/.hermes by accident). Its config is YAML and doctor is stdlib-only, so
+# the two values this row needs are read with the tolerant block scanner below — Hermes writes
+# that shape deterministically (`hermes config set` re-serializes it). An unreadable file is a
+# finding, never a crash.
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+HERMES_CONFIG = HERMES_HOME / "config.yaml"
+HERMES_PLUGIN = HERMES_HOME / "plugins" / "skill-concierge"
+HERMES_SOURCE = ROOT / "adapters" / "hermes" / "plugin"
+
+
+def _yaml_block(lines, key, indent):
+    """The lines nested under a block-style `key:` at `indent`, comments/blanks dropped.
+
+    A tiny subset reader on purpose: doctor may not import PyYAML, and the only two values it
+    needs (an enable list, an argv list) are the shape Hermes itself writes.
+    """
+    out, depth = [], None
+    for ln in lines:
+        if depth is None:
+            if ln.strip() == f"{key}:" and len(ln) - len(ln.lstrip()) == indent:
+                depth = indent
+            continue
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        here = len(ln) - len(ln.lstrip())
+        if here <= depth:
+            break
+        out.append(ln)
+    return out
+
+
+def _hermes_yaml():
+    """The config's lines, or None when it is absent/unreadable."""
+    try:
+        return HERMES_CONFIG.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+
+
+def _hermes_plugin_enabled(lines):
+    """True/False from `plugins.enabled`; None when the block is absent (unknown)."""
+    plugin_block = _yaml_block(lines, "plugins", 0)
+    enabled = _yaml_block(plugin_block, "enabled", 2)
+    if not enabled:
+        return None
+    return any(ln.strip() == "- skill-concierge" for ln in enabled)
+
+
+def _hermes_mcp_args(lines):
+    """The `args:` entries of `mcp_servers.skill-search`, or None when the entry is absent."""
+    servers = _yaml_block(lines, "mcp_servers", 0)
+    entry = _yaml_block(servers, "skill-search", 2)
+    if not entry:
+        return None
+    args = _yaml_block(entry, "args", 4)
+    return [ln.strip()[2:].strip().strip("'\"") for ln in args if ln.strip().startswith("- ")]
+
+
+def _hermes_mcp_surfaces(lines):
+    """The platform_toolsets surfaces that carry mcp-skill-search, or None when unreadable.
+
+    Registering an MCP server is not enough on a profile that enumerates a surface's tools:
+    measured live 2026-11-08, `search_skills` stayed invisible to `hermes chat` until
+    `mcp-skill-search` joined platform_toolsets.cli. A surface list that names no MCP toolset at
+    all is left out on purpose (that owner never opted into MCP there)."""
+    try:
+        base = next(i for i, ln in enumerate(lines) if ln.rstrip() == "platform_toolsets:")
+    except StopIteration:
+        return None
+    out, surface, depth = [], None, None
+    for ln in lines[base + 1:]:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        here = len(ln) - len(ln.lstrip())
+        if here <= 2:
+            surface = ln.strip()[:-1] if ln.strip().endswith(":") else None
+            depth = here
+            continue
+        if surface and ln.strip() == "- mcp-skill-search":
+            out.append(surface)
+    return out
+
+
+def check_hermes():
+    """Hermes Agent install state: the plugin link at this checkout and enabled, the
+    skill-search MCP entry naming this checkout's launcher (ADR-0100).
+
+    WARN-only — no Hermes install is one 'hermes: not installed' row, never a failure.
+    """
+    if not HERMES_HOME.exists():
+        return {"id": "hermes", "label": "Hermes integration", "status": WARN,
+                "detail": "hermes: not installed (no ~/.hermes) — optional harness, no action needed",
+                "fix": None}
+    findings = []
+    fix = f"bash {ROOT / 'adapters' / 'hermes' / 'install.sh'}"
+    # 1. The plugin package exists in THIS checkout.
+    for f in ("plugin.yaml", "__init__.py"):
+        if not (HERMES_SOURCE / f).is_file():
+            findings.append(f"plugin package incomplete (missing adapters/hermes/plugin/{f})")
+    # 2. The installed link/dir resolves to a checkout of this plugin, at this version.
+    if not HERMES_PLUGIN.exists():
+        findings.append(f"Hermes plugin not installed at {HERMES_PLUGIN} ({fix})")
+    else:
+        try:
+            target = HERMES_PLUGIN.resolve()
+        except (OSError, RuntimeError):
+            target = HERMES_PLUGIN
+        findings.extend(f"{f} ({fix})"
+                        for f in _checkin_findings(target, "the Hermes plugin link"))
+        if target != HERMES_SOURCE.resolve():
+            findings.append(f"the Hermes plugin points at {target}, not this checkout ({fix})")
+    # 3. Enabled — Hermes loads a plugin only from its own enable list.
+    lines = _hermes_yaml()
+    if lines is None:
+        findings.append(f"{HERMES_CONFIG} unreadable ({fix})")
+    else:
+        enabled = _hermes_plugin_enabled(lines)
+        if enabled is False or enabled is None:
+            findings.append(f"skill-concierge is not in plugins.enabled of {HERMES_CONFIG} ({fix})")
+        args = _hermes_mcp_args(lines)
+        if args is None:
+            findings.append(f"mcp_servers.skill-search missing from {HERMES_CONFIG} ({fix})")
+        elif not any(str(a).endswith("bin/skill-search-mcp") for a in args):
+            findings.append(f"mcp_servers.skill-search does not launch this checkout's "
+                            f"bin/skill-search-mcp (args: {args}; {fix})")
+        surfaces = _hermes_mcp_surfaces(lines) if lines is not None else None
+        if lines is not None and not surfaces:
+            findings.append(f"no platform_toolsets surface carries mcp-skill-search, so the "
+                            f"skill-search tools are invisible to Hermes ({fix})")
+    # 4. The launcher the MCP entry names.
+    if not (ROOT / "bin" / "skill-search-mcp").exists():
+        findings.append(f"bin/skill-search-mcp missing from this checkout ({fix})")
+    if findings:
+        return {"id": "hermes", "label": "Hermes integration", "status": WARN,
+                "detail": "; ".join(findings), "fix": None}
+    return {"id": "hermes", "label": "Hermes integration", "status": OK,
+            "detail": "plugin linked at this checkout + enabled + skill-search MCP registered "
+                      f"+ toolset on {', '.join(_hermes_mcp_surfaces(_hermes_yaml() or []) or [])}",
+            "fix": None}
+
+
 KEEPOFF_DURABLE = Path(os.environ.get(
     "SKILL_CONCIERGE_KEEPOFF", Path.home() / ".claude" / "skill-concierge" / "keep-off.json"))
 
@@ -2499,7 +2642,7 @@ CHECKS = [check_python, check_venv, check_engine_freshness, check_running_engine
           check_corpus_health, check_flywheel, check_trigger_hygiene, check_overrides,
           check_blocklist, check_keepoff, check_findability,
           check_catalogs, check_omp, check_codex, check_commandcode, check_zcode,
-          check_claude_code, check_dsh, check_cline, check_opencode,
+          check_claude_code, check_dsh, check_cline, check_opencode, check_hermes,
           check_ledger, check_dup_mcp, check_mcp_enabled]
 
 

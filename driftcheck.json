@@ -44,6 +44,11 @@
           "file": "adapters/opencode/plugin/package.json",
           "regex": "\"version\":\\s*\"([0-9]+\\.[0-9]+\\.[0-9]+)\"",
           "occurrence": "first"
+        },
+        {
+          "file": "adapters/hermes/plugin/plugin.yaml",
+          "regex": "^version:\\s*([0-9]+\\.[0-9]+\\.[0-9]+)",
+          "occurrence": "first"
         }
       ]
     }
@@ -97,7 +102,12 @@
     "adapters/cline/agent-plugin.json",
     "adapters/cline/mcp_row.py",
     "docs/adr/0086-cline-native-plugin-and-agent-plugin.md",
-    "docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md"
+    "docs/adr/0087-staged-jev-menu-and-honest-cline-offer-row.md",
+    "adapters/hermes/install.sh",
+    "adapters/hermes/mcp.json",
+    "adapters/hermes/plugin/plugin.yaml",
+    "adapters/hermes/plugin/__init__.py",
+    "docs/adr/0100-hermes-agent-nona-harness-parity.md"
   ],
   "command_checks": [
     {

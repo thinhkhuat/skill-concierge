@@ -253,12 +253,23 @@ _OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"
 # skill-concierge's own OpenCode skills (adapters/opencode/install.sh), registered in opencode.json.
 _OPENCODE_CONCIERGE_ROOT = _OPENCODE_PERSONAL_ROOT.parent / "skill-concierge-skills"
 
+# Hermes Agent skill roots (ADR-0100) — the twin test's filesystem rescue set. Mirrors
+# skills_discovery.HERMES_PERSONAL_ROOT / HERMES_PROJECT_ROOT plus the two roots Hermes has that
+# the engine does not index as their own scope: its plugin shelf (~/.hermes/plugins/<plugin>/
+# skills/<skill>/, served as `<plugin>:<skill>`) and the <project>/.agents/skills convention twin.
+# stdlib-only duplicate of the engine's constants, same rule as every block above.
+_HERMES_HOME = Path(os.environ.get("SKILL_HERMES_HOME", str(Path.home() / ".hermes")))
+_HERMES_PERSONAL_ROOT = _HERMES_HOME / "skills"
+_HERMES_PROJECT_ROOT = Path.cwd() / ".hermes" / "skills"
+_HERMES_PLUGINS_ROOT = _HERMES_HOME / "plugins"
+
 
 # The cross-harness convention root (ZCode, DSH, Cline and OpenCode read it).
 _AGENTS_SKILLS = Path.home() / ".agents" / "skills"
 
 
-_HARNESS_ORDER = ("claude", "codex", "commandcode", "omp", "zcode", "dsh", "cline", "opencode")
+_HARNESS_ORDER = ("claude", "codex", "commandcode", "omp", "zcode", "dsh", "cline",
+                  "opencode", "hermes")
 
 
 def _scope_harness(scope: str) -> str:
@@ -299,6 +310,29 @@ def _agents_shares_personal_shelf() -> bool:
     return _resolves_to_claude_personal(_AGENTS_SKILLS)
 
 
+def _hermes_shares_personal_shelf() -> bool:
+    """Hermes's profile shelf $HERMES_HOME/skills resolves to Claude's personal root, so every
+    `personal`-scoped skill is invocable through the symlink. On this machine it does NOT (the
+    Hermes shelf is its own tree with its own category dirs), which is exactly why the
+    `personal` scope is foreign here by default (ADR-0100)."""
+    return _resolves_to_claude_personal(_HERMES_PERSONAL_ROOT)
+
+
+def _hermes_plugin_skill(name: str) -> bool:
+    """True when `name` (bare, or `<plugin>:<skill>`) is a skill on Hermes's plugin shelf.
+    OSError -> UNKNOWN -> True (fail-to-non-blocking, the twin rule)."""
+    plugin, sep, skill = name.partition(":")
+    if "/" in name or ".." in name:
+        return False
+    try:
+        if sep and plugin and skill:
+            return (_HERMES_PLUGINS_ROOT / plugin / "skills" / skill / "SKILL.md").is_file()
+        return any((_HERMES_PLUGINS_ROOT / d / "skills" / name / "SKILL.md").is_file()
+                   for d in os.listdir(_HERMES_PLUGINS_ROOT))
+    except (OSError, ValueError):
+        return True
+
+
 def _commandcode_shares_personal_shelf() -> bool:
     """Command Code's ~/.commandcode/skills is the shared shelf (verified live 2026-09-18:
     ~/.commandcode/skills -> ~/.claude/skills, and `commandcode -p` returned a
@@ -321,20 +355,28 @@ def _foreign_scopes() -> tuple:
         base = ("plugin", "codex-plugin", "codex-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal",
+                "hermes-personal", "hermes-plugin",
+                "claude-synced")
         return base if _commandcode_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "codex":
         return ("plugin", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal",
+                "hermes-personal", "hermes-plugin",
+                "claude-synced")
     if RUNNING_HARNESS == "omp":
         return ("codex-plugin", "commandcode-personal", "zcode-personal", "zcode-plugin",
-                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal",
+                "hermes-personal", "hermes-plugin",
+                "claude-synced")
     if RUNNING_HARNESS == "zcode":
         base = ("plugin", "codex-plugin", "codex-personal", "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
-                "dsh-personal", "cline-personal", "opencode-personal", "claude-synced")
+                "dsh-personal", "cline-personal", "opencode-personal",
+                "hermes-personal", "hermes-plugin",
+                "claude-synced")
         return base if _agents_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "dsh":
         # DSH reads its own roots (DSH_HOME/skills, <project>/.dsh/skills) plus the
@@ -345,7 +387,9 @@ def _foreign_scopes() -> tuple:
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin", "cline-personal",
-                "opencode-personal", "claude-synced")
+                "opencode-personal",
+                "hermes-personal", "hermes-plugin",
+                "claude-synced")
         return base if _agents_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "cline":
         # Cline (ADR-0051) reads ~/.cline/data/settings/skills and <cwd>/.cline/skills, and —
@@ -356,7 +400,9 @@ def _foreign_scopes() -> tuple:
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin", "dsh-personal",
-                "opencode-personal", "claude-synced")
+                "opencode-personal",
+                "hermes-personal", "hermes-plugin",
+                "claude-synced")
         return base if _agents_shares_personal_shelf() else base + ("personal",)
     if RUNNING_HARNESS == "opencode":
         # OpenCode v2 (ADR-0085) reads ~/.config/opencode/skills, <cwd>/.opencode/skills, and —
@@ -369,11 +415,27 @@ def _foreign_scopes() -> tuple:
                 "commandcode-personal",
                 "omp-personal", "omp-managed", "omp-plugin",
                 "zcode-personal", "zcode-plugin", "dsh-personal", "cline-personal",
+                "hermes-personal", "hermes-plugin",
                 "claude-synced")
+    if RUNNING_HARNESS == "hermes":
+        # Hermes Agent (ADR-0100) resolves skills through its own profile shelf
+        # ($HERMES_HOME/skills), its trusted project dirs (<project>/.hermes/skills and
+        # <project>/.agents/skills), the configured create_dir/skills.external_dirs, and the
+        # skills its ENABLED plugins register as `<plugin>:<skill>`. It reads no other harness's
+        # roots and no plugin CACHE — so `plugin` is foreign, and `personal` is invocable only
+        # when ~/.hermes/skills resolves to Claude's shelf (on this machine it does not: the
+        # Hermes shelf is its own category tree, which is why hermes-personal exists).
+        base = ("plugin", "codex-personal", "codex-plugin",
+                "commandcode-personal",
+                "omp-personal", "omp-managed", "omp-plugin",
+                "zcode-personal", "zcode-plugin", "dsh-personal", "cline-personal",
+                "opencode-personal", "claude-synced")
+        return base if _hermes_shares_personal_shelf() else base + ("personal",)
     return ("codex-plugin", "codex-personal", "commandcode-personal",
             "omp-personal", "omp-managed", "omp-plugin",
             "zcode-personal", "zcode-plugin",
-            "dsh-personal", "cline-personal", "opencode-personal")
+            "dsh-personal", "cline-personal", "opencode-personal",
+            "hermes-personal", "hermes-plugin")
 
 FOREIGN_SCOPES = _foreign_scopes()
 
@@ -645,6 +707,17 @@ def _invocable_twin(name: str) -> bool:
         return _has_skill_md(name, (_OPENCODE_PERSONAL_ROOT, _OPENCODE_PROJECT_ROOT,
                                     _OPENCODE_CONCIERGE_ROOT,
                                     Path.home() / ".claude" / "skills", _AGENTS_SKILLS))
+    if RUNNING_HARNESS == "hermes":
+        # Hermes Agent (ADR-0100): a foreign-scoped row survives only through a filesystem twin
+        # in a root Hermes itself reads — its profile shelf, its own project roots, the
+        # <project>/.agents/skills twin, or an ENABLED plugin's shelf (a `<plugin>:<skill>` row).
+        # NOT ~/.claude/skills: unlike OpenCode, Hermes has no documented compatibility read of
+        # Claude's shelf (agent/skill_utils.py::get_skill_search_roots).
+        if ":" in name:
+            return _hermes_plugin_skill(name)
+        return (_has_skill_md(name, (_HERMES_PERSONAL_ROOT, _HERMES_PROJECT_ROOT,
+                                     Path.cwd() / ".agents" / "skills", _AGENTS_SKILLS))
+                or _hermes_plugin_skill(name))
     if RUNNING_HARNESS not in ("claude", "omp") or not INVOCABLE_PLUGIN_IDS or ":" not in name:
         return False
     return name.split(":", 1)[0] in INVOCABLE_PLUGIN_IDS
@@ -1914,7 +1987,7 @@ def _row_invocable(name: str, scope) -> bool:
     if CROSS_HARNESS and PROJECT_ISOLATION and _project_row_verdict(scope, name) == "other":
         return False
     if (CROSS_HARNESS and (INVOCABLE_PLUGIN_IDS is not None
-                           or RUNNING_HARNESS in ("dsh", "cline", "opencode"))
+                           or RUNNING_HARNESS in ("dsh", "cline", "opencode", "hermes"))
             and _scope_is_foreign(scope) and not _invocable_twin(name)):
         return False
     return _plugin_gate_ok(name, scope)

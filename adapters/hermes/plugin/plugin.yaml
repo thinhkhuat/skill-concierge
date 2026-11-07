@@ -1,0 +1,17 @@
+name: skill-concierge
+version: 0.77.0
+description: "skill-concierge for Hermes Agent (ADR-0100): injects the SKILL-FIRST standing
+  order at session start, runs the per-turn semantic enforcer (embed → retrieve → ranked
+  mandate, with the Jev whole-shelf router), records every turn and skill load in the shared
+  invocation ledger, denies a blocklisted skill at invocation, and echoes a loaded skill's own
+  'not for' lines back so an excluding body forces an open re-rule. Additive and fail-open: a
+  broken adapter must never block a Hermes turn. Companion MCP server `skill-search` supplies
+  search_skills / get_skill / consult_candidates."
+author: Thinh Khuat
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - transform_tool_result
+dependencies: []

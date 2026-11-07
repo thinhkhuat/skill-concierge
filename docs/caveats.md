@@ -847,3 +847,26 @@ env -i HOME=$HOME PATH=/usr/bin:/bin /bin/bash bin/skill-search-mcp   # then cal
 
 **Watch:** the launcher only fills missing values. A stale explicit export outranks the file
 by design, so a shell that already sourced an old setting can still pin the wrong endpoint.
+
+## 1. Hermes Agent: a connected MCP server is not a visible tool, and its shelf has no symlink
+
+Three landmines, all measured on 2026-11-08 (ADR-0100).
+
+1. **Registering `mcp_servers.skill-search` does not put the tools in front of the model.** On a
+   profile that enumerates a surface's tools (`platform_toolsets.<surface>`), a newly registered
+   server's tools stay invisible until `mcp-skill-search` is added to that list. `hermes mcp test
+   skill-search` reports a clean connection with all five tools discovered **while** a real
+   `hermes chat` turn answers "`mcp_skill_search_search_skills` … is not available" and burns ~44 s
+   flailing. Trust the turn, not the connection test. `adapters/hermes/install.sh` extends every
+   surface that already carries an `mcp-<server>` entry, and doctor's Hermes row fails when no
+   surface carries it.
+2. **`~/.hermes/skills` is not a symlink to `~/.claude/skills` on this machine.** `readlink` on it
+   prints nothing; `~/.hermes/skills/claude-code-skills` is the symlink. So Hermes's shelf is its
+   own tree with its own category directories, `personal` is foreign to Hermes, and `hermes-personal`
+   carries 83 skills no other harness scope held. Re-check with `readlink ~/.hermes/skills` before
+   assuming a shared shelf.
+3. **Hermes discards a `post_tool_call` return, and fails `pre_tool_call` CLOSED.** The exclusion
+   echo therefore rides `transform_tool_result` (which replaces the model-bound result), while the
+   blocklist guard must never raise or overrun: Hermes abandons a slow `pre_tool_call` and treats
+   abandonment as a BLOCK, so the guard's subprocess is bounded at 2 s and every exception returns
+   "no directive".

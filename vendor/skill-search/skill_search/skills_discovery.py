@@ -149,6 +149,40 @@ OPENCODE_PROJECT_ROOT = Path.cwd() / ".opencode" / "skills"       # OpenCode pro
 # ~/.config/opencode/skills is often a symlink to ~/.claude/skills (Claude Code's shelf).
 OPENCODE_CONCIERGE_ROOT = _OPENCODE_HOME / "skill-concierge-skills"
 
+# Hermes Agent skill roots (nona-harness parity, ADR-0100): Hermes resolves skills through
+# agent/skill_utils.py::get_skill_search_roots — the profile's own dir ($HERMES_HOME/skills),
+# trusted project dirs (<project>/.hermes/skills, <project>/.agents/skills), the configured
+# create_dir and the configured skills.external_dirs. Only TWO of those are Hermes-specific
+# and unindexed today:
+#   hermes-personal : $HERMES_HOME/skills   (Hermes's own personal shelf)
+#   hermes-plugin   : $HERMES_HOME/plugins/<plugin>/skills/<name>/SKILL.md
+#                     (ctx.register_skill, the plugin-bundled skills Hermes serves as
+#                      `<plugin>:<name>`; not copied into the personal shelf)
+# The <project>/.agents/skills twin is NOT a new root: it is the cross-harness convention root
+# already indexed as `personal`-adjacent and deliberately not re-indexed (ADR-0042).
+# ~/.hermes/skills is often a SYMLINK to ~/.claude/skills (the one-family-one-channel skills
+# library). Globbing it then re-yields every personal SKILL.md under a second string prefix;
+# discover_skills() dedupes by NAME with first-writer-wins, so `personal` keeps every point and
+# the hermes twin never materializes. On an install where the two dirs are distinct, the same
+# code indexes the Hermes copies under `hermes-personal` — which is the case this root exists for.
+# Same one-var revert as every other harness: SKILL_HERMES_ROOTS=0 drops both paths + scopes
+# (byte-identical to the pre-Hermes engine; a reindex prunes the hermes-* points).
+HERMES_ROOTS = os.environ.get("SKILL_HERMES_ROOTS", "1") != "0"
+_HERMES_HOME = Path(os.environ.get("SKILL_HERMES_HOME", str(Path.home() / ".hermes")))
+HERMES_PERSONAL_ROOT = _HERMES_HOME / "skills"                    # Hermes profile shelf
+HERMES_PROJECT_ROOT = Path.cwd() / ".hermes" / "skills"           # project-scoped, CWD-relative
+# The plugin SHELF, not a versioned cache: one directory per installed plugin, so a plain
+# one-level glob is honest (the other harnesses' `**` globs exist for version-named cache dirs).
+HERMES_PLUGIN_GLOB = str(_HERMES_HOME / "plugins" / "*" / "skills" / "*" / "SKILL.md")
+# Hermes loads only ENABLED plugins, and its enable list lives in config.yaml
+# (`plugins.enabled` / `plugins.disabled`) — not in a JSON manifest like Claude's
+# installed_plugins.json. Indexing a disabled plugin's skills would mint results Hermes cannot
+# invoke (the exact pollution SKILL_PLUGIN_FILTER closed for Claude), so the enable list is read
+# from the harness's own config. There is no YAML dependency in the engine: the block Hermes
+# writes is a fixed two-space list, scanned here. Unreadable/absent block -> NO filter (fail open,
+# never lose a skill): a config the scanner cannot read must not silently drop the shelf.
+HERMES_CONFIG_YAML = Path(os.environ.get("SKILL_HERMES_CONFIG", str(_HERMES_HOME / "config.yaml")))
+
 # Claude account-synced skills: Claude Code downloads skills from the user's claude.ai account
 # into ~/.claude/skills/synced/<bucket>/<name>/SKILL.md and lists them as
 # `anthropic-skills:<name>` (a namespace Claude Code reserves for them). Only Claude Code
@@ -175,6 +209,8 @@ SKILL_DIRS = [PERSONAL_ROOT, PROJECT_ROOT] + (
     [CLINE_PERSONAL_ROOT, CLINE_PROJECT_ROOT] if CLINE_ROOTS else []
 ) + (
     [OPENCODE_PERSONAL_ROOT, OPENCODE_PROJECT_ROOT, OPENCODE_CONCIERGE_ROOT] if OPENCODE_ROOTS else []
+) + (
+    [HERMES_PERSONAL_ROOT, HERMES_PROJECT_ROOT] if HERMES_ROOTS else []
 )
 # Plugin-bundled skills. Scope to the *cache* (the installed/active copies Claude
 # Code actually loads), NOT ~/.claude/plugins/marketplaces/** — that holds catalog
@@ -934,22 +970,89 @@ def _plugin_paths() -> list[Path]:
     codex_hits = [Path(p) for p in _glob_both_depths(CODEX_PLUGIN_GLOB)] if CODEX_ROOTS else []
     omp_hits = [Path(p) for p in _glob_both_depths(OMP_PLUGIN_GLOB)] if OMP_ROOTS else []
     zcode_hits = _zcode_plugin_paths()
+    hermes_hits = _hermes_plugin_paths()
 
     if not SKILL_PLUGIN_FILTER:
         claude_hits = [Path(p) for p in _glob_both_depths(PLUGIN_GLOB)]
-        return claude_hits + codex_hits + omp_hits + zcode_hits
+        return claude_hits + codex_hits + omp_hits + zcode_hits + hermes_hits
 
     entries = _installed_plugin_entries()
     if entries is not None:
         # Positive-empty ({}) is respected: the readable layers just said every
         # plugin is off, and a whole-cache fallback here would resurrect exactly
         # what the exclusion rule removed.
-        return _claude_plugin_skill_paths(entries) + codex_hits + omp_hits + zcode_hits
+        return _claude_plugin_skill_paths(entries) + codex_hits + omp_hits + zcode_hits + hermes_hits
 
     log.warning("plugin manifests unreadable — indexing the whole cache "
                 "(stale versions and disabled plugins included)")
     claude_hits = [Path(p) for p in _glob_both_depths(PLUGIN_GLOB)]
-    return claude_hits + codex_hits + omp_hits + zcode_hits
+    return claude_hits + codex_hits + omp_hits + zcode_hits + hermes_hits
+
+
+def hermes_enabled_plugins():
+    """`plugins.enabled` from Hermes's config.yaml, or None when it cannot be read.
+
+    None means NO filter (index every plugin dir) — the fail-open direction: a config shape
+    this scanner misses must degrade to a few stale entries, never to an invisible shelf.
+    A readable list is respected verbatim, an EMPTY list included (every plugin off).
+    Only `enabled` decides; `plugins.disabled` is the complement Hermes derives itself.
+    """
+    try:
+        text = HERMES_CONFIG_YAML.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.rstrip() == "plugins:")
+    except StopIteration:
+        return None
+    names = None
+    for ln in lines[start + 1:]:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        if not ln.startswith(" "):        # left the `plugins:` block
+            break
+        stripped = ln.strip()
+        if stripped.startswith("enabled:"):
+            inline = stripped[len("enabled:"):].strip()
+            names = set()
+            if inline.startswith("[") and inline.endswith("]"):
+                names = {n.strip().strip("'\"") for n in inline[1:-1].split(",") if n.strip()}
+            continue
+        if names is not None:
+            if stripped.startswith("- "):
+                names.add(stripped[2:].strip().strip("'\""))
+            else:
+                break                     # `disabled:` or the next key ends the list
+    return names
+
+
+_HERMES_ENABLED_SEEN: list = []           # one log line per process, not per reindex call
+
+
+def _hermes_plugin_paths() -> list:
+    """Plugin-bundled skill SKILL.md paths from ~/.hermes/plugins/<plugin>/skills/<name>/.
+
+    Filtered by the config's enable list when it is readable, so the index holds what Hermes
+    will actually serve. A disabled plugin's skills stay out exactly as a disabled Claude
+    plugin's do (SKILL_PLUGIN_FILTER, ADR-0028/0052)."""
+    if not HERMES_ROOTS:
+        return []
+    hits = [Path(p) for p in glob.glob(HERMES_PLUGIN_GLOB)]
+    enabled = hermes_enabled_plugins()
+    if enabled is None:
+        if hits and not _HERMES_ENABLED_SEEN:
+            _HERMES_ENABLED_SEEN.append(True)
+            log.warning("hermes plugin enable list unreadable (%s) — indexing every "
+                        "plugin shelf", HERMES_CONFIG_YAML)
+        return hits
+    plugins_root = str(_HERMES_HOME / "plugins") + os.sep
+    kept = []
+    for p in hits:
+        rest = str(p)[len(plugins_root):] if str(p).startswith(plugins_root) else str(p)
+        if rest.split(os.sep, 1)[0] in enabled:
+            kept.append(p)
+    return kept
 
 
 def _under(path, root: Path) -> bool:
@@ -989,14 +1092,26 @@ def _synced_paths() -> list[Path]:
     return out
 
 
+# The Hermes roots that need the two-depth pass (ADR-0100). Derived here, not inlined in
+# discover_skill_paths(), so the vendored tests' single `monkeypatch.setattr(sd, "SKILL_DIRS", ...)`
+# keeps discovery hermetic: a fixture that replaces SKILL_DIRS carries no Hermes root, so the real
+# machine's shelf is never globbed from a temp-dir test (the ADR-0033 hermeticity trap).
+_HERMES_SHELF_DIRS = (HERMES_PERSONAL_ROOT, HERMES_PROJECT_ROOT)
+
+
 def discover_skill_paths() -> list[Path]:
     """Every SKILL.md path across personal dirs, project dirs, plugins, and (when enabled)
     Claude account-synced skills."""
     paths: list[Path] = []
     for d in SKILL_DIRS:
         if d.exists():
-            paths += [Path(p) for p in glob.glob(str(d / "*" / "SKILL.md"))
-                      if not _under(p, SYNCED_ROOT)]
+            pat = str(d / "*" / "SKILL.md")
+            # Every other harness shelf is flat. Hermes's own shelf groups skills into category
+            # directories the same way a plugin cache does (`<category>/<skill>/SKILL.md`), so its
+            # two roots get the same two-depth treatment _plugin_paths already gives that shape.
+            raw = (_glob_both_depths(pat) if HERMES_ROOTS and d in _HERMES_SHELF_DIRS
+                   else glob.glob(pat))
+            paths += [Path(p) for p in raw if not _under(p, SYNCED_ROOT)]
     paths += _plugin_paths()
     if SYNCED_ROOTS:
         paths += _synced_paths()
@@ -1035,6 +1150,12 @@ def _scope_for(path: Path) -> str:
         return "cline-personal"
     if p.startswith(str(OPENCODE_PERSONAL_ROOT) + os.sep) or p.startswith(str(OPENCODE_CONCIERGE_ROOT) + os.sep):
         return "opencode-personal"
+    if p.startswith(str(HERMES_PERSONAL_ROOT) + os.sep):
+        return "hermes-personal"
+    # Hermes's plugin shelf (~/.hermes/plugins/<plugin>/skills/<name>/) has no `/plugins/cache/`
+    # segment, so the shared cache branch below can never see it — checked before the fallthrough.
+    if p.startswith(str(_HERMES_HOME / "plugins") + os.sep) and f"{os.sep}skills{os.sep}" in p:
+        return "hermes-plugin"
     if f"{os.sep}plugins{os.sep}cache{os.sep}" in p:
         if f"{os.sep}.codex{os.sep}" in p:
             return "codex-plugin"
@@ -1065,6 +1186,8 @@ def _scope_for(path: Path) -> str:
         return f"cline-project:{CLINE_PROJECT_ROOT}"
     if p.startswith(str(OPENCODE_PROJECT_ROOT) + os.sep):
         return f"opencode-project:{OPENCODE_PROJECT_ROOT}"
+    if p.startswith(str(HERMES_PROJECT_ROOT) + os.sep):
+        return f"hermes-project:{HERMES_PROJECT_ROOT}"
     return f"project:{PROJECT_ROOT}"
 
 
@@ -1092,6 +1215,8 @@ def visible_scopes() -> set[str]:
         scopes |= {"cline-personal", f"cline-project:{CLINE_PROJECT_ROOT}"}
     if OPENCODE_ROOTS:
         scopes |= {"opencode-personal", f"opencode-project:{OPENCODE_PROJECT_ROOT}"}
+    if HERMES_ROOTS:
+        scopes |= {"hermes-personal", "hermes-plugin", f"hermes-project:{HERMES_PROJECT_ROOT}"}
     if SYNCED_ROOTS:
         scopes.add("claude-synced")
     return scopes | {f"catalog:{a}" for a in catalog_roots()}

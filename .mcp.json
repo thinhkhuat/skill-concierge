@@ -16,7 +16,8 @@
         "SKILL_SERVER_RECORDS": "${HOME}/.cache/skill-search/servers",
         "SKILL_DSH_ROOTS": "1",
         "SKILL_CLINE_ROOTS": "1",
-        "SKILL_OPENCODE_ROOTS": "1"
+        "SKILL_OPENCODE_ROOTS": "1",
+        "SKILL_HERMES_ROOTS": "1"
       }
     }
   }

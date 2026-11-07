@@ -1,0 +1,23 @@
+{
+  "_comment": "Hermes Agent MCP descriptor (ADR-0100). Hermes reads MCP servers ONLY from the `mcp_servers:` block of $HERMES_HOME/config.yaml (native-mcp docs) \u2014 it has no per-project descriptor file and no ${VAR} expansion \u2014 so this file documents the canonical entry for manual wiring; adapters/hermes/install.sh is what actually writes it, through `hermes config set` (never a hand-edited config.yaml: Hermes's own invariant is that a stray indent breaks the live gateway). Hermes namespaces every server tool mcp_<server>_<tool>, so the server named `skill-search` exposes mcp_skill_search_search_skills / mcp_skill_search_get_skill. Env block is kept in strict lockstep with .mcp.json (scripts/check_mcp_env_parity.py). The installer adds SKILL_CONCIERGE_HARNESS=hermes when it writes the entry (the DSH precedent: a harness stamp lives in the harness's own config, never in the shipped descriptor); SKILL_SERVER_RECORDS is omitted here deliberately \u2014 the engine's Path.home() default resolves the same directory without a machine-pinned literal.",
+  "mcpServers": {
+    "skill-search": {
+      "command": "/bin/bash",
+      "args": [
+        "/path/to/skill-concierge/bin/skill-search-mcp"
+      ],
+      "connect_timeout": 60,
+      "timeout": 120,
+      "env": {
+        "SKILL_QDRANT_URL": "http://localhost:6333",
+        "SKILL_EMBED_BACKEND": "ollama",
+        "SKILL_EMBED_MODEL": "embeddinggemma-2:270m",
+        "SKILL_TOP_K": "6",
+        "SKILL_LLM_TRIGGERS": "1",
+        "TRIGGERS_MAX": "16",
+        "SKILL_TRIGGERS": "${HOME}/.claude/skill-concierge/triggers.json",
+        "SKILL_HERMES_ROOTS": "1"
+      }
+    }
+  }
+}

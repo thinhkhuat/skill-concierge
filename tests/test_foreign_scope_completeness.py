@@ -38,6 +38,10 @@ READS_NATIVELY = {
     # OpenCode v2 reads ~/.claude/skills as a DOCUMENTED compatibility source (ADR-0085) —
     # by construction, not by symlink.
     "opencode": {"personal"},
+    # Hermes has no ~/.claude/skills compatibility read (agent/skill_utils.py::get_skill_search_roots):
+    # `personal` survives only when ~/.hermes/skills resolves to Claude's shelf, which the tuple's
+    # shared-shelf probe decides either way (ADR-0100).
+    "hermes": {"personal"},
 }
 OWN_HEAD = {"claude": ("personal", "plugin", "claude-synced")}
 
@@ -47,7 +51,7 @@ def mods(tmp_path_factory):
     saved = dict(os.environ)
     for flag in ("SKILL_CODEX_ROOTS", "SKILL_COMMANDCODE_ROOTS", "SKILL_OMP_ROOTS",
                  "SKILL_ZCODE_ROOTS", "SKILL_DSH_ROOTS", "SKILL_CLINE_ROOTS",
-                 "SKILL_OPENCODE_ROOTS", "SKILL_SYNCED_ROOTS"):
+                 "SKILL_OPENCODE_ROOTS", "SKILL_HERMES_ROOTS", "SKILL_SYNCED_ROOTS"):
         os.environ[flag] = "1"
     tmp = tmp_path_factory.mktemp("engine")
     os.environ.update({"SKILL_CONCIERGE_HARNESS": "claude",

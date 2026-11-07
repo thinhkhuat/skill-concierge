@@ -620,7 +620,8 @@ def _selftest() -> int:
         if not FOREIGN_SCOPES:
             bad.append(f"cross-harness: foreign scopes unset: {FOREIGN_SCOPES!r}")
         if RUNNING_HARNESS == "claude" and (
-                not all(x.startswith(("codex-", "commandcode-", "omp-", "zcode-", "dsh-", "cline-", "opencode-"))
+                not all(x.startswith(("codex-", "commandcode-", "omp-", "zcode-", "dsh-", "cline-",
+                                     "opencode-", "hermes-"))
                         for x in FOREIGN_SCOPES)
                 or not {"omp-managed", "zcode-plugin"} <= set(FOREIGN_SCOPES)):
             bad.append(f"cross-harness: claude foreign scopes must be every other harness's roots: {FOREIGN_SCOPES!r}")
@@ -760,7 +761,8 @@ def _selftest() -> int:
             RUNNING_HARNESS = "omp"
             if _foreign_scopes() != ("codex-plugin", "commandcode-personal", "zcode-personal",
                                      "zcode-plugin", "dsh-personal", "cline-personal",
-                                     "opencode-personal", "claude-synced"):
+                                     "opencode-personal", "hermes-personal", "hermes-plugin",
+                                     "claude-synced"):
                 bad.append("cross-harness: omp foreign scopes wrong: "
                            f"{_foreign_scopes()!r}")
             # twin test is active under omp (plugin ids invocable via the claude/omp union)

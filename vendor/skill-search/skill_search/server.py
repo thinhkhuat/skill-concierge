@@ -1277,7 +1277,8 @@ def _indexed_names() -> set[str]:
 # SKILL_ROW_ORIGIN=0 (read per call) restores the pre-provenance row shape exactly.
 _ORIGIN_HEADS = {"personal": "claude", "plugin": "claude", "project": "claude",
                  "codex": "codex", "commandcode": "commandcode", "omp": "omp", "zcode": "zcode",
-                 "dsh": "dsh", "cline": "cline", "opencode": "opencode"}
+                 "dsh": "dsh", "cline": "cline", "opencode": "opencode",
+                 "hermes": "hermes"}
 ROW_NOTE = ("origin = which harness's skill roots hold the indexed copy. Invoke a hit by name only "
             "if your harness lists it; otherwise load it with get_skill(name) and follow its "
             "SKILL.md inline — unless disabled_in names your harness or your harness has it "

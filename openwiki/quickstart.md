@@ -1,7 +1,7 @@
 # skill-concierge — OpenWiki quickstart
 
-**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, and OpenCode v2 that governs how the agent
-picks and uses *skills*. It is a thin **governance layer** over all eight harnesses' default skill
+**skill-concierge** is a **plugin** for Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, OpenCode v2, and Hermes Agent that governs how the agent
+picks and uses *skills*. It is a thin **governance layer** over all nine harnesses' default skill
 mechanisms: where
 the default injects **every** installed skill's description into the context window on **every**
 turn and hopes the model notices the right one, skill-concierge replaces *hope* with
@@ -11,7 +11,7 @@ turn and hopes the model notices the right one, skill-concierge replaces *hope* 
 > skill-concierge is the *concierge* who knows which book fits, makes sure you actually open
 > one, and remembers what you reached for.
 
-- **Version:** `0.76.4` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md)) · OpenCode v2: native plugin ([`adapters/opencode/plugin/index.ts`](../adapters/opencode/plugin/index.ts); [ADR-0085](../docs/adr/0085-opencode-octa-harness-parity.md)) · Claude Code mod (optional): `concierge-enhancer`, [`adapters/claude-code/mod/hooks/register.tsx`](../adapters/claude-code/mod/hooks/register.tsx)
+- **Version:** `0.77.0` · **License:** MIT · **Manifest:** [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json) · Codex: [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) · Command Code: [`adapters/commandcode/skill-concierge.mod.ts`](../adapters/commandcode/skill-concierge.mod.ts) · OMP: [`adapters/omp/skill-concierge.ext.ts`](../adapters/omp/skill-concierge.ext.ts) · ZCode: native Claude-plugin parity (no adapter; [ADR-0042](../docs/adr/0042-zcode-quintuple-harness-parity.md)) · Hermes Agent: native user plugin ([`adapters/hermes/plugin/`](../adapters/hermes/plugin/); [ADR-0100](adr/0100-hermes-agent-nona-harness-parity.md)) · OpenCode v2: native plugin ([`adapters/opencode/plugin/index.ts`](../adapters/opencode/plugin/index.ts); [ADR-0085](../docs/adr/0085-opencode-octa-harness-parity.md)) · Claude Code mod (optional): `concierge-enhancer`, [`adapters/claude-code/mod/hooks/register.tsx`](../adapters/claude-code/mod/hooks/register.tsx)
 - **Built on** the vendored MIT engine [`sowhan/skill-search`](https://github.com/sowhan/skill-search) (see [`vendor/skill-search/`](../vendor/skill-search/)).
 - **Not a coding tool** — it changes *which specialized skill Claude reaches for*, invisibly, in the half-second before Claude answers. See the [plain-language explainer](../docs/how-it-works-plain-language.md) for a non-technical two-minute read.
 
@@ -58,7 +58,7 @@ These have bitten before; the ADRs and [`docs/caveats.md`](../docs/caveats.md) e
 
 | Requirement | Notes |
 |-------------|-------|
-| Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, or OpenCode v2 | host for the plugin (or its adapter), hooks, and MCP server |
+| Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, OpenCode v2, or Hermes Agent | host for the plugin (or its adapter), hooks, and MCP server |
 | Python 3.10–3.12 | `snake_case`; set `SKILL_PYTHON` to pin an interpreter |
 
 No Docker: the vector store and the warm embedder are one local process, the index owner

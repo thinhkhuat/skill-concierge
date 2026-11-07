@@ -1,11 +1,11 @@
 # skill-concierge
 
-[![version](https://img.shields.io/badge/version-0.76.4-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.77.0-blue.svg)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2.svg)](https://docs.claude.com/en/docs/claude-code)
 [![built on](https://img.shields.io/badge/built%20on-skill--search-orange.svg)](https://github.com/sowhan/skill-search)
 
-A **skill-governance layer** over the default skill mechanisms of Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, and OpenCode v2. Where the
+A **skill-governance layer** over the default skill mechanisms of Claude Code, Codex, Command Code, Oh My Pi (OMP), ZCode, DeepSeek Harness (DSH), Cline, OpenCode v2, and Hermes Agent. Where the
 default dumps every skill description into context every turn and hopes the model picks
 one, skill-concierge replaces *hope* with **retrieve-precisely + enforce-use + measure**.
 
@@ -68,7 +68,7 @@ skill-concierge addresses three distinct failure modes the default conflates:
 
 | Requirement | Version / notes |
 |-------------|-----------------|
-| [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://codex.openai.com), [Command Code](https://github.com/sst/command-code), [Oh My Pi](https://ohmy.pi), [ZCode](https://z.ai), [OpenCode v2](https://opencode.ai/v2/docs/), DeepSeek Harness (DSH), or Cline | host for the plugin, hooks, and MCP server (one or more of the [harness matrix](#harness-matrix)) |
+| [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://codex.openai.com), [Command Code](https://github.com/sst/command-code), [Oh My Pi](https://ohmy.pi), [ZCode](https://z.ai), [OpenCode v2](https://opencode.ai/v2/docs/), DeepSeek Harness (DSH), Cline, or Hermes Agent | host for the plugin, hooks, and MCP server (one or more of the [harness matrix](#harness-matrix)) |
 | Python | 3.10–3.12 (set `SKILL_PYTHON` to pin a specific interpreter) |
 
 > No Docker. The vector store and the warm embedder are one local process — the index
@@ -182,7 +182,7 @@ The vendored engine exposes five tools (`vendor/skill-search/skill_search/server
 Since `0.48.0` ([ADR-0058](docs/adr/0058-off-list-rule-exclusion-echo-row-provenance-synced-default-off.md))
 `search_skills` and `consult_candidates` rows drop the slash `command` field on every non-catalog
 row and gain `origin` (which harness's roots hold the indexed copy — `claude`, `codex`,
-`commandcode`, `omp`, `zcode`, `dsh`, `cline`, `opencode`, or `claude-synced`) and `disabled_in` (present when
+`commandcode`, `omp`, `zcode`, `dsh`, `cline`, `opencode`, `hermes`, or `claude-synced`) and `disabled_in` (present when
 an installed Claude Code plugin has every installed copy switched off in its merged `enabledPlugins` layers — the per-turn hook's own rule, so a plugin Claude can run is never marked; account-synced rows list every non-Claude harness), plus one response-level `note`
 explaining both. `SKILL_ROW_ORIGIN=0` restores the pre-`0.48.0` row shape exactly.
 
@@ -418,7 +418,7 @@ overrides are **reproduced by `setup.sh`**, not embedded.
 
 ### Harness matrix
 
-skill-concierge is a first-class citizen in these eight harnesses. Enforcement rides whatever
+skill-concierge is a first-class citizen in these nine harnesses. Enforcement rides whatever
 each harness's extension mechanism supports (settings hooks for Claude Code, a mod adapter for
 Command Code, a TS extension module for OMP — Codex auto-discovers hooks, no `hooks` field; ZCode
 natively runs the Claude-format plugin hooks; DSH rides a Cordis `agent/pre-step` plugin; Cline
@@ -440,9 +440,10 @@ and the MCP server is wired per-harness from the shared descriptor, never duplic
 | DeepSeek Harness (DSH) | `DSH_HOME/skills`, `$CWD/.dsh/skills` (`dsh-*`) | Cordis plugin `agent/pre-step` (`adapters/dsh/skill-concierge.dsh.ts`; ADR-0050) | Cordis `cordis.patch.yml` row via the `dsh-mcp-client` bridge (`mcp__skill-search__*`); `adapters/dsh/mcp.json` reference |
 | Cline | `~/.cline/data/settings/skills`, `$CWD/.cline/skills` (`cline-*`) | native code plugin (`adapters/cline/skill-concierge.cline-plugin.ts`, loaded through `~/.cline/plugins/skill-concierge.ts`) plus a generated Agent Plugin (`~/.agents/plugins/skill-concierge/`) (ADR-0086; the ADR-0051 file-hook vehicle is retired) | the Agent Plugin's `mcp.json`, which Cline starts itself |
 | OpenCode v2 | `~/.config/opencode/skills`, `$CWD/.opencode/skills` (`opencode-*`), plus the plugin's own `~/.config/opencode/skill-concierge-skills/` (`opencode-personal`, registered in `opencode.json` `skills`); `personal` invocable via OpenCode's documented compat read of `~/.claude/skills` | native v2 plugin — `session.hook("prompt")` + `context` system-part doctrine/enforcer, `permission.hook` blocklist deny, `tool.hook("execute.after")` ledger+echo (`adapters/opencode/plugin/`; ADR-0085) | `ctx.mcp.transform` registers the server from the shared `.mcp.json` with `codemode: false`, so `skill-search_search_skills` and `skill-search_get_skill` are native tools (no manual config at all). A subagent's child session gets no doctrine, menu or turn row; a refused call is not logged; the menu is built at the first model call; a leading `<system-context>` block is stripped from the prompt ([ADR-0089](docs/adr/0089-opencode-v2-live-fixes.md)) |
+| Hermes Agent | `$HERMES_HOME/skills`, `<cwd>/.hermes/skills` and `$HERMES_HOME/plugins/<plugin>/skills/` (`hermes-personal`, `hermes-plugin`, `hermes-project:<abspath>`) | a Python user plugin — `pre_llm_call` (doctrine + enforcer), `pre_tool_call` (blocklist), `post_tool_call` (ledger), `transform_tool_result` (exclusion echo), `on_session_start` (self-heal); `adapters/hermes/plugin/`; [ADR-0100](docs/adr/0100-hermes-agent-nona-harness-parity.md) | `mcp_servers.skill-search` in `~/.hermes/config.yaml` via `hermes config set`, plus `mcp-skill-search` in `platform_toolsets.<surface>` |
 
 `SKILL_CODEX_ROOTS` / `SKILL_COMMANDCODE_ROOTS` / `SKILL_OMP_ROOTS` / `SKILL_ZCODE_ROOTS` /
-`SKILL_DSH_ROOTS` / `SKILL_CLINE_ROOTS` / `SKILL_OPENCODE_ROOTS`
+`SKILL_DSH_ROOTS` / `SKILL_CLINE_ROOTS` / `SKILL_OPENCODE_ROOTS` / `SKILL_HERMES_ROOTS`
 (all default ON) are one-var reverts that drop that harness's roots + scopes byte-identically.
 `SKILL_SYNCED_ROOTS` is the one root flag that ships the other way — **default OFF** — because
 Claude's own account-synced skills would render as installed in a harness cache still below
@@ -464,7 +465,7 @@ gate in detail: [`enforcement-gate.md`](openwiki/architecture/enforcement-gate.m
 
 ## Status & roadmap
 
-Current release: `0.76.4` — **published** (this repo; GitHub `main` carries it). Per-version history, including every release since
+Current release: `0.77.0` — **published** (this repo; GitHub `main` carries it). Per-version history, including every release since
 `0.1.0`, lives in [`CHANGELOG.md`](CHANGELOG.md); the decisions behind them are in
 [`docs/adr/`](docs/adr/README.md). Per-epoch watch items (what to monitor after a release,
 triggers, env-first actions): [`docs/epoch-watch.md`](docs/epoch-watch.md) — the single canonical
@@ -502,7 +503,7 @@ Full landmine list: [`docs/caveats.md`](docs/caveats.md).
 
 ## Uninstall
 
-Removing skill-concierge requires cleaning up each harness you installed it into (the [harness matrix](#harness-matrix) lists all eight) plus the shared infrastructure. Each section below names what the installer created and the reversal steps.
+Removing skill-concierge requires cleaning up each harness you installed it into (the [harness matrix](#harness-matrix) lists all nine) plus the shared infrastructure. Each section below names what the installer created and the reversal steps.
 
 ### Shared components
 
@@ -602,13 +603,14 @@ Installed through ZCode's own plugin marketplace (it natively reads the `.claude
 2. If the manual MCP fallback was merged: delete the `skill-search` entry from `~/.zcode/cli/config.json` → `mcp.servers`.
 3. Optionally drop the scope env pin: `SKILL_ZCODE_ROOTS`.
 
-### DeepSeek Harness (DSH), Cline, OpenCode v2
+### DeepSeek Harness (DSH), Cline, OpenCode v2, Hermes Agent
 
 Each installer touches only skill-concierge-owned entries (the installer's header is the authoritative list):
 
 - **DSH** ([`adapters/dsh/install.sh`](adapters/dsh/install.sh)): delete the skill-concierge `- insert:` patches (the `skill-search` MCP row, the unlazy stop-hook and the enforcement plugin) from `cordis.patch.yml` in each DSH profile it wired (`~/.ohdsh/profiles/desktop/`, `~/.ohdsh/profiles/tui/`, or under `DSH_HOME`).
 - **Cline** ([`adapters/cline/install.sh`](adapters/cline/install.sh)): remove `~/.cline/plugins/skill-concierge.ts` and the directory `~/.agents/plugins/skill-concierge/`.
 - **OpenCode v2** ([`adapters/opencode/install.sh`](adapters/opencode/install.sh)): remove the plugin path from the `plugins` array of `~/.config/opencode/opencode.json`, remove the `~/.config/opencode/skill-concierge-skills/` entry from its `skills` array and delete that folder (only the installer writes it), and restart the OpenCode service.
+- **Hermes Agent**: `hermes plugins disable skill-concierge`, remove the `~/.hermes/plugins/skill-concierge` symlink, then `hermes mcp remove skill-search` and drop `mcp-skill-search` from `platform_toolsets`.
 - For all three, optionally drop the scope env pin (`SKILL_DSH_ROOTS`, `SKILL_CLINE_ROOTS`, `SKILL_OPENCODE_ROOTS`).
 
 After removing a harness, run `skill-concierge:doctor --fix` or `python3 scripts/doctor.py --fix` to reindex the shared catalogue (the harness's scope points are pruned at the next reindex).
