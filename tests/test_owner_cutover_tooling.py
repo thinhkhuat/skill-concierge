@@ -877,7 +877,13 @@ def test_setup_has_no_docker_start_path_and_starts_owner():
     # probed and stopped ($store_port, derived from $QURL) — QURL/EPORT are plain bash
     # vars, never exported by default, so the owner-start line must export them itself
     # or a configured non-default .mcp.json port would leave the owner on 6333/6363.
-    owner_start = code[code.index('subprocess.Popen(') - 200:code.index('subprocess.Popen(')]
+    #   The window is derived from the env statement itself, not a fixed character count:
+    #   a fixed width silently stops covering the launch when that line legitimately grows
+    #   (adding SKILL_OLLAMA_URL/SKILL_EMBED_TOKEN pushed it 33 chars past a hardcoded 200).
+    popen = code.index('subprocess.Popen(')
+    owner_start = code[code.rindex("env ", 0, popen):popen]
     assert 'SKILL_QDRANT_URL="$QURL"' in owner_start
     assert 'EMBED_SHIM_PORT="$EPORT"' in owner_start
+    assert 'SKILL_OLLAMA_URL' in owner_start
+    assert 'SKILL_EMBED_TOKEN' in owner_start
     assert subprocess.run(["bash", "-n", str(ROOT / "setup.sh")], check=False).returncode == 0

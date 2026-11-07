@@ -31,6 +31,7 @@ import json
 import queue
 import socket
 import threading
+import time
 
 import pytest
 
@@ -41,7 +42,10 @@ class FakeConn:
     made = []
 
     def __init__(self, host, timeout=None, context=None, fail=None):
-        self.host, self.timeout, self.sock, self.fail, self.sent = host, timeout, None, fail, []
+        self.host, self.timeout, self.fail, self.sent = host, timeout, fail, []
+        self.closed = False
+        import socket as _s
+        self.sock = _s.socket(_s.AF_INET, _s.SOCK_STREAM)  # a real, empty socket: alive, never readable
         FakeConn.made.append(self)
 
     def request(self, method, path, body=None, headers=None):
@@ -52,6 +56,7 @@ class FakeConn:
     def getresponse(self):
         class R:
             status = 200
+            will_close = False
 
             def read(self):
                 return b'{"answers": {}}'
@@ -59,12 +64,17 @@ class FakeConn:
 
     def close(self):
         self.closed = True
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
 
 @pytest.fixture
 def relay(monkeypatch):
     FakeConn.made = []
-    monkeypatch.setattr(owner_mod, "_JEV_POOL", queue.LifoQueue(maxsize=8))
+    monkeypatch.setattr(owner_mod, "_JEV_POOLS",
+                        {ep: queue.LifoQueue(maxsize=8) for ep in owner_mod.JEV_DESTS})
     monkeypatch.setattr(owner_mod.http.client, "HTTPSConnection", FakeConn)
     return owner_mod
 
@@ -83,8 +93,8 @@ def test_completed_exchange_is_pooled_and_reused(relay):
 
 def test_stale_pooled_connection_retries_once_on_a_fresh_one(relay):
     for _ in range(2):   # two stale connections left in the pool after an idle spell
-        relay._JEV_POOL.put_nowait(
-            FakeConn("api.typesafe.ai", fail=http.client.RemoteDisconnected("closed")))
+        relay._JEV_POOLS["ts"].put_nowait(
+            (FakeConn("api.typesafe.ai", fail=http.client.RemoteDisconnected("closed")), time.time()))
     FakeConn.made = []
     assert relay._jev_relay(b"{}", "Bearer k", 2.0)[0] == 200
     assert len(FakeConn.made) == 1 and not FakeConn.made[0].fail     # the retry was a NEW connection
@@ -100,7 +110,7 @@ def test_fresh_connection_failure_is_not_retried(relay, monkeypatch):
 
 @pytest.mark.parametrize("err", [socket.timeout("slow"), TimeoutError("slow")])
 def test_timeout_is_never_retried(relay, err):
-    relay._JEV_POOL.put_nowait(FakeConn("api.typesafe.ai", fail=err))
+    relay._JEV_POOLS["ts"].put_nowait((FakeConn("api.typesafe.ai", fail=err), time.time()))
     FakeConn.made = []
     with pytest.raises(OSError):
         relay._jev_relay(b"{}", "Bearer k", 2.0)
