@@ -34,7 +34,11 @@ All notable changes to **skill-concierge**. Format loosely follows
   (`smoke.DEFAULT_ADVISORY`): `hermes` is a client of the running gateway daemon, so its hooks write
   to the gateway's own ledger and the run's private folder never sees the rows. The enforcement is
   proven live (a real turn wrote `turn`, `offer` with the Jev whole-shelf ranking, `auto` and
-  `search`, all stamped `harness: hermes`); the isolation model is what does not transfer.
+  `search`, all stamped `harness: hermes`); the isolation model is what does not transfer. The
+  list is a FLOOR the environment can only add to (`smoke.DEFAULT_ADVISORY`): a stale
+  `$SMOKE_ADVISORY` on a machine can no longer un-waive a harness the repo knows cannot be proven
+  there. `--strict` restores the hard gate. Command Code joins it for a provider refusal, not a
+  code one: `403 … meta/muse-spark-1.3-contributor … is not available in your region`.
 
 ### Fixed
 
