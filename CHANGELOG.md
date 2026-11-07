@@ -3,6 +3,28 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.76.1] - 2026-11-07
+
+### Fixed
+
+- **A background reindex now uses the configured embedder, not a localhost default
+  (docs/caveats.md §33).** `.mcp.json` cannot carry `SKILL_OLLAMA_URL` or
+  `SKILL_EMBED_TOKEN` (ADR-0097 forbids the token there), so those keys reached a reindex
+  only through a shell that had sourced `harness-env.sh` — and a SessionStart hook is not
+  such a shell. `selfheal.mcp_env` is `os.environ` + `.mcp.json`, so `auto_reindex.py`
+  resolved the endpoint to `http://localhost:11434` with an empty token and rebuilt catalog
+  points on the wrong embedder, repeatedly. Measured: 19,873 `catalog:antigravity` points
+  stamped by the local engine beside 26,687 stamped by the GPU host, still recurring after a
+  manual repair because the auto-reindex ran the unfixed code. `scripts/engine_env.py` now
+  also reads a machine-local `~/.claude/skill-concierge/engine-env.json` (chmod 600, same
+  shape as the `.mcp.json` env block), which outranks the descriptor: local is deployment
+  truth, the descriptor is a shipped default, and the process environment outranks both.
+  Covered by `vendor/skill-search/tests/test_engine_env_local.py`, whose
+  descriptor-precedence test caught a wrong precedence order in the fix itself. **The fix
+  only takes effect once the installed plugin carries it:** hooks import `engine_env` from
+  the plugin cache, so a repair run against the working tree is overwritten by the next
+  auto-reindex.
+
 ## [0.76.0] - 2026-11-07
 
 ### Fixed

@@ -36,19 +36,55 @@ ENGINE_ENV_KEYS = (
 
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent
 
+# Machine-local engine settings that must NOT ship in `.mcp.json`: the bearer token above
+# all (ADR-0097 says read it from the environment, never the descriptor), and the embedder
+# URL, which is deployment-specific rather than a plugin default.
+#
+# Without this file the two keys reached a reindex ONLY through a shell that had sourced
+# `~/.config/harness-env.sh`. A SessionStart hook is not such a shell: `selfheal.mcp_env`
+# is exactly `os.environ` + `.mcp.json`, so a background reindex resolved
+# SKILL_OLLAMA_URL to its `http://localhost:11434` DEFAULT and the token to empty —
+# silently rebuilding points against a different embedder than the one serving queries.
+# Measured 2026-11-07: 19,873 `catalog:antigravity` points stamped with the localhost
+# embedder while 26,687 carried the GPU-host one. ADR-0098's provenance guard caught it.
+LOCAL_ENV_PATH = Path(os.path.expandvars(os.environ.get(
+    "SKILL_CONCIERGE_ENGINE_ENV",
+    str(Path.home() / ".claude" / "skill-concierge" / "engine-env.json"))))
+
+
+def local_engine_env(path=None):
+    """The machine-local engine overrides, or {} when the file is absent/unreadable.
+
+    Same shape as the `.mcp.json` env block. Fail-open on every bad input: a malformed
+    file must degrade to "no overrides" (the engine's defaults), never raise into a hook.
+    """
+    try:
+        conf = json.loads(Path(path or LOCAL_ENV_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(conf, dict):
+        return {}
+    return {k: v for k, v in conf.items()
+            if k in ENGINE_ENV_KEYS and isinstance(v, str) and v != ""}
+
 
 def engine_env(root=None):
-    """os.environ plus every ENGINE_ENV_KEYS value .mcp.json pins and the environment lacks.
-    Empty .mcp.json values are skipped: an empty flag would read as ON ("" != "0")."""
+    """os.environ plus every ENGINE_ENV_KEYS value the descriptor or the machine-local
+    file pins and the environment lacks. Empty values are skipped: an empty flag would
+    read as ON ("" != "0").
+
+    Precedence, most authoritative first: the process environment (a caller that decided
+    deliberately), the machine-local overrides, then `.mcp.json` (the shipped defaults).
+    Local outranks the descriptor because the descriptor cannot carry a secret."""
     merged = dict(os.environ)
     try:
         conf = json.loads((Path(root or DEFAULT_ROOT) / ".mcp.json").read_text(encoding="utf-8"))[
             "mcpServers"]["skill-search"]["env"]
     except (OSError, ValueError, KeyError, TypeError):
         conf = {}
-    if isinstance(conf, dict):
+    for source in (local_engine_env(), conf if isinstance(conf, dict) else {}):
         for k in ENGINE_ENV_KEYS:
-            v = conf.get(k)
+            v = source.get(k)
             if k not in merged and isinstance(v, str) and v != "":
                 merged[k] = v
     return merged

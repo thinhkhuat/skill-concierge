@@ -796,3 +796,29 @@ from the plugin directory alone came up 703 points short, because the collection
 came from the embedder you think they did, re-embed a few points' exact text through the
 running endpoint and compare: `cos = 1.000000` against the intended backend and ~0.985
 against the other is the answer.
+
+## §33 — A background reindex cannot see an env var only your shell exports (2026-11-07)
+
+`.mcp.json` pins `SKILL_EMBED_BACKEND` and `SKILL_EMBED_MODEL`, and it cannot pin
+`SKILL_OLLAMA_URL` or `SKILL_EMBED_TOKEN` — ADR-0097 requires the token to be read from the
+environment, never the descriptor. Those two keys lived only in `~/.config/harness-env.sh`,
+which a **SessionStart hook never sources**. `selfheal.mcp_env` is exactly `os.environ` +
+`.mcp.json`, so inside `auto_reindex.py` the endpoint resolved to its `localhost:11434`
+default and the token to empty.
+
+Consequence, measured: every automatic reindex silently rebuilt catalog points against this
+Mac's embedder while the query server embedded on the GPU host. 19,873
+`catalog:antigravity` points carried the wrong stamp beside 26,687 correct ones, and it kept
+recurring — repairing the index by hand while an auto-reindex was still running made the
+distribution WORSE, not better (28,800 wrong / 17,764 right after a 19,881-point repair).
+
+**Do:** machine-local engine settings live in `~/.claude/skill-concierge/engine-env.json`
+(chmod 600, same shape as the `.mcp.json` env block). `scripts/engine_env.py` reads it, and
+it outranks the descriptor: local is deployment truth, the descriptor is a shipped default.
+The process environment still outranks both. `SKILL_CONCIERGE_ENGINE_ENV` relocates the
+file for tests.
+
+**Watch:** the fix must reach the INSTALLED plugin, not just the working tree. Hooks import
+`engine_env` from the plugin cache, so commit, push, and re-run the adapters before believing
+a repair. Editing the source and repairing the index in the same session guarantees the
+repair is overwritten.
