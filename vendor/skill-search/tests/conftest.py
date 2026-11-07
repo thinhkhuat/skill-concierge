@@ -100,6 +100,16 @@ os.environ["EMBED_SHIM_PORT"] = str(_OWNER.eport) if _OWNER is not None else "1"
 os.environ.setdefault("SKILL_META_PATH", os.path.join(_TMP, "meta.json"))
 os.environ.setdefault("SKILL_EMBED_BACKEND", "fastembed")
 os.environ.setdefault("SKILL_VECTOR_SIZE", "384")  # avoids an embed probe in unit tests
+# The chosen backend's DEFAULT model must not be overridden by an operator's ambient
+# SKILL_EMBED_MODEL. A shell that has sourced ~/.config/harness-env.sh carries
+# SKILL_EMBED_MODEL=embeddinggemma-2:270m machine-wide, which the fastembed backend cannot
+# load ("Model … is not supported in TextEmbedding") — so any CLI run from such a shell
+# failed 2 query-embed tests and the end-to-end indexing test while CI stayed green.
+# Forced, not setdefault: the suite pins fastembed, so the model must be fastembed's.
+if os.environ.get("SKILL_EMBED_BACKEND", "fastembed") == "fastembed":
+    os.environ.pop("SKILL_EMBED_MODEL", None)
+    os.environ.pop("SKILL_OLLAMA_URL", None)
+    os.environ.pop("SKILL_EMBED_TOKEN", None)
 # Pin the external-catalog config to a NONEXISTENT path (ADR-0031). Without this,
 # every test calling discover_skills()/_disk_signature() reads the operator's LIVE
 # ~/.claude/skill-concierge/catalog-roots.json and pulls in real external skills —

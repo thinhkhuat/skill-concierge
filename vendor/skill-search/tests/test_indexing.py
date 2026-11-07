@@ -441,9 +441,9 @@ def test_server_build_record_never_raises(tmp_path, monkeypatch):
 
 def test_prunable_skips_foreign_project_scope():
     existing = {
-        "mine":    ("h1", "project:/my/proj/.claude/skills"),
-        "theirs":  ("h2", "project:/their/proj/.claude/skills"),
-        "personal": ("h3", "personal"),
+        "mine":    ("h1", "project:/my/proj/.claude/skills", "p"),
+        "theirs":  ("h2", "project:/their/proj/.claude/skills", "p"),
+        "personal": ("h3", "personal", "p"),
     }
     desired = {}                       # nothing on disk -> everything "gone"
     visible = {"personal", "plugin", "project:/my/proj/.claude/skills"}
@@ -455,7 +455,7 @@ def test_prunable_skips_foreign_project_scope():
 
 
 def test_prunable_keeps_points_still_on_disk():
-    existing = {"a": ("h1", "personal")}
+    existing = {"a": ("h1", "personal", "p")}
     desired = {"a": ("txt", "h1", {})}
     assert server._prunable(existing, desired, {"personal"}) == []
 
@@ -463,17 +463,17 @@ def test_prunable_keeps_points_still_on_disk():
 def test_prunable_treats_legacy_scopeless_points_as_prunable():
     """Points written before scope tagging carry no scope. They must remain
     prunable, else they linger forever and never get re-embedded with a scope."""
-    existing = {"old": ("h1", None)}
+    existing = {"old": ("h1", None, "p")}
     assert server._prunable(existing, {}, {"personal"}) == ["old"]
 
 
 def test_scope_change_forces_reembed():
     """A point whose scope changed must count as changed even if its text didn't,
     otherwise the one-time migration to scoped payloads never happens."""
-    assert server._point_changed(("h1", "personal"), "h1", "project:/x") is True
-    assert server._point_changed(("h1", "personal"), "h1", "personal") is False
-    assert server._point_changed(("h1", "personal"), "h2", "personal") is True
-    assert server._point_changed(None, "h1", "personal") is True
+    assert server._point_changed(("h1", "personal", "p"), "h1", "project:/x", "p") is True
+    assert server._point_changed(("h1", "personal", "p"), "h1", "personal", "p") is False
+    assert server._point_changed(("h1", "personal", "p"), "h2", "personal", "p") is True
+    assert server._point_changed(None, "h1", "personal", "p") is True
 
 
 # --- end-to-end (loads the embedder; opt-in) -----------------------------

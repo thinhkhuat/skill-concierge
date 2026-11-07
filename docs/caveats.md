@@ -765,3 +765,34 @@ unproven.
 **Do:** when doctor's "Owner log" row reports a downgrade, find the copy by its version:
 `grep -l '"version": "<old>"' ~/.copilot/installed-plugins/*/*/.claude-plugin/plugin.json "$HOME/Library/Application Support/Code/agentPlugins"/*/*/.claude-plugin/plugin.json`,
 then the other harness folders. Remove the copy through its harness's own command, then truncate the log.
+
+## §32 — Quantization is not part of the embedder identity, so a precision change still drifts silently (ADR-0098)
+
+Every point now carries a `provenance` stamp — backend, model, endpoint, dimension — and
+`reindex()` re-embeds anything whose stamp disagrees with the running embedder. That closes
+the *swap* case completely: change the host, the model id, the backend or the dimension and
+the next ordinary reindex repairs the index with no operator action.
+
+**It does not close the precision case, and that is the honest limit.** The 2026-11-07
+drift that started all of this was the SAME model at the SAME dimension on two hosts —
+`nvfp4` on this Mac, `Q8_0` on the GPU host. Vectors from those two are not interchangeable
+(cosine ~0.985), yet nothing in the identity token can tell them apart, because the engine
+cannot observe quantization through the interface it has: ollama reports
+`quantization_level` in `/api/tags`, but a gateway can hide it, a non-ollama backend has no
+equivalent, and a proxy can swap the model behind a stable URL.
+
+**Do:** after changing the quantization, precision or format of an embedder *without*
+changing its URL, model id or dimension, force the rebuild by hand —
+`reindex(force=True)` (or `skill-search --rebuild`), from **every root that owns points in
+the collection**. That last clause is load-bearing: a `force=True` rebuild deletes the
+collection and then rewrites only what the current directory can see, so running it from one
+root silently drops the points other roots contributed. Measured on this machine: rebuilding
+from the plugin directory alone came up 703 points short, because the collection also carries
+655 `VGP` project points and 48 `skills-dev` points.
+
+**Verify with the stamp, not with health alone.** `health()` reports
+`embedder_provenance.stale_points`, which is 0 after a successful migration — but it is also
+0 when the precision changed behind an unchanged identity. To prove the stored vectors really
+came from the embedder you think they did, re-embed a few points' exact text through the
+running endpoint and compare: `cos = 1.000000` against the intended backend and ~0.985
+against the other is the answer.

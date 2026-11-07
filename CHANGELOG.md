@@ -3,6 +3,33 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.76.0] - 2026-11-07
+
+### Fixed
+
+- **Embedder provenance is stamped on every point, so a backend swap now repairs itself
+  ([ADR-0098](docs/adr/0098-embedder-provenance-stamped-on-every-point.md)).** 0.75.0
+  recorded the blind spot and left an open follow-up: make the engine notice an index
+  built by a different embedder *identity*, not just a different dimension. This closes it.
+  `embedder_identity()` hashes backend, model, endpoint and dimension into a 12-hex token;
+  every point payload carries it, and `_point_changed()` gains a third arm so a point
+  stamped by another embedder is re-embedded by the **ordinary** `reindex()` — no new verb,
+  no migration state, and a legacy point with no stamp is re-embedded exactly once. A
+  manifest-token design with an explicit migration was built as a sketch and rejected
+  because it creates a second repair path that runs only on the day someone remembers it.
+  `_health()` now reports `embedder_provenance: {current, stale_points, total_points, ok}`
+  via one filtered count (O(1) in the owner, independent of collection size), and raises an
+  issue naming the remedy when any point is stale. The manifest also records `endpoint` and
+  `provenance`. **The live index was migrated, not wiped:** 45,857 + 655 + 48 points
+  re-embedded from the three roots that own points in this shared collection (a
+  `force=True` rebuild from one CWD would have silently dropped 703 cross-root points —
+  measured). After migration: `stale_points 0 / total 46560`, and 6/6 hash-verified points
+  reproduce at `cos = 1.000000` against the GPU host versus `0.985` against the local
+  engine. Covered by `vendor/skill-search/tests/test_provenance.py`, whose provenance tests
+  were confirmed red with the new arm reverted and green with it restored. **Quantization
+  stays a documented manual caveat:** a precision change behind an unchanged URL, model id
+  and dimension is not detectable through the interface the engine has.
+
 ## [0.75.0] - 2026-11-07
 
 ### Fixed

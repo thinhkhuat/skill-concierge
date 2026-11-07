@@ -85,6 +85,67 @@ OLLAMA_URL      = os.environ.get("SKILL_OLLAMA_URL", "http://localhost:11434")
 EMBED_TOKEN     = os.environ.get("SKILL_EMBED_TOKEN", "")
 EMBED_BATCH     = int(os.environ.get("SKILL_EMBED_BATCH", "64"))
 
+# --- Embedder provenance (ADR-0098) ---------------------------------------
+# A vector is only comparable against vectors from the SAME embedder, but the only
+# guard this engine had was `_collection_dim() != vector_size()` — a dimension check.
+# Two embedders that both emit 768 floats (the same model on two hosts, one nvfp4 and
+# one Q8_0) pass it, so a backend swap silently left every stored vector built by the
+# old embedder while queries embedded on the new one. Retrieval kept working and health
+# stayed green because it probes the QUERY backend; the only symptom was a quiet loss of
+# ranking precision (cosine ~0.985 instead of 1.0 between the two).
+#
+# The fix is a stamp, not a migration: every point records WHICH embedder produced its
+# vector, and `_point_changed` re-embeds a point whose stamp disagrees with the current
+# one. A swap therefore becomes an ordinary content change that the ORDINARY incremental
+# reindex already repairs — no new verb, no migration state to get wrong, and no second
+# code path running only on the day someone remembers it (ADR-0098 records the rejected
+# manifest-token design).
+#
+# The token covers everything that changes the NUMBERS in a vector and that this engine
+# can actually observe: backend, model, endpoint, dimension. It deliberately does NOT try
+# to capture quantization — ollama reports it in /api/tags, but a gateway can hide it, a
+# non-ollama backend has no equivalent, and a proxy can swap the model behind a stable
+# URL. Detecting only what is observable keeps the token honest; the quantization case is
+# a documented manual caveat (docs/caveats.md), not a pretended detection.
+EMBED_ENDPOINT  = OLLAMA_URL if EMBED_BACKEND == "ollama" else "local"
+
+
+def embedder_identity(backend: str, model: str, endpoint: str, dim: int) -> str:
+    """Stable short token identifying the embedder that produced (or will produce) a vector.
+
+    Everything that changes the numbers, nothing that does not: which backend, which model
+    id, which endpoint, which dimension. The endpoint is normalised so a trailing slash or a
+    capitalisation difference cannot fake a swap — the same host written two ways is the
+    same embedder.
+
+    12 hex chars: long enough that an accidental collision is not a concern for the handful
+    of embedders one machine ever uses, short enough to sit on 47k point payloads.
+    """
+    raw = "|".join((
+        backend.strip().lower(),
+        model.strip(),
+        endpoint.strip().rstrip("/").lower(),
+        str(dim),
+    ))
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+
+_embed_identity = None
+
+
+def current_embed_identity() -> str:
+    """The token for the embedder THIS process is using, computed once.
+
+    Lazily, because `vector_size()` probes the live backend with a real embed call —
+    computing it at import would spend an embed on every `import skill_search`, including
+    the dozens of short-lived hook processes that merely want `search_skills`.
+    """
+    global _embed_identity
+    if _embed_identity is None:
+        _embed_identity = embedder_identity(
+            EMBED_BACKEND, EMBED_MODEL, EMBED_ENDPOINT, vector_size())
+    return _embed_identity
+
 TOP_K           = int(os.environ.get("SKILL_TOP_K", "6"))
 # Installed/external complement rule (SKILL_SEARCH_COMPLEMENT): search_skills can merge installed and external-catalog rows conditionally, not by
 # tier alone — an installed row is placed ahead of an external row only when its score is
@@ -269,6 +330,12 @@ class _Store:
                 return None
             raise
 
+    def count(self, c: str, filter=None) -> int:
+        """Point count, optionally filtered. One pass over the owner's numpy mask, so
+        counting mismatched provenance across ~47k points is O(1) at the call site."""
+        body = {} if filter is None else {"filter": filter}
+        return int((self._req("POST", f"/collections/{c}/points/count", body) or {}).get("count", 0))
+
     def create_collection(self, c: str, size: int) -> None:
         self._write("PUT", f"/collections/{c}", {"vectors": {"size": size, "distance": "Cosine"}})
 
@@ -424,6 +491,8 @@ def _write_manifest(indexed: int) -> None:
         "indexed_at": time.time(),
         "backend": EMBED_BACKEND,
         "model": EMBED_MODEL,
+        "endpoint": EMBED_ENDPOINT,
+        "provenance": current_embed_identity(),
         "dim": vector_size(),
         "signature": sig,
         "engine": _ENGINE_BUILD,
@@ -966,32 +1035,43 @@ def _ensure_collection() -> None:
 
 
 def _existing_points() -> dict[str, tuple]:
-    """Map point-id -> (stored content_hash, stored scope) for everything indexed.
-    The hash decides what needs re-embedding; the scope decides what this process
-    is allowed to delete. Legacy points predating scope tagging carry scope=None."""
+    """Map point-id -> (content_hash, scope, provenance) for everything indexed.
+    The hash decides what needs re-embedding; the scope decides what this process is
+    allowed to delete; the provenance says WHICH embedder built that vector (ADR-0098).
+    Legacy points predating scope tagging carry scope=None, and every point written before
+    ADR-0098 carries provenance=None."""
     existing: dict[str, tuple] = {}
     if _qdrant.collection_info(COLLECTION) is None:
         return existing
     offset = None
     while True:
         points, offset = _qdrant.scroll(
-            COLLECTION, limit=256, with_payload=["content_hash", "scope"], offset=offset)
+            COLLECTION, limit=256,
+            with_payload=["content_hash", "scope", "provenance"], offset=offset)
         for p in points:
             pl = p.get("payload") or {}
-            existing[str(p["id"])] = (pl.get("content_hash"), pl.get("scope"))
+            existing[str(p["id"])] = (
+                pl.get("content_hash"), pl.get("scope"), pl.get("provenance"))
         if offset is None:
             break
     return existing
 
 
-def _point_changed(stored: tuple | None, want_hash: str, want_scope: str) -> bool:
-    """Re-embed when the text changed OR the owning scope changed. The scope arm
-    is what migrates legacy scope-less points onto the scoped payload; without it
-    an unchanged description would keep its scope-less payload forever and be
-    filtered out of every search."""
+def _point_changed(stored: tuple | None, want_hash: str, want_scope: str,
+                   want_provenance: str) -> bool:
+    """Re-embed when the text changed, the owning scope changed, OR the stored vector was
+    built by a different embedder.
+
+    The scope arm migrates legacy scope-less points onto the scoped payload; without it an
+    unchanged description would keep its scope-less payload forever and be filtered out of
+    every search. The provenance arm is the same idea for the embedder (ADR-0098): a point
+    with no stamp predates the field and is re-embedded once, and a point stamped by another
+    embedder is re-embedded because its vector is no longer comparable to this one. That is
+    what makes an embedder swap an ordinary content change rather than a migration verb."""
     if stored is None:
         return True
-    return stored[0] != want_hash or stored[1] != want_scope
+    return (stored[0] != want_hash or stored[1] != want_scope
+            or stored[2] != want_provenance)
 
 
 def _prunable(existing: dict[str, tuple], desired: dict, visible: set[str]) -> list[str]:
@@ -999,7 +1079,7 @@ def _prunable(existing: dict[str, tuple], desired: dict, visible: set[str]) -> l
     can see. A point in another session's project scope is invisible here — it is
     'not mine', not 'deleted'. Legacy scope-less points stay prunable so the
     migration can clear them."""
-    return [pid for pid, (_h, scope) in existing.items()
+    return [pid for pid, (_h, scope, _prov) in existing.items()
             if pid not in desired and (scope is None or scope in visible)]
 
 
@@ -1091,6 +1171,8 @@ def build_index(force: bool = False) -> dict:
     # per-(skill, slot) ids keep reindex incremental and reindex-safe (a plain reindex
     # maintains the trigger layer — no separate overlay/reapply needed).
     desired: dict[str, tuple] = {}
+    # One token per build, stamped on every point this build writes (ADR-0098).
+    identity = current_embed_identity()
     for s in skills:
         text = _doc_embed_text(_skill_text(s))
         h = _content_hash(text)
@@ -1104,15 +1186,16 @@ def build_index(force: bool = False) -> dict:
         synced = dict(s.get("synced_meta") or {}) if scope == "claude-synced" else {}
         desired[_point_id(s["name"])] = (text, h, {
             "name": s["name"], "description": s["description"],
-            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope, **tier,
-            **synced})
+            "path": s["path"], "content_hash": h, "kind": "base", "scope": scope,
+            "provenance": identity, **tier, **synced})
         if MULTIVECTOR:
             for i, ph in enumerate(_trigger_phrases(s)):
                 ph = _trigger_embed_text(s["name"], ph)
                 ph_h = _content_hash(ph)
                 desired[_point_id(f"{s['name']}::trig::{i}")] = (ph, ph_h, {
                     "name": s["name"], "description": s["description"],
-                    "content_hash": ph_h, "kind": "trigger", "scope": scope, **tier})
+                    "content_hash": ph_h, "kind": "trigger", "scope": scope,
+                    "provenance": identity, **tier})
 
     # Embed only what's new or whose text/scope changed. Delete what's gone (incl.
     # orphaned trigger slots when a description shortens, and ALL triggers if
@@ -1120,7 +1203,7 @@ def build_index(force: bool = False) -> dict:
     # every session shares this collection, and another session's project skills
     # are invisible here, not deleted.
     changed = [(pid, d) for pid, d in desired.items()
-               if _point_changed(existing.get(pid), d[1], d[2]["scope"])]
+               if _point_changed(existing.get(pid), d[1], d[2]["scope"], identity)]
     removed = _prunable(existing, desired, sd.visible_scopes())
 
     # Embed AND upsert per chunk — upserting all points in one call overflows Qdrant's
@@ -1565,6 +1648,32 @@ def _health() -> dict:
         report["qdrant"] = {"store": _STORE, "reachable": False, "error": str(e)}
         report["issues"].append(f"qdrant/collection unavailable at {_STORE} "
                                 f"('{COLLECTION}') — run reindex()")
+
+    # Embedder provenance (ADR-0098): does the STORED index match the embedder serving
+    # queries right now? Asked of the STORE, not of the manifest, because the manifest is
+    # per-root while the collection is shared — a manifest can only vouch for the points
+    # one root wrote. Counting mismatched stamps covers every scope, including points this
+    # process can neither see nor prune.
+    #
+    # This is the check whose absence let the 2026-11-07 cutover pass: `embedder.reachable`
+    # above probes the QUERY backend, so an index built by the previous embedder read as
+    # perfectly healthy. Provenance and reachability are different questions.
+    try:
+        total = _qdrant.count(COLLECTION)
+        stale = _qdrant.count(COLLECTION, filter={
+            "must_not": [{"key": "provenance", "match": {"value": current_embed_identity()}}]})
+        report["embedder_provenance"] = {
+            "current": current_embed_identity(), "stale_points": stale,
+            "total_points": total, "ok": stale == 0,
+        }
+        if stale:
+            report["issues"].append(
+                f"{stale} of {total} indexed points were built by a different embedder than "
+                f"the one serving queries — run reindex() (no --rebuild needed: provenance is "
+                f"repaired incrementally)")
+    except Exception as e:
+        report["embedder_provenance"] = {"current": current_embed_identity(),
+                                         "error": str(e)}
 
     # Freshness: when was the index last built, and has disk changed since?
     # Which build we run is a FACT about this process, true with or without an index, so

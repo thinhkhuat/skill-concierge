@@ -33,6 +33,17 @@ at `~/.claude/skill-concierge/venv` (outside the plugin cache, so it survives re
 ## Engine-code patches (DIRECT edits to the vendored source — re-apply after re-vendoring)
 Unlike the plugin-level layer above, these modify the vendored engine and must be re-applied if
 upstream is re-vendored:
+- **Embedder provenance stamp (ADR-0098, 2026-11-07):** `server.py` gains `embedder_identity()`,
+  `current_embed_identity()` and `EMBED_ENDPOINT`; every point payload carries
+  `"provenance": <12-hex>`; `_existing_points()` reads it back and `_point_changed()` gains a third
+  arm so a point stamped by a different embedder is re-embedded by the ORDINARY reindex (a legacy
+  point with no stamp is re-embedded once). `_Store` gains `count(c, filter)` and `_health()` reports
+  `embedder_provenance: {current, stale_points, total_points, ok}`. The manifest also records
+  `endpoint` and `provenance`. It exists because the only embedder guard was a DIMENSION check: two
+  embedders emitting the same number of floats (one model on two hosts, nvfp4 vs Q8_0) passed it, so
+  a backend swap left every stored vector built by the old embedder while queries embedded on the
+  new one — retrieval worked and health stayed green because it probes the query backend. Covered by
+  `vendor/skill-search/tests/test_provenance.py`. Not upstream: re-apply on re-vendor.
 - **Bearer token for a protected embedder (v0.74.0, ADR-0097, 2026-11-07):** `server.py` reads
   `SKILL_EMBED_TOKEN` and sends it as `Authorization: Bearer …` on both Ollama paths — the batch
   `/api/embed` and the legacy single-item `/api/embeddings` — through one `_embed_headers()` helper.
