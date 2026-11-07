@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.75.0] - 2026-11-07
+
+### Fixed
+
+- **Stored-vector provenance is now a known blind spot, and the live index was rebuilt
+  for it.** Changing the embedding *endpoint* does not re-embed what is already stored:
+  `build_index` guards only the dimension, and two hosts serving the same model name at
+  768 dims are indistinguishable to it. After the embedder moved from this Mac (nvfp4,
+  MLX) to the GPU host (Q8_0, gguf), the owner answered queries with the new engine while
+  all 46,560 stored vectors had been built by the old one — and `_health()` stayed green
+  throughout, because it probes the query backend, not stored provenance. An independent
+  verifier caught it: 0 of 400 same-point pairs matched byte-for-byte across a
+  known-new-engine build, cosines clustering at 0.985-0.991. A complete replacement
+  collection (`claude_skills__rtx_staging`, 46,560 points, every one built by the new
+  engine) is staged and point-for-point identical to live; the swap needs a delete of the
+  live collection first, which is Thinh's call. **Verification lesson: prove the owner
+  serves the new engine AND that the stored vectors came from it — they are two facts.**
+  Open follow-up: make the engine refuse to serve an index built by a different embedder
+  identity (not just a different dimension).
+
 ## [0.74.0] - 2026-11-07
 
 ### Added
