@@ -74,3 +74,6 @@ tmp/
 
 # HarnessKit session logs — tool state, not source.
 .harnesskit/
+
+# ds-ledger scratch (session decision log, not source)
+.ds-ledger.tsv
