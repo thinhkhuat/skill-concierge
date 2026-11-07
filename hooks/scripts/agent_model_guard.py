@@ -180,19 +180,32 @@ def _selftest():
     if no_fable is None or "claude-fable-5" in no_fable:
         bad.append("fable without a pinned family must deny without a catalogue guess")
     # the type leg: bundled names and an existing agent id pass, an unregistered skill
-    # name is denied with the /skill: form, a fully unknown name is denied generically
+    # name is denied with the /skill: form, a fully unknown name is denied generically.
+    #
+    # The skill case plants its own skill in a temp root instead of naming a real one:
+    # no particular skill is guaranteed to be installed, and a selftest that depends on
+    # one reports a shipped guard as broken whenever it happens to be absent.
     import cmd_agent_bridge
+    import tempfile
     mirror_ids = [p.stem for p in Path(cmd_agent_bridge.DEST_DEFAULT).glob("*.md")] \
         if Path(cmd_agent_bridge.DEST_DEFAULT).is_dir() else []
     for t in BUNDLED_AGENTS | {x for x in mirror_ids if x}:
         if decide_type(t):
             bad.append(f"registered type {t!r} was denied")
-    type_deny = decide_type("pstack-architect")
-    if not (type_deny or ""):
-        bad.append("an unregistered type was allowed")
-    elif "/skill:pstack-architect" not in type_deny:
-        bad.append(f"the skill match is not named: {type_deny[:120]}")
-    unknown = decide_type("not-a-real-agent-xyz")
+    with tempfile.TemporaryDirectory() as td:
+        planted = Path(td) / "selftest-skill"
+        planted.mkdir()
+        (planted / "SKILL.md").write_text("---\nname: selftest-skill\n---\n", encoding="utf-8")
+        skill_deny = decide_type("selftest-skill", registry=set(), skills_root=td)
+        if not (skill_deny or ""):
+            bad.append("an unregistered type was allowed")
+        elif "/skill:selftest-skill" not in skill_deny:
+            bad.append(f"the skill match is not named: {skill_deny[:120]}")
+        absent = decide_type("selftest-skill", registry=set(),
+                             skills_root=str(Path(td) / "empty"))
+        if not (absent or "") or "/skill:selftest-skill" in absent:
+            bad.append("a name with no skill directory must deny generically")
+    unknown = decide_type("not-a-real-agent-xyz", registry=set(), skills_root="/nonexistent")
     if not (unknown or "") or "/skill:not-a-real-agent-xyz" in unknown:
         bad.append("a fully unknown name must deny generically, never name a fake skill")
     # a failed config read is fail-open (no pool -> deny only names /model)

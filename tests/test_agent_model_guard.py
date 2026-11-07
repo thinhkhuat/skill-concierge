@@ -151,12 +151,26 @@ def test_the_selftest_contract_passes() -> None:
 
 # ── the type leg ──────────────────────────────────────────────────────────────
 
-def test_an_unregistered_skill_name_is_denied_with_the_skill_form() -> None:
-    """The live incident: `subagent_type: pstack-architect` — a SKILL, not an agent. The
-    denial must teach the /skill: form instead of the dispatcher's bare refusal."""
-    reason = _deny_reason({"tool_name": "agent", "tool_input": {"prompt": "x",
-                                                               "subagent_type": "pstack-architect"}})
-    assert "/skill:pstack-architect" in reason and "no registered subagent" in reason
+def test_an_unregistered_skill_name_is_denied_with_the_skill_form(tmp_path, monkeypatch) -> None:
+    """The live incident: a SKILL name passed as `subagent_type`. The denial must teach the
+    /skill: form instead of the dispatcher's bare refusal.
+
+    Hermetic: the skill is planted in a temp `skills_root`, so the test does not depend on
+    any skill being installed on the machine running it. (It did once depend on that, via a
+    bundled plugin skill's name, and failed the moment that skill was not a standalone
+    `~/.commandcode/skills/<name>` directory.)
+    """
+    skills = tmp_path / "skills"
+    (skills / "a-bundled-skill").mkdir(parents=True)
+    (skills / "a-bundled-skill" / "SKILL.md").write_text("---\nname: a-bundled-skill\n---\n",
+                                                         encoding="utf-8")
+    mod = _guard()
+    reason = mod.decide_type("a-bundled-skill", registry=set(), skills_root=str(skills))
+    assert reason and "/skill:a-bundled-skill" in reason and "no registered subagent" in reason
+    # and the same name is NOT treated as a skill when no such directory exists
+    generic = mod.decide_type("a-bundled-skill", registry=set(),
+                              skills_root=str(tmp_path / "empty"))
+    assert generic and "/skill:a-bundled-skill" not in generic
 
 
 def test_a_fully_unknown_type_is_denied_generically_never_a_fake_skill_form() -> None:

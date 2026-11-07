@@ -57,7 +57,13 @@ print(json.load(open(sys.argv[1]))['mcpServers']['skill-search']['env'].get(sys.
 QURL="${SKILL_QDRANT_URL:-$(read_mcp SKILL_QDRANT_URL)}"
 MODEL="${SKILL_EMBED_MODEL:-$(read_mcp SKILL_EMBED_MODEL)}"
 BACKEND="${SKILL_EMBED_BACKEND:-$(read_mcp SKILL_EMBED_BACKEND)}"
-echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  backend=$BACKEND  model=$MODEL"
+# The endpoint and its credential are NOT in .mcp.json (a token must never be committed), so
+# they come only from the environment. They are forwarded to the index owner below for the
+# same reason the model is: an owner started without them embeds from its own defaults while
+# the reindex used these, so the index and the live server would disagree about the endpoint.
+OLLAMA_URL="${SKILL_OLLAMA_URL:-}"
+EMBED_TOKEN="${SKILL_EMBED_TOKEN:-}"
+echo "python=$PYTHON  venv=$VENV  qdrant=$QURL  backend=$BACKEND  model=$MODEL  embedder=${OLLAMA_URL:-default}"
 
 # One-time migration to the canonical home (~/.claude/skill-concierge, ADR-0025): fold the
 # ledger/telemetry in from its old location. The venv is NOT migrated — it is rebuilt below (a
@@ -159,6 +165,7 @@ fi
 # here is invisible to the owner's dimension guard.
 env SKILL_QDRANT_URL="$QURL" EMBED_SHIM_PORT="$EPORT" \
   SKILL_EMBED_BACKEND="$BACKEND" SKILL_EMBED_MODEL="$MODEL" \
+  SKILL_OLLAMA_URL="$OLLAMA_URL" SKILL_EMBED_TOKEN="$EMBED_TOKEN" \
   "$VENV/bin/python" -c 'import subprocess,sys
 subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"],
                   start_new_session=True, stdin=subprocess.DEVNULL,

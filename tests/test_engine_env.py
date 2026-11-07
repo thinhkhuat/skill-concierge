@@ -100,3 +100,20 @@ def test_setup_sh_env_run_routes_through_engine_env():
     body = (ROOT / "setup.sh").read_text(encoding="utf-8")
     start = body.index("env_run() {")
     assert "scripts/engine_env.py" in body[start:body.index("}", start)]
+
+
+def test_setup_sh_forwards_the_embedder_endpoint_and_token_to_the_owner():
+    """[R] wiring guard. The owner caches its endpoint at load, so an owner started without
+    these embeds from default localhost while the reindex used the configured endpoint: the
+    index and the live server would then disagree about where vectors came from.
+
+    They cannot ride .mcp.json (a token must never be committed), so the owner launch is the
+    only place setup.sh can carry them — and it is easy to drop one when editing that block.
+    """
+    body = (ROOT / "setup.sh").read_text(encoding="utf-8")
+    start = body.index('subprocess.Popen([sys.executable, "-m", "skill_search.index_owner"]')
+    launch = body[:start]
+    env_block = launch[launch.rindex("env SKILL_QDRANT_URL"):]
+    assert "SKILL_EMBED_MODEL" in env_block
+    assert "SKILL_OLLAMA_URL" in env_block, "owner would fall back to localhost"
+    assert "SKILL_EMBED_TOKEN" in env_block, "owner would send no bearer to a protected endpoint"
