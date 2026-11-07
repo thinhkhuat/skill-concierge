@@ -687,3 +687,21 @@ plugin-level customization layer and these engine patches.
   2026-10-11 (the hooks now also rotate those logs, `hooks/scripts/selfheal.py` `rotate_log`). Index
   output is unchanged. Covered by `tests/test_discovery.py` (`test_purity_shadow_*`). Not upstream:
   re-apply on re-vendor.
+
+- **`skills_discovery.py` + `server.py` Hermes Agent roots (ADR-0100, 2026-11-08):** adds the ninth
+  harness's discovery roots behind `SKILL_HERMES_ROOTS` (default ON, one-var revert):
+  `$HERMES_HOME/skills` → scope `hermes-personal`, `<cwd>/.hermes/skills` →
+  `hermes-project:<dir>`, and the plugin shelf `$HERMES_HOME/plugins/<plugin>/skills/<name>/SKILL.md`
+  → `hermes-plugin` (what `ctx.register_skill` serves as `<plugin>:<name>` without copying it).
+  Two Hermes-specific shapes: (a) `discover_skill_paths()` runs the two-depth pass
+  (`_glob_both_depths`) for `_HERMES_SHELF_DIRS` only, because Hermes groups skills into category
+  directories the way a plugin cache does — every other harness shelf stays flat, and the tuple is
+  derived so the vendored tests' single `monkeypatch.setattr(sd, "SKILL_DIRS", ...)` stays hermetic;
+  (b) `_hermes_plugin_paths()` filters the shelf by `plugins.enabled` in `$HERMES_HOME/config.yaml`,
+  read with a tolerant stdlib block scanner (`hermes_enabled_plugins()`) because there is no YAML
+  dependency in the engine — an unreadable block means NO filter, the fail-open direction. `SKILL_DIRS`,
+  `_scope_for`, `visible_scopes` and `server.py` `_ORIGIN_HEADS` (`"hermes": "hermes"`) all grew the
+  pair. `SKILL_HERMES_ROOTS`, `SKILL_HERMES_HOME` and `SKILL_HERMES_CONFIG` join
+  `scripts/engine_env.py`'s `ENGINE_ENV_KEYS` and are pinned in `.mcp.json`. Covered by
+  `tests/test_hermes_adapter.py` (the adapter) and `tests/test_foreign_scope_completeness.py` (the
+  scopes). Not upstream: re-apply on re-vendor.
