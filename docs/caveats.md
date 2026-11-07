@@ -822,3 +822,28 @@ file for tests.
 `engine_env` from the plugin cache, so commit, push, and re-run the adapters before believing
 a repair. Editing the source and repairing the index in the same session guarantees the
 repair is overwritten.
+
+## §34 — Restarting a session is not enough to move it onto the configured embedder (ADR-0099)
+
+Restarting Claude brings a new MCP server, but the new server inherits the PARENT process's
+environment. `.mcp.json` cannot carry `SKILL_OLLAMA_URL` or `SKILL_EMBED_TOKEN` (ADR-0097
+keeps the token out of the descriptor), so a session launched from a context that never
+exported them starts on the engine's `http://localhost:11434` default with an empty token.
+
+Measured 2026-11-07 across three freshly restarted sessions: two had neither variable, one
+had both. All three looked healthy — retrieval worked, because the local Ollama was running
+and the index is uniform on one embedder — so nothing distinguished them.
+
+**Do:** `bin/skill-search-mcp` now loads `~/.claude/skill-concierge/engine-env.json` before
+exec'ing the engine, with an explicitly exported variable still winning. To check a session
+without trusting its shell, drive the launcher in an EMPTY environment and read the `health`
+tool's own report:
+
+```
+env -i HOME=$HOME PATH=/usr/bin:/bin /bin/bash bin/skill-search-mcp   # then call health over stdio
+```
+
+`provenance.current` there must equal the identity the configured embedder produces.
+
+**Watch:** the launcher only fills missing values. A stale explicit export outranks the file
+by design, so a shell that already sourced an old setting can still pin the wrong endpoint.

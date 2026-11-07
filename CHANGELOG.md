@@ -3,6 +3,26 @@
 All notable changes to **skill-concierge**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project is pre-1.0 and evolving.
 
+## [0.76.2] - 2026-11-07
+
+### Fixed
+
+- **The MCP launcher now reads the machine-local engine file, so a restarted session lands
+  on the configured embedder (ADR-0099, docs/caveats.md §34).** 0.76.1 fixed every path that
+  runs through `scripts/engine_env.py` — the SessionStart reindex, the flywheel, doctor,
+  setup — but not the query server. `bin/skill-search-mcp` takes its settings from
+  `.mcp.json` plus whatever the parent process exported, and `.mcp.json` cannot carry
+  `SKILL_OLLAMA_URL` or the bearer token (ADR-0097). Measured across three freshly restarted
+  sessions: two launched with neither variable and fell back to `http://localhost:11434`,
+  while the third embedded on the GPU host. All three looked healthy, because retrieval works
+  either way and the index is uniform — nothing distinguished them. The launcher now loads
+  `~/.claude/skill-concierge/engine-env.json` before `exec`, with an explicitly exported
+  variable still winning, matching `engine_env.py`'s precedence exactly. The parse runs in an
+  isolated Python with an inline program, restricted to uppercase-identifier keys with
+  non-empty string values, and fails open so a bad file can never block MCP startup.
+  Verified by driving the real launcher over stdio in an empty environment: `health` reports
+  `provenance.current` as the GPU-host identity, `stale_points 0`, `status ok`.
+
 ## [0.76.1] - 2026-11-07
 
 ### Fixed

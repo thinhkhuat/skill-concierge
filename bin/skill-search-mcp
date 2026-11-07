@@ -40,6 +40,51 @@ if [ ! -x "$BIN" ]; then
   exit 127
 fi
 
+# ── machine-local engine settings (ADR-0099) ──────────────────────────────────────────────────
+# `.mcp.json` pins the backend and model, but it cannot carry the embedder URL or its bearer
+# token — ADR-0097 requires the token to come from the environment, never the descriptor. Those
+# two keys therefore reach this launcher only if the PARENT process exported them, and a parent
+# that was itself started from a non-login context does not. Measured 2026-11-07 on three
+# freshly restarted sessions: two launched with NO SKILL_OLLAMA_URL and NO token, so the engine
+# fell back to http://localhost:11434 while the third embedded on the GPU host. Same sessions,
+# same plugin, different embedder.
+#
+# The fix reads the same machine-local file `scripts/engine_env.py` uses, so the query server and
+# every reindex path resolve ONE embedder. Loaded here, in the launcher, because the engine reads
+# its settings at import time and must be exec'd with them already in the environment.
+#
+# Precedence matches engine_env.py: an explicitly exported variable wins; the file fills the rest.
+# Fail-open on every error: a missing, unreadable or malformed file leaves the engine on the
+# values it already had, and must never stop the MCP server from starting.
+_ENGINE_ENV_FILE="${SKILL_CONCIERGE_ENGINE_ENV:-$HOME/.claude/skill-concierge/engine-env.json}"
+if [ -r "$_ENGINE_ENV_FILE" ]; then
+  # Parse in Python (never `eval` a config file) and emit shell-quoted exports. -I keeps the
+  # interpreter isolated from the caller's PYTHONPATH; the parser is inline so no temp file is
+  # written on the MCP startup path.
+  _engine_env_exports="$(ENGINE_ENV_PATH="$_ENGINE_ENV_FILE" "$VENV/bin/python" -I -c '
+import json, os, shlex, sys
+path = os.environ.get("ENGINE_ENV_PATH", "")
+try:
+    conf = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+if not isinstance(conf, dict):
+    sys.exit(0)
+for k, v in conf.items():
+    # Engine keys only, shell-safe names only, non-empty strings only.
+    if not (isinstance(k, str) and k.isidentifier() and k.isupper()):
+        continue
+    if not (isinstance(v, str) and v):
+        continue
+    if k in os.environ:          # an explicit export outranks the file
+        continue
+    print(f"export {k}={shlex.quote(v)}")
+' 2>/dev/null || true)"
+  if [ -n "$_engine_env_exports" ]; then
+    eval "$_engine_env_exports"
+  fi
+fi
+
 # ver_ge A B — true iff dotted-integer version A >= B ("0.33.10" >= "0.33.9").
 # Non-numeric components fold to 0; unequal lengths compare as if zero-padded.
 _ver_ge() {
